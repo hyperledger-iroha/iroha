@@ -12367,9 +12367,9 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn named_struct_literal_lowers_in_declaration_order() {
-        let program = parse(
-            include_str!("ir/test_sources/named_struct_literal_lowers_in_declaration_order_1.ko"),
-        )
+        let program = parse(include_str!(
+            "ir/test_sources/named_struct_literal_lowers_in_declaration_order_1.ko"
+        ))
         .expect("parse named struct literal");
         let typed = analyze(&program).expect("analyze named struct literal");
         let lowered = lower(&typed).expect("lower named struct literal");
@@ -13045,9 +13045,9 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn wrapping_builtins_have_distinct_ir() {
-        let program = parse(
-            include_str!("ir/test_sources/wrapping_builtins_have_distinct_ir_1.ko"),
-        )
+        let program = parse(include_str!(
+            "ir/test_sources/wrapping_builtins_have_distinct_ir_1.ko"
+        ))
         .expect("parse wrapping builtins");
         let program = lower(&analyze(&program).expect("analyze wrapping builtins"))
             .expect("lower wrapping builtins");

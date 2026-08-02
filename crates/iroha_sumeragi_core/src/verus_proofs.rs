@@ -1,17 +1,15 @@
 //! Verus refinement model for the executable Sumeragi v2 reducer.
 //!
-//! This module is ghost-only and is erased by normal Rust compilation.  It
-//! gives every production `Event` and `WalRecord` variant an explicit abstract
-//! action.  The WAL relation is transition complete at the safety projection:
-//! sequence, context, view, local intent, highest-PrepareQC, lock, timeout, and
-//! decision changes are represented branch by branch.  The reducer relation
-//! additionally models the pending-append fence and historical body-store
-//! tokens needed to justify signing and application effects.
+//! This module is ghost-only and is erased by normal Rust compilation. It gives every production
+//! `Event` and `WalRecord` variant an explicit abstract action. The WAL relation is transition
+//! complete at the safety projection: sequence, context, view, local intent, highest-PrepareQC,
+//! lock, timeout, and decision changes are represented branch by branch. The reducer relation
+//! additionally models the pending-append fence and historical body-store tokens needed to justify
+//! signing and application effects.
 //!
-//! The definitions and proof bodies contain no proof escape hatches.  See
-//! `VERIFICATION.md` for pinned execution evidence and the residual
-//! collection-extraction, adapter-contract, WAL-byte, cross-tool, and liveness
-//! boundaries that remain before a complete production-correctness claim.
+//! The definitions and proof bodies contain no proof escape hatches. See `VERIFICATION.md` for
+//! pinned execution evidence and the residual collection-extraction, adapter-contract, WAL-byte,
+//! cross-tool, and liveness boundaries that remain before a complete production-correctness claim.
 
 use vstd::{assert_seqs_equal, prelude::*};
 
@@ -40,12 +38,10 @@ use crate::refinement::{
     WAL_RECORD_TIMEOUT_INTENT,
 };
 
-// These expressions are instantiated both as specifications and as executable
-// Verus functions.  The PrepareIntent and TimeoutIntent WAL guards below are
-// derived directly from primitive vote and frozen-context fields.  The
-// remaining projected WAL certificate/proposal predicates are called out
-// explicitly in `VERIFICATION.md` until they are migrated to the same
-// representation.
+// These expressions are instantiated both as specifications and as executable Verus functions.
+// The PrepareIntent and TimeoutIntent WAL guards below are derived directly from primitive vote
+// and frozen-context fields. The remaining projected WAL certificate/proposal predicates are
+// called out explicitly in `VERIFICATION.md` until they are migrated to the same representation.
 // Cargo Verus consumes these macros inside `verus!`; the trailing ordinary
 // Rust metadata pass sees the ghost module erased and would otherwise report
 // them as unused.
@@ -5427,76 +5423,6 @@ pub proof fn production_terminal_application_without_successor_activation_refine
     reveal(production_terminal_application_without_successor_activation_kernel);
 }
 
-/// A successful primitive checker result is exactly the shared executable
-/// identity/state relation. Collection extraction and cross-store ordering are
-/// deliberately outside this theorem.
-pub proof fn production_in_flight_reservation_transition_preserves_primitive_identity(
-    projection: ProductionInFlightReservationTransitionProjection,
-)
-    ensures
-        check_production_in_flight_reservation_transition(projection) == Some(projection)
-            ==> production_in_flight_reservation_transition_kernel(projection),
-{
-    reveal(check_production_in_flight_reservation_transition);
-}
-
-/// Runtime commit cannot fabricate a commit barrier from absent ownership.
-pub proof fn production_in_flight_reservation_commit_rejects_absent_owner(
-    projection: ProductionInFlightReservationTransitionProjection,
-)
-    requires
-        projection.action == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_COMMIT),
-        projection.before.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT),
-    ensures
-        !production_in_flight_reservation_transition_kernel(projection),
-{
-    reveal(production_in_flight_reservation_transition_kernel);
-}
-
-/// The composed checker accepts only the shared complete state/action kernel.
-pub proof fn production_in_flight_first_release_transition_refines_named_next(
-    projection: ProductionInFlightFirstReleaseTransitionProjection,
-)
-    ensures
-        check_production_in_flight_first_release_transition(projection) == Some(projection)
-            ==> production_in_flight_first_release_transition_kernel(projection),
-{
-    reveal(check_production_in_flight_first_release_transition);
-}
-
-/// Snapshot reconstruction cannot manufacture a new abstract durable owner.
-pub proof fn production_in_flight_first_release_snapshot_recovery_is_stutter(
-    projection: ProductionInFlightFirstReleaseTransitionProjection,
-)
-    requires
-        projection.action
-            == refinement_tag_value!(
-                IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT
-            ),
-        production_in_flight_first_release_transition_kernel(projection),
-    ensures
-        in_flight_first_release_state_equal_body!(projection.before, projection.after),
-{
-    reveal(production_in_flight_first_release_transition_kernel);
-}
-
-/// Every extracted terminal owner is exclusive: WSV for commit, FIFO for release.
-pub proof fn production_in_flight_first_release_terminal_owner_is_exclusive(
-    state: ProductionInFlightFirstReleaseStateProjection,
-    terminal: ProductionInFlightFirstReleaseTerminalOwnerProjection,
-)
-    requires
-        production_in_flight_first_release_terminal_owner(state) == Some(terminal),
-    ensures
-        terminal.ordinary_fifo_owner != terminal.canonical_wsv_owner,
-        terminal.commit_terminal != terminal.release_terminal,
-        terminal.canonical_wsv_owner ==> (
-            state.history.reservation_commit_forgotten_prefix
-                == state.queue.selected_count
-        ),
-{
-    reveal(production_in_flight_first_release_terminal_owner);
-}
 
 /// Verus-side shape of one fixed-width effect capability key.
 #[derive(Copy, Clone)]
@@ -6950,6 +6876,9 @@ pub proof fn production_action_preserves_volatile_bounds(
 }
 
 } // verus!
+
+// The in-flight reservation/first-release proofs remain in this lexical module.
+include!("verus_proofs/in_flight_first_release_proofs.rs");
 
 // The production-kernel proof tail remains in this lexical module.
 include!("verus_proofs/production_kernel_tail.rs");

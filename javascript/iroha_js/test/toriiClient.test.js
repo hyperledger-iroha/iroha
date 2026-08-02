@@ -61,6 +61,8 @@ const sumeragiDiagnosticsFocus =
   globalThis[SUMERAGI_DIAGNOSTICS_FOCUS_SYMBOL] ?? null;
 const ToriiClient =
   sumeragiDiagnosticsFocus?.ToriiClient ?? SourceToriiClient;
+const FocusValidationError =
+  sumeragiDiagnosticsFocus?.ValidationError ?? ValidationError;
 
 function focusedTestRegistration(baseTest) {
   return (nameOrOptions, optionsOrFn, maybeFn) => {
@@ -786,7 +788,7 @@ function assertConcreteMultisigAccountUsesNativeLengths(body, label) {
 }
 
 function expectValidationErrorFixture(error, key) {
-  assert(error instanceof ValidationError);
+  assert(error instanceof FocusValidationError);
   const fixture = validationFixtures[key];
   assert.ok(fixture, `missing validation error fixture: ${key}`);
   assert.equal(error.code, fixture.code);
@@ -11132,7 +11134,23 @@ test("typed Sumeragi JSON rejects duplicate keys, trailing input, and oversized 
   );
 });
 
-test("getSumeragiDiagnosticsTyped parses bounded native application evidence", async () => {
+test("getSumeragiDiagnosticsTyped parses bounded native application evidence and enforces state geometry", async () => {
+  const application = {
+    lane_id: 3,
+    dataspace_id: 8,
+    lane_incarnation: fakeSumeragiHash(0x65),
+    participant_height: 8,
+    participant_view: 1,
+    predecessor_height: 7,
+    predecessor_descriptor_hash: fakeSumeragiHash(0x68),
+    descriptor_hash: fakeSumeragiHash(0x73),
+    proposal_hash: fakeSumeragiHash(0x69),
+    settlement_hash: fakeSumeragiHash(0x6b),
+    source_count: 2,
+    application_block_height: 10,
+    application_block_hash: fakeSumeragiHash(0x79),
+    state: "durably_applied",
+  };
   const payload = createSumeragiDiagnosticsPayload({
     npos: {
       epoch_length_blocks: 100,
@@ -11146,24 +11164,7 @@ test("getSumeragiDiagnosticsTyped parses bounded native application evidence", a
       vrf_no_participation_total: 0,
       vrf_late_reveals_total: 0,
     },
-    native_amx_participant_applications: [
-      {
-        lane_id: 3,
-        dataspace_id: 8,
-        lane_incarnation: fakeSumeragiHash(0x65),
-        participant_height: 8,
-        participant_view: 1,
-        predecessor_height: 7,
-        predecessor_descriptor_hash: fakeSumeragiHash(0x68),
-        descriptor_hash: fakeSumeragiHash(0x73),
-        proposal_hash: fakeSumeragiHash(0x69),
-        settlement_hash: fakeSumeragiHash(0x6b),
-        source_count: 2,
-        application_block_height: 10,
-        application_block_hash: fakeSumeragiHash(0x79),
-        state: "durably_applied",
-      },
-    ],
+    native_amx_participant_applications: [application],
   });
 
   const diagnostics = await sumeragiDiagnosticsClientForPayload(payload)
@@ -11176,6 +11177,39 @@ test("getSumeragiDiagnosticsTyped parses bounded native application evidence", a
     diagnostics.native_amx_participant_applications[0].state,
     "durably_applied",
   );
+
+  const parseApplication = async (row) => {
+    const parsed = await sumeragiDiagnosticsClientForPayload({
+      ...payload,
+      native_amx_participant_applications: [row],
+    }).getSumeragiDiagnosticsTyped();
+    return parsed.native_amx_participant_applications[0];
+  };
+  const withoutApplicationIdentity = (state) => {
+    const row = { ...application, state };
+    delete row.application_block_height;
+    delete row.application_block_hash;
+    return row;
+  };
+
+  for (const state of ["committed_evidence_pending", "durably_applied"]) {
+    assert.equal((await parseApplication({ ...application, state })).state, state);
+  }
+  for (const state of ["certified_pending_carrier", "conflict"]) {
+    assert.equal((await parseApplication(withoutApplicationIdentity(state))).state, state);
+  }
+  for (const state of ["certified_pending_carrier", "conflict"]) {
+    await assert.rejects(
+      parseApplication({ ...application, state }),
+      /state and application block identity disagree/,
+    );
+  }
+  for (const state of ["committed_evidence_pending", "durably_applied"]) {
+    await assert.rejects(
+      parseApplication(withoutApplicationIdentity(state)),
+      /state and application block identity disagree/,
+    );
+  }
 });
 
 test("getSumeragiDiagnosticsTyped rejects native application evidence above the server bound", async () => {
@@ -21804,6 +21838,7 @@ test("contract mutation drafts reject retired inline private-key fields", async 
 test("prepareContractCall posts a secret-free payload and normalizes the draft", async () => {
   let captured;
   const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
+  const draft = verifyingKeyDraftForPayload(Buffer.from([1]));
   const responsePayload = {
     ok: true,
     submitted: false,
@@ -21815,10 +21850,8 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
     creation_time_ms: 42,
     transaction_ttl_ms: 5_000,
     entrypoint: "increment",
-    entrypoint_hash_hex: "4".repeat(64),
-    transaction_scaffold_b64: "AQ==",
-    signed_transaction_b64: "AQ==",
-    signing_message_b64: Buffer.alloc(32, 2).toString("base64"),
+    entrypoint_hash_hex: null,
+    ...draft,
     operation_receipt: {
       operation_kind: "contract_call",
       status: "pending_signature",
@@ -21830,7 +21863,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
       abi_hash_hex: "2".repeat(64),
       tx_hash_hex: null,
       entrypoint: "increment",
-      entrypoint_hash_hex: "4".repeat(64),
+      entrypoint_hash_hex: null,
       gas_limit: 42,
       gas_used: null,
       fee_payment: feePayment,
@@ -21873,11 +21906,10 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
     tx_hash_hex: null,
     creation_time_ms: 42,
     transaction_ttl_ms: 5_000,
-    entrypoint_hash_hex: "4".repeat(64),
+    entrypoint_hash_hex: null,
     entrypoint: "increment",
-    transaction_scaffold_b64: "AQ==",
-    signed_transaction_b64: "AQ==",
-    signing_message_b64: Buffer.alloc(32, 2).toString("base64"),
+    transaction_payload_b64: draft.transaction_payload_b64,
+    signing_message_b64: draft.signing_message_b64,
     operation_receipt: responsePayload.operation_receipt,
   });
 });
@@ -21982,10 +22014,8 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
     creation_time_ms: 42,
     transaction_ttl_ms: 5_000,
     entrypoint: "increment",
-    entrypoint_hash_hex: "4".repeat(64),
-    transaction_scaffold_b64: "AQ==",
-    signed_transaction_b64: "AQ==",
-    signing_message_b64: Buffer.alloc(32, 2).toString("base64"),
+    entrypoint_hash_hex: null,
+    ...verifyingKeyDraftForPayload(Buffer.from([1])),
     operation_receipt: {
       operation_kind: "contract_call",
       status: "pending_signature",
@@ -21995,7 +22025,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
       code_hash_hex: "1".repeat(64),
       abi_hash_hex: "2".repeat(64),
       entrypoint: "increment",
-      entrypoint_hash_hex: "4".repeat(64),
+      entrypoint_hash_hex: null,
       gas_limit: 42,
       payload_digest_hex: "5".repeat(64),
     },
@@ -22015,8 +22045,8 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
     ],
     [
       "noncanonical base64",
-      (value) => { value.transaction_scaffold_b64 = "AQ"; },
-      /transaction_scaffold_b64 must be exact standard-base64/,
+      (value) => { value.transaction_payload_b64 = "AQ"; },
+      /transaction_payload_b64 must be exact standard-base64/,
     ],
     [
       "unexpected response field",
@@ -22155,15 +22185,14 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
   let captured;
   const instruction = { Custom: { payload: { probe: true } } };
   const responsePayload = {
+    ...verifyingKeyDraftForPayload(Buffer.from([1])),
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
-    submitted: false,
     proposal_id: "a".repeat(64),
     instructions_hash: "a".repeat(64),
     tx_hash_hex: null,
     executed_tx_hash_hex: null,
     creation_time_ms: 123456,
-    signing_message_b64: "AQ==",
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -22442,6 +22471,11 @@ test("proposeMultisig rejects malformed success responses", async () => {
           headers: { "content-type": "application/json" },
         }),
     });
+  const validDraft = {
+    ...verifyingKeyDraftForPayload(Buffer.from([1])),
+    ok: true,
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+  };
 
   await assert.rejects(
     () =>
@@ -22454,8 +22488,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
   await assert.rejects(
     () =>
       clientWithResponse({
-        ok: true,
-        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+        ...validDraft,
         instructions_hash: "aa",
       }).proposeMultisig(request),
     /instructions_hash/,
@@ -22463,8 +22496,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
   await assert.rejects(
     () =>
       clientWithResponse({
-        ok: true,
-        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+        ...validDraft,
         signing_message_b64: "not base64",
       }).proposeMultisig(request),
     /signing_message_b64/,
@@ -22472,8 +22504,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
   await assert.rejects(
     () =>
       clientWithResponse({
-        ok: true,
-        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+        ...validDraft,
         signing_message_b64: "",
       }).proposeMultisig(request),
     /signing_message_b64/,
@@ -22481,8 +22512,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
   await assert.rejects(
     () =>
       clientWithResponse({
-        ok: true,
-        resolved_multisig_account_id: FIXTURE_ALICE_ID,
+        ...validDraft,
         creation_time_ms: -1,
       }).proposeMultisig(request),
     /creation_time_ms/,
@@ -22551,13 +22581,12 @@ test("multisig response decoders reject non-exact resolved account ids", async (
 test("proposeMultisigContractCall posts alias selector and normalizes response", async () => {
   let captured;
   const responsePayload = {
+    ...verifyingKeyDraftForPayload(Buffer.from([1])),
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
-    submitted: false,
     proposal_id: "a".repeat(64),
     instructions_hash: "a".repeat(64),
     creation_time_ms: 123456,
-    signing_message_b64: "AQ==",
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -22617,6 +22646,7 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
     submitted: true,
     proposal_id: "b".repeat(64),
     instructions_hash: "b".repeat(64),
+    tx_hash_hex: "c".repeat(64),
     executed_tx_hash_hex: "c".repeat(64),
   };
   const fetchImpl = async (url, init) => {
@@ -22646,8 +22676,8 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
   });
   assert.deepEqual(result, {
     ...responsePayload,
-    tx_hash_hex: null,
     creation_time_ms: null,
+    transaction_payload_b64: null,
     signing_message_b64: null,
   });
 });

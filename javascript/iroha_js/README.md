@@ -132,7 +132,7 @@ Use `buildSignedOrderbookOrderRequest(fields, privateKey)`,
 `buildSignedOrderbookOrderCancel(fields, privateKey)`, or
 `buildSignedOrderbookSettlementReceipt(fields, privateKey)` when callers have
 field values instead of pre-encoded Norito payload bytes. The builders accept
-camelCase or snake_case field names, encode canonical Norito bytes, attach the
+only the documented camelCase field names, encode canonical Norito bytes, attach the
 Ed25519 payload signature, and return bytes ready for validation or embedding
 in the corresponding native orderbook instruction. Torii orderbook mutation
 routes accept only a full caller-signed transaction containing that one native
@@ -151,7 +151,10 @@ PDP reference validation uses the same native bridge. Use
 proof, `validatePdpCommitmentChallenge(...)` or
 `validatePdpChallengeProof(...)` for pair binding, and
 `validatePdpBundle(...)` for the full commitment/challenge/proof set.
-`SORAFS_PDP_PAYLOAD_KINDS` exports stable kind labels.
+`SORAFS_PDP_PAYLOAD_KINDS` exports stable kind labels. All SoraFS reference
+validator options use the exact TypeScript camelCase names; snake_case option
+aliases and alternate `payload`/`noritoBytes` byte fields are rejected before
+native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
 ## Offline cash SDK boundary
 

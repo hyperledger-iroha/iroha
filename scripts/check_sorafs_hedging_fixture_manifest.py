@@ -66,11 +66,11 @@ MAX_QUANTITY_MANTISSA = (1 << 511) - 1
 MAX_QUANTITY_TEXT_LENGTH = 155
 MAX_QUANTITY_SCALE = 28
 MAX_XOR_QUANTITY_SCALE = 9
-KIND_FLAGS = {
-    "billing-line-item": "--line",
-    "billing-statement": "--statement",
-    "price-feed": "--feed",
-    "reference-price-decision": "--decision",
+SUPPORTED_KINDS = {
+    "billing-line-item",
+    "billing-statement",
+    "price-feed",
+    "reference-price-decision",
 }
 EXPECTED_STATUSES = {"accepted", "rejected"}
 HEDGING_FIXTURE_ROOT = Path("fixtures") / "sorafs_manifest" / "hedging"
@@ -495,7 +495,7 @@ def validate_manifest(manifest: dict[str, Any], errors: list[str]) -> list[dict[
             seen_names.add(name)
 
         kind = require_string(entry, "kind", path, errors)
-        if kind and kind not in KIND_FLAGS:
+        if kind and kind not in SUPPORTED_KINDS:
             errors.append(f"{path}.kind is unsupported: {kind}")
         expected_status = require_string(entry, "expected_status", path, errors)
         if expected_status and expected_status not in EXPECTED_STATUSES:
@@ -529,9 +529,9 @@ def validate_manifest(manifest: dict[str, Any], errors: list[str]) -> list[dict[
         )
 
         command = require_string(entry, "validation_command", path, errors)
-        if kind in KIND_FLAGS and norito_path is not None:
+        if kind in SUPPORTED_KINDS and norito_path is not None:
             expected_command = (
-                f"sorafs-validate hedging {KIND_FLAGS[kind]} {norito_path.as_posix()}"
+                f"sorafs-validate hedging --kind {kind} --input {norito_path.as_posix()}"
             )
             if command != expected_command:
                 errors.append(f"{path}.validation_command must be `{expected_command}`")
@@ -1431,13 +1431,14 @@ def validate_expected_status(
     kind = entry.get("kind")
     expected_status = entry.get("expected_status")
     name = entry.get("name")
-    if not isinstance(command, str) or kind not in KIND_FLAGS:
+    if not isinstance(command, str) or kind not in SUPPORTED_KINDS:
         return
-    flag = KIND_FLAGS[kind]
     expected_tokens = [
         "sorafs-validate",
         "hedging",
-        flag,
+        "--kind",
+        kind,
+        "--input",
         norito_rel_path.as_posix(),
     ]
     try:
@@ -1460,7 +1461,14 @@ def validate_expected_status(
         errors.append("validator-timeout-seconds must be positive")
         return
 
-    argv = [validator_path, "hedging", flag, norito_rel_path.as_posix()]
+    argv = [
+        validator_path,
+        "hedging",
+        "--kind",
+        kind,
+        "--input",
+        norito_rel_path.as_posix(),
+    ]
     try:
         completed = subprocess.run(
             argv,

@@ -46,7 +46,6 @@ pub(super) const OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1: u16 = 52;
 pub(super) const OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1: u16 = 53;
 pub(super) const OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1: u16 = 54;
 pub(super) const OPERATION_GATEWAY_COMPLIANCE_FETCH_V1: u16 = 55;
-pub(super) const OPERATION_POP_RUNTIME_RESOLVE_V1: u16 = 60;
 pub(super) const OPERATION_POP_ISSUER_SIGN_V1: u16 = 61;
 pub(super) const OPERATION_POP_AUTHENTICATE_V1: u16 = 62;
 pub(super) const OPERATION_POP_REGISTRY_SUBMIT_V1: u16 = 63;
@@ -104,6 +103,9 @@ pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1: u16 = 
 pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1: u16 = 115;
 pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1: u16 = 116;
 pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1: u16 = 117;
+pub(super) const OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118;
+pub(super) const OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 119;
+pub(super) const OPERATION_POP_WALLET_RECIPIENT_OPEN_V1: u16 = 120;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -141,10 +143,318 @@ pub(super) const PROVIDER_INGEST_SOURCE_STREAM_DOMAIN_V1: &[u8] =
 pub(super) const PROVIDER_INGEST_SOURCE_CHUNK_DOMAIN_V1: &[u8] =
     b"iroha.runtime-provider-broker.provider-ingest-source-chunk.v1";
 
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+struct PopRuntimeOpenResultWireV1 {
+    issuer_hsm_key_id: String,
+    issuer_public_key: [u8; 32],
+    enrollment_recipient_key_id: String,
+    enrollment_recipient_public_key_digest: [u8; 32],
+    wallet_recipient_key_id: String,
+    wallet_recipient_public_key_digest: [u8; 32],
+    wallet_wrapping_key_id: String,
+}
+
+#[derive(PartialEq, Eq, Decode, Encode)]
+struct PopRecipientOpenRequestWireV1 {
+    encrypted_payload: sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1,
+    aad: Vec<u8>,
+}
+
+impl fmt::Debug for PopRecipientOpenRequestWireV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PopRecipientOpenRequestWireV1")
+            .field("encrypted_payload", &"[REDACTED]")
+            .field("aad_len", &self.aad.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for PopRecipientOpenRequestWireV1 {
+    fn drop(&mut self) {
+        self.aad.fill(0);
+        let _ = std::hint::black_box(&self.aad);
+    }
+}
+
+#[derive(PartialEq, Eq, Decode, Encode)]
+struct PopRecipientOpenResultWireV1 {
+    plaintext: Vec<u8>,
+}
+
+impl PopRecipientOpenResultWireV1 {
+    fn take_plaintext(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.plaintext)
+    }
+}
+
+impl fmt::Debug for PopRecipientOpenResultWireV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PopRecipientOpenResultWireV1")
+            .field("plaintext", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for PopRecipientOpenResultWireV1 {
+    fn drop(&mut self) {
+        self.plaintext.fill(0);
+        let _ = std::hint::black_box(&self.plaintext);
+    }
+}
+
+fn validate_pop_open_result(
+    result: &PopRuntimeOpenResultWireV1,
+    exact: &PopCredentialRuntimeBindingWireV1,
+) -> Result<(), BrokerError> {
+    if result.issuer_hsm_key_id != exact.issuer_hsm_key_id
+        || result.issuer_public_key != exact.issuer_public_key
+        || result.enrollment_recipient_key_id != exact.enrollment_recipient_key_id
+        || result.enrollment_recipient_public_key_digest
+            != exact.enrollment_recipient_public_key_digest
+        || result.wallet_recipient_key_id != exact.wallet_recipient_key_id
+        || result.wallet_recipient_public_key_digest != exact.wallet_recipient_public_key_digest
+        || result.wallet_wrapping_key_id != exact.wallet_wrapping_key_id
+    {
+        return Err(BrokerError::Rejected);
+    }
+    Ok(())
+}
+
+fn validate_pop_cursor(
+    cursor: sorafs_node::pop_credentials::PopFinalizedCursorV1,
+) -> Result<(), BrokerError> {
+    if cursor.block_height == 0 || cursor.block_hash == [0; 32] {
+        return Err(BrokerError::Rejected);
+    }
+    Ok(())
+}
+
+const POP_RECIPIENT_AAD_MAX_BYTES_V1: usize = 64 * 1024;
+const POP_HYBRID_AEAD_TAG_BYTES_V1: usize = 16;
+
+fn pop_recipient_plaintext_limit(operation: u16) -> Result<usize, BrokerError> {
+    match operation {
+        OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1 => {
+            Ok(sorafs_node::pop_credentials::POP_ENCRYPTED_ENROLLMENT_MAX_BYTES_V1)
+        }
+        OPERATION_POP_WALLET_RECIPIENT_OPEN_V1 => {
+            Ok(sorafs_node::pop_credentials::POP_WALLET_DELIVERY_MAX_BYTES_V1)
+        }
+        _ => Err(BrokerError::Rejected),
+    }
+}
+
+fn validate_pop_recipient_open_request(
+    request: &PopRecipientOpenRequestWireV1,
+    operation: u16,
+) -> Result<(), BrokerError> {
+    let plaintext_limit = pop_recipient_plaintext_limit(operation)?;
+    let ciphertext_limit = plaintext_limit
+        .checked_add(POP_HYBRID_AEAD_TAG_BYTES_V1)
+        .ok_or(BrokerError::Rejected)?;
+    if request.encrypted_payload.version
+        != sorafs_manifest::hybrid_envelope::HYBRID_PAYLOAD_ENVELOPE_VERSION_V1
+        || request.encrypted_payload.suite.as_str()
+            != "x25519-mlkem768-chacha20poly1305-transcript-v1"
+        || iroha_crypto::HybridKemCiphertext::from_parts(
+            &request.encrypted_payload.kem.ephemeral_public,
+            &request.encrypted_payload.kem.kyber_ciphertext,
+        )
+        .is_err()
+        || request.aad.is_empty()
+        || request.aad.len() > POP_RECIPIENT_AAD_MAX_BYTES_V1
+        || request.encrypted_payload.ciphertext.len() <= POP_HYBRID_AEAD_TAG_BYTES_V1
+        || request.encrypted_payload.ciphertext.len() > ciphertext_limit
+    {
+        return Err(BrokerError::Rejected);
+    }
+    Ok(())
+}
+
+fn validate_pop_recipient_open_result(
+    result: &PopRecipientOpenResultWireV1,
+    operation: u16,
+) -> Result<(), BrokerError> {
+    let plaintext_limit = pop_recipient_plaintext_limit(operation)?;
+    if result.plaintext.is_empty() || result.plaintext.len() > plaintext_limit {
+        return Err(BrokerError::Rejected);
+    }
+    Ok(())
+}
+
 pub(super) struct ScrubbedBytes {
     pub(super) bytes: Vec<u8>,
     pub(super) inbound_permit: Option<tokio::sync::OwnedSemaphorePermit>,
     pub(super) decode_admission: Option<Arc<DecodeResourceAdmissionV1>>,
+}
+
+#[cfg(test)]
+mod pop_recipient_wire_tests {
+    use super::*;
+    use rand::{SeedableRng as _, rngs::StdRng};
+
+    fn exact_binding() -> PopCredentialRuntimeBindingWireV1 {
+        PopCredentialRuntimeBindingWireV1 {
+            issuer_policy_digest: [0x11; 32],
+            issuer_id: "pop-issuer-production-primary".to_owned(),
+            issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
+            issuer_public_key: [0x12; 32],
+            enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
+            enrollment_recipient_public_key_digest: [0x13; 32],
+            wallet_recipient_key_id: "kms:pop/wallet-recipient:primary".to_owned(),
+            wallet_recipient_public_key_digest: [0x14; 32],
+            wallet_wrapping_key_id: "kms:pop/wallet-wrap:primary".to_owned(),
+        }
+    }
+
+    fn valid_open_request() -> PopRecipientOpenRequestWireV1 {
+        let mut rng = StdRng::from_seed([0x21; 32]);
+        let recipient = iroha_crypto::HybridKeyPair::generate(&mut rng)
+            .expect("generate deterministic recipient");
+        let aad = b"sorafs-pop-recipient-wire-test".to_vec();
+        let encrypted_payload = sorafs_manifest::hybrid_envelope::encrypt_payload(
+            b"private-payload",
+            &aad,
+            recipient.public(),
+            &mut rng,
+        )
+        .expect("encrypt deterministic payload");
+        PopRecipientOpenRequestWireV1 {
+            encrypted_payload,
+            aad,
+        }
+    }
+
+    #[test]
+    fn pop_runtime_open_is_public_and_legacy_operation_is_retired() {
+        let exact = exact_binding();
+        let outcome = PopRuntimeOpenResultWireV1 {
+            issuer_hsm_key_id: exact.issuer_hsm_key_id.clone(),
+            issuer_public_key: exact.issuer_public_key,
+            enrollment_recipient_key_id: exact.enrollment_recipient_key_id.clone(),
+            enrollment_recipient_public_key_digest: exact.enrollment_recipient_public_key_digest,
+            wallet_recipient_key_id: exact.wallet_recipient_key_id.clone(),
+            wallet_recipient_public_key_digest: exact.wallet_recipient_public_key_digest,
+            wallet_wrapping_key_id: exact.wallet_wrapping_key_id.clone(),
+        };
+        assert_eq!(validate_pop_open_result(&outcome, &exact), Ok(()));
+        let mut substituted = outcome;
+        substituted.wallet_recipient_public_key_digest = [0x99; 32];
+        assert_eq!(
+            validate_pop_open_result(&substituted, &exact),
+            Err(BrokerError::Rejected)
+        );
+        assert_eq!(OPERATION_POP_RUNTIME_OPEN_V1, 118);
+        assert_eq!(OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1, 119);
+        assert_eq!(OPERATION_POP_WALLET_RECIPIENT_OPEN_V1, 120);
+        assert!(!super::super::operation_is_known(60));
+        assert_eq!(
+            pop_recipient_plaintext_limit(60),
+            Err(BrokerError::Rejected)
+        );
+    }
+
+    #[test]
+    fn pop_recipient_open_rejects_noncanonical_envelopes_and_redacts_values() {
+        let request = valid_open_request();
+        assert_eq!(
+            validate_pop_recipient_open_request(
+                &request,
+                OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1,
+            ),
+            Ok(())
+        );
+        let debug = format!("{request:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("private-payload"));
+
+        let mut missing_aad = valid_open_request();
+        missing_aad.aad.clear();
+        assert_eq!(
+            validate_pop_recipient_open_request(
+                &missing_aad,
+                OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1,
+            ),
+            Err(BrokerError::Rejected)
+        );
+        let mut wrong_version = valid_open_request();
+        wrong_version.encrypted_payload.version = 0;
+        assert_eq!(
+            validate_pop_recipient_open_request(
+                &wrong_version,
+                OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1,
+            ),
+            Err(BrokerError::Rejected)
+        );
+        let mut wrong_suite = valid_open_request();
+        wrong_suite.encrypted_payload.suite.push_str("-substituted");
+        assert_eq!(
+            validate_pop_recipient_open_request(
+                &wrong_suite,
+                OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1,
+            ),
+            Err(BrokerError::Rejected)
+        );
+        let mut malformed_kem = valid_open_request();
+        malformed_kem.encrypted_payload.kem.ephemeral_public.pop();
+        assert_eq!(
+            validate_pop_recipient_open_request(
+                &malformed_kem,
+                OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1,
+            ),
+            Err(BrokerError::Rejected)
+        );
+        let mut oversized_ciphertext = valid_open_request();
+        oversized_ciphertext.encrypted_payload.ciphertext.resize(
+            sorafs_node::pop_credentials::POP_ENCRYPTED_ENROLLMENT_MAX_BYTES_V1
+                + POP_HYBRID_AEAD_TAG_BYTES_V1
+                + 1,
+            0xA5,
+        );
+        assert_eq!(
+            validate_pop_recipient_open_request(
+                &oversized_ciphertext,
+                OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1,
+            ),
+            Err(BrokerError::Rejected)
+        );
+
+        let mut result = PopRecipientOpenResultWireV1 {
+            plaintext: b"private-payload".to_vec(),
+        };
+        let debug = format!("{result:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("private-payload"));
+        assert_eq!(
+            validate_pop_recipient_open_result(&result, OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1,),
+            Ok(())
+        );
+        assert_eq!(result.take_plaintext(), b"private-payload".to_vec());
+        assert!(result.plaintext.is_empty());
+
+        let enrollment_too_large = PopRecipientOpenResultWireV1 {
+            plaintext: vec![
+                0xA5;
+                sorafs_node::pop_credentials::POP_ENCRYPTED_ENROLLMENT_MAX_BYTES_V1 + 1
+            ],
+        };
+        assert_eq!(
+            validate_pop_recipient_open_result(
+                &enrollment_too_large,
+                OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1,
+            ),
+            Err(BrokerError::Rejected)
+        );
+        assert_eq!(
+            validate_pop_recipient_open_result(
+                &enrollment_too_large,
+                OPERATION_POP_WALLET_RECIPIENT_OPEN_V1,
+            ),
+            Ok(())
+        );
+    }
 }
 
 impl ScrubbedBytes {
@@ -351,6 +661,8 @@ pub(super) struct PopCredentialRuntimeBindingWireV1 {
     pub(super) issuer_public_key: [u8; 32],
     pub(super) enrollment_recipient_key_id: String,
     pub(super) enrollment_recipient_public_key_digest: [u8; 32],
+    pub(super) wallet_recipient_key_id: String,
+    pub(super) wallet_recipient_public_key_digest: [u8; 32],
     pub(super) wallet_wrapping_key_id: String,
 }
 
@@ -382,6 +694,8 @@ impl From<&crate::runtime_provider_registry::PopCredentialRuntimeBindingV1>
             issuer_public_key: binding.issuer_public_key,
             enrollment_recipient_key_id: binding.enrollment_recipient_key_id.clone(),
             enrollment_recipient_public_key_digest: binding.enrollment_recipient_public_key_digest,
+            wallet_recipient_key_id: binding.wallet_recipient_key_id.clone(),
+            wallet_recipient_public_key_digest: binding.wallet_recipient_public_key_digest,
             wallet_wrapping_key_id: binding.wallet_wrapping_key_id.clone(),
         }
     }

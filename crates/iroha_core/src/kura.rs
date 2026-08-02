@@ -49,7 +49,7 @@ use iroha_config::{
     },
 };
 use iroha_crypto::KeyPair;
-use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof, MerkleTree, PublicKey};
+use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof, MerkleTree, PublicKey, Signature};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
@@ -103,9 +103,10 @@ use norito::{
 use parking_lot::{Condvar, Mutex, RwLock};
 
 use crate::lane_consensus::{
-    DurableLaneBlockNewViewCertificateV1, DurableLaneBlockViewCheckpointV1,
-    DurableLanePayloadAvailabilityCertificateV1, LaneExecutablePayloadV1,
-    MAX_LANE_NEW_VIEW_CERTIFICATES, lane_payload_availability_body,
+    CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
+    DurableLaneBlockViewCheckpointV1, DurableLanePayloadAvailabilityCertificateV1,
+    LaneExecutablePayloadV1, MAX_LANE_NEW_VIEW_CERTIFICATES,
+    decode_autonomous_lane_payload_envelope, lane_payload_availability_body,
 };
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
@@ -123,10 +124,15 @@ use crate::{
     },
     sumeragi::{
         lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
-        message::KuraReplicaAdvertV1,
+        message::{
+            KuraReplicaAdvertV1, LaneHistoricalRecoveryKindV1, LaneHistoricalRecoveryPayloadV1,
+            LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
+        },
         output_guard::ConsensusOutputGuard,
+        v2_apply::PostCarrierEvidenceRepairAuthorization,
         v2_core::{
-            CanonicalIdentityProjection, IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+            CanonicalIdentityProjection, CheckedProductionTransition,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
             IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING,
             IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED,
             IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY,
@@ -152,6 +158,8 @@ use crate::{
             ProductionInFlightFirstReleaseStateProjection,
             ProductionInFlightFirstReleaseTransitionProjection,
             check_production_in_flight_first_release_transition,
+            production_in_flight_first_release_state_kernel,
+            production_in_flight_first_release_terminal_owner,
         },
     },
 };
@@ -275,6 +283,16 @@ const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_DIGEST_DOMAIN: &[u8] =
     b"iroha:kura:latest-certified-lane-block-frontier:v1\0";
 const AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX: &str = "autonomous_attempt_v1";
 const AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX: &str = "autonomous_attempt_view_v1";
+const AUTONOMOUS_LIFECYCLE_CURSOR_PREFIX: &str = "autonomous_lifecycle_v2";
+const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PREFIX: &str = "autonomous_lifecycle_bootstrap_v1";
+const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX: &str = ".autonomous-lifecycle-bootstrap-";
+const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_FILE: &str =
+    "autonomous_lifecycle_process_generation_v1.norito";
+const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_TEMP_FILE: &str =
+    "autonomous_lifecycle_process_generation_v1.norito.tmp";
+const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX: &str =
+    ".autonomous-lifecycle-process-generation-";
+const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ROOT_ENTRY_LIMIT: usize = 4_096;
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX: &str = "autonomous_latest_attempt_v1";
 const AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE: &str = "autonomous_route_latest_attempt_v1.norito";
 #[cfg(test)]
@@ -282,7 +300,38 @@ const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norit
 #[cfg(test)]
 const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
+const AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES: usize = 8 * 1024;
+const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES: usize = AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES;
+const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES: usize = 4 * 1024;
+const AUTONOMOUS_LIFECYCLE_CURSOR_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-cursor:v2\0";
+const AUTONOMOUS_LIFECYCLE_CURSOR_SIGNATURE_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-signature:v2\0";
+const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-process-generation:v1\0";
+const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-bootstrap:v1\0";
+const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_SIGNATURE_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-bootstrap-signature:v1\0";
+const AUTONOMOUS_LIFECYCLE_PRODUCER_QUEUE_CUSTODY_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-bootstrap:producer-queue-custody:v1\0";
+const AUTONOMOUS_LIFECYCLE_LOSING_RETIREMENT_CUSTODY_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-bootstrap:losing-retirement-custody:v1\0";
+const AUTONOMOUS_LIFECYCLE_CANONICAL_CARRIER_REPAIR_CUSTODY_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-bootstrap:canonical-carrier-repair-custody:v1\0";
+const AUTONOMOUS_LIFECYCLE_PROTECTED_CARRIER_RECEIVE_CUSTODY_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-bootstrap:protected-carrier-receive-custody:v1\0";
+const AUTONOMOUS_LIFECYCLE_HISTORICAL_QC_RESPONSE_CUSTODY_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-bootstrap:historical-qc-response-custody:v1\0";
+const AUTONOMOUS_LIFECYCLE_CANONICAL_HISTORICAL_RECOVERY_CUSTODY_HASH_DOMAIN: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-bootstrap:canonical-historical-recovery-custody:v1\0";
 const MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES: usize = 65_536;
+const AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_ENTRIES: usize = 4_000_000;
+const AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_DEPTH: usize = 128;
+/// One bounded atomic-replacement temporary may coexist with a full stable
+/// autonomous namespace while a lifecycle cursor CAS is being synced.
+const MAX_AUTONOMOUS_LIFECYCLE_CURSOR_CAS_PEAK_FILES: usize =
+    MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES + 1;
 include!("kura/autonomous_reservation_bounds.rs");
 const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES: usize =
     MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
@@ -293,6 +342,12 @@ const AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES: usize = 4 * 1024;
 /// Pending carrier control sidecars have separately configurable geometry;
 /// autonomous attempt retention keeps the reviewed release-default exposure.
 const AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES: usize = V2_PENDING_CONTROL_SIDECAR_BYTES.get();
+/// The stable autonomous aggregate plus one maximum-size atomic cursor temp.
+const AUTONOMOUS_LIFECYCLE_CURSOR_CAS_PEAK_BYTES: usize =
+    AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES + AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES;
+/// Stable autonomous artifacts plus one maximum bootstrap publication temporary.
+const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PEAK_BYTES: usize =
+    AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES + AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES;
 /// Bound the durable replay-claim namespace by the existing aggregate
 /// pre-carrier sidecar budget. Both main ABA tombstones and crash-staged temp
 /// claims consume one slot, so even a namespace filled with maximum-sized
@@ -321,9 +376,9 @@ const NATIVE_AMX_PARTICIPANT_RECEIPT_FILE_PREFIX: &str = "native_amx_receipt_v1_
 const NATIVE_AMX_EVIDENCE_FILE_SUFFIX: &str = ".norito";
 const NATIVE_AMX_EVIDENCE_TEMP_FILE_SUFFIX: &str = ".norito.tmp";
 const NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS: usize = 20;
-const NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE: &str = "native_amx_evidence_prune_intent_v1.norito";
+const NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE: &str = "native_amx_evidence_prune_intent_v2.norito";
 const NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE: &str =
-    "native_amx_evidence_prune_intent_v1.norito.tmp";
+    "native_amx_evidence_prune_intent_v2.norito.tmp";
 const NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT: usize = 10;
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE: &str =
     "native_amx_participant_receipts.latest_v2.norito";
@@ -650,6 +705,11 @@ pub struct Kura {
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
     sidecar_lock: Mutex<()>,
+    /// Serializes the one durable process-generation claim for this Kura instance.
+    autonomous_lifecycle_process_generation_lock: Mutex<()>,
+    /// Process-local cache of the exact durable generation claimed after peer binding.
+    autonomous_lifecycle_process_generation_claim:
+        OnceLock<AutonomousLifecycleProcessGenerationClaim>,
     /// Serializes complete historical-autonomous recovery preflight/install batches.
     historical_autonomous_recovery_mutation_lock: Mutex<()>,
     /// Bounded identities of immutable v2 finality sidecars already BLS-verified.
@@ -1560,6 +1620,16 @@ pub(crate) struct FinalizedMergeCarrierRepair {
     entry: MergeLedgerEntry,
 }
 
+impl FinalizedMergeCarrierRepair {
+    pub(crate) fn block(&self) -> &SignedBlock {
+        &self.block
+    }
+
+    pub(crate) fn entry(&self) -> &MergeLedgerEntry {
+        &self.entry
+    }
+}
+
 /// Complete read-only startup audit of finalized merge-carrier projections.
 pub(crate) struct FinalizedMergeCarrierRepairPreflight {
     repairs: Vec<FinalizedMergeCarrierRepair>,
@@ -2427,6 +2497,7 @@ impl Kura {
             .map_err(|error| Error::IO(error, configured_store_dir))?;
         let store_root = store_dir.clone();
         let store_root_lock_file = Self::acquire_store_root_lock(&store_dir)?;
+        Self::read_autonomous_lifecycle_process_generation_record_for(&store_root)?;
         let roster_retention = config.block_sync_roster_retention;
         let roster_sidecar_retention = config.roster_sidecar_retention;
         let roster_log_path = Self::roster_log_path(&store_root);
@@ -2735,8 +2806,22 @@ impl Kura {
         }
 
         let defer_lane_provisioning = authenticated_configured_catalog || journal_resolved_primary;
-        if !provisional_open && !defer_lane_provisioning {
-            Self::ensure_lane_directories(&store_dir, lane_config, &blocks_root, &merge_log_path)?;
+        if !provisional_open {
+            if defer_lane_provisioning {
+                // The authenticated catalog or geometry journal will provision secondary lanes
+                // after its binding is verified.  The already-resolved canonical lane still
+                // needs its auxiliary directory before startup replay inventories it.
+                let lane_artifacts_dir = Self::lane_artifact_dir(&blocks_root);
+                std::fs::create_dir_all(&lane_artifacts_dir)
+                    .map_err(|err| Error::MkDir(err, lane_artifacts_dir))?;
+            } else {
+                Self::ensure_lane_directories(
+                    &store_dir,
+                    lane_config,
+                    &blocks_root,
+                    &merge_log_path,
+                )?;
+            }
         }
         let startup_lane_storage_entries = if defer_lane_provisioning {
             BTreeMap::from([(primary_lane.lane_id, primary_lane.clone())])
@@ -2776,6 +2861,8 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock: Mutex::new(()),
+            autonomous_lifecycle_process_generation_lock: Mutex::new(()),
+            autonomous_lifecycle_process_generation_claim: OnceLock::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: Mutex::new(VecDeque::new()),
             v2_startup_finality_verification_inventory: Mutex::new(None),
@@ -2931,6 +3018,8 @@ impl Kura {
             total_disk_usage_scan_paused: AtomicBool::new(false),
             _temp_store_dir: None,
         });
+
+        kura.audit_retained_autonomous_lifecycle_cursor_generations()?;
 
         if !provisional_open {
             kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
@@ -3111,6 +3200,8 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
+            autonomous_lifecycle_process_generation_lock: Mutex::new(()),
+            autonomous_lifecycle_process_generation_claim: OnceLock::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: Mutex::new(VecDeque::new()),
             v2_startup_finality_verification_inventory: Mutex::new(None),
@@ -4894,10 +4985,9 @@ impl Kura {
             manifest_bytes_u64,
             receipt_bytes_u64,
         )?;
-        if !self.native_amx_participant_evidence_pair_fits_stable_bytes(
-            manifest_bytes,
-            receipt_bytes,
-        ) {
+        if !self
+            .native_amx_participant_evidence_pair_fits_stable_bytes(manifest_bytes, receipt_bytes)
+        {
             return Err(
                 NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
                     "Native AMX participant manifest/receipt pair is {pair_bytes} bytes, exceeding the configured shared stable aggregate byte bound of {} bytes",
@@ -4922,19 +5012,15 @@ impl Kura {
     ) -> std::result::Result<(), NativeAmxParticipantApplicationEvidenceByteBudgetError> {
         let finality_artifact_hash = finality_artifact_hash
             .unwrap_or_else(native_amx_participant_application_finality_placeholder_hash);
-        let artifacts = native_amx_participant_application_artifacts(
-            manifest,
-            finality_artifact_hash,
-        )
-        .ok_or(
-            NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactConstruction,
-        )?;
+        let artifacts =
+            native_amx_participant_application_artifacts(manifest, finality_artifact_hash).ok_or(
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactConstruction,
+            )?;
         for (manifest, receipt) in artifacts {
             let (manifest_bytes, receipt_bytes) =
-                native_amx_participant_application_pair_framed_bytes(&manifest, &receipt)
-                    .map_err(
-                        NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactFraming,
-                    )?;
+                native_amx_participant_application_pair_framed_bytes(&manifest, &receipt).map_err(
+                    NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactFraming,
+                )?;
             self.validate_native_amx_participant_application_pair_byte_lengths(
                 manifest_bytes.len(),
                 receipt_bytes.len(),
@@ -5090,7 +5176,10 @@ impl Kura {
         let max_entries = Self::native_amx_evidence_prune_intent_max_entries(retention)?;
         let shared_budget = pending_control_sidecar_bytes;
         let allocation_bytes = max_entries
-            .checked_mul(std::mem::size_of::<NativeAmxEvidencePruneEntryV1>())
+            .checked_mul(std::mem::size_of::<NativeAmxEvidencePruneEntryV2>())
+            .and_then(|bytes| {
+                bytes.checked_add(std::mem::size_of::<NativeAmxEvidencePruneProtectedLatestV2>())
+            })
             .ok_or_else(|| {
                 Error::PruneIntentConflict(
                     "configured Native AMX evidence prune-intent allocation overflowed".to_owned(),
@@ -5103,19 +5192,37 @@ impl Kura {
             ));
         }
 
-        let maximum_entry = NativeAmxEvidencePruneEntryV1 {
-            kind: NativeAmxEvidencePruneIntentV1::RECEIPT_KIND,
+        let maximum_hash = Hash::prehashed([u8::MAX; Hash::LENGTH]);
+        let maximum_entry = NativeAmxEvidencePruneEntryV2 {
+            kind: NativeAmxEvidencePruneIntentV2::RECEIPT_KIND,
             participant_height: u64::MAX,
-            artifact_hash: Hash::prehashed([u8::MAX; Hash::LENGTH]),
+            artifact_hash: maximum_hash,
         };
         let mut entries = Vec::new();
         entries.try_reserve_exact(max_entries)?;
         entries.resize(max_entries, maximum_entry);
-        let maximum_intent = NativeAmxEvidencePruneIntentV1 {
-            version: NativeAmxEvidencePruneIntentV1::VERSION,
+        let maximum_intent = NativeAmxEvidencePruneIntentV2 {
+            version: NativeAmxEvidencePruneIntentV2::VERSION,
             lane_id: LaneId::new(u32::MAX),
             dataspace_id: DataSpaceId::new(u64::MAX),
-            lane_incarnation: Hash::prehashed([u8::MAX; Hash::LENGTH]),
+            lane_incarnation: maximum_hash,
+            protected_latest: NativeAmxEvidencePruneProtectedLatestV2 {
+                identity: NativeAmxParticipantReceiptLatestIndexV2 {
+                    version: NativeAmxParticipantReceiptLatestIndexV2::VERSION,
+                    lane_id: LaneId::new(u32::MAX),
+                    dataspace_id: DataSpaceId::new(u64::MAX),
+                    lane_incarnation: maximum_hash,
+                    lane_block_height: u64::MAX,
+                    participant_proposal_hash: maximum_hash,
+                    participant_settlement_hash: HashOf::from_untyped_unchecked(maximum_hash),
+                    application_block_height: u64::MAX,
+                    application_block_hash: HashOf::from_untyped_unchecked(maximum_hash),
+                    executed_block_wire_hash: maximum_hash,
+                    finality_artifact_hash: HashOf::from_untyped_unchecked(maximum_hash),
+                    manifest_artifact_hash: HashOf::from_untyped_unchecked(maximum_hash),
+                },
+                receipt_artifact_hash: HashOf::from_untyped_unchecked(maximum_hash),
+            },
             entries,
         };
         let encoded_len = norito::encode_canonical(&maximum_intent)?.len();
@@ -6876,6 +6983,76 @@ impl Kura {
                 Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
                 Err(error) => Err(error),
             }
+        }
+    }
+
+    fn remove_bound_progress_file_if_matches(
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        expected: &std::fs::File,
+        expected_snapshot: &StableSidecarMetadata,
+    ) -> std::io::Result<()> {
+        let immediate = namespace.directories.first().ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bound progress namespace has no immediate directory",
+            )
+        })?;
+        if path.parent() != Some(immediate.expected_path.as_path()) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "progress file is outside its bound namespace",
+            ));
+        }
+        let name = path.file_name().ok_or_else(|| {
+            std::io::Error::new(ErrorKind::InvalidInput, "progress file has no entry name")
+        })?;
+        let expected_metadata = expected.metadata()?;
+        if !Self::sidecar_file_metadata_unchanged(&expected_snapshot.file, &expected_metadata) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "progress file changed after exact-object verification",
+            ));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let entry =
+                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(std::io::Error::from)?;
+            if rustix::fs::FileType::from_raw_mode(entry.st_mode)
+                != rustix::fs::FileType::RegularFile
+                || expected_metadata.nlink() != 1
+                || entry.st_dev as u64 != expected_snapshot.file.dev()
+                || entry.st_ino as u64 != expected_snapshot.file.ino()
+                || entry.st_nlink as u64 != 1
+            {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress file changed before exact-object removal",
+                ));
+            }
+            rustix::fs::unlinkat(&immediate.file, name, rustix::fs::AtFlags::empty())
+                .map_err(std::io::Error::from)?;
+            return Ok(());
+        }
+
+        #[cfg(not(unix))]
+        {
+            let current = std::fs::symlink_metadata(path)?;
+            if current.file_type().is_symlink()
+                || !current.is_file()
+                || !Self::sidecar_is_single_link(&current)
+                || !Self::sidecar_file_metadata_unchanged(&expected_snapshot.file, &current)
+            {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress file changed before exact-object removal",
+                ));
+            }
+            std::fs::remove_file(path)
         }
     }
 
@@ -9004,9 +9181,21 @@ impl Kura {
     pub(crate) fn apply_finalized_merge_carrier_repairs(
         &self,
         repairs: &[FinalizedMergeCarrierRepair],
+        repair_authorizations: Vec<Vec<PostCarrierEvidenceRepairAuthorization>>,
     ) -> Result<usize> {
         if repairs.is_empty() {
+            if !repair_authorizations.is_empty() {
+                return Err(Error::MergeCarrierConflict(
+                    "empty finalized merge-carrier repair received repair authority".to_owned(),
+                ));
+            }
             return Ok(0);
+        }
+        if repair_authorizations.len() != repairs.len() {
+            return Err(Error::MergeCarrierConflict(
+                "finalized merge-carrier repair authority cardinality changed after preflight"
+                    .to_owned(),
+            ));
         }
         let durable_count = self.exact_durable_blocks_count()?;
         {
@@ -9031,6 +9220,17 @@ impl Kura {
                     }
                 }
             }
+            // Consume the complete move-only repair set after the raw
+            // finality/body/entry revalidation and before the first reverse
+            // carrier, transaction-index, or receipt publication.
+            for (repair, authorizations) in repairs.iter().zip(repair_authorizations.into_iter()) {
+                self.consume_post_carrier_evidence_repair_authorizations(
+                    &repair.entry,
+                    repair.block.header().height().get(),
+                    repair.block.hash(),
+                    authorizations,
+                )?;
+            }
             for repair in repairs {
                 let _ = self.append_committed_merge_entry_for_block_if_missing(
                     &repair.block,
@@ -9050,7 +9250,11 @@ impl Kura {
             }
         }
         for repair in repairs {
-            self.persist_merge_lane_block_application_receipts_from_committed_log(&repair.entry)?;
+            self.persist_merge_lane_block_application_receipts_after_repair_authorization(
+                &repair.entry,
+                repair.block.header().height().get(),
+                repair.block.hash(),
+            )?;
             self.remove_committed_pending_merge_entry_best_effort(repair.entry.canonical_hash());
         }
         Ok(repairs.len())
@@ -17407,639 +17611,7 @@ impl Kura {
         Ok(())
     }
 
-    fn read_durable_hash_at_height(
-        block_store: &mut BlockStore,
-        height: u64,
-    ) -> Result<Option<HashOf<BlockHeader>>> {
-        let durable_count = block_store.read_durable_index_count()?;
-        if durable_count < height {
-            return Ok(None);
-        }
-        Ok(block_store
-            .read_block_hashes(height.saturating_sub(1), 1)?
-            .first()
-            .copied())
-    }
-
-    fn ensure_durable_block_at_height(&self, height: u64, hash: HashOf<BlockHeader>) -> Result<()> {
-        let mut block_store = self.block_store.lock();
-        match Self::read_durable_hash_at_height(&mut block_store, height)? {
-            Some(existing) if existing == hash => Ok(()),
-            Some(expected) => Err(Error::BlockHeightConflict {
-                height,
-                expected,
-                actual: hash,
-            }),
-            None => {
-                let expected_next_height =
-                    block_store.read_durable_index_count()?.saturating_add(1);
-                Err(Error::BlockHeightGap {
-                    expected_next_height,
-                    actual_height: height,
-                })
-            }
-        }
-    }
-
-    fn append_debug_block_dump(&self, block: &Arc<SignedBlock>) {
-        let Some(path) = self.block_plain_text_path.lock().clone() else {
-            return;
-        };
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let debug_before = match Self::file_len_or_zero(&path) {
-            Ok(bytes) => Some(bytes),
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to measure debug block dump before append"
-                );
-                None
-            }
-        };
-        if let Err(error) = Self::append_blocks_jsonl(&path, std::slice::from_ref(block)) {
-            warn!(
-                ?error,
-                path = %path.display(),
-                "Failed to append debug block dump"
-            );
-        }
-        if let Some(debug_before) = debug_before {
-            match Self::file_len_or_zero(&path) {
-                Ok(debug_after) => {
-                    self.update_disk_usage_delta(debug_before, debug_after);
-                    accounting_mutation.finish();
-                }
-                Err(err) => warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to measure debug block dump after append"
-                ),
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn persist_block_at_height(&self, block: &Arc<SignedBlock>, height: u64) -> Result<()> {
-        let write_guard = self.lock_block_store_for_write();
-        self.persist_block_at_height_while_locked(block, height, &write_guard)
-    }
-
-    fn persist_block_at_height_while_locked(
-        &self,
-        block: &Arc<SignedBlock>,
-        height: u64,
-        _write_guard: &parking_lot::MutexGuard<'_, ()>,
-    ) -> Result<()> {
-        self.ensure_canonical_storage_not_poisoned()?;
-        #[cfg(test)]
-        if self.fail_next_block_write.swap(false, Ordering::Relaxed) {
-            return Err(Error::IO(
-                std::io::Error::other("kura store_block injected failure"),
-                PathBuf::from("block_store_test_fail"),
-            ));
-        }
-
-        let start_height = height.saturating_sub(1);
-        self.ensure_no_pending_rollback()?;
-        let mut block_store = self.block_store.lock();
-        let block_store_before = match Self::block_store_tracked_bytes(&mut block_store) {
-            Ok(bytes) => Some(bytes),
-            Err(err) => {
-                warn!(?err, "failed to measure block store bytes before append");
-                None
-            }
-        };
-        let total_initialized = self.disk_usage_total_initialized.load(Ordering::Relaxed);
-        let da_before = if total_initialized {
-            match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    warn!(?err, "failed to measure DA payload bytes before append");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let mut accounting_complete =
-            block_store_before.is_some() && (!total_initialized || da_before.is_some());
-        if let Err(error) = block_store.append_block_batch_at(
-            start_height,
-            std::slice::from_ref(block),
-            self.max_disk_usage_bytes,
-        ) {
-            if matches!(error, Error::DaBlockRewriteCommitStateUnknown { .. }) {
-                self.poison_canonical_storage("ambiguous DA block rewrite publication", &error);
-            }
-            return Err(error);
-        }
-        if let Some(message) = block_store.take_deferred_da_recovery_fault() {
-            let recovery_error = Error::IO(
-                std::io::Error::other(message),
-                block_store.da_block_rewrite_stage_path(),
-            );
-            self.poison_canonical_storage("committed DA block rewrite recovery", &recovery_error);
-            return Err(Error::CanonicalBlockCommittedRecoveryRequired {
-                detail: format!(
-                    "DA rewrite marker committed but body promotion could not complete: {recovery_error}"
-                ),
-            });
-        }
-        if let Err(error) = block_store.flush_pending_fsync(true) {
-            let publication_is_ambiguous =
-                matches!(error, Error::DaBlockRewriteCommitStateUnknown { .. });
-            drop(block_store);
-            if publication_is_ambiguous {
-                self.poison_canonical_storage("ambiguous block append publication", &error);
-            }
-            return Err(error);
-        }
-        let rewritten_index = block_store.read_block_index(start_height)?;
-        if !rewritten_index.is_evicted()
-            && let Err(error) = block_store.remove_da_block_file(height)
-        {
-            warn!(
-                ?error,
-                height, "canonical inline rewrite is durable but stale DA-sidecar cleanup failed"
-            );
-            self.record_writer_fault("stale DA-sidecar cleanup", &error);
-        }
-
-        if let Some(block_store_before) = block_store_before {
-            match Self::block_store_tracked_bytes(&mut block_store) {
-                Ok(after_bytes) => self.update_disk_usage_delta(block_store_before, after_bytes),
-                Err(err) => {
-                    accounting_complete = false;
-                    warn!(?err, "failed to measure block store bytes after append");
-                }
-            }
-        }
-        if let Some(da_before) = da_before {
-            match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
-                Ok(da_after) => self.update_total_disk_usage_delta(da_before, da_after),
-                Err(err) => {
-                    accounting_complete = false;
-                    warn!(?err, "failed to measure DA payload bytes after append");
-                }
-            }
-        }
-        match usize::try_from(height) {
-            Ok(persisted_count) => self.publish_durable_budget_snapshot(persisted_count, 0),
-            Err(err) => {
-                warn!(?err, height, "failed to cache Kura durable budget metadata");
-                self.invalidate_durable_budget_snapshot();
-            }
-        }
-        if accounting_complete {
-            accounting_mutation.finish();
-        }
-        Ok(())
-    }
-
-    fn store_block_durable(
-        &self,
-        block: &Arc<SignedBlock>,
-        merge_entry: Option<&MergeLedgerEntry>,
-    ) -> Result<()> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        self.resolve_canonical_storage_before_mutation()?;
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        self.resolve_retained_block_rewrite_stage_before_canonical_mutation(&blocks_dir)?;
-        let block_hash = block.hash();
-        let actual_height = block.header().height().get();
-        let actual_height_usize = usize::try_from(actual_height)?;
-        match (Self::block_merge_reference(block), merge_entry) {
-            (Some(reference), Some(entry)) if reference.matches_entry(entry) => {}
-            (Some(reference), None) => {
-                return Err(Error::MissingCertifiedMergeSidecar {
-                    entry_hash: reference.entry_hash,
-                });
-            }
-            (Some(_), Some(_)) => {
-                return Err(Error::MergeReferenceMismatch(
-                    "block compact reference does not match supplied merge entry".to_owned(),
-                ));
-            }
-            (None, Some(_)) => {
-                return Err(Error::MergeReferenceMismatch(
-                    "merge entry supplied for a block without a compact reference".to_owned(),
-                ));
-            }
-            (None, None) => {}
-        }
-        if let Some(entry) = merge_entry {
-            Self::validate_merge_transaction_uniqueness(block, entry)?;
-        }
-
-        {
-            let block_data = self.block_data.lock();
-            self.ensure_prune_recovery_not_required()?;
-            Self::validate_next_or_existing_block(
-                block_data.as_slice(),
-                actual_height,
-                actual_height_usize,
-                block_hash,
-            )?;
-            if actual_height <= u64::try_from(block_data.len())? {
-                let chain_len = block_data.len();
-                drop(block_data);
-                self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
-                if let Some(entry) = merge_entry {
-                    self.preflight_committed_merge_entry_for_block(block, entry)?;
-                    let associated = self.associated_merge_entry_for_block(block)?;
-                    if associated.as_ref() != Some(entry) {
-                        self.persist_pending_certified_merge_entry(entry)?;
-                    }
-                }
-                self.persist_lane_payload_ownership_artifacts_for_block(block)?;
-                self.set_block_height_index_entry(actual_height_usize, block_hash);
-                if let Some(entry) = merge_entry {
-                    self.set_transaction_entrypoint_index_entry_with_merge(
-                        actual_height_usize,
-                        block,
-                        None,
-                        chain_len,
-                        false,
-                    );
-                    self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                } else {
-                    self.set_transaction_entrypoint_index_entry(
-                        actual_height_usize,
-                        block,
-                        chain_len,
-                        None,
-                    );
-                }
-                debug!(
-                    height = actual_height,
-                    ?block_hash,
-                    "block already durably stored in Kura"
-                );
-                return Ok(());
-            }
-        }
-
-        if let Some(entry) = merge_entry {
-            self.preflight_committed_merge_entry_for_block(block, entry)?;
-        }
-        self.check_storage_budget(block, merge_entry)?;
-        if let Some(entry) = merge_entry {
-            // The exact full entry is the recovery source for every crash after
-            // the canonical block commit point, including direct callers that
-            // did not arrive through the pending sidecar transport.
-            self.persist_pending_certified_merge_entry(entry)?;
-            #[cfg(test)]
-            self.maybe_pause_store_after_pending_merge_stage_for_tests();
-        }
-        let mut lane_artifacts = self.stage_lane_payload_ownership_artifacts_for_block(
-            block,
-            LaneBlockArtifactConflictPolicy::PreserveCanonical,
-        )?;
-
-        // Lane-artifact staging, when present, already owns `sidecar_lock`. Canonical mutation
-        // therefore follows one global order: sidecar -> block-store write -> block_data.
-        let write_guard = self.lock_block_store_for_write();
-        let mut block_data = self.block_data.lock();
-        self.ensure_prune_recovery_not_required()?;
-        Self::validate_next_or_existing_block(
-            block_data.as_slice(),
-            actual_height,
-            actual_height_usize,
-            block_hash,
-        )?;
-        if actual_height <= u64::try_from(block_data.len())? {
-            let chain_len = block_data.len();
-            drop(block_data);
-            self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
-            if let Some(entry) = merge_entry {
-                self.preflight_committed_merge_entry_for_block(block, entry)?;
-            }
-            if let Some(batch) = lane_artifacts.take() {
-                batch.commit();
-            }
-            self.set_block_height_index_entry(actual_height_usize, block_hash);
-            if let Some(entry) = merge_entry {
-                self.set_transaction_entrypoint_index_entry_with_merge(
-                    actual_height_usize,
-                    block,
-                    None,
-                    chain_len,
-                    false,
-                );
-                self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-            } else {
-                self.set_transaction_entrypoint_index_entry(
-                    actual_height_usize,
-                    block,
-                    chain_len,
-                    None,
-                );
-            }
-            debug!(
-                height = actual_height,
-                ?block_hash,
-                "block was durably stored in Kura while waiting to append"
-            );
-            return Ok(());
-        }
-
-        if let Some(entry) = merge_entry {
-            // Recheck after all fallible staging and while the canonical height
-            // is still exclusively reserved. Deterministic binding conflicts
-            // must fail before the block becomes irrevocable.
-            self.preflight_committed_merge_entry_for_block(block, entry)?;
-        }
-
-        self.write_canonical_association_stage(block, merge_entry)?;
-        if let Err(err) =
-            self.persist_block_at_height_while_locked(block, actual_height, &write_guard)
-        {
-            if matches!(
-                err,
-                Error::DaBlockRewriteCommitStateUnknown { .. }
-                    | Error::CanonicalBlockCommittedRecoveryRequired { .. }
-                    | Error::CanonicalStoragePoisoned
-            ) {
-                // Startup resolves the marker first, then applies or discards the durable
-                // association stage against the selected canonical block hash.
-                return Err(err);
-            }
-            if let Some(mut batch) = lane_artifacts.take()
-                && let Err(rollback_err) = batch.rollback()
-            {
-                error!(
-                    ?rollback_err,
-                    ?block_hash,
-                    "Failed to rollback lane artifacts after block write failure"
-                );
-            }
-            self.remove_canonical_association_stage()?;
-            return Err(err);
-        }
-
-        if let Some(batch) = lane_artifacts.take() {
-            batch.commit();
-        }
-        block_data.push((block_hash, Some(Arc::clone(block))));
-        Self::drop_persisted_blocks(
-            &mut block_data,
-            actual_height_usize,
-            self.blocks_in_memory.get(),
-        );
-        let new_len = block_data.len();
-        self.set_block_height_index_entry(actual_height_usize, block_hash);
-        // The canonical block is now durable, but its compact merge reference
-        // is not query-complete until the full entry, sparse carrier record,
-        // and exact finality projection are all durable. Passing no entry
-        // records that prepublication frontier.
-        self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len, None);
-        drop(block_data);
-        // Apply associations only after block_data and the durable marker agree. The durable
-        // stage remains authoritative across any post-commit association failure.
-        if let Err(association_error) = self.recover_canonical_association_stage() {
-            return Err(self.committed_recovery_failure(
-                "committed canonical association recovery",
-                &association_error,
-            ));
-        }
-        self.append_debug_block_dump(block);
-
-        if let Some(entry) = merge_entry {
-            // The block fsync above is the Kura commit point. From here on all
-            // repair is monotonic: never truncate the block, lane artifacts, or
-            // a successfully appended merge frame when a later write fails.
-            if let Err(err) = self.append_committed_merge_entry_for_block_if_missing(block, entry) {
-                error!(
-                    ?err,
-                    ?block_hash,
-                    entry_epoch = entry.epoch_id,
-                    "Failed to publish merge-ledger association after canonical block commit"
-                );
-                return Err(self.committed_recovery_failure(
-                    "committed merge-ledger association publication",
-                    &err,
-                ));
-            }
-            // Canonical-association recovery already attempted the
-            // post-commit cleanup. Preserve its redundant repair sidecar when
-            // that best-effort removal failed; an idempotent store retry uses
-            // the existing-block branch above to remove it.
-        }
-
-        debug!(
-            height = actual_height,
-            new_len,
-            ?block_hash,
-            "stored block durably in Kura"
-        );
-
-        Ok(())
-    }
-
-    fn validate_next_or_existing_block(
-        block_data: &[(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)],
-        actual_height: u64,
-        actual_height_usize: usize,
-        block_hash: HashOf<BlockHeader>,
-    ) -> Result<()> {
-        let expected_next_height = u64::try_from(block_data.len())?.saturating_add(1);
-
-        if actual_height < expected_next_height {
-            let index = actual_height_usize.saturating_sub(1);
-            if let Some((expected, _)) = block_data.get(index) {
-                if *expected == block_hash {
-                    return Ok(());
-                }
-                return Err(Error::BlockHeightConflict {
-                    height: actual_height,
-                    expected: *expected,
-                    actual: block_hash,
-                });
-            }
-        }
-
-        if actual_height > expected_next_height {
-            return Err(Error::BlockHeightGap {
-                expected_next_height,
-                actual_height,
-            });
-        }
-
-        Ok(())
-    }
-
-    fn file_len_or_zero(path: &Path) -> Result<u64> {
-        if path.as_os_str().is_empty() {
-            return Ok(0);
-        }
-        match std::fs::metadata(path) {
-            Ok(meta) => Ok(meta.len()),
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(0),
-            Err(err) => Err(Error::IO(err, path.to_path_buf())),
-        }
-    }
-
-    fn read_block_data_from_file(
-        file: &mut FileWrap,
-        start_location_in_data_file: u64,
-        dest_buffer: &mut [u8],
-    ) -> Result<()> {
-        file.try_io(|file| {
-            file.seek(SeekFrom::Start(start_location_in_data_file))?;
-            file.read_exact(dest_buffer)
-        })
-    }
-
-    fn write_atomic_synced_replace(&self, path: &Path, bytes: &[u8]) -> Result<()> {
-        self.write_atomic_synced_impl(path, bytes, true).map(|_| ())
-    }
-
-    fn write_atomic_synced_noclobber(&self, path: &Path, bytes: &[u8]) -> Result<bool> {
-        self.write_atomic_synced_impl(path, bytes, false)
-    }
-
-    fn write_atomic_synced_impl(
-        &self,
-        path: &Path,
-        bytes: &[u8],
-        allow_replace: bool,
-    ) -> Result<bool> {
-        self.durable_mutation_authorized()?;
-        let parent = path.parent().ok_or_else(|| {
-            Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "atomic sidecar path has no parent directory",
-                ),
-                path.to_path_buf(),
-            )
-        })?;
-        let (_, directory_before) = self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
-            Error::IO(
-                std::io::Error::new(
-                    ErrorKind::NotFound,
-                    "atomic sidecar directory does not exist",
-                ),
-                parent.to_path_buf(),
-            )
-        })?;
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".kura-sidecar-")
-            .tempfile_in(parent)
-            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        let (_, directory_after_create) =
-            self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::NotFound,
-                        "atomic sidecar directory disappeared",
-                    ),
-                    parent.to_path_buf(),
-                )
-            })?;
-        if !Self::sidecar_metadata_same_object(&directory_before, &directory_after_create) {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "atomic sidecar directory changed while creating the temporary file",
-                ),
-                parent.to_path_buf(),
-            ));
-        }
-        let temporary_metadata = temporary
-            .as_file()
-            .metadata()
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        if !temporary_metadata.is_file() || !Self::sidecar_is_single_link(&temporary_metadata) {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "atomic sidecar temporary path is not a single-link regular file",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        temporary
-            .as_file_mut()
-            .write_all(bytes)
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        temporary
-            .as_file_mut()
-            .flush()
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let (_, directory_before_persist) =
-            self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::NotFound,
-                        "atomic sidecar directory disappeared before rename",
-                    ),
-                    parent.to_path_buf(),
-                )
-            })?;
-        if !Self::sidecar_metadata_same_object(&directory_before, &directory_before_persist) {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "atomic sidecar directory changed before rename",
-                ),
-                parent.to_path_buf(),
-            ));
-        }
-        let persisted = if allow_replace {
-            temporary
-                .persist(path)
-                .map_err(|error| Error::IO(error.error, path.to_path_buf()))?
-        } else {
-            match temporary.persist_noclobber(path) {
-                Ok(file) => file,
-                Err(error) if error.error.kind() == ErrorKind::AlreadyExists => return Ok(false),
-                Err(error) => return Err(Error::IO(error.error, path.to_path_buf())),
-            }
-        };
-        persisted
-            .sync_all()
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let persisted_metadata = persisted
-            .metadata()
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let path_metadata = std::fs::symlink_metadata(path)
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let (_, directory_after_persist) =
-            self.canonical_sidecar_directory(parent)?.ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::NotFound,
-                        "atomic sidecar directory disappeared after rename",
-                    ),
-                    parent.to_path_buf(),
-                )
-            })?;
-        if !Self::sidecar_metadata_same_object(&directory_before, &directory_after_persist)
-            || path_metadata.file_type().is_symlink()
-            || !path_metadata.is_file()
-            || !Self::sidecar_file_metadata_unchanged(&persisted_metadata, &path_metadata)
-            || persisted_metadata.len() != u64::try_from(bytes.len())?
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "atomic sidecar changed during durable rename",
-                ),
-                path.to_path_buf(),
-            ));
-        }
-        sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-        Ok(true)
-    }
+    include!("kura/durable_block_and_atomic_sidecar_io.rs");
 
     fn prune_intent_path_for(store_root: &Path) -> PathBuf {
         store_root.join(PRUNE_INTENT_FILE_NAME)
@@ -18920,6 +18492,12 @@ impl Kura {
                 .lane_geometry_journal_path()
                 .with_extension("norito.tmp"),
         )?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+        )?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &Self::autonomous_lifecycle_process_generation_temp_path_for(&self.store_root),
+        )?);
         Ok(used)
     }
 
@@ -18973,6 +18551,12 @@ impl Kura {
             &self
                 .lane_geometry_journal_path()
                 .with_extension("norito.tmp"),
+        )?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+        )?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &Self::autonomous_lifecycle_process_generation_temp_path_for(&self.store_root),
         )?);
         Ok(used)
     }
@@ -20438,6 +20022,147 @@ impl Kura {
         Ok(Some(bytes))
     }
 
+    fn open_bound_regular_file_with_exact_bytes_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        expected_bytes: &[u8],
+        max_bytes: usize,
+        kind: &str,
+    ) -> Result<(std::fs::File, StableSidecarMetadata)> {
+        let directory = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} path has no directory"),
+            )
+        })?;
+        let metadata = Self::regular_sidecar_metadata_for(&self.store_root, path, directory)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{kind} disappeared before exact-object binding"),
+                )
+            })?;
+        let len = usize::try_from(metadata.file.len())?;
+        if len == 0 || len > max_bytes || len != expected_bytes.len() {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} changed size before exact-object binding"),
+            ));
+        }
+        let mut file = Self::open_bound_progress_file(namespace, path, &metadata)?;
+        self.verify_bound_open_regular_file_exact_bytes_locked(
+            namespace,
+            path,
+            &mut file,
+            &metadata,
+            expected_bytes,
+            max_bytes,
+            kind,
+        )?;
+        Ok((file, metadata))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_bound_open_regular_file_exact_bytes_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        file: &mut std::fs::File,
+        metadata: &StableSidecarMetadata,
+        expected_bytes: &[u8],
+        max_bytes: usize,
+        kind: &str,
+    ) -> Result<()> {
+        let directory = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} path has no directory"),
+            )
+        })?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let mut readback = Vec::with_capacity(expected_bytes.len());
+        std::io::Read::by_ref(&mut *file)
+            .take(u64::try_from(max_bytes)?.saturating_add(1))
+            .read_to_end(&mut readback)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let current = Self::regular_sidecar_metadata_for(&self.store_root, path, directory)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{kind} disappeared during exact-object binding"),
+                )
+            })?;
+        if readback != expected_bytes
+            || !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened)
+            || !Self::stable_sidecar_metadata_unchanged(&metadata, &current)
+            || !Self::progress_mutation_namespace_unchanged(namespace)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} changed during exact-object binding"),
+            ));
+        }
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        file: &mut std::fs::File,
+        metadata: &StableSidecarMetadata,
+        expected_bytes: &[u8],
+        max_bytes: usize,
+        kind: &str,
+    ) -> Result<()> {
+        let directory = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} path has no directory"),
+            )
+        })?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let mut readback = Vec::with_capacity(expected_bytes.len());
+        std::io::Read::by_ref(&mut *file)
+            .take(u64::try_from(max_bytes)?.saturating_add(1))
+            .read_to_end(&mut readback)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let current = Self::regular_sidecar_metadata_for(&self.store_root, path, directory)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{kind} disappeared after namespace mutation"),
+                )
+            })?;
+        if readback != expected_bytes
+            || metadata.canonical_path != current.canonical_path
+            || !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened)
+            || !Self::sidecar_file_metadata_unchanged(&metadata.file, &current.file)
+            || !Self::sidecar_directory_binding_unchanged(&metadata.directory, &current.directory)
+            || !Self::progress_mutation_namespace_unchanged(namespace)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} changed after namespace mutation"),
+            ));
+        }
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        Ok(())
+    }
+
     fn publish_bound_noclobber_file_locked(
         &self,
         namespace: &BoundProgressNamespace,
@@ -20702,31 +20427,145 @@ impl Kura {
     }
 
     fn native_amx_evidence_prune_entry_kind(
-        entry: &NativeAmxEvidencePruneEntryV1,
+        entry: &NativeAmxEvidencePruneEntryV2,
     ) -> Result<NativeAmxEvidenceKind> {
         match entry.kind {
-            NativeAmxEvidencePruneIntentV1::MANIFEST_KIND => Ok(NativeAmxEvidenceKind::Manifest),
-            NativeAmxEvidencePruneIntentV1::RECEIPT_KIND => Ok(NativeAmxEvidenceKind::Receipt),
+            NativeAmxEvidencePruneIntentV2::MANIFEST_KIND => Ok(NativeAmxEvidenceKind::Manifest),
+            NativeAmxEvidencePruneIntentV2::RECEIPT_KIND => Ok(NativeAmxEvidenceKind::Receipt),
             _ => Err(Error::PruneIntentConflict(
                 "Native AMX evidence prune intent contains an unknown artifact kind".to_owned(),
             )),
         }
     }
 
+    /// Authenticate the prune-owned latest identity without trusting the
+    /// replaceable derived pointer.
+    ///
+    /// The caller holds `prune_lock`, `canonical_chain_lock`,
+    /// `lane_geometry_lock`, and `sidecar_lock`, in that order.
+    fn validate_native_amx_evidence_prune_protected_latest_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        protected: NativeAmxEvidencePruneProtectedLatestV2,
+    ) -> Result<()> {
+        let identity = protected.identity;
+        let (active_incarnation, _) = self.active_lane_incarnation_marker(entry)?;
+        Self::validate_native_amx_participant_receipt_latest_index(&identity)
+            .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
+        if identity.lane_id != entry.lane_id
+            || identity.dataspace_id != entry.dataspace_id
+            || identity.lane_incarnation != active_incarnation
+            || Hash::from(protected.receipt_artifact_hash)
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent protects a stale or malformed route identity"
+                    .to_owned(),
+            ));
+        }
+        let (manifest, receipt) = self
+            .native_amx_fully_authenticated_evidence_for_latest_locked(
+                entry, namespace, identity,
+            )
+            .map_err(|error| {
+                Error::PruneIntentConflict(format!(
+                    "Native AMX evidence prune protected latest lacks fully authenticated manifest/receipt evidence: {error}"
+                ))
+            })?;
+        if NativeAmxEvidencePruneProtectedLatestV2::from_artifacts(&manifest, &receipt)
+            != Some(protected)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune protected latest differs from its exact durable artifacts"
+                    .to_owned(),
+            ));
+        }
+        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            entry,
+            &self.store_root,
+        );
+        if self
+            .decode_bound_native_amx_participant_receipt_latest_index_locked(
+                entry,
+                &latest_path,
+                namespace,
+            )?
+            .is_some_and(|latest| latest != identity)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX stable latest pointer differs from the prune-protected latest identity"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Derive protection from the highest fully authenticated complete pair,
+    /// independently of the optional derived latest pointer.
+    fn derive_native_amx_evidence_prune_protected_latest_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        inventory: &NativeAmxEvidenceInventory,
+    ) -> Result<NativeAmxEvidencePruneProtectedLatestV2> {
+        let protected_height = inventory
+            .manifests
+            .keys()
+            .rev()
+            .copied()
+            .find(|height| inventory.receipts.contains_key(height))
+            .ok_or_else(|| {
+                Error::PruneIntentConflict(
+                    "Native AMX evidence prune intent has no complete pair to protect".to_owned(),
+                )
+            })?;
+        let manifest_file = inventory.manifests.get(&protected_height).ok_or_else(|| {
+            Error::PruneIntentConflict(
+                "selected Native AMX protected manifest disappeared from inventory".to_owned(),
+            )
+        })?;
+        let receipt_file = inventory.receipts.get(&protected_height).ok_or_else(|| {
+            Error::PruneIntentConflict(
+                "selected Native AMX protected receipt disappeared from inventory".to_owned(),
+            )
+        })?;
+        let manifest =
+            self.decode_native_amx_manifest_file_locked(entry, namespace, manifest_file)?;
+        let receipt = self.decode_native_amx_receipt_file_locked(entry, namespace, receipt_file)?;
+        let protected =
+            NativeAmxEvidencePruneProtectedLatestV2::from_artifacts(&manifest, &receipt)
+                .ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                "Native AMX highest complete pair has conflicting manifest/receipt identities"
+                    .to_owned(),
+            )
+                })?;
+        self.validate_native_amx_evidence_prune_protected_latest_locked(
+            entry, namespace, protected,
+        )?;
+        Ok(protected)
+    }
+
     fn validate_native_amx_evidence_prune_intent_locked(
         &self,
         entry: &LaneConfigEntry,
         namespace: &BoundProgressNamespace,
-        intent: &NativeAmxEvidencePruneIntentV1,
+        intent: &NativeAmxEvidencePruneIntentV2,
     ) -> Result<()> {
         let (active_incarnation, _) = self.active_lane_incarnation_marker(entry)?;
         let max_entries = Self::native_amx_evidence_prune_intent_max_entries(
             self.native_amx_participant_evidence_retention(),
         )?;
-        if intent.version != NativeAmxEvidencePruneIntentV1::VERSION
+        if intent.version != NativeAmxEvidencePruneIntentV2::VERSION
             || intent.lane_id != entry.lane_id
             || intent.dataspace_id != entry.dataspace_id
             || intent.lane_incarnation != active_incarnation
+            || intent.protected_latest.identity.lane_id != intent.lane_id
+            || intent.protected_latest.identity.dataspace_id != intent.dataspace_id
+            || intent.protected_latest.identity.lane_incarnation != intent.lane_incarnation
             || intent.entries.is_empty()
             || intent.entries.len() > max_entries
         {
@@ -20736,27 +20575,27 @@ impl Kura {
             ));
         }
         let inventory = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
-        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
-            entry,
-            &self.store_root,
-        );
-        let latest = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
-            entry,
-            &latest_path,
-            namespace,
+        let protected_latest = self.derive_native_amx_evidence_prune_protected_latest_locked(
+            entry, namespace, &inventory,
         )?;
+        if protected_latest != intent.protected_latest {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent replaces the highest authenticated protected latest identity"
+                    .to_owned(),
+            ));
+        }
+        let protected_height = protected_latest.identity.lane_block_height;
         let mut previous = None;
         let mut grouped = BTreeMap::<u64, BTreeSet<u8>>::new();
         for removal in &intent.entries {
             let kind = Self::native_amx_evidence_prune_entry_kind(removal)?;
             if removal.participant_height == 0
                 || removal.artifact_hash.as_ref().iter().all(|byte| *byte == 0)
-                || latest
-                    .as_ref()
-                    .is_some_and(|latest| latest.lane_block_height == removal.participant_height)
+                || removal.participant_height >= protected_height
             {
                 return Err(Error::PruneIntentConflict(
-                    "Native AMX evidence prune intent targets a zero or latest identity".to_owned(),
+                    "Native AMX evidence prune intent targets a zero or protected-latest identity"
+                        .to_owned(),
                 ));
             }
             let key = (removal.participant_height, removal.kind);
@@ -20788,8 +20627,8 @@ impl Kura {
             }
         }
         let expected_kinds = BTreeSet::from([
-            NativeAmxEvidencePruneIntentV1::MANIFEST_KIND,
-            NativeAmxEvidencePruneIntentV1::RECEIPT_KIND,
+            NativeAmxEvidencePruneIntentV2::MANIFEST_KIND,
+            NativeAmxEvidencePruneIntentV2::RECEIPT_KIND,
         ]);
         if grouped.values().any(|kinds| kinds != &expected_kinds) {
             return Err(Error::PruneIntentConflict(
@@ -20826,10 +20665,11 @@ impl Kura {
                     .to_owned(),
             ));
         }
-        let highest_removal = removal_heights
-            .last()
-            .copied()
-            .expect("validated Native AMX prune intent has at least one pair");
+        let highest_removal = removal_heights.last().copied().ok_or_else(|| {
+            Error::PruneIntentConflict(
+                "Native AMX evidence prune intent has no complete removal pair".to_owned(),
+            )
+        })?;
         if original_heights
             .iter()
             .any(|height| *height <= highest_removal && !removal_heights.contains(height))
@@ -20863,15 +20703,28 @@ impl Kura {
             false,
         )
         .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
+        if !retained_manifests.contains_key(&protected_height)
+            || !retained_receipts.contains_key(&protected_height)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent does not retain its protected latest pair"
+                    .to_owned(),
+            ));
+        }
+        self.validate_native_amx_evidence_prune_protected_latest_locked(
+            entry,
+            namespace,
+            intent.protected_latest,
+        )?;
         Ok(())
     }
 
     fn decode_native_amx_evidence_prune_intent_bytes(
         path: &Path,
         bytes: &[u8],
-    ) -> Result<NativeAmxEvidencePruneIntentV1> {
+    ) -> Result<NativeAmxEvidencePruneIntentV2> {
         let intent =
-            norito::decode_canonical::<NativeAmxEvidencePruneIntentV1>(bytes).map_err(|error| {
+            norito::decode_canonical::<NativeAmxEvidencePruneIntentV2>(bytes).map_err(|error| {
                 Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
                     format!("Native AMX evidence prune intent failed exact decode: {error}"),
@@ -20918,23 +20771,103 @@ impl Kura {
                         .to_owned(),
                 ));
             }
-            Self::remove_bound_progress_temp_if_present(namespace, &temp_path)
-                .map_err(|error| Error::IO(error, temp_path.clone()))?;
-            return self
-                .sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent");
+            let (mut temporary_file, temporary_metadata) = self
+                .open_bound_regular_file_with_exact_bytes_locked(
+                    namespace,
+                    &temp_path,
+                    &temp_bytes,
+                    prune_intent_max_bytes,
+                    "Native AMX evidence prune-intent temporary",
+                )?;
+            self.verify_bound_open_regular_file_exact_bytes_locked(
+                namespace,
+                &temp_path,
+                &mut temporary_file,
+                &temporary_metadata,
+                &temp_bytes,
+                prune_intent_max_bytes,
+                "Native AMX evidence prune-intent temporary",
+            )?;
+            Self::remove_bound_progress_file_if_matches(
+                namespace,
+                &temp_path,
+                &temporary_file,
+                &temporary_metadata,
+            )
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+            self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent")?;
+            if self
+                .read_bound_regular_file_bytes_locked(
+                    namespace,
+                    &temp_path,
+                    prune_intent_max_bytes,
+                    "Native AMX evidence prune-intent temporary",
+                )?
+                .is_some()
+                || self
+                    .read_bound_regular_file_bytes_locked(
+                        namespace,
+                        &path,
+                        prune_intent_max_bytes,
+                        "Native AMX evidence prune intent",
+                    )?
+                    .as_deref()
+                    != Some(temp_bytes.as_slice())
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "Native AMX identical prune-intent temporary cleanup failed exact read-back",
+                ));
+            }
+            return Ok(());
         }
-        let directory = temp_path.parent().expect("temporary path has a parent");
-        let metadata = Self::regular_sidecar_metadata_for(&self.store_root, &temp_path, directory)?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    temp_path.clone(),
-                    "Native AMX evidence prune-intent temporary disappeared",
-                )
-            })?;
-        let temporary_file = Self::open_bound_progress_file(namespace, &temp_path, &metadata)?;
+        let (mut temporary_file, temporary_metadata) = self
+            .open_bound_regular_file_with_exact_bytes_locked(
+                namespace,
+                &temp_path,
+                &temp_bytes,
+                prune_intent_max_bytes,
+                "Native AMX evidence prune-intent temporary",
+            )?;
+        temporary_file
+            .sync_all()
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        self.verify_bound_open_regular_file_exact_bytes_locked(
+            namespace,
+            &temp_path,
+            &mut temporary_file,
+            &temporary_metadata,
+            &temp_bytes,
+            prune_intent_max_bytes,
+            "Native AMX evidence prune-intent temporary",
+        )?;
         Self::promote_bound_progress_temp_noreplace(namespace, &temp_path, &path, &temporary_file)
             .map_err(|error| Error::IO(error.source, path.clone()))?;
-        self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent")
+        self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent")?;
+        if self
+            .read_bound_regular_file_bytes_locked(
+                namespace,
+                &temp_path,
+                prune_intent_max_bytes,
+                "Native AMX evidence prune-intent temporary",
+            )?
+            .is_some()
+            || self
+                .read_bound_regular_file_bytes_locked(
+                    namespace,
+                    &path,
+                    prune_intent_max_bytes,
+                    "Native AMX evidence prune intent",
+                )?
+                .as_deref()
+                != Some(temp_bytes.as_slice())
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "Native AMX prune-intent temporary promotion failed exact read-back",
+            ));
+        }
+        Ok(())
     }
 
     fn require_native_amx_evidence_prune_intent_absent_locked(
@@ -20977,6 +20910,10 @@ impl Kura {
         entry: &LaneConfigEntry,
         namespace: &BoundProgressNamespace,
     ) -> Result<bool> {
+        // Latest-index staging and evidence pruning are disjoint durable
+        // protocols. Never promote or consume a prune journal while pointer
+        // recovery remains unresolved.
+        self.require_native_amx_latest_index_temp_absent_locked(namespace)?;
         self.recover_native_amx_evidence_prune_intent_publication_locked(entry, namespace)?;
         let directory = namespace.data_path.parent().ok_or_else(|| {
             Self::invalid_lane_artifact_error(
@@ -20995,6 +20932,14 @@ impl Kura {
         else {
             return Ok(false);
         };
+        let (mut intent_file, intent_metadata) = self
+            .open_bound_regular_file_with_exact_bytes_locked(
+                namespace,
+                &path,
+                &bytes,
+                prune_intent_max_bytes,
+                "Native AMX evidence prune intent",
+            )?;
         let intent = Self::decode_native_amx_evidence_prune_intent_bytes(&path, &bytes)?;
         self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;
         for removal in &intent.entries {
@@ -21012,19 +20957,60 @@ impl Kura {
             else {
                 continue;
             };
-            if Hash::new(artifact_bytes) != removal.artifact_hash {
+            if Hash::new(&artifact_bytes) != removal.artifact_hash {
                 return Err(Error::PruneIntentConflict(format!(
                     "{} changed before prune completion at height {}",
                     kind.label(),
                     removal.participant_height
                 )));
             }
-            Self::remove_bound_progress_temp_if_present(namespace, &artifact_path)
-                .map_err(|error| Error::IO(error, artifact_path.clone()))?;
+            let (mut artifact_file, artifact_metadata) = self
+                .open_bound_regular_file_with_exact_bytes_locked(
+                    namespace,
+                    &artifact_path,
+                    &artifact_bytes,
+                    usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES)?,
+                    kind.label(),
+                )?;
+            #[cfg(test)]
+            run_native_amx_prune_pre_unlink_hook_for_tests(&artifact_path);
+            self.verify_bound_open_regular_file_exact_bytes_locked(
+                namespace,
+                &artifact_path,
+                &mut artifact_file,
+                &artifact_metadata,
+                &artifact_bytes,
+                usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES)?,
+                kind.label(),
+            )?;
+            Self::remove_bound_progress_file_if_matches(
+                namespace,
+                &artifact_path,
+                &artifact_file,
+                &artifact_metadata,
+            )
+            .map_err(|error| Error::IO(error, artifact_path.clone()))?;
         }
+        self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;
         self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence pair pruning")?;
-        Self::remove_bound_progress_temp_if_present(namespace, &path)
-            .map_err(|error| Error::IO(error, path.clone()))?;
+        #[cfg(test)]
+        run_native_amx_prune_pre_unlink_hook_for_tests(&path);
+        self.verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
+            namespace,
+            &path,
+            &mut intent_file,
+            &intent_metadata,
+            &bytes,
+            prune_intent_max_bytes,
+            "Native AMX evidence prune intent",
+        )?;
+        Self::remove_bound_progress_file_if_matches(
+            namespace,
+            &path,
+            &intent_file,
+            &intent_metadata,
+        )
+        .map_err(|error| Error::IO(error, path.clone()))?;
         self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent")?;
         Ok(true)
     }
@@ -21034,7 +21020,12 @@ impl Kura {
         entry: &LaneConfigEntry,
         namespace: &BoundProgressNamespace,
         inventory: &NativeAmxEvidenceInventory,
-    ) -> Result<Vec<NativeAmxEvidencePruneEntryV1>> {
+    ) -> Result<
+        Option<(
+            NativeAmxEvidencePruneProtectedLatestV2,
+            Vec<NativeAmxEvidencePruneEntryV2>,
+        )>,
+    > {
         let mut manifests = BTreeMap::new();
         for (height, file) in &inventory.manifests {
             manifests.insert(
@@ -21052,7 +21043,17 @@ impl Kura {
         Self::validate_native_amx_retained_history_continuity(&manifests, &receipts, false)
             .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
 
-        let complete = manifests.keys().copied().collect::<BTreeSet<_>>();
+        let complete = manifests
+            .keys()
+            .filter(|height| receipts.contains_key(*height))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if complete.is_empty() {
+            return Ok(None);
+        }
+        let protected_latest = self.derive_native_amx_evidence_prune_protected_latest_locked(
+            entry, namespace, inventory,
+        )?;
         let retention = self.native_amx_participant_evidence_retention().get();
         let stable_byte_limit = self.native_amx_participant_evidence_file_bytes();
         let mut kept_complete = BTreeSet::new();
@@ -21062,14 +21063,22 @@ impl Kura {
             let manifest_len = inventory
                 .manifests
                 .get(height)
-                .expect("complete manifest height exists")
+                .ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "complete Native AMX prune height lost its manifest".to_owned(),
+                    )
+                })?
                 .metadata
                 .file
                 .len();
             let receipt_len = inventory
                 .receipts
                 .get(height)
-                .expect("complete receipt height exists")
+                .ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "complete Native AMX prune height lost its receipt".to_owned(),
+                    )
+                })?
                 .metadata
                 .file
                 .len();
@@ -21096,19 +21105,10 @@ impl Kura {
             kept_complete.insert(*height);
             kept_pair_bytes += pair_len;
         }
-        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
-            entry,
-            &self.store_root,
-        );
-        if let Some(latest) = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
-            entry,
-            &latest_path,
-            namespace,
-        )? && complete.contains(&latest.lane_block_height)
-            && !kept_complete.contains(&latest.lane_block_height)
-        {
+        if !kept_complete.contains(&protected_latest.identity.lane_block_height) {
             return Err(Error::PruneIntentConflict(
-                "Native AMX retained budget cannot preserve the indexed latest evidence".to_owned(),
+                "Native AMX retained budget cannot preserve the authenticated protected latest evidence"
+                    .to_owned(),
             ));
         }
 
@@ -21117,26 +21117,28 @@ impl Kura {
             for (kind, encoded_kind) in [
                 (
                     NativeAmxEvidenceKind::Manifest,
-                    NativeAmxEvidencePruneIntentV1::MANIFEST_KIND,
+                    NativeAmxEvidencePruneIntentV2::MANIFEST_KIND,
                 ),
                 (
                     NativeAmxEvidenceKind::Receipt,
-                    NativeAmxEvidencePruneIntentV1::RECEIPT_KIND,
+                    NativeAmxEvidencePruneIntentV2::RECEIPT_KIND,
                 ),
             ] {
-                let file = inventory
-                    .stable(kind)
-                    .get(height)
-                    .expect("complete Native AMX evidence height exists");
+                let file = inventory.stable(kind).get(height).ok_or_else(|| {
+                    Error::PruneIntentConflict(format!(
+                        "complete Native AMX prune height lost its {}",
+                        kind.label()
+                    ))
+                })?;
                 let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
-                removals.push(NativeAmxEvidencePruneEntryV1 {
+                removals.push(NativeAmxEvidencePruneEntryV2 {
                     kind: encoded_kind,
                     participant_height: *height,
                     artifact_hash: Hash::new(bytes),
                 });
             }
         }
-        Ok(removals)
+        Ok(Some((protected_latest, removals)))
     }
 
     fn prune_native_amx_evidence_pairs_locked(
@@ -21150,18 +21152,23 @@ impl Kura {
             namespace,
             NativeAmxEvidenceRecoveryPhase::Startup,
         )?;
-        let removals =
-            self.plan_native_amx_evidence_pair_prune_locked(entry, namespace, &inventory)?;
+        let Some((protected_latest, removals)) =
+            self.plan_native_amx_evidence_pair_prune_locked(entry, namespace, &inventory)?
+        else {
+            self.inventory_native_amx_evidence_files_locked(namespace, false)?;
+            return Ok(());
+        };
         if removals.is_empty() {
             self.inventory_native_amx_evidence_files_locked(namespace, false)?;
             return Ok(());
         }
         let (lane_incarnation, _) = self.active_lane_incarnation_marker(entry)?;
-        let intent = NativeAmxEvidencePruneIntentV1 {
-            version: NativeAmxEvidencePruneIntentV1::VERSION,
+        let intent = NativeAmxEvidencePruneIntentV2 {
+            version: NativeAmxEvidencePruneIntentV2::VERSION,
             lane_id: entry.lane_id,
             dataspace_id: entry.dataspace_id,
             lane_incarnation,
+            protected_latest,
             entries: removals,
         };
         self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;
@@ -22783,809 +22790,7 @@ impl Kura {
     }
 }
 
-#[cfg(test)]
-impl Kura {
-    /// Inject a semantically valid selected-keeper observation in focused
-    /// storage tests which do not own the keeper private key.  Production
-    /// ingress can only use [`Self::admit_kura_replica_advert`].
-    pub(crate) fn record_block_replica_advert(
-        &self,
-        peer: PeerId,
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-        executed_block_wire_len: u64,
-    ) {
-        if height == 0 || executed_block_wire_len == 0 {
-            return;
-        }
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        let Ok(Some(authority)) =
-            self.verified_kura_replica_authority_for_eviction(&blocks_dir, height, block_hash)
-        else {
-            return;
-        };
-        if authority.key.executed_block_wire_len != executed_block_wire_len {
-            return;
-        }
-        let Some((keeper_index, _)) = authority
-            .selected_keepers
-            .iter()
-            .find(|(_, keeper)| keeper == &peer)
-        else {
-            return;
-        };
-        self.replica_registry
-            .lock()
-            .entry(authority.key)
-            .or_default()
-            .insert(
-                peer,
-                BlockReplicaAdvert {
-                    keeper_index: *keeper_index,
-                    observed_at: Instant::now(),
-                },
-            );
-    }
-}
-
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-impl Kura {
-    /// Persist a benchmark block directly into the canonical block store.
-    ///
-    /// # Errors
-    /// Returns an error if the block cannot be appended or the tracked block-store byte usage
-    /// cannot be measured.
-    pub fn persist_block_immediate_for_bench(&self, block: &Arc<SignedBlock>) -> Result<()> {
-        let _write_guard = self.block_store_write_lock.lock();
-        self.ensure_no_pending_rollback()?;
-        let mut store = self.block_store.lock();
-        let before_bytes = Self::block_store_tracked_bytes(&mut store)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        store.append_block_to_chain(block.as_ref())?;
-        let after_bytes = Self::block_store_tracked_bytes(&mut store)?;
-        self.update_disk_usage_delta(before_bytes, after_bytes);
-        let persisted_count = usize::try_from(block.header().height().get())?;
-        self.publish_durable_budget_snapshot(persisted_count, 0);
-        accounting_mutation.finish();
-        Ok(())
-    }
-
-    /// Append an in-memory pending block for storage-budget benchmark scenarios.
-    pub fn append_pending_block_for_bench(&self, block: Arc<SignedBlock>) {
-        let hash = block.hash();
-        self.block_data.lock().push((hash, Some(block)));
-        self.invalidate_pending_budget_cache();
-    }
-
-    /// Run storage-budget accounting without storing a block.
-    pub fn check_storage_budget_for_bench(&self, block: &SignedBlock) -> Result<()> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        self.resolve_canonical_storage_before_mutation()?;
-        self.check_storage_budget(block, None)
-    }
-
-    /// Advertise enough matching remote replicas for the block at `height`.
-    #[must_use]
-    pub fn advertise_required_replicas_for_bench(&self, height: NonZeroUsize) -> Option<u64> {
-        let height_u64 = u64::try_from(height.get()).ok()?;
-        let (block_hash, payload_len, blocks_dir) = {
-            let index = u64::try_from(height.get().saturating_sub(1)).ok()?;
-            let mut store = self.block_store.lock();
-            let payload_len = store.read_block_index(index).ok()?.length;
-            let block_hash = store.read_block_hashes(index, 1).ok()?.first().copied()?;
-            (block_hash, payload_len, store.path_to_blockchain.clone())
-        };
-        if payload_len == 0 {
-            return None;
-        }
-        let authority = self
-            .verified_kura_replica_authority_for_eviction(&blocks_dir, height_u64, block_hash)
-            .ok()??;
-        if authority.selected_keepers.is_empty() {
-            return None;
-        }
-        if self.local_peer_id.get().is_none() {
-            let mut local = checked_peer_id();
-            while authority
-                .selected_keepers
-                .iter()
-                .any(|(_, keeper)| keeper == &local)
-            {
-                local = checked_peer_id();
-            }
-            self.bind_local_peer_id(local).ok()?;
-        }
-        let now = Instant::now();
-        let mut registry = self.replica_registry.lock();
-        let peers = registry.entry(authority.key).or_default();
-        for (keeper_index, keeper) in &authority.selected_keepers {
-            peers.insert(
-                keeper.clone(),
-                BlockReplicaAdvert {
-                    keeper_index: *keeper_index,
-                    observed_at: now,
-                },
-            );
-        }
-        Some(payload_len)
-    }
-
-    /// Evict persisted block bodies for benchmark scenarios.
-    ///
-    /// # Errors
-    /// Returns an error if Kura cannot read, rewrite, or atomically replace block-store files.
-    pub fn evict_block_bodies_for_bench(&self, bytes_needed: u64) -> Result<u64> {
-        self.evict_block_bodies(bytes_needed)
-    }
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-impl Kura {
-    /// Remove the local DA cache only after a canonical body was genuinely evicted.
-    ///
-    /// This test-only hook models a remote-only historical block so downstream
-    /// proof-serving regressions cannot accidentally succeed by re-decoding the
-    /// complete local body instead of the immutable retained record.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `height` is absent, still inline, or its local
-    /// sidecar cannot be removed.
-    pub fn remove_evicted_block_sidecar_for_testing(&self, height: NonZeroUsize) -> Result<()> {
-        let index = u64::try_from(height.get().saturating_sub(1))?;
-        let accounting_mutation = {
-            let mut store = self.block_store.lock();
-            let block_index = store.read_block_index(index)?;
-            if !block_index.is_evicted() {
-                let path = store.da_block_path(u64::try_from(height.get())?);
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidInput,
-                        "cannot remove a DA sidecar for a block whose canonical body is still inline",
-                    ),
-                    path,
-                ));
-            }
-            let height = u64::try_from(height.get())?;
-            let path = store.da_block_path(height);
-            let before_bytes = Self::file_len_or_zero(&path)?;
-            if before_bytes == 0 {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::NotFound,
-                        "cannot remove an absent evicted-block DA sidecar",
-                    ),
-                    path,
-                ));
-            }
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
-            store.remove_da_block_file(height)?;
-            self.update_total_disk_usage_delta(before_bytes, 0);
-            accounting_mutation
-        };
-        if let Some((_, cached)) = self
-            .block_data
-            .lock()
-            .get_mut(height.get().saturating_sub(1))
-        {
-            *cached = None;
-        }
-        accounting_mutation.finish();
-        Ok(())
-    }
-
-    /// Remove only the newest exact Native AMX application manifest record.
-    ///
-    /// This test-only hook creates the crash shape where a durable receipt and
-    /// latest-route pointer outlive their QC-authenticated manifest. Combined
-    /// with an evicted remote-only carrier, startup repair must fetch the
-    /// canonical body from a CommitQC signer before it can recreate the exact
-    /// manifest and revalidate the receipt.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the route/incarnation/application identity does
-    /// not match the active newest manifest or the standalone removal fails.
-    pub fn remove_latest_native_amx_participant_manifest_for_testing(
-        &self,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        lane_incarnation: Hash,
-        participant_height: u64,
-        application_block_hash: HashOf<BlockHeader>,
-    ) -> Result<()> {
-        if participant_height == 0 {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "cannot remove a zero-height Native AMX manifest",
-            ));
-        }
-
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(lane_id)?;
-        if entry.dataspace_id != dataspace_id {
-            return Err(Self::invalid_lane_artifact_error(
-                entry.blocks_dir(&self.store_root),
-                "Native AMX manifest removal targets another dataspace",
-            ));
-        }
-        let (active_incarnation, _) = self.active_lane_incarnation_marker(&entry)?;
-        if active_incarnation != lane_incarnation {
-            return Err(Self::invalid_lane_artifact_error(
-                entry.blocks_dir(&self.store_root),
-                "Native AMX manifest removal targets an inactive lane incarnation",
-            ));
-        }
-        let _sidecar_guard = self.sidecar_lock.lock();
-        let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
-        self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
-        self.recover_native_amx_evidence_publication_temp_locked(
-            &entry,
-            &namespace,
-            NativeAmxEvidenceRecoveryPhase::Startup,
-        )?;
-        let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, false)?;
-        let path = Self::native_amx_application_manifest_path_for_entry(
-            &entry,
-            &self.store_root,
-            participant_height,
-        );
-        let artifact = self
-            .read_native_amx_participant_application_manifest_from_paths_locked(
-                &entry,
-                participant_height,
-                &path,
-                &namespace,
-            )
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    path.clone(),
-                    "exact Native AMX manifest to remove is unavailable",
-                )
-            })?;
-        let leaf = &artifact.leaf;
-        if leaf.lane_incarnation != lane_incarnation
-            || leaf.application_block_hash != application_block_hash
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                path,
-                "Native AMX manifest removal identity mismatch",
-            ));
-        }
-        if inventory
-            .manifests
-            .last_key_value()
-            .map(|(height, _)| *height)
-            != Some(participant_height)
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                path,
-                "Native AMX manifest removal is restricted to the newest record",
-            ));
-        }
-
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
-        Self::remove_bound_progress_temp_if_present(&namespace, &path)
-            .map_err(|error| Error::IO(error, path.clone()))?;
-        self.sync_native_amx_evidence_namespace(
-            &namespace,
-            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-        )?;
-        let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
-        self.update_disk_usage_delta(before_bytes, after_bytes);
-        accounting_mutation.finish();
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-impl Kura {
-    /// Persist one canonical test block and its exact retained SCCP archive.
-    pub(crate) fn persist_block_with_retained_archive_for_tests(
-        &self,
-        block: &Arc<SignedBlock>,
-    ) -> Result<()> {
-        self.store_block(Arc::clone(block))?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let height = block.header().height().get();
-        let canonical_hash = block.hash();
-        self.ensure_durable_block_at_height(height, canonical_hash)?;
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        self.persist_retained_block_record(&blocks_dir, canonical_hash, block.as_ref())
-    }
-
-    pub(crate) fn persist_block_immediate_for_tests(&self, block: &Arc<SignedBlock>) {
-        let _write_guard = self.block_store_write_lock.lock();
-        let mut store = self.block_store.lock();
-        let before_bytes = Self::block_store_tracked_bytes(&mut store)
-            .expect("measure block store bytes before test append");
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        store
-            .append_block_to_chain(block.as_ref())
-            .expect("persist block for tests");
-        let after_bytes = Self::block_store_tracked_bytes(&mut store)
-            .expect("measure block store bytes after test append");
-        self.update_disk_usage_delta(before_bytes, after_bytes);
-        match usize::try_from(block.header().height().get()) {
-            Ok(persisted_count) => self.publish_durable_budget_snapshot(persisted_count, 0),
-            Err(_) => self.invalidate_durable_budget_snapshot(),
-        }
-        accounting_mutation.finish();
-    }
-
-    fn pause_next_store_after_pending_merge_stage_for_tests(&self) {
-        self.store_paused_after_pending_merge_stage
-            .store(false, Ordering::Release);
-        self.pause_store_after_pending_merge_stage
-            .store(true, Ordering::Release);
-    }
-
-    fn store_paused_after_pending_merge_stage_for_tests(&self) -> bool {
-        self.store_paused_after_pending_merge_stage
-            .load(Ordering::Acquire)
-    }
-
-    fn resume_store_after_pending_merge_stage_for_tests(&self) {
-        self.store_paused_after_pending_merge_stage
-            .store(false, Ordering::Release);
-    }
-
-    fn pause_next_eviction_after_snapshot_for_tests(&self) {
-        self.eviction_paused_after_snapshot
-            .store(false, Ordering::Release);
-        self.pause_eviction_after_snapshot
-            .store(true, Ordering::Release);
-    }
-
-    fn eviction_paused_after_snapshot_for_tests(&self) -> bool {
-        self.eviction_paused_after_snapshot.load(Ordering::Acquire)
-    }
-
-    fn resume_eviction_after_snapshot_for_tests(&self) {
-        self.eviction_paused_after_snapshot
-            .store(false, Ordering::Release);
-    }
-
-    fn pause_next_eviction_before_stage_publication_for_tests(&self) {
-        self.eviction_paused_before_stage_publication
-            .store(false, Ordering::Release);
-        self.pause_eviction_before_stage_publication
-            .store(true, Ordering::Release);
-    }
-
-    fn eviction_paused_before_stage_publication_for_tests(&self) -> bool {
-        self.eviction_paused_before_stage_publication
-            .load(Ordering::Acquire)
-    }
-
-    fn resume_eviction_before_stage_publication_for_tests(&self) {
-        self.eviction_paused_before_stage_publication
-            .store(false, Ordering::Release);
-    }
-
-    fn pause_next_block_read_before_cache_recheck_for_tests(&self) {
-        self.block_read_paused_before_cache_recheck
-            .store(false, Ordering::Release);
-        self.pause_block_read_before_cache_recheck
-            .store(true, Ordering::Release);
-    }
-
-    fn block_read_paused_before_cache_recheck_for_tests(&self) -> bool {
-        self.block_read_paused_before_cache_recheck
-            .load(Ordering::Acquire)
-    }
-
-    fn resume_block_read_before_cache_recheck_for_tests(&self) {
-        self.block_read_paused_before_cache_recheck
-            .store(false, Ordering::Release);
-    }
-
-    fn force_next_durable_blocks_count_fallback_for_tests(&self) {
-        self.durable_blocks_count_fallback_reached
-            .store(false, Ordering::Release);
-        self.force_durable_blocks_count_fallback
-            .store(true, Ordering::Release);
-    }
-
-    fn durable_blocks_count_fallback_reached_for_tests(&self) -> bool {
-        self.durable_blocks_count_fallback_reached
-            .load(Ordering::Acquire)
-    }
-
-    fn pause_next_hash_only_extension_before_store_for_tests(&self) {
-        self.hash_only_extension_paused_before_store
-            .store(false, Ordering::Release);
-        self.pause_hash_only_extension_before_store
-            .store(true, Ordering::Release);
-    }
-
-    fn hash_only_extension_paused_before_store_for_tests(&self) -> bool {
-        self.hash_only_extension_paused_before_store
-            .load(Ordering::Acquire)
-    }
-
-    fn resume_hash_only_extension_before_store_for_tests(&self) {
-        self.hash_only_extension_paused_before_store
-            .store(false, Ordering::Release);
-    }
-
-    fn pause_next_total_disk_usage_scan_after_scan_for_tests(&self) {
-        self.total_disk_usage_scan_paused
-            .store(false, Ordering::Release);
-        self.pause_total_disk_usage_scan_after_scan
-            .store(true, Ordering::Release);
-    }
-
-    fn total_disk_usage_scan_paused_for_tests(&self) -> bool {
-        self.total_disk_usage_scan_paused.load(Ordering::Acquire)
-    }
-
-    fn resume_total_disk_usage_scan_for_tests(&self) {
-        self.total_disk_usage_scan_paused
-            .store(false, Ordering::Release);
-    }
-
-    fn fail_retained_rewrite_discard_after_for_tests(&self, removed_index: usize) {
-        self.fail_retained_rewrite_discard_after
-            .store(removed_index, Ordering::Release);
-    }
-
-    fn fail_next_retained_rewrite_recovery_for_tests(&self) {
-        self.fail_next_retained_rewrite_recovery
-            .store(true, Ordering::Release);
-    }
-
-    /// Return raw cache state together with independent exact scans without refreshing caches.
-    pub(crate) fn disk_usage_accounting_snapshot_for_tests(
-        &self,
-    ) -> Result<DiskUsageAccountingSnapshotForTesting> {
-        Ok(DiskUsageAccountingSnapshotForTesting {
-            enforced_initialized: self.disk_usage_initialized.load(Ordering::Acquire),
-            total_initialized: self.disk_usage_total_initialized.load(Ordering::Acquire),
-            cached_enforced_bytes: self.disk_usage.load(Ordering::Relaxed),
-            cached_total_bytes: self.disk_usage_total.load(Ordering::Relaxed),
-            exact_enforced_bytes: self.kura_disk_usage_bytes()?,
-            exact_total_bytes: self.kura_total_disk_usage_bytes()?,
-        })
-    }
-
-    fn fail_next_retired_tree_purge_after_one_removal_for_tests(&self) {
-        self.fail_next_retired_tree_purge_after_one_removal
-            .store(true, Ordering::Release);
-    }
-
-    pub(crate) fn fail_next_store_for_tests(&self) {
-        self.fail_next_block_write.store(true, Ordering::Relaxed);
-    }
-
-    pub(crate) fn fail_next_block_write_for_tests(&self) {
-        self.fail_next_block_write.store(true, Ordering::Relaxed);
-    }
-
-    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-    pub(crate) fn fail_next_block_write_with_unreadable_old_marker_for_tests(&self) {
-        self.block_store
-            .lock()
-            .fail_next_commit_marker_write_and_readback
-            .store(true, Ordering::Release);
-    }
-
-    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-    pub(crate) fn fail_next_block_write_with_unreadable_new_marker_for_tests(&self) {
-        self.block_store
-            .lock()
-            .fail_next_commit_marker_ack_and_readback
-            .store(true, Ordering::Release);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn poison_canonical_storage_for_tests(&self) {
-        self.poison_canonical_storage(
-            "injected preexisting canonical-storage poison",
-            &Error::CanonicalStoragePoisoned,
-        );
-    }
-
-    #[cfg(test)]
-    pub(crate) fn overwrite_commit_marker_for_tests(&self, bytes: &[u8]) -> Result<()> {
-        let store = self.block_store.lock();
-        let path = store.commit_marker_path();
-        std::fs::write(&path, bytes).map_err(|error| Error::IO(error, path))
-    }
-
-    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-    pub(crate) fn canonical_commit_marker_count_for_tests(&self) -> Result<u64> {
-        let mut block_store = self.block_store.lock();
-        let path = block_store.commit_marker_path();
-        block_store
-            .read_commit_marker()?
-            .map(|marker| marker.count)
-            .ok_or_else(|| {
-                Error::IO(
-                    std::io::Error::new(ErrorKind::NotFound, "canonical commit marker is missing"),
-                    path,
-                )
-            })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn publish_exact_commit_marker_for_tests(&self) -> Result<()> {
-        let mut store = self.block_store.lock();
-        let index_len = store.index_file_len()?;
-        let hashes_len = store.hashes_file_len()?;
-        if index_len % BlockIndex::SIZE != 0 || hashes_len % SIZE_OF_BLOCK_HASH != 0 {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "cannot publish a test marker for a partial canonical journal",
-                ),
-                store.path_to_blockchain.clone(),
-            ));
-        }
-        let index_count = index_len / BlockIndex::SIZE;
-        let hashes_count = hashes_len / SIZE_OF_BLOCK_HASH;
-        if index_count != hashes_count {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        store.write_commit_marker(index_count)?;
-        let marker = store.read_commit_marker()?.ok_or_else(|| {
-            Error::IO(
-                std::io::Error::new(ErrorKind::NotFound, "published commit marker is missing"),
-                store.commit_marker_path(),
-            )
-        })?;
-        store.validate_commit_marker_tip(&marker, hashes_count)?;
-        if marker.count != index_count {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        store.commit_marker_count = index_count;
-        Ok(())
-    }
-
-    pub(crate) fn fail_next_wsv_checkpoint_write_for_tests(&self) {
-        self.fail_next_wsv_checkpoint_write
-            .store(true, Ordering::Relaxed);
-    }
-
-    pub(crate) fn fail_next_commit_manifest_write_for_tests(&self) {
-        self.fail_next_commit_manifest_write
-            .store(true, Ordering::Relaxed);
-    }
-
-    pub(crate) fn fail_prune_after_stage_for_tests(&self, stage: usize) {
-        self.fail_prune_after_stage.store(stage, Ordering::Relaxed);
-    }
-
-    pub(crate) fn fail_prune_sidecar_promotion_for_tests(&self, stage: usize) {
-        self.fail_prune_sidecar_promotion_stage
-            .store(stage, Ordering::Relaxed);
-    }
-
-    pub(crate) fn fail_next_v2_finality_write_for_tests(&self) {
-        self.fail_next_v2_finality_write
-            .store(true, Ordering::Relaxed);
-    }
-
-    pub(crate) fn fail_next_native_amx_prepublication_for_tests(&self) {
-        self.fail_next_native_amx_prepublication
-            .store(true, Ordering::Relaxed);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_progress_sidecar_ancestor_sync_attempts_for_tests(
-        &self,
-        ancestor_index: usize,
-        failures: usize,
-    ) {
-        fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, failures);
-    }
-
-    /// Replace manifest bytes without updating the checkpoint digest, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn overwrite_commit_manifest_without_binding_for_tests(
-        &self,
-        manifest: &CommitManifest,
-    ) -> Result<()> {
-        self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;
-        let path = self.commit_manifest_path(manifest.height);
-        let dir = path.parent().ok_or_else(|| {
-            Error::IO(
-                std::io::Error::other("manifest path has no parent"),
-                path.clone(),
-            )
-        })?;
-        std::fs::create_dir_all(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
-        std::fs::write(&path, manifest.encode()).map_err(|err| Error::IO(err, path))
-    }
-
-    /// Remove manifest bytes without updating the checkpoint digest, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn remove_commit_manifest_without_binding_for_tests(
-        &self,
-        height: u64,
-    ) -> Result<()> {
-        let path = self.commit_manifest_path(height);
-        std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
-    }
-
-    /// Remove checkpoint bytes without changing any companion sidecar, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn remove_wsv_checkpoint_without_binding_for_tests(
-        &self,
-        height: u64,
-    ) -> Result<()> {
-        let path = self.wsv_checkpoint_path(height);
-        std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
-    }
-
-    /// Replace checkpoint state and optional manifest binding without validating either value.
-    ///
-    /// This deliberately bypasses the production publication protocol so replay tests can model
-    /// independently corrupted and mutually correlated sidecars.
-    #[cfg(test)]
-    pub(crate) fn overwrite_wsv_checkpoint_without_validation_for_tests(
-        &self,
-        height: u64,
-        state_hash: Hash,
-        manifest: Option<&CommitManifest>,
-    ) -> Result<()> {
-        let path = self.wsv_checkpoint_path(height);
-        let Some(mut checkpoint) = Self::decode_wsv_checkpoint_at(&path)? else {
-            return Err(Error::IO(
-                std::io::Error::new(ErrorKind::NotFound, "WSV checkpoint is missing"),
-                path,
-            ));
-        };
-        checkpoint.state_hash = state_hash;
-        checkpoint.commit_manifest_hash = manifest.map(CommitManifest::encoded_hash);
-        std::fs::write(&path, checkpoint.encode()).map_err(|err| Error::IO(err, path))
-    }
-
-    /// Remove v2 finality bytes without changing the durable block or manifest, for tests.
-    #[cfg(test)]
-    pub(crate) fn remove_v2_finality_without_binding_for_tests(&self, height: u64) -> Result<()> {
-        let path = self.v2_finality_artifact_path(height);
-        std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
-    }
-
-    /// Replace durable v2-finality bytes without decoding them, for corruption tests.
-    #[cfg(test)]
-    pub(crate) fn overwrite_v2_finality_bytes_for_tests(
-        &self,
-        height: u64,
-        bytes: &[u8],
-    ) -> Result<()> {
-        let path = self.v2_finality_artifact_path(height);
-        std::fs::write(&path, bytes).map_err(|err| Error::IO(err, path))
-    }
-
-    /// Replace the artifact inside an existing finality envelope without validation, for tests.
-    #[cfg(test)]
-    pub(crate) fn overwrite_v2_finality_without_validation_for_tests(
-        &self,
-        height: u64,
-        artifact: V2FinalityArtifact,
-    ) -> Result<()> {
-        let path = self.v2_finality_artifact_path(height);
-        let dir = path.parent().ok_or_else(|| {
-            Error::IO(
-                std::io::Error::other("v2 finality path has no parent"),
-                path.clone(),
-            )
-        })?;
-        let Some((mut record, _)) = self.decode_v2_finality_record_at(&path, dir)? else {
-            return Err(Error::IO(
-                std::io::Error::new(ErrorKind::NotFound, "v2 finality sidecar is missing"),
-                path,
-            ));
-        };
-        record.artifact = artifact;
-        std::fs::write(&path, record.encode()).map_err(|err| Error::IO(err, path))
-    }
-
-    #[allow(dead_code)] // Used by the feature-gated Sumeragi actor regression suite.
-    pub(crate) fn fail_next_roster_sidecar_writes_for_tests(&self, count: usize) {
-        self.fail_next_roster_sidecar_writes
-            .store(count, Ordering::Relaxed);
-    }
-}
-
-/// Loaded block count
-#[derive(Clone, Copy, Debug)]
-pub struct BlockCount(pub usize);
-
-/// An implementation of a block store for `Kura`
-/// that uses `std::fs`, the default IO file in Rust.
-pub struct BlockStore {
-    path_to_blockchain: PathBuf,
-    da_blocks_dir: PathBuf,
-    data_file: Option<FileWrap>,
-    index_file: Option<FileWrap>,
-    hashes_file: Option<FileWrap>,
-    fsync: FsyncState,
-    fsync_telemetry: FsyncTelemetry,
-    encode_scratch: Vec<u8>,
-    read_scratch: Vec<u8>,
-    data_mmap: Option<MemoryMirror>,
-    data_mmap_len: u64,
-    commit_marker_count: u64,
-    commit_marker_pending: Option<u64>,
-    /// Committed DA rewrite whose body promotion must be retried before the next mutation.
-    deferred_da_recovery_fault: Option<String>,
-    /// Test hook for failing after a DA rewrite is staged and journal files are written, but before
-    /// its commit marker is published.
-    #[cfg(test)]
-    fail_next_da_rewrite_before_marker: AtomicBool,
-    /// Test hook for failing after a DA rewrite marker is durable but before body promotion.
-    #[cfg(test)]
-    fail_next_da_rewrite_after_marker: AtomicBool,
-    /// Test hook for failing the immediate staged recovery attempted after marker publication.
-    #[cfg(test)]
-    fail_next_da_rewrite_recovery: AtomicBool,
-    /// Test-only abrupt-stop boundary after journal writes and before marker publication.
-    #[cfg(test)]
-    crash_next_da_rewrite_before_marker: AtomicBool,
-    /// Test-only abrupt-stop boundary after marker publication and before body promotion.
-    #[cfg(test)]
-    crash_next_da_rewrite_after_marker: AtomicBool,
-    /// Test hook for failing before the next atomic commit-marker write.
-    #[cfg(test)]
-    fail_next_commit_marker_write: AtomicBool,
-    /// Test hook for failing the next commit-marker readback.
-    #[cfg(test)]
-    fail_next_commit_marker_read: AtomicBool,
-    /// Test hook for failing acknowledgement after a marker was atomically persisted and synced.
-    #[cfg(test)]
-    fail_next_commit_marker_ack_after_persist: AtomicBool,
-    /// Test hook for a pre-persist marker failure followed by an unreadable marker state.
-    #[cfg(test)]
-    fail_next_commit_marker_write_and_readback: AtomicBool,
-    /// Test hook for a persisted new marker followed by acknowledgement/readback failure.
-    #[cfg(test)]
-    fail_next_commit_marker_ack_and_readback: AtomicBool,
-    /// Test-only abrupt-stop boundary after an eviction compaction stage is durable.
-    #[cfg(test)]
-    crash_next_eviction_after_stage: AtomicBool,
-    /// Test-only abrupt-stop boundary after replacement data is promoted.
-    #[cfg(test)]
-    crash_next_eviction_after_data_promotion: AtomicBool,
-    /// Test-only abrupt-stop boundary after both replacement files are promoted.
-    #[cfg(test)]
-    crash_next_eviction_after_index_promotion: AtomicBool,
-    /// Test-only count of stage durability acknowledgements to fail.
-    #[cfg(test)]
-    fail_eviction_stage_syncs_remaining: AtomicUsize,
-}
-
-impl Debug for BlockStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BlockStore")
-            .field("path_to_blockchain", &self.path_to_blockchain)
-            .field("da_blocks_dir", &self.da_blocks_dir)
-            .field("data_file_open", &self.data_file.is_some())
-            .field("index_file_open", &self.index_file.is_some())
-            .field("hashes_file_open", &self.hashes_file.is_some())
-            .field("fsync_mode", &self.fsync.mode)
-            .field("fsync_pending", &self.fsync.pending_since.is_some())
-            .field("fsync_telemetry", &self.fsync_telemetry)
-            .field("encode_scratch_len", &self.encode_scratch.len())
-            .field("read_scratch_len", &self.read_scratch.len())
-            .field(
-                "mirror_kind",
-                &self.data_mmap.as_ref().map(MemoryMirror::kind),
-            )
-            .field("mmap_len", &self.data_mmap_len)
-            .field("commit_marker_count", &self.commit_marker_count)
-            .field("commit_marker_pending", &self.commit_marker_pending)
-            .finish()
-    }
-}
+include!("kura/block_store_definition_and_test_controls.rs");
 
 /// Read-only mirror of the block data file backed either by a memory mapping or a heap copy.
 #[derive(Clone)]
@@ -24051,2316 +23256,7 @@ impl BlockStoreCommitMarker {
     }
 }
 
-/// Norito-encoded pipeline recovery metadata sidecar stored alongside block data.
-#[derive(Debug, Clone, Encode, Decode)]
-pub struct PipelineRecoverySidecar {
-    /// Schema / evolution tag for the pipeline metadata format.
-    pub format: PipelineRecoveryFormat,
-    /// Block height the metadata belongs to.
-    pub height: u64,
-    /// Block hash the metadata belongs to.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Deterministic DAG fingerprint and key count summary.
-    pub dag: PipelineDagSnapshot,
-    /// Per-transaction access summaries for recovery heuristics.
-    pub txs: Vec<PipelineTxSnapshot>,
-    /// Optional zero-knowledge proof attachments captured for this block.
-    #[norito(default)]
-    pub proofs: Vec<PipelineProofSnapshot>,
-    /// FASTPQ proof artifacts generated asynchronously for committed execution witnesses.
-    #[norito(default)]
-    pub fastpq_proofs: Vec<FastpqProofSnapshot>,
-}
-
-impl PipelineRecoverySidecar {
-    const FORMAT_LABEL: &'static str = "pipeline.recovery";
-
-    /// Create a new recovery sidecar payload.
-    pub fn new(
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-        dag: PipelineDagSnapshot,
-        txs: Vec<PipelineTxSnapshot>,
-    ) -> Self {
-        Self {
-            format: PipelineRecoveryFormat::Current,
-            height,
-            block_hash,
-            dag,
-            txs,
-            proofs: Vec::new(),
-            fastpq_proofs: Vec::new(),
-        }
-    }
-
-    /// Return the human-readable format tag describing the recovery payload.
-    pub fn format_label(&self) -> &'static str {
-        match self.format {
-            PipelineRecoveryFormat::Current => Self::FORMAT_LABEL,
-        }
-    }
-
-    /// Convert the sidecar into a JSON value for operator tooling.
-    pub fn to_json_value(&self) -> JsonValue {
-        let dag = {
-            let mut dag = norito::json::Map::new();
-            dag.insert(
-                "fingerprint".to_string(),
-                norito::json::to_value(&hex::encode(self.dag.fingerprint))
-                    .expect("serialize fingerprint"),
-            );
-            dag.insert(
-                "key_count".to_string(),
-                norito::json::to_value(&self.dag.key_count).expect("serialize key_count"),
-            );
-            norito::json::Value::Object(dag)
-        };
-
-        let txs = self
-            .txs
-            .iter()
-            .map(|tx| {
-                let mut entry = norito::json::Map::new();
-                entry.insert(
-                    "hash".to_string(),
-                    norito::json::to_value(&tx.hash.to_string()).expect("serialize tx hash"),
-                );
-                entry.insert(
-                    "read_count".to_string(),
-                    norito::json::to_value(&tx.read_count()).expect("serialize read count"),
-                );
-                entry.insert(
-                    "write_count".to_string(),
-                    norito::json::to_value(&tx.write_count()).expect("serialize write count"),
-                );
-                entry.insert(
-                    "reads".to_string(),
-                    norito::json::to_value(&tx.reads).expect("serialize sampled reads"),
-                );
-                entry.insert(
-                    "writes".to_string(),
-                    norito::json::to_value(&tx.writes).expect("serialize sampled writes"),
-                );
-                norito::json::Value::Object(entry)
-            })
-            .collect::<Vec<_>>();
-
-        let proofs = self
-            .proofs
-            .iter()
-            .map(|proof| {
-                let mut entry = norito::json::Map::new();
-                entry.insert(
-                    "backend".to_string(),
-                    norito::json::to_value(&proof.backend).expect("serialize backend"),
-                );
-                entry.insert(
-                    "proof".to_string(),
-                    norito::json::to_value(&BASE64_STANDARD.encode(&proof.proof))
-                        .expect("serialize proof"),
-                );
-                entry.insert(
-                    "code_hash".to_string(),
-                    norito::json::to_value(&hex::encode(proof.code_hash))
-                        .expect("serialize code hash"),
-                );
-                if let Some(tx_hash) = proof.tx_hash {
-                    entry.insert(
-                        "tx_hash".to_string(),
-                        norito::json::to_value(&hex::encode(tx_hash)).expect("serialize tx hash"),
-                    );
-                }
-                norito::json::Value::Object(entry)
-            })
-            .collect::<Vec<_>>();
-        let fastpq_proofs = self
-            .fastpq_proofs
-            .iter()
-            .map(FastpqProofSnapshot::to_json_value)
-            .collect::<Vec<_>>();
-
-        let mut root = norito::json::Map::new();
-        root.insert(
-            "format".to_string(),
-            norito::json::to_value(&self.format_label()).expect("serialize format label"),
-        );
-        root.insert(
-            "height".to_string(),
-            norito::json::to_value(&self.height).expect("serialize pipeline height"),
-        );
-        root.insert(
-            "block_hash".to_string(),
-            norito::json::to_value(&self.block_hash.to_string())
-                .expect("serialize pipeline block hash"),
-        );
-        root.insert("dag".to_string(), dag);
-        root.insert("txs".to_string(), norito::json::Value::Array(txs));
-        root.insert("proofs".to_string(), norito::json::Value::Array(proofs));
-        root.insert(
-            "fastpq_proofs".to_string(),
-            norito::json::Value::Array(fastpq_proofs),
-        );
-        norito::json::Value::Object(root)
-    }
-
-    /// Encode the sidecar into a framed Norito buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if framing fails (e.g., compression/header mismatch).
-    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        let bytes = norito::encode_canonical(self)?;
-        if bytes.len() > MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES {
-            return Err(norito::Error::Message(
-                "certified lane block exceeds the merge source envelope byte limit".to_owned(),
-            ));
-        }
-        Ok(bytes)
-    }
-}
-
-/// Known metadata format variants for pipeline recovery sidecars.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub enum PipelineRecoveryFormat {
-    #[codec(index = 1)]
-    /// Sidecars anchored to a specific block hash to avoid reuse across forks.
-    Current,
-}
-
-/// Deterministic DAG summary embedded in pipeline recovery metadata.
-#[derive(Debug, Copy, Clone, Encode, Decode)]
-pub struct PipelineDagSnapshot {
-    /// Blake2 hash summarising the DAG structure for the block.
-    pub fingerprint: [u8; 32],
-    /// Number of unique DAG keys observed during block construction.
-    pub key_count: u32,
-}
-
-/// Transaction access summary persisted for pipeline recovery/replay.
-#[derive(Debug, Clone, Encode, Decode)]
-pub struct PipelineTxSnapshot {
-    /// Transaction hash to correlate with block entries.
-    pub hash: HashOf<TransactionEntrypoint>,
-    /// Optional sampled state keys read during execution.
-    pub reads: Vec<String>,
-    /// Optional sampled state keys written during execution.
-    pub writes: Vec<String>,
-    /// Total number of state keys read during execution.
-    #[norito(default)]
-    pub read_count: u32,
-    /// Total number of state keys written during execution.
-    #[norito(default)]
-    pub write_count: u32,
-}
-
-impl PipelineTxSnapshot {
-    /// Create a compact tx access summary without embedding the full key lists.
-    #[must_use]
-    pub fn compact(
-        hash: HashOf<TransactionEntrypoint>,
-        read_count: usize,
-        write_count: usize,
-    ) -> Self {
-        Self {
-            hash,
-            reads: Vec::new(),
-            writes: Vec::new(),
-            read_count: u32::try_from(read_count).unwrap_or(u32::MAX),
-            write_count: u32::try_from(write_count).unwrap_or(u32::MAX),
-        }
-    }
-
-    /// Total number of read keys represented by this snapshot.
-    #[must_use]
-    pub fn read_count(&self) -> u32 {
-        self.read_count
-            .max(u32::try_from(self.reads.len()).unwrap_or(u32::MAX))
-    }
-
-    /// Total number of write keys represented by this snapshot.
-    #[must_use]
-    pub fn write_count(&self) -> u32 {
-        self.write_count
-            .max(u32::try_from(self.writes.len()).unwrap_or(u32::MAX))
-    }
-}
-
-/// ZK proof artifacts captured alongside pipeline metadata.
-#[derive(Debug, Clone, Encode, Decode)]
-pub struct PipelineProofSnapshot {
-    /// Backend identifier for the proof format.
-    pub backend: String,
-    /// Raw proof bytes recorded for the trace.
-    pub proof: Vec<u8>,
-    /// Code hash of the executed program producing the trace.
-    pub code_hash: [u8; 32],
-    /// Optional transaction hash associated with the trace.
-    #[norito(default)]
-    pub tx_hash: Option<[u8; 32]>,
-}
-
-/// FASTPQ proof artifact captured after block commit for local AXT packaging and audits.
-///
-/// Sidecar persistence stores compact metadata-only snapshots to keep per-block
-/// recovery metadata bounded under sustained throughput. Full proof payloads
-/// should be exported through dedicated proof artifact paths rather than folded
-/// into the pipeline sidecar.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub struct FastpqProofSnapshot {
-    /// Block height the proof belongs to.
-    pub height: u64,
-    /// Block hash the proof belongs to.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Transaction entrypoint or execution-witness entry hash proven by this batch.
-    pub entry_hash: Hash,
-    /// Zero-based batch position in the committed execution witness.
-    pub batch_index: u32,
-    /// FASTPQ parameter set used to produce the proof.
-    pub parameter: String,
-    /// Number of transitions carried by `batch`.
-    pub transition_count: u32,
-    /// Batch trace commitment proven by `proof`.
-    pub trace_commitment: Hash,
-    /// Stable digest of the Norito-encoded FASTPQ proof bytes.
-    pub proof_digest: Hash,
-    /// Canonical transition batch proven by the FASTPQ proof, or compact public inputs for sidecars.
-    pub batch: fastpq_prover::TransitionBatch,
-    /// Norito-encoded FASTPQ proof bytes; empty when persisted as sidecar metadata.
-    pub proof: Vec<u8>,
-}
-
-impl FastpqProofSnapshot {
-    /// Create a compact sidecar snapshot from a proven batch without embedding
-    /// transition rows or proof bytes.
-    #[must_use]
-    pub fn compact_from_batch(
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-        entry_hash: Hash,
-        batch_index: u32,
-        batch: &fastpq_prover::TransitionBatch,
-        trace_commitment: Hash,
-        proof_digest: Hash,
-    ) -> Self {
-        let transition_count = u32::try_from(batch.transitions.len()).unwrap_or(u32::MAX);
-        let compact_batch =
-            fastpq_prover::TransitionBatch::new(batch.parameter.clone(), batch.public_inputs);
-        Self {
-            height,
-            block_hash,
-            entry_hash,
-            batch_index,
-            parameter: batch.parameter.clone(),
-            transition_count,
-            trace_commitment,
-            proof_digest,
-            batch: compact_batch,
-            proof: Vec::new(),
-        }
-    }
-
-    /// Return a bounded sidecar representation while retaining proof identity.
-    #[must_use]
-    pub fn compact_for_sidecar(&self) -> Self {
-        let compact_batch = fastpq_prover::TransitionBatch::new(
-            self.batch.parameter.clone(),
-            self.batch.public_inputs,
-        );
-        Self {
-            height: self.height,
-            block_hash: self.block_hash,
-            entry_hash: self.entry_hash,
-            batch_index: self.batch_index,
-            parameter: self.parameter.clone(),
-            transition_count: self.transition_count,
-            trace_commitment: self.trace_commitment,
-            proof_digest: self.proof_digest,
-            batch: compact_batch,
-            proof: Vec::new(),
-        }
-    }
-
-    /// Return `true` when both snapshots describe the same proof attachment.
-    #[must_use]
-    pub fn same_attachment(&self, other: &Self) -> bool {
-        self.entry_hash == other.entry_hash
-            && self.batch_index == other.batch_index
-            && self.proof_digest == other.proof_digest
-    }
-
-    /// Decode the embedded FASTPQ proof.
-    ///
-    /// # Errors
-    ///
-    /// Returns a Norito decode error when the proof bytes are malformed.
-    pub fn decode_proof(&self) -> Result<fastpq_prover::Proof, norito::Error> {
-        norito::decode_from_bytes(&self.proof)
-    }
-
-    /// Convert this FASTPQ proof snapshot to the JSON object used by recovery endpoints.
-    #[must_use]
-    pub fn to_json_value(&self) -> JsonValue {
-        let mut entry = norito::json::Map::new();
-        entry.insert(
-            "entry_hash".to_string(),
-            norito::json::to_value(&self.entry_hash.to_string()).expect("serialize entry hash"),
-        );
-        entry.insert(
-            "batch_index".to_string(),
-            norito::json::to_value(&self.batch_index).expect("serialize batch index"),
-        );
-        entry.insert(
-            "parameter".to_string(),
-            norito::json::to_value(&self.parameter).expect("serialize parameter"),
-        );
-        entry.insert(
-            "transition_count".to_string(),
-            norito::json::to_value(&self.transition_count).expect("serialize transition count"),
-        );
-        entry.insert(
-            "trace_commitment".to_string(),
-            norito::json::to_value(&self.trace_commitment.to_string())
-                .expect("serialize trace commitment"),
-        );
-        entry.insert(
-            "proof_digest".to_string(),
-            norito::json::to_value(&self.proof_digest.to_string()).expect("serialize proof digest"),
-        );
-        entry.insert(
-            "batch".to_string(),
-            norito::json::to_value(
-                &BASE64_STANDARD
-                    .encode(norito::to_bytes(&self.batch).expect("encode FASTPQ batch")),
-            )
-            .expect("serialize FASTPQ batch"),
-        );
-        entry.insert(
-            "proof".to_string(),
-            norito::json::to_value(&BASE64_STANDARD.encode(&self.proof))
-                .expect("serialize FASTPQ proof"),
-        );
-        norito::json::Value::Object(entry)
-    }
-
-    /// Package this snapshot as an AXT proof blob.
-    ///
-    /// # Errors
-    ///
-    /// Returns a FASTPQ prover error when the embedded proof is malformed or
-    /// the batch was not already AXT-bound before proof generation.
-    pub fn to_axt_proof_blob(
-        &self,
-        manifest_root: [u8; 32],
-        da_commitment: Option<[u8; 32]>,
-        expiry_slot: Option<u64>,
-    ) -> fastpq_prover::Result<iroha_data_model::nexus::ProofBlob> {
-        let proof = norito::decode_from_bytes(&self.proof)
-            .map_err(|source| fastpq_prover::Error::AxtProofPayloadDecode { source })?;
-        fastpq_prover::axt_proof_blob_from_bound_batch(
-            &self.batch,
-            proof,
-            manifest_root,
-            da_commitment,
-            expiry_slot,
-        )
-    }
-}
-
-/// Known metadata format variants for certified standalone lane blocks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub enum CertifiedLaneBlockArtifactFormat {
-    #[codec(index = 1)]
-    /// Standalone lane block certified by prepare and commit lane-local QCs.
-    Current,
-}
-
-/// Persisted standalone lane block certification artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub struct CertifiedLaneBlockArtifact {
-    /// Schema / evolution tag for the certified lane block format.
-    pub format: CertifiedLaneBlockArtifactFormat,
-    /// Lane block proposal that defines the certified descriptor and payload subject.
-    pub proposal: LaneBlockProposalV1,
-    /// Prepare QC for the lane block proposal.
-    pub prepare_qc: LaneBlockQcV1,
-    /// Commit QC for the lane block proposal.
-    pub commit_qc: LaneBlockQcV1,
-    /// Proof-of-possession material for every signer selected by either QC.
-    pub signer_pops: BTreeMap<PublicKey, Vec<u8>>,
-}
-
-impl CertifiedLaneBlockArtifact {
-    const FORMAT_LABEL: &'static str = "lane.certified_block";
-
-    /// Construct a certified lane block artifact using the current schema.
-    #[must_use]
-    pub(crate) fn new(
-        session: crate::lane_consensus::CommittedLaneBlockSession,
-        signer_pops: BTreeMap<PublicKey, Vec<u8>>,
-    ) -> Self {
-        Self {
-            format: CertifiedLaneBlockArtifactFormat::Current,
-            proposal: session.proposal,
-            prepare_qc: session.prepare_qc,
-            commit_qc: session.commit_qc,
-            signer_pops,
-        }
-    }
-
-    /// Return the human-readable format tag describing the artifact payload.
-    #[must_use]
-    pub fn format_label(&self) -> &'static str {
-        match self.format {
-            CertifiedLaneBlockArtifactFormat::Current => Self::FORMAT_LABEL,
-        }
-    }
-
-    /// Encode the artifact into a framed Norito buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if framing fails or the complete certified source
-    /// exceeds its protocol-reserved merge envelope.
-    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        let bytes = norito::encode_canonical(self)?;
-        if bytes.len() > MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES {
-            return Err(norito::Error::Message(
-                "certified lane block exceeds the merge source envelope byte limit".to_owned(),
-            ));
-        }
-        Ok(bytes)
-    }
-}
-
-/// Bounded durable head for one active lane's latest certified session.
-///
-/// The complete artifact is retained so a frontier publication that survives a
-/// crash can repair the exact ordinary progress-pair entry without scanning
-/// lane-local history.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-struct LatestCertifiedLaneBlockFrontierV1 {
-    version: u16,
-    artifact: CertifiedLaneBlockArtifact,
-    integrity_hash: Hash,
-}
-
-#[derive(Debug)]
-struct LatestCertifiedLaneBlockFrontierRead {
-    frontier: LatestCertifiedLaneBlockFrontierV1,
-    snapshot: StableSidecarRead,
-}
-
-impl LatestCertifiedLaneBlockFrontierV1 {
-    fn new(artifact: CertifiedLaneBlockArtifact) -> Option<Self> {
-        let mut frontier = Self {
-            version: LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_VERSION,
-            artifact,
-            integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        frontier.integrity_hash = frontier.computed_integrity_hash()?;
-        Some(frontier)
-    }
-
-    fn computed_integrity_hash(&self) -> Option<Hash> {
-        let mut canonical = self.clone();
-        canonical.integrity_hash = Hash::prehashed([0; Hash::LENGTH]);
-        norito::encode_canonical(&canonical).ok().map(|bytes| {
-            Hash::new_from_chunks(&[LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_DIGEST_DOMAIN, &bytes])
-        })
-    }
-
-    fn ordinary_height(&self) -> u64 {
-        self.artifact.proposal.descriptor.lane_block_height
-    }
-}
-
-/// Known metadata formats for lane-owned executable payloads and view proofs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub(crate) enum AutonomousLaneBlockArtifactFormat {
-    #[codec(index = 1)]
-    /// Canonical executable payload followed by a contiguous NewView proof chain.
-    Current,
-}
-
-/// Durable lane-owned payload and authenticated view-transition chain.
-///
-/// Unlike [`LaneBlockArtifact`], this artifact does not depend on a global block
-/// body. Its payload is producer-signed, its availability certificate remains
-/// bound to the immutable origin proposal, and every later synthetic view
-/// cursor is authorized by a lane-committee aggregate certificate carrying
-/// restart-verifiable PoPs.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub(crate) struct AutonomousLaneBlockArtifact {
-    /// Schema/evolution tag.
-    pub(crate) format: AutonomousLaneBlockArtifactFormat,
-    /// View-neutral executable payload authenticated at its origin view.
-    pub(crate) executable_payload: LaneExecutablePayloadV1,
-    /// Origin-Prepare quorum proof that READY signers retained the exact payload.
-    pub(crate) availability_certificate: Option<DurableLanePayloadAvailabilityCertificateV1>,
-    /// Latest quorum-signed restart checkpoint after older transitions were
-    /// compacted away.
-    pub(crate) view_checkpoint: Option<DurableLaneBlockViewCheckpointV1>,
-    /// Contiguous certificates from the origin proposal, or from the retained
-    /// checkpoint target, to the current view.
-    pub(crate) new_view_certificates: Vec<DurableLaneBlockNewViewCertificateV1>,
-}
-
-impl AutonomousLaneBlockArtifact {
-    fn new(executable_payload: LaneExecutablePayloadV1) -> Self {
-        Self {
-            format: AutonomousLaneBlockArtifactFormat::Current,
-            executable_payload,
-            availability_certificate: None,
-            view_checkpoint: None,
-            new_view_certificates: Vec::new(),
-        }
-    }
-
-    fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        let bytes = norito::encode_canonical(self)?;
-        if bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES {
-            return Err(norito::Error::Message(
-                "autonomous lane block exceeds the merge source byte limit".to_owned(),
-            ));
-        }
-        Ok(bytes)
-    }
-}
-
-/// Authenticated pointer to the latest attempt at one lane-local height.
-///
-/// Every attempt, including the first, is immutable in its versioned
-/// proposal-height namespace. A later global proposal height may reuse that
-/// lane-local height only after the prior attempt is durably retired and its
-/// Queue release is complete. This pointer is published last and reconstructed
-/// from the bounded attempt inventory at startup.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-struct AutonomousLaneBlockLatestAttemptV1 {
-    version: u16,
-    chain_id_hash: Hash,
-    epoch: u64,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    proposal_height: u64,
-    lane_block_height: u64,
-    origin_proposal_hash: Hash,
-    executable_payload_hash: Hash,
-}
-
-impl AutonomousLaneBlockLatestAttemptV1 {
-    const VERSION: u16 = 1;
-
-    fn from_payload(payload: &LaneExecutablePayloadV1) -> Self {
-        let descriptor = &payload.origin_proposal.descriptor;
-        Self {
-            version: Self::VERSION,
-            chain_id_hash: payload.chain_id_hash,
-            epoch: payload.epoch,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            proposal_height: descriptor.proposal_height,
-            lane_block_height: descriptor.lane_block_height,
-            origin_proposal_hash: payload.origin_proposal.proposal_hash,
-            executable_payload_hash: payload.payload_hash,
-        }
-    }
-
-    fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
-        self.version == Self::VERSION && self == &Self::from_payload(payload)
-    }
-}
-
-include!("kura/autonomous_merge_bundle_support.rs");
-
-/// Durable state of one autonomous executable-entrypoint owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-enum AutonomousLaneEntrypointClaimStateV3 {
-    /// The lane payload exclusively owns the entrypoint.
-    #[codec(index = 1)]
-    Active,
-    /// The exact slot retirement is durable, but Queue still owns the
-    /// reservations behind an ordered release barrier.
-    #[codec(index = 2)]
-    ReleasePending(Hash),
-    /// Queue proved its ordered barrier durable, so canonical ownership may
-    /// return to ordinary FIFO.
-    #[codec(index = 3)]
-    Released(Hash),
-}
-
-/// Durable exact-key owner for one autonomous executable entrypoint.
-///
-/// Claims live in hash-addressed files outside individual lane segments, so a
-/// lookup touches at most one bounded record and never scans historical lane
-/// blocks. An active claim binds the complete immutable payload identity. A
-/// terminal slot retirement first changes every claim to `ReleasePending`.
-/// Only a durable Queue release barrier permits the second transition to
-/// `Released`; only that state may be replaced by a later payload.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-struct AutonomousLaneEntrypointClaimV3 {
-    version: u16,
-    chain_id_hash: Hash,
-    epoch: u64,
-    entrypoint_hash: Hash,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    proposal_height: u64,
-    lane_block_height: u64,
-    origin_proposal_hash: Hash,
-    executable_payload_hash: Hash,
-    state: AutonomousLaneEntrypointClaimStateV3,
-}
-
-impl AutonomousLaneEntrypointClaimV3 {
-    const VERSION: u16 = 3;
-
-    fn new(payload: &LaneExecutablePayloadV1, entrypoint_hash: Hash) -> Self {
-        let descriptor = &payload.origin_proposal.descriptor;
-        Self {
-            version: Self::VERSION,
-            chain_id_hash: payload.chain_id_hash,
-            epoch: payload.epoch,
-            entrypoint_hash,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            proposal_height: descriptor.proposal_height,
-            lane_block_height: descriptor.lane_block_height,
-            origin_proposal_hash: payload.origin_proposal.proposal_hash,
-            executable_payload_hash: payload.payload_hash,
-            state: AutonomousLaneEntrypointClaimStateV3::Active,
-        }
-    }
-
-    fn owns_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
-        let mut expected = Self::new(payload, self.entrypoint_hash);
-        expected.state = self.state;
-        self.version == Self::VERSION
-            && payload.entrypoint_hashes.contains(&self.entrypoint_hash)
-            && self == &expected
-    }
-
-    fn active_for_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
-        matches!(self.state, AutonomousLaneEntrypointClaimStateV3::Active)
-            && self.owns_payload(payload)
-    }
-
-    fn release_pending_for_payload(
-        payload: &LaneExecutablePayloadV1,
-        entrypoint_hash: Hash,
-        retirement_hash: Hash,
-    ) -> Self {
-        let mut claim = Self::new(payload, entrypoint_hash);
-        claim.state = AutonomousLaneEntrypointClaimStateV3::ReleasePending(retirement_hash);
-        claim
-    }
-
-    fn released_for_payload(
-        payload: &LaneExecutablePayloadV1,
-        entrypoint_hash: Hash,
-        retirement_hash: Hash,
-    ) -> Self {
-        let mut claim = Self::new(payload, entrypoint_hash);
-        claim.state = AutonomousLaneEntrypointClaimStateV3::Released(retirement_hash);
-        claim
-    }
-
-    fn retirement_hash(&self) -> Option<Hash> {
-        match self.state {
-            AutonomousLaneEntrypointClaimStateV3::Active => None,
-            AutonomousLaneEntrypointClaimStateV3::ReleasePending(hash)
-            | AutonomousLaneEntrypointClaimStateV3::Released(hash) => Some(hash),
-        }
-    }
-}
-
-/// Terminal durable identity for one abandoned autonomous lane-height slot.
-///
-/// The record is written before any queue reservation returns to ordinary FIFO
-/// ownership. Its ordered reservation vector is therefore both the exact
-/// release recipe and the restart proof that a delayed proposal, READY vote,
-/// QC, or merge bundle belongs to a closed slot.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-pub(crate) struct AutonomousLaneSlotRetirementV1 {
-    version: u16,
-    chain_id_hash: Hash,
-    epoch: u64,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    proposal_height: u64,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    origin_descriptor_hash: Hash,
-    origin_proposal_hash: Hash,
-    executable_payload_hash: Hash,
-    reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
-}
-
-impl AutonomousLaneSlotRetirementV1 {
-    const VERSION: u16 = 1;
-
-    /// Build the only valid retirement identity for an authenticated payload.
-    #[must_use]
-    pub(crate) fn from_payload(payload: &LaneExecutablePayloadV1) -> Self {
-        let proposal = &payload.origin_proposal;
-        let descriptor = &proposal.descriptor;
-        Self {
-            version: Self::VERSION,
-            chain_id_hash: payload.chain_id_hash,
-            epoch: payload.epoch,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            proposal_height: descriptor.proposal_height,
-            lane_block_height: descriptor.lane_block_height,
-            lane_block_view: descriptor.lane_block_view,
-            origin_descriptor_hash: descriptor.descriptor_hash,
-            origin_proposal_hash: proposal.proposal_hash,
-            executable_payload_hash: payload.payload_hash,
-            reservation_keys: payload.reservation_keys.clone(),
-        }
-    }
-
-    fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
-        self.version == Self::VERSION && self == &Self::from_payload(payload)
-    }
-
-    pub(crate) fn digest(&self) -> Result<Hash> {
-        let bytes = norito::encode_canonical(self).map_err(Error::NoritoFrame)?;
-        Ok(Hash::new_from_chunks(&[
-            b"iroha:nexus:autonomous-lane-slot-retirement:v1\0",
-            &bytes,
-        ]))
-    }
-
-    /// Build the exact Queue-side ordered barrier for this durable retirement.
-    pub(crate) fn queue_release_barrier(
-        &self,
-    ) -> Result<crate::queue::LaneQueueReservationReleaseBarrierV3> {
-        Ok(crate::queue::LaneQueueReservationReleaseBarrierV3 {
-            version: crate::queue::LaneQueueReservationReleaseBarrierV3::VERSION,
-            chain_id_hash: self.chain_id_hash,
-            epoch: self.epoch,
-            lane_id: self.lane_id,
-            dataspace_id: self.dataspace_id,
-            lane_incarnation: self.lane_incarnation,
-            proposal_height: self.proposal_height,
-            lane_block_height: self.lane_block_height,
-            lane_block_view: self.lane_block_view,
-            origin_descriptor_hash: self.origin_descriptor_hash,
-            origin_proposal_hash: self.origin_proposal_hash,
-            executable_payload_hash: self.executable_payload_hash,
-            retirement_hash: self.digest()?,
-            ordered_keys: self.reservation_keys.clone(),
-        })
-    }
-}
-
-/// Known formats for the bounded mutable view state of an autonomous payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-enum AutonomousLaneBlockViewStateFormat {
-    #[codec(index = 1)]
-    /// Quorum checkpoint plus a bounded contiguous certificate suffix.
-    Current,
-}
-
-/// Mutable view state stored separately from the immutable executable payload.
-///
-/// Separating this small record prevents every timeout from appending another
-/// copy of an executable payload that may be as large as the consensus frame
-/// limit. All identity fields are repeated and validated so a stale view file
-/// cannot be attached to a recreated lane or another payload at the same
-/// lane-local height.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-struct AutonomousLaneBlockViewState {
-    format: AutonomousLaneBlockViewStateFormat,
-    chain_id_hash: Hash,
-    epoch: u64,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    proposal_height: u64,
-    lane_block_height: u64,
-    origin_proposal_hash: Hash,
-    executable_payload_hash: Hash,
-    availability_certificate: Option<DurableLanePayloadAvailabilityCertificateV1>,
-    checkpoint: Option<DurableLaneBlockViewCheckpointV1>,
-    certificates: Vec<DurableLaneBlockNewViewCertificateV1>,
-    retirement: Option<AutonomousLaneSlotRetirementV1>,
-}
-
-impl AutonomousLaneBlockViewState {
-    fn from_artifact(artifact: &AutonomousLaneBlockArtifact) -> Self {
-        let payload = &artifact.executable_payload;
-        let descriptor = &payload.origin_proposal.descriptor;
-        Self {
-            format: AutonomousLaneBlockViewStateFormat::Current,
-            chain_id_hash: payload.chain_id_hash,
-            epoch: payload.epoch,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            proposal_height: descriptor.proposal_height,
-            lane_block_height: descriptor.lane_block_height,
-            origin_proposal_hash: payload.origin_proposal.proposal_hash,
-            executable_payload_hash: payload.payload_hash,
-            availability_certificate: artifact.availability_certificate.clone(),
-            checkpoint: artifact.view_checkpoint.clone(),
-            certificates: artifact.new_view_certificates.clone(),
-            retirement: None,
-        }
-    }
-
-    fn matches_payload(&self, payload: &LaneExecutablePayloadV1) -> bool {
-        let descriptor = &payload.origin_proposal.descriptor;
-        matches!(self.format, AutonomousLaneBlockViewStateFormat::Current)
-            && self.chain_id_hash == payload.chain_id_hash
-            && self.epoch == payload.epoch
-            && self.lane_id == descriptor.lane_id
-            && self.dataspace_id == descriptor.dataspace_id
-            && self.lane_incarnation == descriptor.lane_incarnation
-            && self.proposal_height == descriptor.proposal_height
-            && self.lane_block_height == descriptor.lane_block_height
-            && self.origin_proposal_hash == payload.origin_proposal.proposal_hash
-            && self.executable_payload_hash == payload.payload_hash
-    }
-}
-
-struct AutonomousLaneBlockDurableRecord {
-    artifact: AutonomousLaneBlockArtifact,
-    retirement: Option<AutonomousLaneSlotRetirementV1>,
-    view_state_path: PathBuf,
-}
-
-include!("kura/autonomous_reservation_types.rs");
-include!("kura/autonomous_reservation_inventory.rs");
-include!("kura/autonomous_reservation_classifier.rs");
-include!("kura/historical_autonomous_recovery.rs");
-
-/// Known metadata format variants for lane-local block artifacts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub enum LaneBlockArtifactFormat {
-    #[codec(index = 1)]
-    /// Lane payload ownership artifact anchored to a committed global block hash.
-    Current,
-}
-
-/// Persisted lane-local payload ownership artifact anchored to a global block.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub struct LaneBlockArtifact {
-    /// Schema / evolution tag for the lane artifact format.
-    pub format: LaneBlockArtifactFormat,
-    /// Global block hash that committed the lane payload ownership.
-    pub proposal_block_hash: HashOf<BlockHeader>,
-    /// Lane-local payload ownership and RBC instance identity.
-    pub ownership: SumeragiLanePayloadOwnership,
-}
-
-impl LaneBlockArtifact {
-    const FORMAT_LABEL: &'static str = "lane.block_artifact";
-
-    /// Construct a lane block artifact using the current schema.
-    #[must_use]
-    pub fn new(
-        proposal_block_hash: HashOf<BlockHeader>,
-        ownership: SumeragiLanePayloadOwnership,
-    ) -> Self {
-        Self {
-            format: LaneBlockArtifactFormat::Current,
-            proposal_block_hash,
-            ownership,
-        }
-    }
-
-    /// Return the human-readable format tag describing the artifact payload.
-    #[must_use]
-    pub fn format_label(&self) -> &'static str {
-        match self.format {
-            LaneBlockArtifactFormat::Current => Self::FORMAT_LABEL,
-        }
-    }
-
-    /// Encode the artifact into a framed Norito buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if framing fails.
-    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::encode_canonical(self)
-    }
-}
-
-/// Known metadata format variants for roster snapshots persisted alongside blocks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub enum RosterSidecarFormat {
-    #[codec(index = 1)]
-    /// Roster snapshot format with stake metadata.
-    Current,
-}
-
-/// Persisted roster metadata enabling roster reconstruction during block sync.
-#[derive(Debug, Clone, Encode, Decode)]
-pub struct RosterSidecar {
-    /// Schema / evolution tag for the roster metadata format.
-    pub format: RosterSidecarFormat,
-    /// Block height the roster applies to.
-    pub height: u64,
-    /// Block hash the roster was validated against.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Optional commit certificate capturing the validator set.
-    #[norito(default)]
-    pub commit_qc: Option<Qc>,
-    /// Optional validator-set checkpoint capturing the validator set.
-    #[norito(default)]
-    pub validator_checkpoint: Option<ValidatorSetCheckpoint>,
-    /// Optional stake snapshot aligned to the validator set.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub stake_snapshot: Option<CommitStakeSnapshot>,
-}
-
-impl RosterSidecar {
-    const FORMAT_LABEL: &'static str = "roster.snapshot";
-
-    /// Construct a new roster sidecar payload using the current schema.
-    pub fn new(
-        height: u64,
-        block_hash: HashOf<BlockHeader>,
-        commit_qc: Option<Qc>,
-        validator_checkpoint: Option<ValidatorSetCheckpoint>,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> Self {
-        Self {
-            format: RosterSidecarFormat::Current,
-            height,
-            block_hash,
-            commit_qc,
-            validator_checkpoint,
-            stake_snapshot,
-        }
-    }
-
-    /// Return the human-readable format tag.
-    pub fn format_label(&self) -> &'static str {
-        match self.format {
-            RosterSidecarFormat::Current => Self::FORMAT_LABEL,
-        }
-    }
-
-    /// Encode the sidecar into a framed Norito buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if framing fails.
-    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::encode_canonical(self)
-    }
-
-    /// Return the roster snapshot contained in the sidecar, preferring commit certificates over
-    /// checkpoints.
-    #[must_use]
-    pub fn roster_snapshot(&self) -> Option<Vec<PeerId>> {
-        self.commit_qc
-            .as_ref()
-            .map(|cert| cert.validator_set.clone())
-            .or_else(|| {
-                self.validator_checkpoint
-                    .as_ref()
-                    .map(|chkpt| chkpt.validator_set.clone())
-            })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SidecarIndexEntry {
-    offset: u64,
-    len: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidecarIndexOrigin {
-    HeightOne,
-    FirstWrite,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SidecarIndexLayout {
-    base_height: u64,
-    entries_offset: u64,
-    entry_count: u64,
-    aligned_len: u64,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum IndexedSidecarRewrite {
-    RetainNewest {
-        retention: NonZeroUsize,
-        pinned_height: Option<u64>,
-    },
-    /// Advance the based-index window together with the retained payloads.
-    ///
-    /// This is reserved for evidence whose configured retention is also its
-    /// hard startup scan bound. Generic pipeline sidecars retain their
-    /// historical zero slots for compatibility.
-    #[cfg(test)]
-    RetainNewestWindow { retention: NonZeroUsize },
-    /// Discard only the authenticated terminal prefix while retaining a
-    /// configured diagnostic window and every later (possibly pending) slot.
-    RetainAfterTerminalFrontier {
-        terminal_height: u64,
-        retention: NonZeroUsize,
-    },
-    TruncateToHeight {
-        height: u64,
-        /// Require every retained index entry to be structurally valid instead
-        /// of replacing malformed entries with empty slots. Test-only crash
-        /// shaping enables this to preserve prior forensic evidence exactly.
-        strict_retained: bool,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-enum LaneBlockArtifactConflictPolicy {
-    PreserveCanonical,
-    AllowCanonicalReplacementAtProposalHeight(u64),
-}
-
-#[derive(Debug)]
-struct LaneBlockArtifactWriteCheckpoint {
-    data_path: PathBuf,
-    index_path: PathBuf,
-    data_existed: bool,
-    index_existed: bool,
-    data_len: u64,
-    index_len: u64,
-    index_layout: Option<SidecarIndexLayout>,
-    index_entry_pos: Option<u64>,
-    index_entry_bytes: Option<[u8; PIPELINE_INDEX_ENTRY_SIZE]>,
-    tracked_bytes_before: Option<u64>,
-}
-
-struct LaneBlockArtifactWriteBatch<'a> {
-    kura: &'a Kura,
-    // Fields drop in declaration order, so the inner sidecar gate is released
-    // before the outer geometry gate.
-    _sidecar_guard: parking_lot::MutexGuard<'a, ()>,
-    _geometry_guard: parking_lot::MutexGuard<'a, ()>,
-    checkpoints: Vec<LaneBlockArtifactWriteCheckpoint>,
-    finished: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FastpqProofWriteResult {
-    Written,
-    Retry,
-    Drop,
-}
-
-impl SidecarIndexEntry {
-    fn to_bytes(self) -> [u8; PIPELINE_INDEX_ENTRY_SIZE] {
-        let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        buf[..8].copy_from_slice(&self.offset.to_le_bytes());
-        buf[8..].copy_from_slice(&self.len.to_le_bytes());
-        buf
-    }
-
-    fn from_bytes(bytes: [u8; PIPELINE_INDEX_ENTRY_SIZE]) -> Self {
-        let offset = u64::from_le_bytes(bytes[..8].try_into().expect("slice length matches"));
-        let len = u64::from_le_bytes(bytes[8..].try_into().expect("slice length matches"));
-        Self { offset, len }
-    }
-}
-
-impl SidecarIndexLayout {
-    const LEGACY_BASE_HEIGHT: u64 = 1;
-
-    fn legacy(index_len: u64) -> Self {
-        let aligned_len = index_len - index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
-        Self {
-            base_height: Self::LEGACY_BASE_HEIGHT,
-            entries_offset: 0,
-            entry_count: aligned_len / PIPELINE_INDEX_ENTRY_SIZE_U64,
-            aligned_len,
-        }
-    }
-
-    fn based(base_height: u64, index_len: u64) -> Result<Self, &'static str> {
-        if base_height <= Self::LEGACY_BASE_HEIGHT {
-            return Err("sidecar base height must be greater than one");
-        }
-        let entries_len = index_len
-            .checked_sub(INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
-            .ok_or("sidecar base-height header is truncated")?;
-        let aligned_entries_len = entries_len - entries_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
-        let entry_count = aligned_entries_len / PIPELINE_INDEX_ENTRY_SIZE_U64;
-        base_height
-            .checked_add(entry_count)
-            .ok_or("sidecar base height and entry count overflow")?;
-        Ok(Self {
-            base_height,
-            entries_offset: INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
-            entry_count,
-            aligned_len: INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + aligned_entries_len,
-        })
-    }
-
-    fn is_based(self) -> bool {
-        self.entries_offset != 0
-    }
-
-    fn next_height(self) -> Option<u64> {
-        self.base_height.checked_add(self.entry_count)
-    }
-
-    fn entry_position(self, height: u64) -> Option<u64> {
-        let relative = height.checked_sub(self.base_height)?;
-        if relative >= self.entry_count {
-            return None;
-        }
-        relative
-            .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-            .and_then(|offset| self.entries_offset.checked_add(offset))
-    }
-
-    fn height_range(self) -> Option<core::ops::RangeInclusive<u64>> {
-        if self.entry_count == 0 {
-            return None;
-        }
-        let end = self.next_height()?.checked_sub(1)?;
-        Some(self.base_height..=end)
-    }
-
-    fn base_header(base_height: u64) -> [u8; INDEXED_SIDECAR_BASE_HEADER_SIZE] {
-        let mut header = [0u8; INDEXED_SIDECAR_BASE_HEADER_SIZE];
-        header[..8].copy_from_slice(&u64::MAX.to_le_bytes());
-        header[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
-        header[16..24].copy_from_slice(&base_height.to_le_bytes());
-        header[24..]
-            .copy_from_slice(&(base_height ^ INDEXED_SIDECAR_BASE_CHECK_MASK).to_le_bytes());
-        header
-    }
-
-    fn read_from(index: &mut std::fs::File, index_len: u64) -> Result<Self, &'static str> {
-        if index_len < PIPELINE_INDEX_ENTRY_SIZE_U64 {
-            return Ok(Self::legacy(index_len));
-        }
-
-        let mut first_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        index
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| index.read_exact(&mut first_buf))
-            .map_err(|_| "failed to read sidecar index prefix")?;
-        let first = SidecarIndexEntry::from_bytes(first_buf);
-        let marker_field_present = first.offset == u64::MAX || first.len == u64::MAX;
-        if !marker_field_present {
-            return Ok(Self::legacy(index_len));
-        }
-        if first.offset != u64::MAX || first.len != u64::MAX {
-            return Err("malformed sidecar base-height marker");
-        }
-        if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
-            return Err("sidecar base-height header is truncated");
-        }
-
-        let mut metadata_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        index
-            .read_exact(&mut metadata_buf)
-            .map_err(|_| "failed to read sidecar base-height metadata")?;
-        let metadata = SidecarIndexEntry::from_bytes(metadata_buf);
-        if metadata.len != metadata.offset ^ INDEXED_SIDECAR_BASE_CHECK_MASK {
-            return Err("sidecar base-height checksum mismatch");
-        }
-        Self::based(metadata.offset, index_len)
-    }
-}
-
-/// Local availability state for the executable payload behind a certified lane block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaneBlockPayloadAvailability {
-    /// The canonical global block body still provides every accepted entrypoint.
-    Available,
-    /// No lane payload ownership artifact is stored for the certified lane height.
-    MissingLaneArtifact,
-    /// The ownership artifact no longer matches the certified lane descriptor.
-    DescriptorMismatch,
-    /// The global block that anchored the ownership artifact is not locally readable.
-    MissingProposalBlock,
-    /// An accepted entrypoint index is not present in the canonical global block body.
-    MissingEntrypoint,
-    /// The canonical global block has no committed result at an accepted entrypoint index.
-    MissingTransactionResult,
-    /// An accepted entrypoint hash differs from the certified descriptor.
-    EntrypointHashMismatch,
-}
-
-/// Read-only startup classification for one ordinary application receipt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LaneBlockApplicationReceiptRepairPreflight {
-    /// Every canonical input and result is locally available and exact.
-    Ready(LaneBlockApplicationReceiptArtifact),
-    /// The finality-authenticated result-bearing global body must be rehydrated.
-    MissingCanonicalBody,
-}
-
-/// Verified payload material recovered for a certified standalone lane block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecoveredLaneBlockPayload {
-    /// Certified lane-block proposal whose descriptor selected this payload.
-    pub proposal: LaneBlockProposalV1,
-    /// Lane payload ownership sidecar anchoring the payload to a global block.
-    pub artifact: LaneBlockArtifact,
-    /// Chain binding of a lane-owned autonomous payload, when recovery did not
-    /// depend on a committed global block body.
-    pub autonomous_chain_id_hash: Option<Hash>,
-    /// Epoch binding of the autonomous payload.
-    pub autonomous_epoch: Option<u64>,
-    /// Canonical autonomous executable payload digest.
-    pub autonomous_payload_hash: Option<Hash>,
-    /// Accepted entrypoints in lane descriptor order.
-    pub entrypoints: Vec<TransactionEntrypoint>,
-    /// Exact durable queue reservation identities in entrypoint order.
-    pub reservation_keys: Vec<LaneQueueReservationKeyV2>,
-    /// Complete routing plans in entrypoint order.
-    pub routing_plans: Vec<RoutingPlan>,
-    /// Producer-authenticated native-AMX receipts in entrypoint order.
-    pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
-}
-
-/// Known metadata format variants for durable lane-block execution input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub enum LaneBlockExecutionInputArtifactFormat {
-    #[codec(index = 1)]
-    /// Recovered standalone lane-block payload awaiting state application.
-    Current,
-}
-
-/// Durable recovered input for a certified standalone lane block.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-pub struct LaneBlockExecutionInputArtifact {
-    /// Schema / evolution tag for the execution input format.
-    pub format: LaneBlockExecutionInputArtifactFormat,
-    /// Certified lane-block proposal whose descriptor selected this payload.
-    pub proposal: LaneBlockProposalV1,
-    /// Lane payload ownership sidecar anchoring the payload to a global block.
-    pub artifact: LaneBlockArtifact,
-    /// Chain binding when this input came from a lane-owned payload.
-    pub autonomous_chain_id_hash: Option<Hash>,
-    /// Epoch binding when this input came from a lane-owned payload.
-    pub autonomous_epoch: Option<u64>,
-    /// Canonical autonomous executable payload digest, when applicable.
-    pub autonomous_payload_hash: Option<Hash>,
-    /// Accepted entrypoint hashes in lane descriptor order.
-    pub entrypoint_hashes: Vec<Hash>,
-    /// Accepted entrypoints in lane descriptor order.
-    pub entrypoints: Vec<TransactionEntrypoint>,
-    /// Exact durable queue reservation identities in entrypoint order.
-    pub reservation_keys: Vec<LaneQueueReservationKeyV2>,
-    /// Complete routing plans in entrypoint order.
-    pub routing_plans: Vec<RoutingPlan>,
-    /// Producer-authenticated native-AMX receipts in entrypoint order.
-    pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
-}
-
-impl LaneBlockExecutionInputArtifact {
-    const FORMAT_LABEL: &'static str = "lane.execution_input";
-
-    /// Construct a durable execution input artifact from a verified recovery result.
-    #[must_use]
-    pub fn new(recovered: RecoveredLaneBlockPayload) -> Self {
-        let entrypoint_hashes = recovered
-            .entrypoints
-            .iter()
-            .map(|entrypoint| Hash::from(entrypoint.hash()))
-            .collect();
-        Self {
-            format: LaneBlockExecutionInputArtifactFormat::Current,
-            proposal: recovered.proposal,
-            artifact: recovered.artifact,
-            autonomous_chain_id_hash: recovered.autonomous_chain_id_hash,
-            autonomous_epoch: recovered.autonomous_epoch,
-            autonomous_payload_hash: recovered.autonomous_payload_hash,
-            entrypoint_hashes,
-            entrypoints: recovered.entrypoints,
-            reservation_keys: recovered.reservation_keys,
-            routing_plans: recovered.routing_plans,
-            native_amx_receipts: recovered.native_amx_receipts,
-        }
-    }
-
-    /// Return the human-readable format tag describing the artifact payload.
-    #[must_use]
-    pub fn format_label(&self) -> &'static str {
-        match self.format {
-            LaneBlockExecutionInputArtifactFormat::Current => Self::FORMAT_LABEL,
-        }
-    }
-
-    /// Encode the artifact into a framed Norito buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if framing fails.
-    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::encode_canonical(self)
-    }
-}
-
-/// Known metadata format variants for durable lane-block direct-execution preflights.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub enum LaneBlockExecutionPreflightArtifactFormat {
-    #[codec(index = 1)]
-    /// Non-committing direct-execution preflight result for recovered lane input.
-    Current,
-}
-
-/// Durable result of non-committing direct-execution preflight for a lane block.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub struct LaneBlockExecutionPreflightArtifact {
-    /// Schema / evolution tag for the preflight format.
-    pub format: LaneBlockExecutionPreflightArtifactFormat,
-    /// Certified lane-block proposal whose descriptor selected this payload.
-    pub proposal: LaneBlockProposalV1,
-    /// Lane payload ownership sidecar anchoring the payload to a global block.
-    pub artifact: LaneBlockArtifact,
-    /// Local committed state height used as the preflight base.
-    pub preflight_state_height: u64,
-    /// Local committed WSV snapshot hash used as the preflight base.
-    pub preflight_state_hash: Option<HashOf<BlockHeader>>,
-    /// Accepted entrypoint indices in lane descriptor order.
-    pub entrypoint_indices: Vec<u64>,
-    /// Accepted entrypoint hashes in lane descriptor order.
-    pub entrypoint_hashes: Vec<Hash>,
-    /// Hashes of preflight transaction results in lane descriptor order.
-    pub result_hashes: Vec<Hash>,
-    /// Preflight transaction results in lane descriptor order.
-    pub results: Vec<TransactionResult>,
-}
-
-impl LaneBlockExecutionPreflightArtifact {
-    const FORMAT_LABEL: &'static str = "lane.execution_preflight";
-
-    /// Construct a durable direct-execution preflight result from recovered input.
-    #[must_use]
-    pub fn new(
-        input: &LaneBlockExecutionInputArtifact,
-        preflight_state_height: u64,
-        preflight_state_hash: Option<HashOf<BlockHeader>>,
-        results: Vec<TransactionResult>,
-    ) -> Self {
-        let result_hashes = results
-            .iter()
-            .map(|result| Hash::from(result.hash()))
-            .collect();
-        Self {
-            format: LaneBlockExecutionPreflightArtifactFormat::Current,
-            proposal: input.proposal.clone(),
-            artifact: input.artifact.clone(),
-            preflight_state_height,
-            preflight_state_hash,
-            entrypoint_indices: input.proposal.descriptor.accepted_candidate_indices.clone(),
-            entrypoint_hashes: input.entrypoint_hashes.clone(),
-            result_hashes,
-            results,
-        }
-    }
-
-    /// Return the human-readable format tag describing the artifact payload.
-    #[must_use]
-    pub fn format_label(&self) -> &'static str {
-        match self.format {
-            LaneBlockExecutionPreflightArtifactFormat::Current => Self::FORMAT_LABEL,
-        }
-    }
-
-    /// Whether any transaction failed during preflight.
-    #[must_use]
-    pub fn has_rejections(&self) -> bool {
-        self.results.iter().any(|result| result.0.is_err())
-    }
-
-    /// Encode the artifact into a framed Norito buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if framing fails.
-    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::encode_canonical(self)
-    }
-}
-
-/// Known metadata format variants for durable lane-block application receipts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub enum LaneBlockApplicationReceiptArtifactFormat {
-    #[codec(index = 1)]
-    /// Canonical global block results proving lane payload state application.
-    Current,
-    #[codec(index = 2)]
-    /// Direct standalone execution results proving lane payload state application.
-    DirectExecution,
-    #[codec(index = 3)]
-    /// Canonical merge-batch execution results proving lane payload state application.
-    MergeExecution,
-}
-
-/// Durable receipt proving a certified standalone lane block has committed results.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-pub struct LaneBlockApplicationReceiptArtifact {
-    /// Schema / evolution tag for the application receipt format.
-    pub format: LaneBlockApplicationReceiptArtifactFormat,
-    /// Certified lane-block proposal whose descriptor selected this payload.
-    pub proposal: LaneBlockProposalV1,
-    /// Lane payload ownership sidecar anchoring the payload to a global block.
-    pub artifact: LaneBlockArtifact,
-    /// Canonical block height, or committed preflight base height for direct execution.
-    pub application_block_height: u64,
-    /// Canonical block hash, or committed preflight base WSV hash for direct execution.
-    pub application_block_hash: HashOf<BlockHeader>,
-    /// Accepted entrypoint indices in the canonical block body.
-    pub entrypoint_indices: Vec<u64>,
-    /// Accepted entrypoint hashes in lane descriptor order.
-    pub entrypoint_hashes: Vec<Hash>,
-    /// Hashes of committed transaction results in lane descriptor order.
-    pub result_hashes: Vec<Hash>,
-    /// Committed transaction results in lane descriptor order.
-    pub results: Vec<TransactionResult>,
-    /// Merge epoch whose durable entry authorized this application.
-    pub merge_epoch_id: Option<u64>,
-    /// Hash of the exact full merge-ledger entry referenced by the carrier block.
-    pub merge_entry_hash: Option<HashOf<MergeLedgerEntry>>,
-    /// Actual globally committed block height carrying the compact merge reference.
-    pub merge_carrier_block_height: Option<u64>,
-    /// Actual globally committed block hash carrying the compact merge reference.
-    pub merge_carrier_block_hash: Option<HashOf<BlockHeader>>,
-    /// Hash-addressed authenticated source bundle committed by the merge batch.
-    pub merge_source_bundle_hash: Option<Hash>,
-    /// Stable pre-marker batch identity included in the complete write set.
-    pub merge_batch_identity_hash: Option<Hash>,
-    /// Final marker-inclusive merge batch hash sealed by the merge QC.
-    pub merge_batch_hash: Option<Hash>,
-    /// Canonical base WSV commitment sealed by the merge batch.
-    pub merge_base_state_hash: Option<HashOf<BlockHeader>>,
-    /// Canonical complete marker-inclusive write-set root.
-    pub merge_write_set_root: Option<Hash>,
-    /// Expected post-state transition commitment after the batch.
-    pub merge_expected_post_state_hash: Option<HashOf<BlockHeader>>,
-    /// Exact lane settlement commitment hash staged atomically with execution.
-    pub merge_settlement_hash:
-        Option<HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>>,
-}
-
-/// Versioned durable cursor proving a contiguous lane-local prefix reached the
-/// canonical global merge carrier.
-///
-/// The cursor is published only after the exact application receipt is
-/// durability-attested. It lets Kura compact append histories without
-/// retaining a lifetime-sized startup or retirement scan. Every field is
-/// reconstructed from the QC-authenticated merge entry and carrier before the
-/// cursor can authorize compaction or archive validation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-struct LaneMergeApplicationFrontierV1 {
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    proposal_height: u64,
-    lane_block_height: u64,
-    lane_block_descriptor_hash: Hash,
-    proposal_hash: Hash,
-    merge_epoch_id: u64,
-    merge_entry_hash: HashOf<MergeLedgerEntry>,
-    application_block_height: u64,
-    application_block_hash: HashOf<BlockHeader>,
-    receipt_hash: HashOf<LaneBlockApplicationReceiptArtifact>,
-}
-
-impl LaneMergeApplicationFrontierV1 {
-    const VERSION: u8 = 1;
-
-    fn from_receipt(receipt: &LaneBlockApplicationReceiptArtifact) -> Option<Self> {
-        if receipt.format != LaneBlockApplicationReceiptArtifactFormat::MergeExecution {
-            return None;
-        }
-        let descriptor = &receipt.proposal.descriptor;
-        Some(Self {
-            version: Self::VERSION,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            proposal_height: descriptor.proposal_height,
-            lane_block_height: descriptor.lane_block_height,
-            lane_block_descriptor_hash: descriptor.descriptor_hash,
-            proposal_hash: receipt.proposal.proposal_hash,
-            merge_epoch_id: receipt.merge_epoch_id?,
-            merge_entry_hash: receipt.merge_entry_hash?,
-            application_block_height: receipt.merge_carrier_block_height?,
-            application_block_hash: receipt.merge_carrier_block_hash?,
-            receipt_hash: HashOf::new(receipt),
-        })
-    }
-
-    fn matches_receipt(&self, receipt: &LaneBlockApplicationReceiptArtifact) -> bool {
-        Self::from_receipt(receipt).as_ref() == Some(self)
-    }
-}
-
-/// Per-route Native AMX application leaf and its QC-authenticated Merkle proof.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-pub(crate) struct NativeAmxParticipantApplicationManifestArtifactV1 {
-    /// Exact durable artifact schema version.
-    pub version: u16,
-    /// Canonical manifest leaf committed by the global CommitQC.
-    pub leaf: NativeAmxApplicationManifestLeafV1,
-    /// Zero-based position of `leaf` in canonical route order.
-    pub leaf_index: u32,
-    /// Merkle proof from `leaf` to `manifest_root`.
-    pub proof: MerkleProof<NativeAmxApplicationManifestLeafV1>,
-    /// Exact root authenticated by the global CommitQC.
-    pub manifest_root: Hash,
-    /// Exact route-leaf count authenticated by the global CommitQC.
-    pub manifest_leaf_count: u32,
-    /// Hash of the independently persisted and verified v2 finality artifact.
-    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
-}
-
-impl NativeAmxParticipantApplicationManifestArtifactV1 {
-    const VERSION: u16 = 1;
-    const FORMAT_LABEL: &'static str = "lane.native_amx_participant_application_manifest.v1";
-
-    fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::encode_canonical(self)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-struct NativeAmxEvidencePruneEntryV1 {
-    kind: u8,
-    participant_height: u64,
-    artifact_hash: Hash,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-struct NativeAmxEvidencePruneIntentV1 {
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    entries: Vec<NativeAmxEvidencePruneEntryV1>,
-}
-
-impl NativeAmxEvidencePruneIntentV1 {
-    const VERSION: u8 = 1;
-    const MANIFEST_KIND: u8 = 1;
-    const RECEIPT_KIND: u8 = 2;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
-    /// Exact durable sidecar schema version.
-    pub version: u16,
-    /// Participant control proposal certified by its lane committee.
-    pub participant_proposal: LaneBlockProposalV1,
-    /// Exact zero-effect control settlement certified alongside the proposal.
-    pub participant_settlement: LaneBlockCommitment,
-    /// Canonical hash of `participant_settlement` carried by both participant QCs.
-    pub participant_settlement_hash: HashOf<LaneBlockCommitment>,
-    /// Canonical global block which executed the control members.
-    pub application_block_height: u64,
-    /// Canonical global block identity. It binds the execution context, not the
-    /// result root (which consensus hashing deliberately excludes).
-    pub application_block_hash: HashOf<BlockHeader>,
-    /// Hash of the canonical result-bearing global block wire.
-    pub executed_block_wire_hash: Hash,
-    /// Hash of the exact independently verified durable v2 finality artifact.
-    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    /// Hash of the distinct per-route manifest leaf/proof artifact.
-    pub manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
-    /// Source transaction identities in canonical block order. These are
-    /// intentionally distinct from `entrypoint_hashes`.
-    pub source_ids: Vec<[u8; Hash::LENGTH]>,
-    /// Canonical global entrypoint indices whose results apply this control.
-    pub entrypoint_indices: Vec<u64>,
-    /// Canonical entrypoint hashes at `entrypoint_indices`.
-    pub entrypoint_hashes: Vec<HashOf<TransactionEntrypoint>>,
-    /// Hashes of the exact committed transaction results.
-    pub result_hashes: Vec<HashOf<TransactionResult>>,
-    /// Exact canonical transaction results.
-    pub results: Vec<TransactionResult>,
-}
-
-type NativeAmxParticipantApplicationArtifactPair = (
-    NativeAmxParticipantApplicationManifestArtifactV1,
-    NativeAmxParticipantApplicationReceiptArtifact,
-);
-
-/// Side-effect-free failure while projecting the exact durable Native AMX
-/// artifact bytes which a candidate would require.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum NativeAmxParticipantApplicationEvidenceByteBudgetError {
-    /// The canonical manifest could not supply one proof per route.
-    #[error("Native AMX participant evidence artifact construction failed")]
-    ArtifactConstruction,
-    /// Exact Norito framing failed before any persistence boundary.
-    #[error("Native AMX participant evidence artifact framing failed: {0}")]
-    ArtifactFraming(#[source] norito::Error),
-    /// The exact framed pair violates a configured or hard byte bound.
-    #[error("{0}")]
-    Budget(String),
-}
-
-/// Bounded route/incarnation pointer to the latest Native AMX application receipt.
-///
-/// The immutable per-height manifest and receipt files remain authoritative.
-/// This independently versioned derived pointer is rebuilt from that
-/// standalone evidence set during startup and lets consensus/drain readers
-/// avoid reverse history scans.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-struct NativeAmxParticipantReceiptLatestIndexV2 {
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    lane_block_height: u64,
-    participant_proposal_hash: Hash,
-    participant_settlement_hash: HashOf<LaneBlockCommitment>,
-    application_block_height: u64,
-    application_block_hash: HashOf<BlockHeader>,
-    executed_block_wire_hash: Hash,
-    finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
-}
-
-/// Exact in-memory attestation that every separate-participant frontier in one
-/// canonical carrier has crossed the pre-WSV durable publication boundary.
-///
-/// This token is deliberately not a wire or persistence layout. It can only be
-/// constructed after Kura has read back the exact manifest, receipt, and
-/// latest-index bytes under the publication guards.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NativeAmxParticipantApplicationPrepublicationToken {
-    application_block_height: u64,
-    application_block_hash: HashOf<BlockHeader>,
-    executed_block_wire_hash: Hash,
-    finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    manifest_root: Hash,
-    manifest_leaf_count: u32,
-    identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct NativeAmxParticipantApplicationPrepublicationIdentity {
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_incarnation: Hash,
-    participant_height: u64,
-    manifest_leaf_hash: HashOf<NativeAmxApplicationManifestLeafV1>,
-    manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
-    receipt_artifact_hash: HashOf<NativeAmxParticipantApplicationReceiptArtifact>,
-    latest_index_artifact_hash: HashOf<NativeAmxParticipantReceiptLatestIndexV2>,
-}
-
-struct NativeAmxParticipantApplicationEvidencePlan {
-    application_block_height: u64,
-    application_block_hash: HashOf<BlockHeader>,
-    executed_block_wire_hash: Hash,
-    finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    manifest_root: Hash,
-    manifest_leaf_count: u32,
-    artifacts: Vec<NativeAmxParticipantApplicationArtifactPair>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NativeAmxParticipantApplicationRoutePreflight {
-    incoming: NativeAmxParticipantReceiptLatestIndexV2,
-    current: Option<NativeAmxParticipantReceiptLatestIndexV2>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NativeAmxParticipantApplicationManifestReadback {
-    manifest_root: Hash,
-    manifest_leaf_count: u32,
-    artifact_hashes: Vec<HashOf<NativeAmxParticipantApplicationManifestArtifactV1>>,
-}
-
-impl NativeAmxParticipantApplicationManifestReadback {
-    fn authenticates(
-        &self,
-        plan: &NativeAmxParticipantApplicationEvidencePlan,
-        manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
-    ) -> bool {
-        self.manifest_root == plan.manifest_root
-            && self.manifest_leaf_count == plan.manifest_leaf_count
-            && usize::try_from(self.manifest_leaf_count).ok() == Some(self.artifact_hashes.len())
-            && self
-                .artifact_hashes
-                .get(usize::try_from(manifest.leaf_index).unwrap_or(usize::MAX))
-                == Some(&HashOf::new(manifest))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeAmxParticipantApplicationPublicationMode {
-    PreWsv,
-    PostWsvRepair,
-}
-
-impl NativeAmxParticipantApplicationPublicationMode {
-    const fn requires_post_apply_metadata(self) -> bool {
-        matches!(self, Self::PostWsvRepair)
-    }
-
-    const fn permits_retention_cleanup(self) -> bool {
-        matches!(self, Self::PostWsvRepair)
-    }
-}
-
-/// Startup-only classification for a retained Native AMX participant receipt.
-///
-/// Runtime readers never accept either pending state: they continue to require
-/// the complete manifest/finality/checkpoint/commit-manifest join. Startup may
-/// admit `PendingTipMetadata` only for the highest receipt at the interrupted
-/// canonical tip. A missing manifest is weaker and is admitted only for that
-/// same highest receipt: its structurally valid bytes are retained for exact
-/// comparison during repair, but never promoted to the derived latest pointer
-/// until the QC-authenticated manifest is restored. Every older retained
-/// receipt must already have the complete durable evidence join.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeAmxParticipantReceiptStartupEvidence {
-    DurablyApplied,
-    PendingTipMetadata,
-    PendingManifestRepair,
-}
-
-fn native_amx_startup_retention_cleanup_authorized(
-    newest_evidence: Option<NativeAmxParticipantReceiptStartupEvidence>,
-    has_partial_pair: bool,
-) -> bool {
-    !has_partial_pair
-        && newest_evidence.is_none_or(|evidence| {
-            evidence == NativeAmxParticipantReceiptStartupEvidence::DurablyApplied
-        })
-}
-
-impl NativeAmxParticipantReceiptLatestIndexV2 {
-    const VERSION: u8 = 2;
-
-    fn from_receipt(receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> Self {
-        let descriptor = &receipt.participant_proposal.descriptor;
-        Self {
-            version: Self::VERSION,
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            lane_block_height: descriptor.lane_block_height,
-            participant_proposal_hash: receipt.participant_proposal.proposal_hash,
-            participant_settlement_hash: receipt.participant_settlement_hash,
-            application_block_height: receipt.application_block_height,
-            application_block_hash: receipt.application_block_hash,
-            executed_block_wire_hash: receipt.executed_block_wire_hash,
-            finality_artifact_hash: receipt.finality_artifact_hash,
-            manifest_artifact_hash: receipt.manifest_artifact_hash,
-        }
-    }
-
-    fn matches_receipt(&self, receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> bool {
-        *self == Self::from_receipt(receipt)
-    }
-
-    fn matches_manifest(
-        &self,
-        manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
-    ) -> bool {
-        let leaf = &manifest.leaf;
-        self.lane_id == leaf.lane_id
-            && self.dataspace_id == leaf.dataspace_id
-            && self.lane_incarnation == leaf.lane_incarnation
-            && self.lane_block_height == leaf.participant_height
-            && self.participant_proposal_hash == leaf.proposal_hash
-            && self.participant_settlement_hash == leaf.settlement_hash
-            && self.application_block_height == leaf.application_block_height
-            && self.application_block_hash == leaf.application_block_hash
-            && self.executed_block_wire_hash == leaf.executed_block_wire_hash
-            && self.finality_artifact_hash == manifest.finality_artifact_hash
-            && self.manifest_artifact_hash == HashOf::new(manifest)
-    }
-}
-
-impl NativeAmxParticipantApplicationReceiptArtifact {
-    const VERSION: u16 = 2;
-    const FORMAT_LABEL: &'static str = "lane.native_amx_participant_application_receipt.v2";
-
-    fn new(
-        entry: &crate::sumeragi::exec::NativeAmxApplicationManifestEntryV1,
-        manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
-        finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    ) -> Self {
-        let leaf = &entry.leaf;
-        Self {
-            version: Self::VERSION,
-            participant_proposal: entry.participant_proposal.clone(),
-            participant_settlement: entry.participant_settlement.clone(),
-            participant_settlement_hash: leaf.settlement_hash,
-            application_block_height: leaf.application_block_height,
-            application_block_hash: leaf.application_block_hash,
-            executed_block_wire_hash: leaf.executed_block_wire_hash,
-            finality_artifact_hash,
-            manifest_artifact_hash,
-            source_ids: leaf.members.iter().map(|member| member.source_id).collect(),
-            entrypoint_indices: leaf
-                .members
-                .iter()
-                .map(|member| member.entrypoint_index)
-                .collect(),
-            entrypoint_hashes: leaf
-                .members
-                .iter()
-                .map(|member| member.entrypoint_hash)
-                .collect(),
-            result_hashes: leaf
-                .members
-                .iter()
-                .map(|member| member.result_hash)
-                .collect(),
-            results: entry.results.clone(),
-        }
-    }
-
-    fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::encode_canonical(self)
-    }
-}
-
-fn native_amx_participant_application_finality_placeholder_hash() -> HashOf<V2FinalityArtifact> {
-    HashOf::from_untyped_unchecked(Hash::new(
-        b"Native AMX participant evidence finality placeholder",
-    ))
-}
-
-/// Build the exact ordered per-route artifact pairs without consulting Kura
-/// state or performing I/O. The finality identity is fixed-width, so callers
-/// may use the typed placeholder during candidate validation and the actual
-/// artifact hash during decided-block application without changing lengths.
-fn native_amx_participant_application_artifacts(
-    manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
-    finality_artifact_hash: HashOf<V2FinalityArtifact>,
-) -> Option<Vec<NativeAmxParticipantApplicationArtifactPair>> {
-    let mut artifacts = Vec::with_capacity(manifest.entries().len());
-    for (index, entry) in manifest.entries().iter().enumerate() {
-        let leaf_index = u32::try_from(index).ok()?;
-        let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
-            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
-            leaf: entry.leaf.clone(),
-            leaf_index,
-            proof: manifest.proof(leaf_index)?,
-            manifest_root: manifest.root(),
-            manifest_leaf_count: manifest.count(),
-            finality_artifact_hash,
-        };
-        let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
-            entry,
-            HashOf::new(&manifest_artifact),
-            finality_artifact_hash,
-        );
-        artifacts.push((manifest_artifact, receipt));
-    }
-    Some(artifacts)
-}
-
-fn native_amx_participant_application_pair_framed_bytes(
-    manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
-    receipt: &NativeAmxParticipantApplicationReceiptArtifact,
-) -> Result<(Vec<u8>, Vec<u8>), norito::Error> {
-    Ok((manifest.encode_framed()?, receipt.encode_framed()?))
-}
-
-fn checked_native_amx_participant_application_pair_bytes(
-    manifest_bytes: u64,
-    receipt_bytes: u64,
-) -> std::result::Result<u64, NativeAmxParticipantApplicationEvidenceByteBudgetError> {
-    manifest_bytes.checked_add(receipt_bytes).ok_or_else(|| {
-        NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-            "Native AMX participant manifest/receipt pair byte length overflowed".to_owned(),
-        )
-    })
-}
-
-impl NativeAmxParticipantApplicationPrepublicationIdentity {
-    fn from_artifacts(
-        manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
-        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
-    ) -> Option<Self> {
-        let latest = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(receipt);
-        if receipt.manifest_artifact_hash != HashOf::new(manifest)
-            || receipt.finality_artifact_hash != manifest.finality_artifact_hash
-            || !latest.matches_manifest(manifest)
-        {
-            return None;
-        }
-        let leaf = &manifest.leaf;
-        Some(Self {
-            lane_id: leaf.lane_id,
-            dataspace_id: leaf.dataspace_id,
-            lane_incarnation: leaf.lane_incarnation,
-            participant_height: leaf.participant_height,
-            manifest_leaf_hash: HashOf::new(leaf),
-            manifest_artifact_hash: HashOf::new(manifest),
-            receipt_artifact_hash: HashOf::new(receipt),
-            latest_index_artifact_hash: HashOf::new(&latest),
-        })
-    }
-}
-
-impl NativeAmxParticipantApplicationPrepublicationToken {
-    fn from_plan(
-        plan: &NativeAmxParticipantApplicationEvidencePlan,
-        identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>,
-    ) -> Option<Self> {
-        if usize::try_from(plan.manifest_leaf_count).ok() != Some(identities.len()) {
-            return None;
-        }
-        Some(Self {
-            application_block_height: plan.application_block_height,
-            application_block_hash: plan.application_block_hash,
-            executed_block_wire_hash: plan.executed_block_wire_hash,
-            finality_artifact_hash: plan.finality_artifact_hash,
-            manifest_root: plan.manifest_root,
-            manifest_leaf_count: plan.manifest_leaf_count,
-            identities,
-        })
-    }
-
-    /// Verify that this read-back token covers exactly the canonical manifest
-    /// which will stage Native participant frontiers in State.
-    #[must_use]
-    pub(crate) fn authenticates(
-        &self,
-        block: &SignedBlock,
-        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
-        finality: &V2FinalityArtifact,
-    ) -> bool {
-        let Ok(executed_block_wire) = block.encode_wire() else {
-            return false;
-        };
-        let Ok(executed_block_wire_len) = u64::try_from(executed_block_wire.len()) else {
-            return false;
-        };
-        let executed_block_wire_hash = Hash::new(&executed_block_wire);
-        let execution = &finality.commit_qc.execution_commitment;
-        if self.application_block_height != block.header().height().get()
-            || self.application_block_hash != block.hash()
-            || self.executed_block_wire_hash != executed_block_wire_hash
-            || self.finality_artifact_hash != HashOf::new(finality)
-            || self.manifest_root != manifest.root()
-            || self.manifest_leaf_count != manifest.count()
-            || finality.block_hash != block.hash()
-            || execution.native_amx_application_manifest_version
-                != iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION
-            || execution.native_amx_application_manifest_root != manifest.root()
-            || execution.native_amx_application_manifest_count != manifest.count()
-            || execution.executed_block_wire_len != executed_block_wire_len
-            || execution.executed_block_wire_len != manifest.executed_block_wire_len()
-            || execution.executed_block_wire_hash != executed_block_wire_hash
-        {
-            return false;
-        }
-
-        let Some(artifacts) = native_amx_participant_application_artifacts(
-            manifest,
-            self.finality_artifact_hash,
-        ) else {
-            return false;
-        };
-        let mut expected = Vec::with_capacity(artifacts.len());
-        for (manifest_artifact, receipt) in artifacts {
-            let Some(identity) =
-                NativeAmxParticipantApplicationPrepublicationIdentity::from_artifacts(
-                    &manifest_artifact,
-                    &receipt,
-                )
-            else {
-                return false;
-            };
-            expected.push(identity);
-        }
-        self.identities == expected
-    }
-
-    /// Verify the exact ordered State frontier projection authenticated by
-    /// this durable prepublication token.
-    #[must_use]
-    pub(crate) fn authenticates_state_frontiers(
-        &self,
-        block: &SignedBlock,
-        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
-        finality: &V2FinalityArtifact,
-        frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
-    ) -> bool {
-        if !self.authenticates(block, manifest, finality)
-            || frontiers.len() != manifest.entries().len()
-        {
-            return false;
-        }
-        manifest
-            .entries()
-            .iter()
-            .zip(frontiers)
-            .all(|(entry, frontier)| {
-                let leaf = &entry.leaf;
-                frontier.version == 2
-                    && frontier.lane_id == leaf.lane_id
-                    && frontier.dataspace_id == leaf.dataspace_id
-                    && frontier.lane_incarnation == leaf.lane_incarnation
-                    && frontier.lane_block_height == leaf.participant_height
-                    && frontier.participant_view == leaf.participant_view
-                    && frontier.previous_lane_block_height == leaf.predecessor_height
-                    && frontier.previous_lane_block_descriptor_hash
-                        == leaf.predecessor_descriptor_hash
-                    && frontier.lane_block_descriptor_hash == leaf.descriptor_hash
-                    && frontier.participant_proposal_hash == leaf.proposal_hash
-                    && frontier.participant_settlement_hash == leaf.settlement_hash
-                    && frontier.application_block_height == leaf.application_block_height
-                    && frontier.application_block_hash == leaf.application_block_hash
-                    && u64::try_from(leaf.members.len())
-                        .is_ok_and(|source_count| frontier.source_count == source_count)
-            })
-    }
-}
-
-impl LaneBlockApplicationReceiptArtifact {
-    const FORMAT_LABEL: &'static str = "lane.application_receipt";
-
-    /// Construct a durable application receipt from canonical block results.
-    #[must_use]
-    pub fn new(
-        recovered: RecoveredLaneBlockPayload,
-        application_block_height: u64,
-        application_block_hash: HashOf<BlockHeader>,
-        results: Vec<TransactionResult>,
-    ) -> Self {
-        let entrypoint_indices = recovered
-            .proposal
-            .descriptor
-            .accepted_candidate_indices
-            .clone();
-        let entrypoint_hashes = recovered
-            .entrypoints
-            .iter()
-            .map(|entrypoint| Hash::from(entrypoint.hash()))
-            .collect();
-        let result_hashes = results
-            .iter()
-            .map(|result| Hash::from(result.hash()))
-            .collect();
-        Self {
-            format: LaneBlockApplicationReceiptArtifactFormat::Current,
-            proposal: recovered.proposal,
-            artifact: recovered.artifact,
-            application_block_height,
-            application_block_hash,
-            entrypoint_indices,
-            entrypoint_hashes,
-            result_hashes,
-            results,
-            merge_epoch_id: None,
-            merge_entry_hash: None,
-            merge_carrier_block_height: None,
-            merge_carrier_block_hash: None,
-            merge_source_bundle_hash: None,
-            merge_batch_identity_hash: None,
-            merge_batch_hash: None,
-            merge_base_state_hash: None,
-            merge_write_set_root: None,
-            merge_expected_post_state_hash: None,
-            merge_settlement_hash: None,
-        }
-    }
-
-    /// Construct a durable application receipt from clean direct-execution preflight results.
-    #[must_use]
-    pub fn new_direct_execution(
-        input: &LaneBlockExecutionInputArtifact,
-        preflight: &LaneBlockExecutionPreflightArtifact,
-    ) -> Option<Self> {
-        let application_block_hash = preflight.preflight_state_hash?;
-        if preflight.has_rejections()
-            || input.proposal != preflight.proposal
-            || input.artifact != preflight.artifact
-            || input.proposal.descriptor.accepted_candidate_indices != preflight.entrypoint_indices
-            || input.entrypoint_hashes != preflight.entrypoint_hashes
-        {
-            return None;
-        }
-        Some(Self {
-            format: LaneBlockApplicationReceiptArtifactFormat::DirectExecution,
-            proposal: input.proposal.clone(),
-            artifact: input.artifact.clone(),
-            application_block_height: preflight.preflight_state_height,
-            application_block_hash,
-            entrypoint_indices: preflight.entrypoint_indices.clone(),
-            entrypoint_hashes: preflight.entrypoint_hashes.clone(),
-            result_hashes: preflight.result_hashes.clone(),
-            results: preflight.results.clone(),
-            merge_epoch_id: None,
-            merge_entry_hash: None,
-            merge_carrier_block_height: None,
-            merge_carrier_block_hash: None,
-            merge_source_bundle_hash: None,
-            merge_batch_identity_hash: None,
-            merge_batch_hash: None,
-            merge_base_state_hash: None,
-            merge_write_set_root: None,
-            merge_expected_post_state_hash: None,
-            merge_settlement_hash: None,
-        })
-    }
-
-    fn new_merge_execution(
-        entry: &MergeLedgerEntry,
-        batch: &MergeExecutionBatch,
-        execution: &MergeLaneExecution,
-        artifact: LaneBlockArtifact,
-        carrier_block_height: u64,
-        carrier_block_hash: HashOf<BlockHeader>,
-    ) -> Self {
-        Self {
-            format: LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
-            proposal: execution.proposal.clone(),
-            artifact,
-            application_block_height: carrier_block_height,
-            application_block_hash: carrier_block_hash,
-            entrypoint_indices: execution
-                .proposal
-                .descriptor
-                .accepted_candidate_indices
-                .clone(),
-            entrypoint_hashes: execution.entrypoint_hashes.clone(),
-            result_hashes: execution.result_hashes.clone(),
-            results: execution.results.clone(),
-            merge_epoch_id: Some(entry.epoch_id),
-            merge_entry_hash: Some(crate::merge::merge_ledger_entry_hash(entry)),
-            merge_carrier_block_height: Some(carrier_block_height),
-            merge_carrier_block_hash: Some(carrier_block_hash),
-            merge_source_bundle_hash: Some(execution.source_bundle_hash),
-            merge_batch_identity_hash: Some(crate::merge::merge_execution_batch_identity_hash(
-                batch,
-            )),
-            merge_batch_hash: Some(batch.batch_hash),
-            merge_base_state_hash: Some(batch.base_state_hash),
-            merge_write_set_root: Some(batch.write_set_root),
-            merge_expected_post_state_hash: Some(batch.expected_post_state_hash),
-            merge_settlement_hash: Some(execution.settlement_hash),
-        }
-    }
-
-    /// Return the human-readable format tag describing the artifact payload.
-    #[must_use]
-    pub fn format_label(&self) -> &'static str {
-        match self.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current
-            | LaneBlockApplicationReceiptArtifactFormat::DirectExecution
-            | LaneBlockApplicationReceiptArtifactFormat::MergeExecution => Self::FORMAT_LABEL,
-        }
-    }
-
-    /// Encode the artifact into a framed Norito buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if framing fails.
-    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::encode_canonical(self)
-    }
-}
-
-impl LaneBlockArtifactConflictPolicy {
-    fn allows_canonical_replacement(
-        self,
-        existing: &LaneBlockArtifact,
-        replacement: &LaneBlockArtifact,
-    ) -> bool {
-        match self {
-            Self::PreserveCanonical => false,
-            Self::AllowCanonicalReplacementAtProposalHeight(height) => {
-                existing.ownership.proposal_height == height
-                    && replacement.ownership.proposal_height == height
-                    && existing.proposal_block_hash != replacement.proposal_block_hash
-            }
-        }
-    }
-}
-
-impl<'a> LaneBlockArtifactWriteBatch<'a> {
-    fn new(kura: &'a Kura) -> Self {
-        let geometry_guard = kura.lane_geometry_lock.lock();
-        let sidecar_guard = kura.sidecar_lock.lock();
-        Self {
-            kura,
-            _sidecar_guard: sidecar_guard,
-            _geometry_guard: geometry_guard,
-            checkpoints: Vec::new(),
-            finished: false,
-        }
-    }
-
-    fn push(&mut self, checkpoint: LaneBlockArtifactWriteCheckpoint) {
-        self.checkpoints.push(checkpoint);
-    }
-
-    fn commit(mut self) {
-        self.finished = true;
-    }
-
-    fn rollback(&mut self) -> Result<()> {
-        if self.finished {
-            return Ok(());
-        }
-
-        let mut first_error = None;
-        while let Some(checkpoint) = self.checkpoints.pop() {
-            if let Err(err) = self
-                .kura
-                .restore_lane_block_artifact_checkpoint_locked(&checkpoint)
-            {
-                error!(?err, "failed to roll back lane block artifact write");
-                if first_error.is_none() {
-                    first_error = Some(err);
-                }
-            }
-        }
-        self.finished = true;
-
-        if let Some(err) = first_error {
-            Err(err)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl Drop for LaneBlockArtifactWriteBatch<'_> {
-    fn drop(&mut self) {
-        if !self.finished
-            && let Err(err) = self.rollback()
-        {
-            error!(?err, "failed to roll back uncommitted lane block artifacts");
-        }
-    }
-}
+include!("kura/pipeline_and_lane_artifacts.rs");
 
 impl Kura {
     fn now_unix_secs() -> u64 {
@@ -26498,6 +23394,14 @@ impl Kura {
         Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX)
     }
 
+    fn autonomous_lifecycle_cursor_coordinates(name: &str) -> Option<(u64, u64)> {
+        Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LIFECYCLE_CURSOR_PREFIX)
+    }
+
+    fn autonomous_lifecycle_bootstrap_coordinates(name: &str) -> Option<(u64, u64)> {
+        Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PREFIX)
+    }
+
     fn autonomous_lane_block_attempt_view_temp_coordinates(name: &str) -> Option<(u64, u64)> {
         let stable_name = name.strip_suffix(".tmp")?;
         Self::autonomous_two_height_coordinates(
@@ -26543,6 +23447,12 @@ impl Kura {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
                     "autonomous attempt inventory requires startup cleanup of an atomic temporary artifact",
+                ));
+            }
+            if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle bootstrap atomic temporary requires fail-closed recovery",
                 ));
             }
             if !name.starts_with("autonomous_") {
@@ -26596,6 +23506,8 @@ impl Kura {
                 AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
             )
             .is_some()
+                || Self::autonomous_lifecycle_cursor_coordinates(&name).is_some()
+                || Self::autonomous_lifecycle_bootstrap_coordinates(&name).is_some()
                 || Self::autonomous_one_height_coordinate(
                     &name,
                     AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
@@ -26613,6 +23525,55 @@ impl Kura {
         Ok((related_files, attempts_at_height, related_bytes))
     }
 
+    fn validate_autonomous_lifecycle_cursor_cas_budget(
+        related_files: usize,
+        related_bytes: u64,
+        previous_len: u64,
+        next_len: u64,
+        replacing_existing: bool,
+    ) -> std::result::Result<(), &'static str> {
+        if replacing_existing != (previous_len != 0) {
+            return Err("autonomous lifecycle cursor CAS replacement accounting is inconsistent");
+        }
+        let resulting_files = related_files
+            .checked_add(usize::from(!replacing_existing))
+            .ok_or("autonomous lifecycle cursor CAS file-count accounting overflowed")?;
+        if resulting_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+            return Err(
+                "autonomous lifecycle cursor CAS would exceed the hard namespace file-count limit",
+            );
+        }
+        let resulting_bytes = related_bytes
+            .checked_sub(previous_len)
+            .and_then(|bytes| bytes.checked_add(next_len))
+            .ok_or("autonomous lifecycle cursor CAS byte accounting overflowed")?;
+        if resulting_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
+            return Err(
+                "autonomous lifecycle cursor CAS would exceed the shared sidecar aggregate byte budget",
+            );
+        }
+
+        // Atomic synced replacement materializes one `.kura-sidecar-*` temp.
+        // Bound that transient exposure separately from the resulting stable
+        // namespace so replacing a cursor is not miscounted as a second stable
+        // cursor, while a crash-staged temporary still has an explicit ceiling.
+        let peak_files = related_files
+            .checked_add(1)
+            .ok_or("autonomous lifecycle cursor CAS temporary file-count accounting overflowed")?;
+        if peak_files > MAX_AUTONOMOUS_LIFECYCLE_CURSOR_CAS_PEAK_FILES {
+            return Err(
+                "autonomous lifecycle cursor CAS would exceed its temporary file-count budget",
+            );
+        }
+        let peak_bytes = related_bytes
+            .checked_add(next_len)
+            .ok_or("autonomous lifecycle cursor CAS temporary byte accounting overflowed")?;
+        if peak_bytes > AUTONOMOUS_LIFECYCLE_CURSOR_CAS_PEAK_BYTES as u64 {
+            return Err("autonomous lifecycle cursor CAS would exceed its temporary byte budget");
+        }
+        Ok(())
+    }
+
     kura_autonomous_reservation_inventory_methods!();
 
     fn autonomous_lane_block_attempt_view_state_path_for_entry(
@@ -26623,6 +23584,28 @@ impl Kura {
     ) -> PathBuf {
         Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(format!(
             "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
+        ))
+    }
+
+    fn autonomous_lifecycle_cursor_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+        lane_block_height: u64,
+        proposal_height: u64,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(format!(
+            "{AUTONOMOUS_LIFECYCLE_CURSOR_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
+        ))
+    }
+
+    fn autonomous_lifecycle_bootstrap_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+        lane_block_height: u64,
+        proposal_height: u64,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(format!(
+            "{AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
         ))
     }
 
@@ -27303,33 +24286,340 @@ impl Kura {
         .map(Some)
     }
 
-    fn discard_native_amx_latest_index_temp_locked(
+    fn native_amx_latest_index_temp_bytes_locked(
         &self,
         namespace: &BoundProgressNamespace,
-    ) -> Result<bool> {
+    ) -> Result<Option<Vec<u8>>> {
         let directory = namespace
             .data_path
             .parent()
             .expect("bound Native AMX namespace has an immediate directory");
         let temp_path = directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE);
+        self.read_bound_regular_file_bytes_locked(
+            namespace,
+            &temp_path,
+            NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+            "Native AMX participant latest-index temporary",
+        )
+    }
+
+    fn require_native_amx_latest_index_temp_absent_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<()> {
         if self
-            .read_bound_regular_file_bytes_locked(
-                namespace,
-                &temp_path,
-                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
-                "Native AMX participant latest-index temporary",
-            )?
+            .native_amx_latest_index_temp_bytes_locked(namespace)?
+            .is_some()
+        {
+            let directory = namespace
+                .data_path
+                .parent()
+                .expect("bound Native AMX namespace has an immediate directory");
+            return Err(Self::invalid_lane_artifact_error(
+                directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE),
+                "Native AMX publication found an unresolved latest-index temporary",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reject an impossible overlap before either recovery journal is consumed.
+    ///
+    /// Latest-index staging starts only after the exact manifest and receipt are
+    /// stable, while evidence pruning starts only after the latest index was
+    /// promoted and read back. A latest-index temporary alongside either an
+    /// evidence publication temporary or a prune intent therefore has no
+    /// unambiguous production crash interpretation.
+    fn require_native_amx_latest_index_temp_recovery_unambiguous_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<()> {
+        if self
+            .native_amx_latest_index_temp_bytes_locked(namespace)?
             .is_none()
         {
-            return Ok(false);
+            return Ok(());
         }
-        Self::remove_bound_progress_temp_if_present(namespace, &temp_path)
-            .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        self.sync_native_amx_evidence_namespace(
+        let directory = namespace
+            .data_path
+            .parent()
+            .expect("bound Native AMX namespace has an immediate directory");
+        for (name, kind, max_bytes) in [
+            (
+                NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE,
+                "Native AMX evidence prune intent",
+                self.native_amx_evidence_prune_intent_max_bytes(),
+            ),
+            (
+                NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE,
+                "Native AMX evidence prune-intent temporary",
+                self.native_amx_evidence_prune_intent_max_bytes(),
+            ),
+        ] {
+            let path = directory.join(name);
+            if self
+                .read_bound_regular_file_bytes_locked(namespace, &path, max_bytes, kind)?
+                .is_some()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "Native AMX latest-index temporary ambiguously overlaps evidence pruning",
+                ));
+            }
+        }
+        let inventory = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
+        if let Some(temporary) = inventory.temporaries.values().next() {
+            return Err(Self::invalid_lane_artifact_error(
+                temporary.path.clone(),
+                "Native AMX latest-index temporary ambiguously overlaps evidence publication",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Resolve a crash-durable latest-index temporary only after startup has
+    /// authenticated the complete retained evidence inventory.
+    ///
+    /// The caller holds `prune_lock`, `canonical_chain_lock`,
+    /// `lane_geometry_lock`, and `sidecar_lock`, in that order. Failures before
+    /// promotion never remove or rewrite either the temporary or stable bytes.
+    fn reconcile_native_amx_latest_index_temp_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        latest_path: &Path,
+        authenticated_complete: &BTreeMap<u64, NativeAmxParticipantReceiptLatestIndexV2>,
+        expected: Option<NativeAmxParticipantReceiptLatestIndexV2>,
+        expected_can_publish: bool,
+    ) -> Result<NativeAmxLatestIndexTempReconciliation> {
+        let Some(temp_bytes) = self.native_amx_latest_index_temp_bytes_locked(namespace)? else {
+            return Ok(NativeAmxLatestIndexTempReconciliation::Absent);
+        };
+        let directory = namespace
+            .data_path
+            .parent()
+            .expect("bound Native AMX namespace has an immediate directory");
+        if latest_path.parent() != Some(directory) {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_path.to_path_buf(),
+                "Native AMX latest-index recovery path escapes its bound namespace",
+            ));
+        }
+        let temp_path = directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE);
+        let temporary = Self::decode_native_amx_participant_receipt_latest_index_bytes_for_route(
+            entry.lane_id,
+            entry.dataspace_id,
+            &temp_path,
+            &temp_bytes,
+        )?;
+        let expected = expected.filter(|_| expected_can_publish).ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                temp_path.clone(),
+                "Native AMX latest-index temporary has no publishable authenticated highest pair",
+            )
+        })?;
+        if temporary != expected
+            || authenticated_complete.get(&temporary.lane_block_height) != Some(&temporary)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                temp_path.clone(),
+                "Native AMX latest-index temporary is stale, conflicting, or unbacked by the exact authenticated highest pair",
+            ));
+        }
+
+        let stable_bytes = self.read_bound_regular_file_bytes_locked(
             namespace,
+            latest_path,
+            NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+            "Native AMX participant latest index",
+        )?;
+        let stable = stable_bytes
+            .as_deref()
+            .map(|bytes| {
+                Self::decode_native_amx_participant_receipt_latest_index_bytes_for_route(
+                    entry.lane_id,
+                    entry.dataspace_id,
+                    latest_path,
+                    bytes,
+                )
+            })
+            .transpose()?;
+        let stable_metadata = if stable.is_some() {
+            Some(
+                Self::regular_sidecar_metadata_for(&self.store_root, latest_path, directory)?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            latest_path.to_path_buf(),
+                            "Native AMX stable latest index disappeared before temporary reconciliation",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(stable) = stable {
+            if stable == temporary {
+                if stable_bytes.as_deref() != Some(temp_bytes.as_slice()) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        temp_path.clone(),
+                        "Native AMX identical latest-index identities have different canonical bytes",
+                    ));
+                }
+                let (mut temporary_file, temporary_metadata) = self
+                    .open_bound_regular_file_with_exact_bytes_locked(
+                        namespace,
+                        &temp_path,
+                        &temp_bytes,
+                        NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                        "Native AMX participant latest-index temporary",
+                    )?;
+                #[cfg(test)]
+                run_native_amx_latest_index_pre_mutation_hook_for_tests(&temp_path);
+                self.verify_bound_open_regular_file_exact_bytes_locked(
+                    namespace,
+                    &temp_path,
+                    &mut temporary_file,
+                    &temporary_metadata,
+                    &temp_bytes,
+                    NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                    "Native AMX participant latest-index temporary",
+                )?;
+                Self::remove_bound_progress_file_if_matches(
+                    namespace,
+                    &temp_path,
+                    &temporary_file,
+                    &temporary_metadata,
+                )
+                .map_err(|error| Error::IO(error, temp_path.clone()))?;
+                self.sync_native_amx_evidence_namespace(
+                    namespace,
+                    "Native AMX identical participant latest-index temporary",
+                )?;
+                let persisted = self
+                    .read_bound_regular_file_bytes_locked(
+                        namespace,
+                        latest_path,
+                        NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                        "Native AMX participant latest index",
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            latest_path.to_path_buf(),
+                            "Native AMX stable latest index disappeared during identical-temp cleanup",
+                        )
+                    })?;
+                let stable_after = Self::regular_sidecar_metadata_for(
+                    &self.store_root,
+                    latest_path,
+                    directory,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        latest_path.to_path_buf(),
+                        "Native AMX stable latest index disappeared after identical-temp cleanup",
+                    )
+                })?;
+                let stable_before = stable_metadata
+                    .as_ref()
+                    .expect("present stable index has captured metadata");
+                if persisted != temp_bytes
+                    || self
+                        .native_amx_latest_index_temp_bytes_locked(namespace)?
+                        .is_some()
+                    || stable_before.canonical_path != stable_after.canonical_path
+                    || !Self::sidecar_file_metadata_unchanged(
+                        &stable_before.file,
+                        &stable_after.file,
+                    )
+                    || !Self::sidecar_directory_binding_unchanged(
+                        &stable_before.directory,
+                        &stable_after.directory,
+                    )
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        latest_path.to_path_buf(),
+                        "Native AMX identical latest-index cleanup did not preserve one exact stable pointer",
+                    ));
+                }
+                return Ok(NativeAmxLatestIndexTempReconciliation::RemovedIdentical);
+            }
+            if authenticated_complete.get(&stable.lane_block_height) != Some(&stable)
+                || stable.lane_block_height >= temporary.lane_block_height
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    latest_path.to_path_buf(),
+                    "Native AMX stable latest index conflicts with authenticated temporary recovery",
+                ));
+            }
+        }
+
+        let (mut temporary_file, temporary_metadata) = self
+            .open_bound_regular_file_with_exact_bytes_locked(
+                namespace,
+                &temp_path,
+                &temp_bytes,
+                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                "Native AMX participant latest-index temporary",
+            )?;
+        sync_native_amx_latest_index_recovery_temp(&temporary_file)
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        #[cfg(test)]
+        run_native_amx_latest_index_pre_mutation_hook_for_tests(&temp_path);
+        self.verify_bound_open_regular_file_exact_bytes_locked(
+            namespace,
+            &temp_path,
+            &mut temporary_file,
+            &temporary_metadata,
+            &temp_bytes,
+            NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
             "Native AMX participant latest-index temporary",
         )?;
-        Ok(true)
+        let promotion = if stable.is_some() {
+            Self::promote_bound_progress_temp(namespace, &temp_path, latest_path, &temporary_file)
+        } else {
+            Self::promote_bound_progress_temp_noreplace(
+                namespace,
+                &temp_path,
+                latest_path,
+                &temporary_file,
+            )
+        };
+        promotion.map_err(|error| Error::IO(error.source, latest_path.to_path_buf()))?;
+        self.sync_native_amx_evidence_namespace(
+            namespace,
+            "Native AMX participant latest-index temporary recovery",
+        )?;
+        let persisted = self
+            .read_bound_regular_file_bytes_locked(
+                namespace,
+                latest_path,
+                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                "Native AMX participant latest index",
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    latest_path.to_path_buf(),
+                    "Native AMX latest index disappeared after temporary recovery",
+                )
+            })?;
+        if persisted != temp_bytes
+            || self
+                .native_amx_latest_index_temp_bytes_locked(namespace)?
+                .is_some()
+            || Self::decode_native_amx_participant_receipt_latest_index_bytes_for_route(
+                entry.lane_id,
+                entry.dataspace_id,
+                latest_path,
+                &persisted,
+            )? != expected
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_path.to_path_buf(),
+                "Native AMX latest-index temporary recovery failed exact durable read-back",
+            ));
+        }
+        Ok(NativeAmxLatestIndexTempReconciliation::Promoted)
     }
 
     fn replace_bound_native_amx_latest_index_locked(
@@ -27355,7 +24645,7 @@ impl Kura {
             NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
             "Native AMX participant latest index",
         )?;
-        self.discard_native_amx_latest_index_temp_locked(namespace)?;
+        self.require_native_amx_latest_index_temp_absent_locked(namespace)?;
         let temp_path = directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE);
         let mut temporary = Self::create_new_bound_progress_temp(namespace, &temp_path)
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
@@ -27516,10 +24806,7 @@ impl Kura {
         let mut native_prune_intent_routes = BTreeSet::new();
         for (manifest_artifact, receipt) in native_artifacts {
             let (manifest_bytes, receipt_bytes) =
-                native_amx_participant_application_pair_framed_bytes(
-                    &manifest_artifact,
-                    &receipt,
-                )?;
+                native_amx_participant_application_pair_framed_bytes(&manifest_artifact, &receipt)?;
             let manifest_len = u64::try_from(manifest_bytes.len())?;
             let receipt_len = u64::try_from(receipt_bytes.len())?;
             let latest_len = u64::try_from(
@@ -30069,6 +27356,3486 @@ impl Kura {
         Ok(pointer)
     }
 
+    fn autonomous_lifecycle_process_generation_path_for(store_root: &Path) -> PathBuf {
+        store_root.join(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_FILE)
+    }
+
+    fn autonomous_lifecycle_process_generation_temp_path_for(store_root: &Path) -> PathBuf {
+        store_root.join(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_TEMP_FILE)
+    }
+
+    fn decode_autonomous_lifecycle_process_generation_record(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<AutonomousLifecycleProcessGenerationRecordV1> {
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle process-generation record exceeds its hard byte limit",
+            ));
+        }
+        let record =
+            norito::decode_canonical::<AutonomousLifecycleProcessGenerationRecordV1>(bytes)
+                .map_err(|error| match error {
+                    norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                        path.to_path_buf(),
+                        "autonomous lifecycle process-generation record is not canonical Norito",
+                    ),
+                    other => Error::NoritoFrame(other),
+                })?;
+        record
+            .validate_structure()
+            .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
+        if record.encode_framed().map_err(Error::NoritoFrame)? != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle process-generation record does not round-trip canonically",
+            ));
+        }
+        Ok(record)
+    }
+
+    fn read_autonomous_lifecycle_process_generation_record_for(
+        store_root: &Path,
+    ) -> Result<Option<(AutonomousLifecycleProcessGenerationRecordV1, Vec<u8>)>> {
+        let entries = std::fs::read_dir(store_root)
+            .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+        let mut entries_seen = 0_usize;
+        for entry in entries {
+            let entry = entry.map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+            entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    store_root.to_path_buf(),
+                    "Kura-root process-generation inventory count overflows",
+                )
+            })?;
+            if entries_seen > AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ROOT_ENTRY_LIMIT {
+                return Err(Self::invalid_lane_artifact_error(
+                    store_root.to_path_buf(),
+                    "Kura-root process-generation inventory exceeds its hard entry limit",
+                ));
+            }
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if file_name.starts_with(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX) {
+                return Err(Self::invalid_lane_artifact_error(
+                    entry.path(),
+                    "autonomous lifecycle process-generation atomic temporary requires fail-closed operator recovery",
+                ));
+            }
+            if file_name.starts_with("autonomous_lifecycle_process_generation_")
+                && file_name.as_ref() != AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_FILE
+                && file_name.as_ref() != AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_TEMP_FILE
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    entry.path(),
+                    "autonomous lifecycle process-generation artifact has an unexpected or legacy layout",
+                ));
+            }
+        }
+        let temp_path = Self::autonomous_lifecycle_process_generation_temp_path_for(store_root);
+        match std::fs::symlink_metadata(&temp_path) {
+            Ok(_) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    temp_path,
+                    "autonomous lifecycle process-generation temporary requires fail-closed operator recovery",
+                ));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(Error::IO(error, temp_path)),
+        }
+        Self::read_autonomous_lifecycle_process_generation_stable_record_for(store_root)
+    }
+
+    fn read_autonomous_lifecycle_process_generation_stable_record_for(
+        store_root: &Path,
+    ) -> Result<Option<(AutonomousLifecycleProcessGenerationRecordV1, Vec<u8>)>> {
+        let path = Self::autonomous_lifecycle_process_generation_path_for(store_root);
+        let Some(bytes) = Self::read_regular_sidecar_bytes_for(
+            store_root,
+            &path,
+            store_root,
+            AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let record = Self::decode_autonomous_lifecycle_process_generation_record(&path, &bytes)?;
+        Ok(Some((record, bytes)))
+    }
+
+    fn read_autonomous_lifecycle_process_generation_record(
+        &self,
+    ) -> Result<Option<(AutonomousLifecycleProcessGenerationRecordV1, Vec<u8>)>> {
+        Self::read_autonomous_lifecycle_process_generation_record_for(&self.store_root)
+    }
+
+    fn read_autonomous_lifecycle_process_generation_stable_record(
+        &self,
+    ) -> Result<Option<(AutonomousLifecycleProcessGenerationRecordV1, Vec<u8>)>> {
+        Self::read_autonomous_lifecycle_process_generation_stable_record_for(&self.store_root)
+    }
+
+    fn validate_autonomous_lifecycle_process_generation_claim(
+        &self,
+        claim: &AutonomousLifecycleProcessGenerationClaim,
+    ) -> Result<AutonomousLifecycleProcessGenerationRecordV1> {
+        if claim.store_root != self.store_root || claim.generation == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle process-generation claim belongs to another Kura root",
+            ));
+        }
+        let (record, _) = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lifecycle process-generation claim lost its durable record",
+                )
+            })?;
+        if record.body.chain_id_hash != claim.chain_id_hash
+            || record.body.local_peer_id != claim.local_peer_id
+            || record.body.generation != claim.generation
+            || record.record_hash != claim.record_hash
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                "autonomous lifecycle process-generation claim conflicts with durable state",
+            ));
+        }
+        Ok(record)
+    }
+
+    fn validate_autonomous_lifecycle_cursor_process_generation(
+        record: &AutonomousLifecycleProcessGenerationRecordV1,
+        cursor: &AutonomousLifecycleCursorV2,
+    ) -> std::result::Result<(), &'static str> {
+        if cursor.body.binding.chain_id_hash != record.body.chain_id_hash
+            || cursor.body.signer != record.body.local_peer_id
+        {
+            return Err(
+                "autonomous lifecycle cursor conflicts with the Kura-root chain or local-key identity",
+            );
+        }
+        if cursor.owner_generation() == 0
+            || cursor.owner_generation() > record.body.generation
+            || cursor
+                .source_generation()
+                .is_some_and(|generation| generation >= cursor.owner_generation())
+        {
+            return Err(
+                "autonomous lifecycle process generation was rolled back below its durable cursor",
+            );
+        }
+        Ok(())
+    }
+
+    fn audit_retained_autonomous_lifecycle_cursor_generations(&self) -> Result<()> {
+        let process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
+        let mut pending = vec![
+            (self.store_root.join("blocks"), 0_usize, true),
+            (
+                self.store_root.join("retired").join("blocks"),
+                0_usize,
+                false,
+            ),
+            (
+                self.store_root.join("retired").join("lane_geometry"),
+                0_usize,
+                false,
+            ),
+        ];
+        let mut entries_seen = 0_usize;
+        while let Some((directory, depth, bootstrap_allowed)) = pending.pop() {
+            if depth > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_DEPTH {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous lifecycle generation audit exceeds its directory-depth bound",
+                ));
+            }
+            let directory_entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
+            };
+            for directory_entry in directory_entries {
+                let directory_entry =
+                    directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "autonomous lifecycle generation audit entry count overflows",
+                    )
+                })?;
+                if entries_seen > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_ENTRIES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous lifecycle generation audit exceeds its hard entry bound",
+                    ));
+                }
+                let path = directory_entry.path();
+                let file_type = directory_entry
+                    .file_type()
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                if file_type.is_symlink() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle generation audit encountered a symlink",
+                    ));
+                }
+                if file_type.is_dir() {
+                    pending.push((path, depth.saturating_add(1), bootstrap_allowed));
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+                    continue;
+                };
+                if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle generation audit found a bootstrap atomic temporary",
+                    ));
+                }
+                if !name.starts_with("autonomous_lifecycle_") {
+                    continue;
+                }
+                if !file_type.is_file() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "retained autonomous lifecycle evidence is not a regular file",
+                    ));
+                }
+                let metadata = std::fs::symlink_metadata(&path)
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                if !Self::sidecar_is_single_link(&metadata) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "retained autonomous lifecycle evidence is multiply linked",
+                    ));
+                }
+                let parent = path.parent().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "retained autonomous lifecycle evidence has no parent directory",
+                    )
+                })?;
+                if Self::autonomous_lifecycle_bootstrap_coordinates(name).is_some() {
+                    if !bootstrap_allowed {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "autonomous lifecycle bootstrap must never enter retired or archived storage",
+                        ));
+                    }
+                    let bytes = self
+                        .read_regular_sidecar_bytes(
+                            &path,
+                            parent,
+                            AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                        )?
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "retained autonomous lifecycle bootstrap disappeared during audit",
+                            )
+                        })?;
+                    let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
+                    let record = process_generation.as_ref().ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "retained autonomous lifecycle bootstrap lacks a Kura-root process generation",
+                        )
+                    })?;
+                    Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                        record, &bootstrap,
+                    )
+                    .map_err(|message| Self::invalid_lane_artifact_error(path, message))?;
+                    continue;
+                }
+                if Self::autonomous_lifecycle_cursor_coordinates(name).is_none() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "retained autonomous lifecycle evidence has an obsolete or temporary layout",
+                    ));
+                }
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        parent,
+                        AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "retained autonomous lifecycle cursor disappeared during audit",
+                        )
+                    })?;
+                let cursor = Self::decode_autonomous_lifecycle_cursor(&path, &bytes)?;
+                let record = process_generation.as_ref().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "retained autonomous lifecycle cursor lacks a Kura-root process generation",
+                    )
+                })?;
+                Self::validate_autonomous_lifecycle_cursor_process_generation(record, &cursor)
+                    .map_err(|message| Self::invalid_lane_artifact_error(path, message))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_autonomous_lifecycle_process_generation_record(
+        &self,
+        expected_bytes: Option<&[u8]>,
+        record: &AutonomousLifecycleProcessGenerationRecordV1,
+    ) -> Result<Vec<u8>> {
+        let bytes = record.encode_framed().map_err(Error::NoritoFrame)?;
+        let path = Self::autonomous_lifecycle_process_generation_path_for(&self.store_root);
+        if self
+            .read_autonomous_lifecycle_process_generation_stable_record()?
+            .as_ref()
+            .map(|(_, bytes)| bytes.as_slice())
+            != expected_bytes
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle process generation changed before its atomic claim",
+                ),
+                path,
+            ));
+        }
+        if self
+            .read_autonomous_lifecycle_process_generation_stable_record()?
+            .as_ref()
+            .map(|(_, bytes)| bytes.as_slice())
+            != expected_bytes
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle process generation changed before publication",
+                ),
+                path,
+            ));
+        }
+        if expected_bytes.is_some() {
+            self.write_atomic_synced_impl_with_prefix(
+                &path,
+                &bytes,
+                true,
+                AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX,
+            )?;
+        } else if !self.write_atomic_synced_impl_with_prefix(
+            &path,
+            &bytes,
+            false,
+            AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX,
+        )? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle process generation appeared during initial claim",
+                ),
+                path,
+            ));
+        }
+        let (_, readback) = self
+            .read_autonomous_lifecycle_process_generation_stable_record()?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "autonomous lifecycle process-generation record disappeared after publication",
+                )
+            })?;
+        if readback != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lifecycle process-generation readback differs from published bytes",
+            ));
+        }
+        Ok(bytes)
+    }
+
+    /// Atomically claim the next durable process generation for this Kura root.
+    ///
+    /// Repeating the exact claim on one live Kura instance is idempotent. A
+    /// restart increments the previous generation with checked arithmetic and
+    /// permanently rejects chain or local-key identity drift.
+    pub(crate) fn claim_autonomous_lifecycle_process_generation(
+        &self,
+        chain_id_hash: Hash,
+        local_peer_id: &PeerId,
+    ) -> Result<AutonomousLifecycleProcessGenerationClaim> {
+        self.durable_mutation_authorized()?;
+        if self._store_root_lock_file.is_none() {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle process generation requires exclusive Kura-root ownership",
+            ));
+        }
+        match self.local_peer_id.get() {
+            Some(bound) if bound == local_peer_id => {}
+            Some(_) => return Err(Error::KuraReplicaLocalPeerConflict),
+            None => return Err(Error::KuraReplicaLocalPeerUnbound),
+        }
+        let _generation_guard = self.autonomous_lifecycle_process_generation_lock.lock();
+        self.audit_retained_autonomous_lifecycle_cursor_generations()?;
+        if let Some(claim) = self.autonomous_lifecycle_process_generation_claim.get() {
+            if claim.chain_id_hash != chain_id_hash || claim.local_peer_id != *local_peer_id {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lifecycle process-generation claim identity drifted",
+                ));
+            }
+            self.validate_autonomous_lifecycle_process_generation_claim(claim)?;
+            return Ok(claim.clone());
+        }
+        let current = self.read_autonomous_lifecycle_process_generation_record()?;
+        if let Some((record, _)) = current.as_ref()
+            && (record.body.chain_id_hash != chain_id_hash
+                || record.body.local_peer_id != *local_peer_id)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                "autonomous lifecycle process-generation identity changed across restart",
+            ));
+        }
+        let generation = current.as_ref().map_or(Ok(1), |(record, _)| {
+            record.body.generation.checked_add(1).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                    "autonomous lifecycle process generation is exhausted",
+                )
+            })
+        })?;
+        let next = AutonomousLifecycleProcessGenerationRecordV1::new(
+            chain_id_hash,
+            local_peer_id.clone(),
+            generation,
+        )
+        .map_err(|message| {
+            Self::invalid_lane_artifact_error(
+                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                message,
+            )
+        })?;
+        let previous_len = current
+            .as_ref()
+            .map_or(Ok(0), |(_, bytes)| u64::try_from(bytes.len()))?;
+        let next_len = u64::try_from(next.encode_framed().map_err(Error::NoritoFrame)?.len())?;
+        let enforced_peak = self
+            .kura_disk_usage_bytes()?
+            .checked_add(next_len)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lifecycle process-generation peak disk accounting overflows",
+                )
+            })?;
+        self.kura_total_disk_usage_bytes()?
+            .checked_add(next_len)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lifecycle process-generation peak total-disk accounting overflows",
+                )
+            })?;
+        if self.max_disk_usage_bytes != 0 && enforced_peak > self.max_disk_usage_bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                "autonomous lifecycle process-generation temporary would exceed the Kura disk bound",
+            ));
+        }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let written = self.write_autonomous_lifecycle_process_generation_record(
+            current.as_ref().map(|(_, bytes)| bytes.as_slice()),
+            &next,
+        )?;
+        if u64::try_from(written.len())? != next_len {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::autonomous_lifecycle_process_generation_path_for(&self.store_root),
+                "autonomous lifecycle process-generation encoded length changed during publication",
+            ));
+        }
+        self.update_disk_usage_delta(previous_len, next_len);
+        self.update_total_disk_usage_delta(previous_len, next_len);
+        accounting_mutation.finish();
+        let claim = AutonomousLifecycleProcessGenerationClaim {
+            store_root: self.store_root.clone(),
+            chain_id_hash,
+            local_peer_id: local_peer_id.clone(),
+            generation,
+            record_hash: next.record_hash,
+        };
+        self.validate_autonomous_lifecycle_process_generation_claim(&claim)?;
+        if self
+            .autonomous_lifecycle_process_generation_claim
+            .set(claim.clone())
+            .is_err()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle process-generation claim raced within one Kura instance",
+            ));
+        }
+        Ok(claim)
+    }
+
+    fn decode_autonomous_lifecycle_bootstrap(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<AutonomousLifecycleBootstrapV1> {
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle bootstrap exceeds its hard byte limit",
+            ));
+        }
+        let bootstrap =
+            norito::decode_canonical::<AutonomousLifecycleBootstrapV1>(bytes).map_err(|error| {
+                match error {
+                    norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                        path.to_path_buf(),
+                        "autonomous lifecycle bootstrap is not canonical Norito",
+                    ),
+                    other => Error::NoritoFrame(other),
+                }
+            })?;
+        bootstrap
+            .validate_structure()
+            .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
+        if bootstrap.encode_framed().map_err(Error::NoritoFrame)? != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle bootstrap does not round-trip canonically",
+            ));
+        }
+        let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+        let name = path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "autonomous lifecycle bootstrap path has no UTF-8 filename",
+                )
+            })?;
+        if Self::autonomous_lifecycle_bootstrap_coordinates(name)
+            != Some((descriptor.lane_block_height, descriptor.proposal_height))
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle bootstrap identity does not match its exact attempt path",
+            ));
+        }
+        Ok(bootstrap)
+    }
+
+    fn validate_autonomous_lifecycle_bootstrap_process_generation(
+        current: &AutonomousLifecycleProcessGenerationRecordV1,
+        bootstrap: &AutonomousLifecycleBootstrapV1,
+    ) -> std::result::Result<(), &'static str> {
+        let historical = AutonomousLifecycleProcessGenerationRecordV1::new(
+            current.body.chain_id_hash,
+            current.body.local_peer_id.clone(),
+            bootstrap.body.process_generation,
+        )?;
+        if bootstrap.body.process_generation > current.body.generation
+            || bootstrap.body.process_generation_record_hash != historical.record_hash
+            || bootstrap.body.binding.chain_id_hash != current.body.chain_id_hash
+            || bootstrap.body.prepared_activate.body.signer != current.body.local_peer_id
+            || bootstrap.body.live_activate.body.signer != current.body.local_peer_id
+        {
+            return Err(
+                "autonomous lifecycle bootstrap conflicts with the Kura-root process generation",
+            );
+        }
+        Self::validate_autonomous_lifecycle_cursor_process_generation(
+            current,
+            &bootstrap.body.prepared_activate,
+        )?;
+        Self::validate_autonomous_lifecycle_cursor_process_generation(
+            current,
+            &bootstrap.body.live_activate,
+        )
+    }
+
+    fn decode_autonomous_lifecycle_cursor(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<AutonomousLifecycleCursorV2> {
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle cursor exceeds its hard byte limit",
+            ));
+        }
+        let cursor =
+            norito::decode_canonical::<AutonomousLifecycleCursorV2>(bytes).map_err(|error| {
+                match error {
+                    norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                        path.to_path_buf(),
+                        "autonomous lifecycle cursor is not canonical Norito",
+                    ),
+                    other => Error::NoritoFrame(other),
+                }
+            })?;
+        if cursor.encode_framed().map_err(Error::NoritoFrame)? != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle cursor does not round-trip canonically",
+            ));
+        }
+        cursor
+            .validate_signature()
+            .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
+        let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle cursor path has no UTF-8 filename",
+            ));
+        };
+        if Self::autonomous_lifecycle_cursor_coordinates(name)
+            != Some((
+                cursor.body.binding.lane_block_height,
+                cursor.body.binding.proposal_height,
+            ))
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle cursor identity does not match its exact attempt path",
+            ));
+        }
+        Ok(cursor)
+    }
+
+    fn validate_autonomous_lifecycle_cursor_successor(
+        lease: &AutonomousLifecycleCursorLease,
+        current: Option<&AutonomousLifecycleCursorV2>,
+        next: &AutonomousLifecycleCursorV2,
+    ) -> std::result::Result<(), &'static str> {
+        let Some(expected_sequence) = lease.sequence.checked_add(1) else {
+            return Err("autonomous lifecycle cursor sequence is exhausted");
+        };
+        if lease.owner_generation == 0
+            || lease.actor == 0
+            || lease.actor.count_ones() != 1
+            || next.body.binding != lease.binding
+            || next.signer_actor() != lease.actor
+            || next.body.sequence != expected_sequence
+            || next.body.previous_cursor_hash != lease.cursor_hash
+        {
+            return Err("autonomous lifecycle cursor CAS identity or sequence drifted");
+        }
+        if next.owner_generation() != lease.owner_generation {
+            return Err("autonomous lifecycle cursor owner generation drifted");
+        }
+        let Some(current) = current else {
+            let initial_projection = next.before_projection()?;
+            return match next.phase() {
+                AutonomousLifecycleCursorPhaseV2::Live {
+                    owner_generation, ..
+                } if *owner_generation == lease.owner_generation
+                    && (initial_projection.carrier.kura_active & lease.actor) != 0 =>
+                {
+                    Ok(())
+                }
+                AutonomousLifecycleCursorPhaseV2::Live { .. } => Err(
+                    "the first autonomous lifecycle cursor must attest the local actor's already-durable Kura payload",
+                ),
+                _ => Err("the first autonomous lifecycle cursor must be a live owner"),
+            };
+        };
+        match (current.phase(), next.phase()) {
+            (
+                AutonomousLifecycleCursorPhaseV2::Live {
+                    owner_generation,
+                    projection,
+                },
+                AutonomousLifecycleCursorPhaseV2::Prepared {
+                    owner_generation: prepared_generation,
+                    before,
+                    action,
+                    ..
+                },
+            ) if *owner_generation == lease.owner_generation
+                && prepared_generation == owner_generation
+                && projection == before =>
+            {
+                if matches!(
+                    action.action,
+                    crate::sumeragi::v2_core::IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH
+                        | crate::sumeragi::v2_core::IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER
+                ) {
+                    Err("Crash and Recover require their generation-aware lifecycle phases")
+                } else {
+                    Ok(())
+                }
+            }
+            (
+                AutonomousLifecycleCursorPhaseV2::Live {
+                    owner_generation,
+                    projection,
+                },
+                AutonomousLifecycleCursorPhaseV2::Crashed {
+                    source_generation,
+                    observing_generation,
+                    before,
+                    ..
+                },
+            ) if *source_generation == *owner_generation
+                && *observing_generation == lease.owner_generation
+                && projection == before
+                && observing_generation > source_generation =>
+            {
+                Ok(())
+            }
+            (
+                AutonomousLifecycleCursorPhaseV2::Live {
+                    owner_generation,
+                    projection,
+                },
+                AutonomousLifecycleCursorPhaseV2::Terminal {
+                    owner_generation: terminal_generation,
+                    projection: terminal,
+                },
+            ) if owner_generation == terminal_generation && projection == terminal => Ok(()),
+            (
+                AutonomousLifecycleCursorPhaseV2::Prepared {
+                    owner_generation,
+                    after,
+                    ..
+                },
+                AutonomousLifecycleCursorPhaseV2::Live {
+                    owner_generation: live_generation,
+                    projection,
+                },
+            ) if *owner_generation == lease.owner_generation
+                && live_generation == owner_generation
+                && after == projection =>
+            {
+                Ok(())
+            }
+            (
+                AutonomousLifecycleCursorPhaseV2::Prepared {
+                    owner_generation,
+                    before,
+                    after,
+                    ..
+                },
+                AutonomousLifecycleCursorPhaseV2::Crashed {
+                    source_generation,
+                    observing_generation,
+                    before: crash_before,
+                    ..
+                },
+            ) if *source_generation == *owner_generation
+                && *observing_generation == lease.owner_generation
+                && observing_generation > source_generation
+                && (crash_before == before || crash_before == after) =>
+            {
+                Ok(())
+            }
+            (
+                AutonomousLifecycleCursorPhaseV2::Crashed {
+                    observing_generation,
+                    after,
+                    ..
+                },
+                AutonomousLifecycleCursorPhaseV2::Prepared {
+                    owner_generation,
+                    before,
+                    action,
+                    ..
+                },
+            ) if after == before
+                && *observing_generation == lease.owner_generation
+                && owner_generation == observing_generation
+                && action.action
+                    == crate::sumeragi::v2_core::IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER
+                && action.actor == lease.actor
+                && action.target == 0 =>
+            {
+                Ok(())
+            }
+            (
+                AutonomousLifecycleCursorPhaseV2::Crashed {
+                    observing_generation,
+                    after,
+                    ..
+                },
+                AutonomousLifecycleCursorPhaseV2::Crashed {
+                    source_generation,
+                    observing_generation: next_observing_generation,
+                    before: next_before,
+                    after: next_after,
+                },
+            ) if *source_generation == *observing_generation
+                && *next_observing_generation == lease.owner_generation
+                && next_observing_generation > source_generation
+                && next_before == after
+                && next_after == after =>
+            {
+                Ok(())
+            }
+            _ => Err("autonomous lifecycle cursor phase transition is not contiguous"),
+        }
+    }
+
+    /// Seal one source-specific, internally derived evidence identity to ActivateKura.
+    ///
+    /// This helper is deliberately private. Public source-specific minting
+    /// paths must first validate and canonically hash their complete carrier,
+    /// retirement, QC response, or recovery-record evidence; no caller may
+    /// choose an arbitrary source/hash pair. Consuming the checked transition
+    /// also prevents raw payload possession from minting persistence authority.
+    #[allow(dead_code)]
+    fn authorize_autonomous_lifecycle_payload_custody_from_validated_evidence(
+        payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        source: AutonomousLifecyclePayloadCustodySourceV1,
+        evidence_hash: Hash,
+        checked_activate_kura: CheckedProductionTransition<
+            ProductionInFlightFirstReleaseTransitionProjection,
+        >,
+    ) -> std::result::Result<AutonomousLifecyclePayloadCustodyAuthorization, &'static str> {
+        binding.validate_for_payload(payload)?;
+        let custody =
+            AutonomousLifecyclePayloadCustodyBindingV1::authenticated(source, evidence_hash)?;
+        let activate_kura = checked_activate_kura.into_projection();
+        let local_actor = binding.local_actor();
+        if activate_kura.action != IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA
+            || activate_kura.actor != local_actor
+            || activate_kura.target != 0
+            || activate_kura.before.session.bodies & local_actor == 0
+            || activate_kura.before.session.crashed & local_actor != 0
+            || activate_kura.before.carrier.kura_active & local_actor != 0
+            || activate_kura.after.carrier.kura_active & local_actor == 0
+        {
+            return Err(
+                "payload custody does not authorize the exact local ActivateKura transition",
+            );
+        }
+        binding
+            .validate_state(AutonomousLifecycleStableStateV1::from_production(
+                activate_kura.before,
+            ))
+            .and_then(|()| {
+                binding.validate_state(AutonomousLifecycleStableStateV1::from_production(
+                    activate_kura.after,
+                ))
+            })?;
+        Ok(AutonomousLifecyclePayloadCustodyAuthorization {
+            binding,
+            custody,
+            activate_kura,
+        })
+    }
+
+    fn autonomous_lifecycle_payload_custody_evidence_hash(
+        domain: &[u8],
+        evidence: &impl Encode,
+    ) -> Result<Hash> {
+        let encoded = norito::encode_canonical(evidence).map_err(Error::NoritoFrame)?;
+        Ok(Hash::new_from_chunks(&[domain, &encoded]))
+    }
+
+    fn finish_autonomous_lifecycle_payload_custody_authorization(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        source: AutonomousLifecyclePayloadCustodySourceV1,
+        evidence_hash: Hash,
+        checked_activate_kura: CheckedProductionTransition<
+            ProductionInFlightFirstReleaseTransitionProjection,
+        >,
+    ) -> Result<AutonomousLifecyclePayloadCustodyAuthorization> {
+        Self::authorize_autonomous_lifecycle_payload_custody_from_validated_evidence(
+            payload,
+            binding,
+            source,
+            evidence_hash,
+            checked_activate_kura,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))
+    }
+
+    /// Authenticate a losing locally-produced payload from its exact terminal
+    /// slot retirement. The full typed retirement is hashed internally; no
+    /// caller can substitute an arbitrary source or evidence digest.
+    pub(crate) fn authorize_losing_retirement_payload_custody(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        retirement: &AutonomousLaneSlotRetirementV1,
+        checked_activate_kura: CheckedProductionTransition<
+            ProductionInFlightFirstReleaseTransitionProjection,
+        >,
+    ) -> Result<AutonomousLifecyclePayloadCustodyAuthorization> {
+        if *retirement != AutonomousLaneSlotRetirementV1::from_payload(payload) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "losing-retirement custody differs from the exact producer-signed slot",
+            ));
+        }
+        let evidence = AutonomousLifecycleLosingRetirementCustodyEvidenceV1 {
+            version: 1,
+            height_context_id: binding.height_context_id(),
+            retirement_hash: HashOf::new(retirement),
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            executable_payload_hash: payload.payload_hash,
+        };
+        let evidence_hash = Self::autonomous_lifecycle_payload_custody_evidence_hash(
+            AUTONOMOUS_LIFECYCLE_LOSING_RETIREMENT_CUSTODY_HASH_DOMAIN,
+            &evidence,
+        )?;
+        self.finish_autonomous_lifecycle_payload_custody_authorization(
+            payload,
+            binding,
+            AutonomousLifecyclePayloadCustodySourceV1::LosingRetirement,
+            evidence_hash,
+            checked_activate_kura,
+        )
+    }
+
+    /// Authenticate payload bytes reconstructed from their exact durable
+    /// canonical block and verified global finality artifact.
+    pub(crate) fn authorize_canonical_carrier_repair_payload_custody(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        checked_activate_kura: CheckedProductionTransition<
+            ProductionInFlightFirstReleaseTransitionProjection,
+        >,
+    ) -> Result<AutonomousLifecyclePayloadCustodyAuthorization> {
+        let hint = payload.origin_proposal.payload_block_hint.ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical-carrier repair payload has no exact global hint",
+            )
+        })?;
+        let height = usize::try_from(hint.proposal_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical-carrier repair height is not representable",
+                )
+            })?;
+        let block = self.get_block(height).ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical-carrier repair block is not durably readable",
+            )
+        })?;
+        let finality = self
+            .v2_finality_artifact(hint.proposal_height)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical-carrier repair has no durable finality artifact",
+                )
+            })?;
+        finality.verify().map_err(|error| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                format!("canonical-carrier repair finality is invalid: {error}"),
+            )
+        })?;
+        finality
+            .validate_for_header(&block.header())
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("canonical-carrier repair finality/header binding is invalid: {error}"),
+                )
+            })?;
+        let executed_block_wire_hash = block.executed_block_wire_hash().map_err(|error| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                format!("canonical-carrier repair block wire is invalid: {error}"),
+            )
+        })?;
+        let commitment = finality.commit_qc.execution_commitment;
+        let block_wire_len = u64::try_from(block.encode_wire()?.len())?;
+        if finality.height != hint.proposal_height
+            || finality.block_hash != hint.proposal_block_hash
+            || block.hash() != hint.proposal_block_hash
+            || block.header().view_change_index() != hint.proposal_view
+            || finality.height_context.id() != binding.height_context_id()
+            || finality.height_context.height != hint.proposal_height
+            || finality.height_context.epoch != payload.epoch
+            || Hash::new(
+                finality
+                    .height_context
+                    .chain_id
+                    .clone()
+                    .into_inner()
+                    .as_bytes(),
+            ) != payload.chain_id_hash
+            || commitment.executed_block_wire_len != block_wire_len
+            || commitment.executed_block_wire_hash != executed_block_wire_hash
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical-carrier repair differs from finality, context, block wire, or attempt binding",
+            ));
+        }
+        let bundle = block.execution_context().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical-carrier repair block has no execution context",
+            )
+        })?;
+        let mut exact_payloads = 0_usize;
+        for envelope in &bundle.autonomous_lane_payloads {
+            let decoded = decode_autonomous_lane_payload_envelope(
+                envelope,
+                payload.chain_id_hash,
+                payload.epoch,
+            )
+            .and_then(|decoded| {
+                decoded.attach_global_hint_exact(hint, payload.chain_id_hash, payload.epoch)
+            })
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("canonical-carrier repair contains an invalid envelope: {error}"),
+                )
+            })?;
+            if decoded.origin_proposal == payload.origin_proposal {
+                if decoded != *payload {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "canonical carrier contains conflicting bytes for the requested proposal",
+                    ));
+                }
+                exact_payloads = exact_payloads.saturating_add(1);
+            }
+        }
+        if exact_payloads != 1 {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical carrier must contain the exact autonomous payload exactly once",
+            ));
+        }
+        let evidence = AutonomousLifecycleCanonicalCarrierRepairCustodyEvidenceV1 {
+            version: 1,
+            height_context_id: finality.height_context.id(),
+            height_context_hash: HashOf::new(&finality.height_context),
+            block_hash: block.hash(),
+            executed_block_wire_hash,
+            finality_artifact_hash: HashOf::new(&finality),
+            execution_commitment: commitment,
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            executable_payload_hash: payload.payload_hash,
+        };
+        let evidence_hash = Self::autonomous_lifecycle_payload_custody_evidence_hash(
+            AUTONOMOUS_LIFECYCLE_CANONICAL_CARRIER_REPAIR_CUSTODY_HASH_DOMAIN,
+            &evidence,
+        )?;
+        self.finish_autonomous_lifecycle_payload_custody_authorization(
+            payload,
+            binding,
+            AutonomousLifecyclePayloadCustodySourceV1::CanonicalCarrierRepair,
+            evidence_hash,
+            checked_activate_kura,
+        )
+    }
+
+    /// Authenticate payload custody from the exact protected live global
+    /// carrier. The complete frozen context, lock round, subject, local peer,
+    /// proposal, and executable identity enter the signed custody digest.
+    pub(crate) fn authorize_protected_carrier_receive_payload_custody(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        context: &HeightContext,
+        locked_round: iroha_data_model::block::consensus_v2::ConsensusRound,
+        locked_subject: BlockSubject,
+        local_peer: &PeerId,
+        checked_activate_kura: CheckedProductionTransition<
+            ProductionInFlightFirstReleaseTransitionProjection,
+        >,
+    ) -> Result<AutonomousLifecyclePayloadCustodyAuthorization> {
+        context.validate().map_err(|error| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                format!("protected-carrier custody context is invalid: {error}"),
+            )
+        })?;
+        payload
+            .validate(payload.chain_id_hash, payload.epoch)
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("protected-carrier custody payload is invalid: {error}"),
+                )
+            })?;
+        let hint = payload.origin_proposal.payload_block_hint.ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "protected-carrier custody payload has no exact global hint",
+            )
+        })?;
+        let process_claim = self
+            .autonomous_lifecycle_process_generation_claim
+            .get()
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "protected-carrier custody has no validator process-generation claim",
+                )
+            })?;
+        if process_claim.local_peer_id() != local_peer
+            || context.id() != binding.height_context_id()
+            || context.height != hint.proposal_height
+            || context.epoch != payload.epoch
+            || Hash::new(context.chain_id.clone().into_inner().as_bytes()) != payload.chain_id_hash
+            || locked_round.context_id != context.id()
+            || locked_round.height != context.height
+            || locked_round.view != hint.proposal_view
+            || locked_subject.block_hash != hint.proposal_block_hash
+            || locked_subject
+                .payload_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "protected-carrier custody differs from the exact process, context, lock, or payload hint",
+            ));
+        }
+        let evidence = AutonomousLifecycleProtectedCarrierReceiveCustodyEvidenceV1 {
+            version: 1,
+            height_context_id: context.id(),
+            height_context_hash: HashOf::new(context),
+            locked_round,
+            locked_subject,
+            local_peer: local_peer.clone(),
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            executable_payload_hash: payload.payload_hash,
+        };
+        let evidence_hash = Self::autonomous_lifecycle_payload_custody_evidence_hash(
+            AUTONOMOUS_LIFECYCLE_PROTECTED_CARRIER_RECEIVE_CUSTODY_HASH_DOMAIN,
+            &evidence,
+        )?;
+        self.finish_autonomous_lifecycle_payload_custody_authorization(
+            payload,
+            binding,
+            AutonomousLifecyclePayloadCustodySourceV1::ProtectedCarrierReceive,
+            evidence_hash,
+            checked_activate_kura,
+        )
+    }
+
+    /// Authenticate an autonomous payload from one exact outstanding-request
+    /// response carrying matching Prepare/Commit and READY authority.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn authorize_historical_qc_response_payload_custody(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        request: &LaneHistoricalRecoveryRequestV1,
+        response: &LaneHistoricalRecoveryResponseV1,
+        responder: &PeerId,
+        checked_activate_kura: CheckedProductionTransition<
+            ProductionInFlightFirstReleaseTransitionProjection,
+        >,
+    ) -> Result<AutonomousLifecyclePayloadCustodyAuthorization> {
+        let request_hash = HashOf::new(request);
+        let certificate = request.certificate.as_ref().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "historical-QC custody request has no lane certificate",
+            )
+        })?;
+        let (
+            LaneHistoricalRecoveryKindV1::AutonomousPayload {
+                executable_payload_hash,
+                prepare_qc_hash,
+                commit_qc_hash,
+            },
+            LaneHistoricalRecoveryPayloadV1::AutonomousPayload {
+                payload: response_payload,
+                prepare_qc,
+                commit_qc,
+            },
+        ) = (&request.kind, &response.payload)
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "historical-QC custody requires the autonomous request/response variants",
+            ));
+        };
+        let Some(availability) = prepare_qc.payload_availability_qc.as_ref() else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "historical-QC custody PrepareQC has no READY certificate",
+            ));
+        };
+        let hint = payload.origin_proposal.payload_block_hint.ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "historical-QC custody payload has no canonical carrier hint",
+            )
+        })?;
+        let finality = self
+            .v2_finality_artifact(hint.proposal_height)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "historical-QC custody has no durable global finality",
+                )
+            })?;
+        finality.verify().map_err(|error| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                format!("historical-QC custody finality is invalid: {error}"),
+            )
+        })?;
+        let certified = CertifiedLaneBlockArtifact::new(
+            CommittedLaneBlockSession {
+                proposal: certificate.proposal.clone(),
+                prepare_qc: certificate.prepare_qc.clone(),
+                commit_qc: certificate.commit_qc.clone(),
+            },
+            request.signer_pops.clone(),
+        );
+        Self::validate_certified_lane_block_artifact(&certified).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+        })?;
+        crate::lane_consensus::validate_lane_payload_availability_certificate(
+            &DurableLanePayloadAvailabilityCertificateV1 {
+                certificate: prepare_qc.clone(),
+            },
+            payload,
+            payload.chain_id_hash,
+            payload.epoch,
+        )
+        .map_err(|error| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                format!("historical-QC custody READY certificate is invalid: {error}"),
+            )
+        })?;
+        let responder_index = availability
+            .validator_set
+            .iter()
+            .position(|peer| peer == responder)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "historical-QC custody responder is outside the READY validator set",
+                )
+            })?;
+        let responder_selected = availability
+            .signers_bitmap
+            .get(responder_index / 8)
+            .is_some_and(|byte| byte & (1_u8 << (responder_index % 8)) != 0);
+        let process_claim = self
+            .autonomous_lifecycle_process_generation_claim
+            .get()
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "historical-QC custody has no validator process-generation claim",
+                )
+            })?;
+        if request.version != crate::sumeragi::message::LANE_HISTORICAL_RECOVERY_VERSION_V4
+            || response.version != crate::sumeragi::message::LANE_HISTORICAL_RECOVERY_VERSION_V4
+            || response.request_hash != request_hash
+            || process_claim.local_peer_id() != &request.requester
+            || response_payload != payload
+            || certificate.proposal != payload.origin_proposal
+            || certificate.prepare_qc != *prepare_qc
+            || certificate.commit_qc != *commit_qc
+            || HashOf::new(prepare_qc) != *prepare_qc_hash
+            || HashOf::new(commit_qc) != *commit_qc_hash
+            || payload.payload_hash != *executable_payload_hash
+            || availability.body.executable_payload_hash != payload.payload_hash
+            || !responder_selected
+            || finality.height != hint.proposal_height
+            || finality.block_hash != hint.proposal_block_hash
+            || finality.height_context.id() != binding.height_context_id()
+            || finality.height_context.epoch != payload.epoch
+            || Hash::new(
+                finality
+                    .height_context
+                    .chain_id
+                    .clone()
+                    .into_inner()
+                    .as_bytes(),
+            ) != payload.chain_id_hash
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "historical-QC custody differs from its request, response, QCs, responder, finality, or process claim",
+            ));
+        }
+        let evidence = AutonomousLifecycleHistoricalQcResponseCustodyEvidenceV1 {
+            version: 1,
+            height_context_id: finality.height_context.id(),
+            height_context_hash: HashOf::new(&finality.height_context),
+            request_hash,
+            response_hash: HashOf::new(response),
+            responder: responder.clone(),
+            prepare_qc_hash: HashOf::new(prepare_qc),
+            commit_qc_hash: HashOf::new(commit_qc),
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            executable_payload_hash: payload.payload_hash,
+        };
+        let evidence_hash = Self::autonomous_lifecycle_payload_custody_evidence_hash(
+            AUTONOMOUS_LIFECYCLE_HISTORICAL_QC_RESPONSE_CUSTODY_HASH_DOMAIN,
+            &evidence,
+        )?;
+        self.finish_autonomous_lifecycle_payload_custody_authorization(
+            payload,
+            binding,
+            AutonomousLifecyclePayloadCustodySourceV1::HistoricalQcResponse,
+            evidence_hash,
+            checked_activate_kura,
+        )
+    }
+
+    /// Authenticate the full State-preflighted historical recovery record
+    /// before any dependent autonomous payload or execution-input sidecar is
+    /// written. The durable signed bootstrap becomes the crash fence until the
+    /// immutable record itself can be published after those dependencies.
+    pub(crate) fn authorize_canonical_historical_recovery_record_payload_custody(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        record: &HistoricalAutonomousLaneRecoveryRecordV1,
+        checked_activate_kura: CheckedProductionTransition<
+            ProductionInFlightFirstReleaseTransitionProjection,
+        >,
+    ) -> Result<AutonomousLifecyclePayloadCustodyAuthorization> {
+        self.validate_historical_autonomous_recovery_record_shape(record, &self.store_root)?;
+        let finality = self
+            .v2_finality_artifact(record.canonical_body.height)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical historical-recovery custody has no durable finality artifact",
+                )
+            })?;
+        finality.verify().map_err(|error| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                format!("canonical historical-recovery finality is invalid: {error}"),
+            )
+        })?;
+        if record.payload != *payload
+            || record.historical_context_id != binding.height_context_id()
+            || record.historical_context.id() != record.historical_context_id
+            || record.historical_context_hash != HashOf::new(&record.historical_context)
+            || finality.height_context != record.historical_context
+            || HashOf::new(&finality) != record.canonical_body.finality_artifact_hash
+            || finality.height != record.canonical_body.height
+            || finality.block_hash != record.canonical_body.block_hash
+            || finality.commit_qc.execution_commitment != record.canonical_body.execution_commitment
+            || record.reservation_group.identity != binding.reservation_group_binding().identity
+            || record.reservation_group.ordered_keys != payload.reservation_keys
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical historical-recovery custody differs from its record, finality, reservation group, or attempt binding",
+            ));
+        }
+        let evidence = AutonomousLifecycleCanonicalHistoricalRecoveryCustodyEvidenceV1 {
+            version: 1,
+            height_context_id: record.historical_context_id,
+            height_context_hash: record.historical_context_hash,
+            recovery_id: record.recovery_id,
+            record_hash: HashOf::new(record),
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            executable_payload_hash: payload.payload_hash,
+        };
+        let evidence_hash = Self::autonomous_lifecycle_payload_custody_evidence_hash(
+            AUTONOMOUS_LIFECYCLE_CANONICAL_HISTORICAL_RECOVERY_CUSTODY_HASH_DOMAIN,
+            &evidence,
+        )?;
+        self.finish_autonomous_lifecycle_payload_custody_authorization(
+            payload,
+            binding,
+            AutonomousLifecyclePayloadCustodySourceV1::CanonicalHistoricalRecoveryRecord,
+            evidence_hash,
+            checked_activate_kura,
+        )
+    }
+
+    /// Consume one source-specific custody authority as either an exact
+    /// already-durable stutter or a bootstrap requirement. A retained
+    /// bootstrap always wins over the stutter so crash recovery cannot strand
+    /// an authenticated source between payload and cursor publication.
+    pub(crate) fn classify_autonomous_payload_custody_for_persistence(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        authorization: AutonomousLifecyclePayloadCustodyAuthorization,
+    ) -> Result<Option<AutonomousLifecyclePayloadCustodyAuthorization>> {
+        if authorization.binding.validate_for_payload(payload).is_err()
+            || authorization.custody.source
+                == AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "non-Queue custody classification has the wrong payload or source",
+            ));
+        }
+        let descriptor = &payload.origin_proposal.descriptor;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let current = self.read_current_autonomous_lane_block_record_self_context_locked(
+            &entry,
+            descriptor.lane_block_height,
+            false,
+        )?;
+        let bootstrap_path = Self::autonomous_lifecycle_bootstrap_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let bootstrap_parent = bootstrap_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                bootstrap_path.clone(),
+                "autonomous lifecycle bootstrap path has no parent",
+            )
+        })?;
+        let bootstrap_exists = self
+            .read_regular_sidecar_bytes(
+                &bootstrap_path,
+                bootstrap_parent,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+            )?
+            .is_some();
+        let Some(record) = current else {
+            return Ok(Some(authorization));
+        };
+        if record.retirement.is_some() {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "authenticated payload custody names a durably retired lane slot",
+            ));
+        }
+        let existing_payload = &record.artifact.executable_payload;
+        let exact = existing_payload == payload;
+        let promotable = existing_payload
+            .origin_proposal
+            .payload_block_hint
+            .is_none()
+            && payload.origin_proposal.payload_block_hint.is_some()
+            && existing_payload
+                .attach_global_hint_exact(
+                    payload
+                        .origin_proposal
+                        .payload_block_hint
+                        .expect("checked present"),
+                    payload.chain_id_hash,
+                    payload.epoch,
+                )
+                .is_ok_and(|promoted| promoted == *payload);
+        if !exact && !promotable {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "authenticated payload custody conflicts with the current durable lane slot",
+            ));
+        }
+        if exact && !bootstrap_exists {
+            let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
+                &entry,
+                &self.store_root,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+            );
+            let cursor_parent = cursor_path.parent().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    cursor_path.clone(),
+                    "autonomous payload custody cursor path has no parent",
+                )
+            })?;
+            let cursor = self
+                .read_regular_sidecar_bytes(
+                    &cursor_path,
+                    cursor_parent,
+                    AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+                )?
+                .as_deref()
+                .map(|bytes| Self::decode_autonomous_lifecycle_cursor(&cursor_path, bytes))
+                .transpose()?;
+            let Some(cursor) = cursor else {
+                // Exact payload bytes without an authenticated Live cursor are
+                // not a custody stutter. Require the caller to publish the
+                // complete signed bootstrap so a legacy/raw sidecar cannot
+                // bypass durable lifecycle ownership.
+                return Ok(Some(authorization));
+            };
+            cursor.validate_for_payload(payload).map_err(|message| {
+                Self::invalid_lane_artifact_error(cursor_path.clone(), message)
+            })?;
+            let process_generation = self
+                .autonomous_lifecycle_process_generation_claim
+                .get()
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        cursor_path.clone(),
+                        "autonomous payload custody stutter has no process-generation claim",
+                    )
+                })?;
+            let process_record =
+                self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+            Self::validate_autonomous_lifecycle_cursor_process_generation(&process_record, &cursor)
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(cursor_path.clone(), message)
+                })?;
+            if cursor.binding() != &authorization.binding
+                || cursor.phase_kind() != AutonomousLifecycleCursorPhaseKindV2::Live
+                || cursor.owner_generation() != process_generation.generation()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    cursor_path,
+                    "autonomous payload custody stutter requires the exact current-generation Live cursor",
+                ));
+            }
+            drop(authorization);
+            return Ok(None);
+        }
+        Ok(Some(authorization))
+    }
+
+    fn validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts(
+        body: &AutonomousLifecycleBootstrapBodyV1,
+        height_context_id: HeightContextId,
+        validator_count: u8,
+        producer: u128,
+        reservation_group: LaneQueueReservationGroupBindingV1,
+    ) -> std::result::Result<(), &'static str> {
+        let binding = &body.binding;
+        if body.custody.source != AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
+            || body.custody != AutonomousLifecyclePayloadCustodyBindingV1::producer_queue(binding)?
+            || validator_count == 0
+            || validator_count > 128
+            || binding.height_context_id() != height_context_id
+            || binding.local_validator_identity().1 != producer
+            || binding.producer_actor_projection() != producer
+            || binding.validator_count != u16::from(validator_count)
+            || binding.reservation_group_binding() != reservation_group
+        {
+            return Err(
+                "autonomous lifecycle bootstrap differs from its Queue authentication facts",
+            );
+        }
+        let validator_mask = if validator_count == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << validator_count) - 1
+        };
+        let binding_a =
+            canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+        let before = ProductionInFlightFirstReleaseStateProjection {
+            validator_count,
+            producer,
+            producer_selected_owner: producer,
+            replicated_carrier_owners: validator_mask & !producer,
+            payload_binding_a: producer,
+            binding_a,
+            queue: ProductionInFlightFirstReleaseQueueProjection {
+                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+                selected_count: reservation_group.reservation_count,
+                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            },
+            carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
+            session: ProductionInFlightFirstReleaseSessionProjection {
+                bodies: producer,
+                producer_alive: true,
+                ..ProductionInFlightFirstReleaseSessionProjection::default()
+            },
+            history: ProductionInFlightFirstReleaseHistoryProjection {
+                ever_queue_plan_v4: true,
+                ever_reservation_v5: true,
+                ..ProductionInFlightFirstReleaseHistoryProjection::default()
+            },
+            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+        };
+        let mut after = before;
+        after.carrier.kura_active = producer;
+        let expected = ProductionInFlightFirstReleaseTransitionProjection {
+            action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+            actor: producer,
+            target: 0,
+            before,
+            after,
+        };
+        if body.prepared_activate.prepared_transition_projection()? != Some(expected)
+            || body.live_activate.before_projection()? != after
+        {
+            return Err(
+                "autonomous lifecycle bootstrap differs from the exact authenticated ActivateKura projection",
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_autonomous_lifecycle_bootstrap_payload_custody_authorization(
+        body: &AutonomousLifecycleBootstrapBodyV1,
+        authorization: &AutonomousLifecyclePayloadCustodyAuthorization,
+    ) -> std::result::Result<(), &'static str> {
+        if body.binding != authorization.binding
+            || body.custody != authorization.custody
+            || body.custody.source == AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
+            || body.prepared_activate.prepared_transition_projection()?
+                != Some(authorization.activate_kura)
+            || body.live_activate.before_projection()? != authorization.activate_kura.after
+        {
+            return Err(
+                "autonomous lifecycle bootstrap differs from its authenticated payload-custody authority",
+            );
+        }
+        Ok(())
+    }
+
+    fn classify_autonomous_lifecycle_bootstrap_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        bootstrap: &AutonomousLifecycleBootstrapV1,
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryStage> {
+        let payload = &bootstrap.body.executable_payload;
+        let binding = &bootstrap.body.binding;
+        let descriptor = &payload.origin_proposal.descriptor;
+        self.require_active_lane_artifact(entry, descriptor)?;
+        let payload_record = self.read_autonomous_lane_block_attempt_record_locked(
+            entry,
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+            payload.chain_id_hash,
+            payload.epoch,
+            false,
+        )?;
+        let payload_record_matches = payload_record.as_ref().is_none_or(|record| {
+            let durable = &record.artifact.executable_payload;
+            durable == payload
+                || (record.retirement.is_none()
+                    && durable.origin_proposal.payload_block_hint.is_none()
+                    && payload.origin_proposal.payload_block_hint.is_some()
+                    && durable
+                        .attach_global_hint_exact(
+                            payload
+                                .origin_proposal
+                                .payload_block_hint
+                                .expect("checked present"),
+                            payload.chain_id_hash,
+                            payload.epoch,
+                        )
+                        .is_ok_and(|promoted| promoted == *payload))
+        });
+        if !payload_record_matches {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::autonomous_lane_block_attempt_path_for_entry(
+                    entry,
+                    &self.store_root,
+                    descriptor.lane_block_height,
+                    descriptor.proposal_height,
+                ),
+                "autonomous lifecycle bootstrap conflicts with the durable payload attempt",
+            ));
+        }
+        let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let cursor_parent = cursor_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                cursor_path.clone(),
+                "autonomous lifecycle bootstrap cursor path has no parent",
+            )
+        })?;
+        let cursor = self
+            .read_regular_sidecar_bytes(
+                &cursor_path,
+                cursor_parent,
+                AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+            )?
+            .as_deref()
+            .map(|bytes| Self::decode_autonomous_lifecycle_cursor(&cursor_path, bytes))
+            .transpose()?;
+        match (payload_record.is_some(), cursor) {
+            (false, None) => Ok(AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly),
+            (false, Some(_)) => Err(Self::invalid_lane_artifact_error(
+                cursor_path,
+                "autonomous lifecycle bootstrap cursor exists before its exact payload",
+            )),
+            (true, None) => Ok(AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable),
+            (true, Some(cursor)) if cursor == bootstrap.body.prepared_activate => {
+                Ok(AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable)
+            }
+            (true, Some(cursor)) if cursor == bootstrap.body.live_activate => {
+                Ok(AutonomousLifecycleBootstrapRecoveryStage::LiveDurable)
+            }
+            (true, Some(_)) => Err(Self::invalid_lane_artifact_error(
+                cursor_path,
+                "autonomous lifecycle bootstrap conflicts with the durable cursor head",
+            )),
+        }
+    }
+
+    fn autonomous_lifecycle_bootstrap_authority_locked(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        entry: &LaneConfigEntry,
+        path: PathBuf,
+        bytes: Vec<u8>,
+        bootstrap: AutonomousLifecycleBootstrapV1,
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        let process_record =
+            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+            &process_record,
+            &bootstrap,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+        let (active_incarnation, activation_height) = self.active_lane_incarnation_marker(entry)?;
+        let expected_path = Self::autonomous_lifecycle_bootstrap_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        if entry.lane_id != descriptor.lane_id
+            || entry.dataspace_id != descriptor.dataspace_id
+            || active_incarnation != descriptor.lane_incarnation
+            || descriptor.proposal_height <= activation_height
+            || path != expected_path
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lifecycle bootstrap targets a stale route or incarnation",
+            ));
+        }
+        let stage = self.classify_autonomous_lifecycle_bootstrap_locked(entry, &bootstrap)?;
+        Ok(AutonomousLifecycleBootstrapRecoveryAuthority {
+            store_root: self.store_root.clone(),
+            path,
+            expected_bytes_hash: Hash::new(&bytes),
+            expected_bytes: bytes,
+            process_generation: process_generation.clone(),
+            bootstrap,
+            stage,
+        })
+    }
+
+    fn refresh_autonomous_lifecycle_bootstrap_authority(
+        &self,
+        authority: AutonomousLifecycleBootstrapRecoveryAuthority,
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        if authority.store_root != self.store_root {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap authority belongs to another Kura root",
+            ));
+        }
+        self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let descriptor = &authority
+            .bootstrap
+            .body
+            .executable_payload
+            .origin_proposal
+            .descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        let parent = authority.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap authority path has no parent",
+            )
+        })?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let bytes = self
+            .read_regular_sidecar_bytes(
+                &authority.path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    authority.path.clone(),
+                    "autonomous lifecycle bootstrap disappeared before completion",
+                )
+            })?;
+        if bytes != authority.expected_bytes || Hash::new(&bytes) != authority.expected_bytes_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap changed after recovery authority was minted",
+            ));
+        }
+        let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&authority.path, &bytes)?;
+        if bootstrap != authority.bootstrap {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap identity changed during recovery",
+            ));
+        }
+        self.autonomous_lifecycle_bootstrap_authority_locked(
+            &authority.process_generation,
+            &entry,
+            authority.path,
+            bytes,
+            bootstrap,
+        )
+    }
+
+    /// Return every signed bootstrap for one active route in deterministic attempt order.
+    pub(crate) fn autonomous_lifecycle_bootstrap_recovery_inventory(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<Vec<AutonomousLifecycleBootstrapRecoveryAuthority>> {
+        self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (active_incarnation, _) = self.active_lane_incarnation_marker(&entry)?;
+        if entry.dataspace_id != dataspace_id || active_incarnation != lane_incarnation {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root)),
+                "autonomous lifecycle bootstrap inventory targets a stale route",
+            ));
+        }
+        let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Error::IO(error, directory)),
+        };
+        let mut related_files = 0_usize;
+        let mut related_bytes = 0_u64;
+        let mut bootstraps = BTreeMap::new();
+        for directory_entry in entries {
+            let directory_entry =
+                directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+            let path = directory_entry.path();
+            let name = directory_entry.file_name().into_string().map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "autonomous lifecycle bootstrap inventory contains a non-UTF-8 artifact",
+                )
+            })?;
+            if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle bootstrap inventory found an atomic temporary",
+                ));
+            }
+            if !name.starts_with("autonomous_") {
+                continue;
+            }
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || !Self::sidecar_is_single_link(&metadata)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle bootstrap inventory contains a non-regular, linked, or symlinked artifact",
+                ));
+            }
+            related_files = related_files.checked_add(1).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.clone(),
+                    "autonomous lifecycle bootstrap inventory file count overflows",
+                )
+            })?;
+            related_bytes = related_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.clone(),
+                    "autonomous lifecycle bootstrap inventory byte count overflows",
+                )
+            })?;
+            if related_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES
+                || related_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous lifecycle bootstrap inventory exceeds its shared hard bounds",
+                ));
+            }
+            let Some(identity) = Self::autonomous_lifecycle_bootstrap_coordinates(&name) else {
+                if name.starts_with("autonomous_lifecycle_bootstrap") {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle bootstrap has an unexpected or legacy path",
+                    ));
+                }
+                continue;
+            };
+            let bytes = self
+                .read_regular_sidecar_bytes(
+                    &path,
+                    &directory,
+                    AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous lifecycle bootstrap disappeared during inventory",
+                    )
+                })?;
+            let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
+            if bootstraps
+                .insert(identity, (path, bytes, bootstrap))
+                .is_some()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous lifecycle bootstrap inventory contains duplicate identities",
+                ));
+            }
+        }
+        let mut inventory = Vec::new();
+        inventory.try_reserve_exact(bootstraps.len())?;
+        for (_, (path, bytes, bootstrap)) in bootstraps {
+            inventory.push(self.autonomous_lifecycle_bootstrap_authority_locked(
+                process_generation,
+                &entry,
+                path,
+                bytes,
+                bootstrap,
+            )?);
+        }
+        Ok(inventory)
+    }
+
+    fn autonomous_lifecycle_bootstrap_body_with_authentication(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        executable_payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        prepared_activate: AutonomousLifecycleCursorV2,
+        live_activate: AutonomousLifecycleCursorV2,
+        authentication: AutonomousLifecycleBootstrapPersistenceAuthentication<'_>,
+    ) -> Result<AutonomousLifecycleBootstrapBodyV1> {
+        let process_record =
+            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        let custody = match &authentication {
+            AutonomousLifecycleBootstrapPersistenceAuthentication::ProducerQueue { .. } => {
+                AutonomousLifecyclePayloadCustodyBindingV1::producer_queue(&binding).map_err(
+                    |message| Self::invalid_lane_artifact_error(self.store_root.clone(), message),
+                )?
+            }
+            AutonomousLifecycleBootstrapPersistenceAuthentication::PayloadCustody(
+                authorization,
+            ) => authorization.custody.clone(),
+        };
+        let body = AutonomousLifecycleBootstrapBodyV1::new(
+            process_generation,
+            executable_payload.clone(),
+            binding,
+            custody,
+            prepared_activate,
+            live_activate,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
+        if body.process_generation != process_record.body.generation
+            || body.process_generation_record_hash != process_record.record_hash
+            || body.binding.chain_id_hash != process_record.body.chain_id_hash
+            || body.prepared_activate.body.signer != process_record.body.local_peer_id
+            || body.live_activate.body.signer != process_record.body.local_peer_id
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle bootstrap body conflicts with the current process claim",
+            ));
+        }
+        match authentication {
+            AutonomousLifecycleBootstrapPersistenceAuthentication::ProducerQueue {
+                height_context_id,
+                validator_count,
+                producer,
+                reservation_group,
+            } => Self::validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts(
+                &body,
+                height_context_id,
+                validator_count,
+                producer,
+                reservation_group,
+            ),
+            AutonomousLifecycleBootstrapPersistenceAuthentication::PayloadCustody(
+                authorization,
+            ) => Self::validate_autonomous_lifecycle_bootstrap_payload_custody_authorization(
+                &body,
+                authorization,
+            ),
+        }
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
+        Ok(body)
+    }
+
+    /// Build the exact full-body producer bootstrap signature preimage.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn autonomous_lifecycle_bootstrap_signing_preimage(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        executable_payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        prepared_activate: AutonomousLifecycleCursorV2,
+        live_activate: AutonomousLifecycleCursorV2,
+        authorization: &AutonomousLaneKuraActivationAuthorization<'_>,
+    ) -> Result<Vec<u8>> {
+        let (height_context_id, validator_count, producer, reservation_group) =
+            authorization.facts();
+        self.autonomous_lifecycle_bootstrap_body_with_authentication(
+            process_generation,
+            executable_payload,
+            binding,
+            prepared_activate,
+            live_activate,
+            AutonomousLifecycleBootstrapPersistenceAuthentication::ProducerQueue {
+                height_context_id,
+                validator_count,
+                producer,
+                reservation_group,
+            },
+        )?
+        .signing_preimage()
+        .map_err(Error::NoritoFrame)
+    }
+
+    /// Build the exact full-body non-Queue bootstrap signature preimage.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
+    pub(crate) fn autonomous_lifecycle_bootstrap_signing_preimage_with_payload_custody(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        executable_payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        prepared_activate: AutonomousLifecycleCursorV2,
+        live_activate: AutonomousLifecycleCursorV2,
+        authorization: &AutonomousLifecyclePayloadCustodyAuthorization,
+    ) -> Result<Vec<u8>> {
+        self.autonomous_lifecycle_bootstrap_body_with_authentication(
+            process_generation,
+            executable_payload,
+            binding,
+            prepared_activate,
+            live_activate,
+            AutonomousLifecycleBootstrapPersistenceAuthentication::PayloadCustody(authorization),
+        )?
+        .signing_preimage()
+        .map_err(Error::NoritoFrame)
+    }
+
+    /// Persist a fully signed lifecycle bootstrap before any payload mutation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn persist_autonomous_lifecycle_bootstrap(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        executable_payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        prepared_activate: AutonomousLifecycleCursorV2,
+        live_activate: AutonomousLifecycleCursorV2,
+        bootstrap_signature: [u8; 96],
+        authorization: &AutonomousLaneKuraActivationAuthorization<'_>,
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        let (height_context_id, validator_count, producer, reservation_group) =
+            authorization.facts();
+        self.persist_autonomous_lifecycle_bootstrap_with_authentication(
+            process_generation,
+            executable_payload,
+            binding,
+            prepared_activate,
+            live_activate,
+            bootstrap_signature,
+            AutonomousLifecycleBootstrapPersistenceAuthentication::ProducerQueue {
+                height_context_id,
+                validator_count,
+                producer,
+                reservation_group,
+            },
+        )
+    }
+
+    /// Persist a signed bootstrap under one exact non-Queue payload-custody authority.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)] // Called by source-specific audited persistence adapters.
+    pub(crate) fn persist_autonomous_lifecycle_bootstrap_with_payload_custody(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        executable_payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        prepared_activate: AutonomousLifecycleCursorV2,
+        live_activate: AutonomousLifecycleCursorV2,
+        bootstrap_signature: [u8; 96],
+        authorization: AutonomousLifecyclePayloadCustodyAuthorization,
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        self.persist_autonomous_lifecycle_bootstrap_with_authentication(
+            process_generation,
+            executable_payload,
+            binding,
+            prepared_activate,
+            live_activate,
+            bootstrap_signature,
+            AutonomousLifecycleBootstrapPersistenceAuthentication::PayloadCustody(&authorization),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn persist_autonomous_lifecycle_bootstrap_with_authentication(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        executable_payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        prepared_activate: AutonomousLifecycleCursorV2,
+        live_activate: AutonomousLifecycleCursorV2,
+        bootstrap_signature: [u8; 96],
+        authentication: AutonomousLifecycleBootstrapPersistenceAuthentication<'_>,
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        let body = self.autonomous_lifecycle_bootstrap_body_with_authentication(
+            process_generation,
+            executable_payload,
+            binding,
+            prepared_activate,
+            live_activate,
+            authentication,
+        )?;
+        let bootstrap = AutonomousLifecycleBootstrapV1::from_body(body, bootstrap_signature)
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+            })?;
+        let process_record =
+            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+            &process_record,
+            &bootstrap,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
+        self.durable_mutation_authorized()?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let descriptor = &executable_payload.origin_proposal.descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        let path = Self::autonomous_lifecycle_bootstrap_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "autonomous lifecycle bootstrap path has no parent",
+            )
+        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|error| Error::MkDir(error, parent.to_path_buf()))?;
+        let bytes = bootstrap.encode_framed().map_err(Error::NoritoFrame)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        if let Some(existing) = self.read_regular_sidecar_bytes(
+            &path,
+            parent,
+            AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+        )? {
+            if existing != bytes {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle bootstrap path already contains conflicting bytes",
+                ));
+            }
+            let existing_bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &existing)?;
+            return self.autonomous_lifecycle_bootstrap_authority_locked(
+                process_generation,
+                &entry,
+                path,
+                existing,
+                existing_bootstrap,
+            );
+        }
+        let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        if self
+            .regular_sidecar_metadata(&attempt_path, parent)?
+            .is_some()
+            || self
+                .regular_sidecar_metadata(&cursor_path, parent)?
+                .is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lifecycle bootstrap cannot be replayed around existing payload or cursor state",
+            ));
+        }
+        let (related_files, _, related_bytes) = self
+            .autonomous_lane_attempt_inventory_counts_locked(
+                &entry,
+                descriptor.lane_block_height,
+            )?;
+        let next_len = u64::try_from(bytes.len())?;
+        if related_files
+            .checked_add(1)
+            .is_none_or(|files| files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)
+            || related_bytes
+                .checked_add(next_len)
+                .is_none_or(|total| total > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64)
+            || related_bytes
+                .checked_add(next_len)
+                .is_none_or(|peak| peak > AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PEAK_BYTES as u64)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lifecycle bootstrap would exceed its stable or atomic peak bounds",
+            ));
+        }
+        let enforced_peak = self
+            .kura_disk_usage_bytes()?
+            .checked_add(next_len)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lifecycle bootstrap peak disk accounting overflows",
+                )
+            })?;
+        self.kura_total_disk_usage_bytes()?
+            .checked_add(next_len)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lifecycle bootstrap total-disk accounting overflows",
+                )
+            })?;
+        if self.max_disk_usage_bytes != 0 && enforced_peak > self.max_disk_usage_bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lifecycle bootstrap temporary would exceed the Kura disk bound",
+            ));
+        }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let wrote = self.write_atomic_synced_impl_with_prefix(
+            &path,
+            &bytes,
+            false,
+            AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX,
+        )?;
+        if !wrote {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle bootstrap appeared during publication",
+                ),
+                path,
+            ));
+        }
+        self.update_disk_usage_delta(0, next_len);
+        self.update_total_disk_usage_delta(0, next_len);
+        accounting_mutation.finish();
+        let readback = self
+            .read_regular_sidecar_bytes(&path, parent, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "autonomous lifecycle bootstrap disappeared after publication",
+                )
+            })?;
+        if readback != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lifecycle bootstrap readback differs from published bytes",
+            ));
+        }
+        let readback_bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &readback)?;
+        self.autonomous_lifecycle_bootstrap_authority_locked(
+            process_generation,
+            &entry,
+            path,
+            readback,
+            readback_bootstrap,
+        )
+    }
+
+    /// Recheck a recovery authority under a live Queue activation fence.
+    pub(crate) fn authenticate_autonomous_lifecycle_bootstrap_recovery<'queue>(
+        &self,
+        authority: AutonomousLifecycleBootstrapRecoveryAuthority,
+        authorization: AutonomousLaneKuraActivationAuthorization<'queue>,
+    ) -> Result<AutonomousLifecycleBootstrapCompletionPermit<'queue>> {
+        let expected_stage = authority.stage;
+        let authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        if authority.stage != expected_stage {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap advanced after recovery authority was minted",
+            ));
+        }
+        let facts = authorization.facts();
+        Self::validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts(
+            &authority.bootstrap.body,
+            facts.0,
+            facts.1,
+            facts.2,
+            facts.3,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(authority.path.clone(), message))?;
+        Ok(AutonomousLifecycleBootstrapCompletionPermit {
+            authority,
+            fence: AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization),
+        })
+    }
+
+    /// Authorize non-Queue recovery from the already-durable locally signed bootstrap.
+    ///
+    /// Source-specific evidence was authenticated before this bootstrap could
+    /// be published and its canonical identity is covered by both local cursor
+    /// signatures. Unlike ProducerQueue, no ephemeral transport/QC token can
+    /// survive a crash; the active route, process claim, exact bootstrap bytes,
+    /// and signed custody binding are therefore the recovery fence.
+    #[allow(dead_code)] // Called when source-specific startup recovery is installed.
+    pub(crate) fn authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody(
+        &self,
+        authority: AutonomousLifecycleBootstrapRecoveryAuthority,
+    ) -> Result<AutonomousLifecycleBootstrapCompletionPermit<'static>> {
+        let expected_stage = authority.stage;
+        let authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        if authority.stage != expected_stage {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap advanced after recovery authority was minted",
+            ));
+        }
+        if authority.bootstrap.body.custody.source
+            == AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "producer Queue bootstrap recovery requires a fresh live Queue fence",
+            ));
+        }
+        Ok(AutonomousLifecycleBootstrapCompletionPermit {
+            authority,
+            fence: AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody,
+        })
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        executable_payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        prepared_activate: AutonomousLifecycleCursorV2,
+        live_activate: AutonomousLifecycleCursorV2,
+        authentication_facts: (
+            HeightContextId,
+            u8,
+            u128,
+            LaneQueueReservationGroupBindingV1,
+        ),
+    ) -> Result<Vec<u8>> {
+        self.autonomous_lifecycle_bootstrap_body_with_authentication(
+            process_generation,
+            executable_payload,
+            binding,
+            prepared_activate,
+            live_activate,
+            AutonomousLifecycleBootstrapPersistenceAuthentication::ProducerQueue {
+                height_context_id: authentication_facts.0,
+                validator_count: authentication_facts.1,
+                producer: authentication_facts.2,
+                reservation_group: authentication_facts.3,
+            },
+        )?
+        .signing_preimage()
+        .map_err(Error::NoritoFrame)
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn persist_autonomous_lifecycle_bootstrap_for_tests(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        executable_payload: &LaneExecutablePayloadV1,
+        binding: AutonomousLifecycleAttemptBindingV1,
+        prepared_activate: AutonomousLifecycleCursorV2,
+        live_activate: AutonomousLifecycleCursorV2,
+        bootstrap_signature: [u8; 96],
+        authentication_facts: (
+            HeightContextId,
+            u8,
+            u128,
+            LaneQueueReservationGroupBindingV1,
+        ),
+    ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        self.persist_autonomous_lifecycle_bootstrap_with_authentication(
+            process_generation,
+            executable_payload,
+            binding,
+            prepared_activate,
+            live_activate,
+            bootstrap_signature,
+            AutonomousLifecycleBootstrapPersistenceAuthentication::ProducerQueue {
+                height_context_id: authentication_facts.0,
+                validator_count: authentication_facts.1,
+                producer: authentication_facts.2,
+                reservation_group: authentication_facts.3,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    fn authenticate_autonomous_lifecycle_bootstrap_recovery_for_tests(
+        &self,
+        authority: AutonomousLifecycleBootstrapRecoveryAuthority,
+        authentication_facts: (
+            HeightContextId,
+            u8,
+            u128,
+            LaneQueueReservationGroupBindingV1,
+        ),
+    ) -> Result<AutonomousLifecycleBootstrapCompletionPermit<'static>> {
+        let expected_stage = authority.stage;
+        let authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        if authority.stage != expected_stage {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap advanced after test recovery authority was minted",
+            ));
+        }
+        Self::validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts(
+            &authority.bootstrap.body,
+            authentication_facts.0,
+            authentication_facts.1,
+            authentication_facts.2,
+            authentication_facts.3,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(authority.path.clone(), message))?;
+        Ok(AutonomousLifecycleBootstrapCompletionPermit {
+            authority,
+            fence: AutonomousLifecycleBootstrapCompletionFence::Test,
+        })
+    }
+
+    fn publish_autonomous_lifecycle_bootstrap_cursor_stage(
+        &self,
+        authority: &AutonomousLifecycleBootstrapRecoveryAuthority,
+        target: AutonomousLifecycleBootstrapRecoveryStage,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        if authority.store_root != self.store_root {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap cursor authority belongs to another Kura root",
+            ));
+        }
+        self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let descriptor = &authority
+            .bootstrap
+            .body
+            .executable_payload
+            .origin_proposal
+            .descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        let bootstrap_parent = authority.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap cursor authority has no parent",
+            )
+        })?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let bootstrap_bytes = self
+            .read_regular_sidecar_bytes(
+                &authority.path,
+                bootstrap_parent,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    authority.path.clone(),
+                    "autonomous lifecycle bootstrap disappeared before cursor publication",
+                )
+            })?;
+        if bootstrap_bytes != authority.expected_bytes
+            || Hash::new(&bootstrap_bytes) != authority.expected_bytes_hash
+            || Self::decode_autonomous_lifecycle_bootstrap(&authority.path, &bootstrap_bytes)?
+                != authority.bootstrap
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap changed before cursor publication",
+            ));
+        }
+        let current_stage =
+            self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &authority.bootstrap)?;
+        if current_stage != authority.stage {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap stage changed before cursor publication",
+            ));
+        }
+        let (next, replacing_existing) = match (target, current_stage) {
+            (
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+                AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable,
+            ) => (&authority.bootstrap.body.prepared_activate, false),
+            (
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable
+                | AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+            ) => return Ok(()),
+            (
+                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+            ) => (&authority.bootstrap.body.live_activate, true),
+            (
+                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+            ) => return Ok(()),
+            (AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly, _)
+            | (AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable, _)
+            | (AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable, _)
+            | (AutonomousLifecycleBootstrapRecoveryStage::LiveDurable, _) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    authority.path.clone(),
+                    "autonomous lifecycle bootstrap cursor stages are not contiguous",
+                ));
+            }
+        };
+        let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let cursor_parent = cursor_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                cursor_path.clone(),
+                "autonomous lifecycle bootstrap cursor path has no parent",
+            )
+        })?;
+        let current_bytes = self.read_regular_sidecar_bytes(
+            &cursor_path,
+            cursor_parent,
+            AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+        )?;
+        let prepared_bytes = authority
+            .bootstrap
+            .body
+            .prepared_activate
+            .encode_framed()
+            .map_err(Error::NoritoFrame)?;
+        if replacing_existing && current_bytes.as_deref() != Some(prepared_bytes.as_slice())
+            || !replacing_existing && current_bytes.is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                cursor_path,
+                "autonomous lifecycle bootstrap cursor head changed before publication",
+            ));
+        }
+        let next_bytes = next.encode_framed().map_err(Error::NoritoFrame)?;
+        let previous_len = current_bytes
+            .as_ref()
+            .map_or(Ok(0), |bytes| u64::try_from(bytes.len()))?;
+        let next_len = u64::try_from(next_bytes.len())?;
+        let (related_files, _, related_bytes) = self
+            .autonomous_lane_attempt_inventory_counts_locked(
+                &entry,
+                descriptor.lane_block_height,
+            )?;
+        Self::validate_autonomous_lifecycle_cursor_cas_budget(
+            related_files,
+            related_bytes,
+            previous_len,
+            next_len,
+            replacing_existing,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(cursor_path.clone(), message))?;
+        // The atomic writer materializes the complete successor beside the old
+        // cursor (for replace) or empty stable path (for create). Preflight that
+        // exact transient exposure against both accounting domains before any
+        // mutation; only the enforced domain has a configured capacity bound.
+        let enforced_peak = self
+            .kura_disk_usage_bytes()?
+            .checked_add(next_len)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    cursor_path.clone(),
+                    "autonomous lifecycle bootstrap cursor atomic peak disk accounting overflows",
+                )
+            })?;
+        self.kura_total_disk_usage_bytes()?
+            .checked_add(next_len)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    cursor_path.clone(),
+                    "autonomous lifecycle bootstrap cursor atomic peak total-disk accounting overflows",
+                )
+            })?;
+        if self.max_disk_usage_bytes != 0 && enforced_peak > self.max_disk_usage_bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                cursor_path,
+                "autonomous lifecycle bootstrap cursor atomic write would exceed the Kura disk bound",
+            ));
+        }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        if replacing_existing {
+            self.write_atomic_synced_replace(&cursor_path, &next_bytes)?;
+        } else if !self.write_atomic_synced_noclobber(&cursor_path, &next_bytes)? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle bootstrap cursor appeared during publication",
+                ),
+                cursor_path,
+            ));
+        }
+        self.update_disk_usage_delta(previous_len, next_len);
+        self.update_total_disk_usage_delta(previous_len, next_len);
+        accounting_mutation.finish();
+        let readback = self
+            .read_regular_sidecar_bytes(
+                &cursor_path,
+                cursor_parent,
+                AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    cursor_path.clone(),
+                    "autonomous lifecycle bootstrap cursor disappeared after publication",
+                )
+            })?;
+        if Self::decode_autonomous_lifecycle_cursor(&cursor_path, &readback)? != *next {
+            return Err(Self::invalid_lane_artifact_error(
+                cursor_path,
+                "autonomous lifecycle bootstrap cursor readback differs from the signed target",
+            ));
+        }
+        Ok(())
+    }
+
+    fn delete_completed_autonomous_lifecycle_bootstrap(
+        &self,
+        authority: &AutonomousLifecycleBootstrapRecoveryAuthority,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let descriptor = &authority
+            .bootstrap
+            .body
+            .executable_payload
+            .origin_proposal
+            .descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        let parent = authority.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "completed autonomous lifecycle bootstrap path has no parent",
+            )
+        })?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let bytes = self
+            .read_regular_sidecar_bytes(
+                &authority.path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    authority.path.clone(),
+                    "completed autonomous lifecycle bootstrap disappeared before deletion",
+                )
+            })?;
+        if bytes != authority.expected_bytes
+            || Hash::new(&bytes) != authority.expected_bytes_hash
+            || Self::decode_autonomous_lifecycle_bootstrap(&authority.path, &bytes)?
+                != authority.bootstrap
+            || self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &authority.bootstrap)?
+                != AutonomousLifecycleBootstrapRecoveryStage::LiveDurable
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap is not at its exact Live readback boundary",
+            ));
+        }
+        let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let cursor_bytes = self
+            .read_regular_sidecar_bytes(
+                &cursor_path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    cursor_path.clone(),
+                    "autonomous lifecycle bootstrap Live cursor disappeared before deletion",
+                )
+            })?;
+        if Self::decode_autonomous_lifecycle_cursor(&cursor_path, &cursor_bytes)?
+            != authority.bootstrap.body.live_activate
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                cursor_path,
+                "autonomous lifecycle bootstrap Live cursor changed before deletion",
+            ));
+        }
+        let previous_len = u64::try_from(bytes.len())?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        std::fs::remove_file(&authority.path)
+            .map_err(|error| Error::IO(error, authority.path.clone()))?;
+        sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        self.update_disk_usage_delta(previous_len, 0);
+        self.update_total_disk_usage_delta(previous_len, 0);
+        accounting_mutation.finish();
+        if self
+            .regular_sidecar_metadata(&authority.path, parent)?
+            .is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap remained after synced deletion",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Complete the exact bootstrap stages while retaining its typed custody fence.
+    pub(crate) fn complete_autonomous_lifecycle_bootstrap(
+        &self,
+        permit: AutonomousLifecycleBootstrapCompletionPermit<'_>,
+    ) -> Result<AutonomousLifecycleBootstrapCompletion> {
+        let AutonomousLifecycleBootstrapCompletionPermit { authority, fence } = permit;
+        let mut authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        let payload = authority.bootstrap.body.executable_payload.clone();
+        let binding = authority.bootstrap.body.binding.clone();
+        let current_generation = authority.process_generation.generation();
+        let historical_generation = authority.bootstrap.body.process_generation;
+        self.persist_lane_executable_payload_impl(&payload, payload.chain_id_hash, payload.epoch)?;
+        authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        if authority.stage == AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap payload did not reach exact durable readback",
+            ));
+        }
+        self.publish_autonomous_lifecycle_bootstrap_cursor_stage(
+            &authority,
+            AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+        )?;
+        authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        if !matches!(
+            authority.stage,
+            AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable
+                | AutonomousLifecycleBootstrapRecoveryStage::LiveDurable
+        ) {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap Prepared cursor lacks exact readback",
+            ));
+        }
+        self.publish_autonomous_lifecycle_bootstrap_cursor_stage(
+            &authority,
+            AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+        )?;
+        authority = self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;
+        if authority.stage != AutonomousLifecycleBootstrapRecoveryStage::LiveDurable {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap Live cursor lacks exact readback",
+            ));
+        }
+        self.delete_completed_autonomous_lifecycle_bootstrap(&authority)?;
+        let cursor_read = self.read_autonomous_lifecycle_cursor(
+            &payload,
+            &binding,
+            &authority.process_generation,
+        )?;
+        if cursor_read.cursor() != Some(&authority.bootstrap.body.live_activate) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle bootstrap completion returned a different Live cursor",
+            ));
+        }
+        match fence {
+            AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization) => {
+                drop(authorization);
+            }
+            AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody => {}
+            #[cfg(test)]
+            AutonomousLifecycleBootstrapCompletionFence::Test => {}
+        }
+        Ok(AutonomousLifecycleBootstrapCompletion {
+            cursor_read,
+            takeover_required: historical_generation != current_generation,
+        })
+    }
+
+    /// Read one exact lifecycle cursor and mint a single-use CAS lease.
+    ///
+    /// An absent cursor still returns a lease. The lease records authenticated
+    /// absence and can create only sequence one without clobbering a concurrent
+    /// publication.
+    pub(crate) fn read_autonomous_lifecycle_cursor(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        binding: &AutonomousLifecycleAttemptBindingV1,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+    ) -> Result<AutonomousLifecycleCursorRead> {
+        let process_record =
+            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        let local_validator = payload
+            .origin_proposal
+            .descriptor
+            .validator_set
+            .get(usize::from(binding.local_validator_index));
+        if binding.chain_id_hash != process_generation.chain_id_hash
+            || local_validator != Some(&process_generation.local_peer_id)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle lease conflicts with the durable process identity",
+            ));
+        }
+        binding.validate_for_payload(payload).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+        })?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(binding.lane_id)?;
+        self.require_active_lane_artifact(&entry, &payload.origin_proposal.descriptor)?;
+        let path = Self::autonomous_lifecycle_cursor_path_for_entry(
+            &entry,
+            &self.store_root,
+            binding.lane_block_height,
+            binding.proposal_height,
+        );
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "autonomous lifecycle cursor path has no parent directory",
+            )
+        })?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let bytes =
+            self.read_regular_sidecar_bytes(&path, parent, AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES)?;
+        let cursor = bytes
+            .as_deref()
+            .map(|bytes| Self::decode_autonomous_lifecycle_cursor(&path, bytes))
+            .transpose()?;
+        if let Some(cursor) = cursor.as_ref() {
+            if cursor.binding() != binding {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle cursor conflicts with the requested attempt binding",
+                ));
+            }
+            cursor
+                .validate_for_payload(payload)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            Self::validate_autonomous_lifecycle_cursor_process_generation(&process_record, cursor)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+        }
+        let expected_bytes_hash = bytes.as_ref().map(Hash::new);
+        let sequence = cursor
+            .as_ref()
+            .map_or(0, AutonomousLifecycleCursorV2::sequence);
+        let cursor_hash = cursor
+            .as_ref()
+            .map(AutonomousLifecycleCursorV2::cursor_hash);
+        Ok(AutonomousLifecycleCursorRead {
+            cursor,
+            lease: AutonomousLifecycleCursorLease {
+                path,
+                expected_bytes: bytes,
+                expected_bytes_hash,
+                sequence,
+                cursor_hash,
+                owner_generation: process_generation.generation,
+                process_generation_record_hash: process_generation.record_hash,
+                actor: binding.local_actor(),
+                binding: binding.clone(),
+                validator_set: payload.origin_proposal.descriptor.validator_set.clone(),
+            },
+        })
+    }
+
+    /// Return every retained local-committee lifecycle attempt for one exact
+    /// active route/incarnation in deterministic lane/proposal order.
+    ///
+    /// The scan is bounded by the existing autonomous namespace file, byte,
+    /// and per-height proposal-retention limits. Entries do not invent a
+    /// height context for cursorless payloads; the startup coordinator requires
+    /// their signed bootstrap to supply and authenticate that context.
+    pub(crate) fn active_autonomous_lifecycle_attempt_inventory(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<Vec<AutonomousLifecycleAttemptInventoryEntry>> {
+        let process_record =
+            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (active_incarnation, _) = self.active_lane_incarnation_marker(&entry)?;
+        if entry.dataspace_id != dataspace_id
+            || active_incarnation != lane_incarnation
+            || process_record.body.chain_id_hash != process_generation.chain_id_hash
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root)),
+                "autonomous lifecycle inventory targets a stale route or process identity",
+            ));
+        }
+        let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let directory_entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Error::IO(error, directory)),
+        };
+        let mut related_files = 0_usize;
+        let mut related_bytes = 0_u64;
+        let mut attempts = BTreeMap::<(u64, u64), LaneExecutablePayloadV1>::new();
+        let mut attempts_per_height = BTreeMap::<u64, usize>::new();
+        let mut cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV2>::new();
+        let mut bootstrap_stages =
+            BTreeMap::<(u64, u64), AutonomousLifecycleBootstrapRecoveryStage>::new();
+        for directory_entry in directory_entries {
+            let directory_entry =
+                directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+            let path = directory_entry.path();
+            let name = directory_entry.file_name().into_string().map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "autonomous lifecycle inventory contains a non-UTF-8 artifact",
+                )
+            })?;
+            if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle inventory found a bootstrap atomic temporary",
+                ));
+            }
+            if !name.starts_with("autonomous_") && !name.starts_with(".kura-sidecar-") {
+                continue;
+            }
+            related_files = related_files.checked_add(1).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.clone(),
+                    "autonomous lifecycle inventory file count overflows",
+                )
+            })?;
+            if related_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous lifecycle inventory exceeds its hard file-count limit",
+                ));
+            }
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || !Self::sidecar_is_single_link(&metadata)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle inventory contains a non-regular, linked, or symlinked artifact",
+                ));
+            }
+            related_bytes = related_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.clone(),
+                    "autonomous lifecycle inventory byte count overflows",
+                )
+            })?;
+            if related_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous lifecycle inventory exceeds the shared sidecar aggregate byte budget",
+                ));
+            }
+            if name.starts_with(".kura-sidecar-") {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle inventory found an unresolved atomic temporary",
+                ));
+            }
+            if let Some((lane_block_height, proposal_height)) =
+                Self::autonomous_lane_block_attempt_coordinates(&name)
+            {
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        &directory,
+                        MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "autonomous lifecycle payload disappeared during bounded inventory",
+                        )
+                    })?;
+                let artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
+                    .map_err(Error::NoritoFrame)?;
+                let pointer =
+                    AutonomousLaneBlockLatestAttemptV1::from_payload(&artifact.executable_payload);
+                let descriptor = &artifact.executable_payload.origin_proposal.descriptor;
+                if pointer.chain_id_hash != process_generation.chain_id_hash
+                    || pointer.lane_id != lane_id
+                    || pointer.dataspace_id != dataspace_id
+                    || pointer.lane_incarnation != lane_incarnation
+                    || pointer.lane_block_height != lane_block_height
+                    || pointer.proposal_height != proposal_height
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle payload has a stale or conflicting route identity",
+                    ));
+                }
+                let record = self
+                    .read_autonomous_lane_block_attempt_record_locked(
+                        &entry,
+                        lane_id,
+                        lane_block_height,
+                        proposal_height,
+                        pointer.chain_id_hash,
+                        pointer.epoch,
+                        false,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "autonomous lifecycle payload disappeared after validation",
+                        )
+                    })?;
+                if descriptor
+                    .validator_set
+                    .iter()
+                    .all(|peer| peer != process_generation.local_peer_id())
+                {
+                    continue;
+                }
+                let retained = attempts_per_height.entry(lane_block_height).or_default();
+                *retained = retained.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous lifecycle per-height retention count overflows",
+                    )
+                })?;
+                if *retained > self.roster_sidecar_retention.get() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle attempts exceed the per-height retention bound",
+                    ));
+                }
+                if attempts
+                    .insert(
+                        (lane_block_height, proposal_height),
+                        record.artifact.executable_payload,
+                    )
+                    .is_some()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous lifecycle inventory contains duplicate payload identities",
+                    ));
+                }
+                continue;
+            }
+            if let Some(identity) = Self::autonomous_lifecycle_cursor_coordinates(&name) {
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        &directory,
+                        AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "autonomous lifecycle cursor disappeared during bounded inventory",
+                        )
+                    })?;
+                let cursor = Self::decode_autonomous_lifecycle_cursor(&path, &bytes)?;
+                Self::validate_autonomous_lifecycle_cursor_process_generation(
+                    &process_record,
+                    &cursor,
+                )
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+                if cursors.insert(identity, cursor).is_some() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle inventory contains duplicate cursor identities",
+                    ));
+                }
+                continue;
+            }
+            if let Some(identity) = Self::autonomous_lifecycle_bootstrap_coordinates(&name) {
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        &directory,
+                        AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "autonomous lifecycle bootstrap disappeared during active inventory",
+                        )
+                    })?;
+                let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
+                Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                    &process_record,
+                    &bootstrap,
+                )
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+                let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+                if identity != (descriptor.lane_block_height, descriptor.proposal_height)
+                    || descriptor.lane_id != lane_id
+                    || descriptor.dataspace_id != dataspace_id
+                    || descriptor.lane_incarnation != lane_incarnation
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle bootstrap conflicts with active inventory route",
+                    ));
+                }
+                let stage =
+                    self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &bootstrap)?;
+                if bootstrap_stages.insert(identity, stage).is_some() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle inventory contains duplicate bootstrap identities",
+                    ));
+                }
+                continue;
+            }
+            if Self::autonomous_lane_block_attempt_view_temp_coordinates(&name).is_some() {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous lifecycle inventory found an unresolved named temporary",
+                ));
+            }
+            if Self::autonomous_two_height_coordinates(
+                &name,
+                AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
+            )
+            .is_some()
+                || Self::autonomous_one_height_coordinate(
+                    &name,
+                    AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
+                )
+                .is_some()
+                || name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE
+            {
+                continue;
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "autonomous lifecycle inventory found an unexpected or obsolete artifact",
+            ));
+        }
+        if cursors
+            .keys()
+            .any(|identity| !attempts.contains_key(identity))
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                directory,
+                "autonomous lifecycle inventory contains an orphan local cursor",
+            ));
+        }
+        if cursors.iter().any(|(identity, cursor)| {
+            cursor.sequence() == 1
+                && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV2::Prepared
+                && !bootstrap_stages.contains_key(identity)
+        }) {
+            return Err(Self::invalid_lane_artifact_error(
+                directory,
+                "initial Prepared lifecycle cursor is orphaned from its signed bootstrap",
+            ));
+        }
+        if attempts.keys().any(|identity| {
+            !cursors.contains_key(identity)
+                && bootstrap_stages.get(identity)
+                    != Some(&AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable)
+        }) {
+            return Err(Self::invalid_lane_artifact_error(
+                directory,
+                "autonomous payload attempt lacks its exact lifecycle cursor or signed payload-durable bootstrap",
+            ));
+        }
+        let mut inventory = Vec::new();
+        inventory.try_reserve_exact(attempts.len())?;
+        for (identity, executable_payload) in attempts {
+            let cursor = cursors.remove(&identity);
+            if let Some(cursor) = cursor.as_ref() {
+                cursor
+                    .validate_for_payload(&executable_payload)
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                    })?;
+            }
+            inventory.push(AutonomousLifecycleAttemptInventoryEntry {
+                executable_payload,
+                cursor,
+            });
+        }
+        self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        Ok(inventory)
+    }
+
+    /// Atomically compare and swap one exact lifecycle cursor.
+    ///
+    /// The move-only lease binds the path, prior canonical bytes and digest,
+    /// sequence/hash-chain head, process generation, and local actor. A stale
+    /// file observation returns `AlreadyExists`; generation or phase drift is
+    /// reported separately as invalid input. Successful replacement is fully
+    /// synced before a new lease is returned.
+    // The startup lifecycle coordinator binds the runner's durable process generation and uses
+    // this exact CAS for every Crash, Recover, and local-Kura rehydration boundary before lane
+    // activation or Queue publication.
+    pub(crate) fn compare_and_swap_autonomous_lifecycle_cursor(
+        &self,
+        lease: AutonomousLifecycleCursorLease,
+        next: AutonomousLifecycleCursorV2,
+    ) -> Result<AutonomousLifecycleCursorRead> {
+        self.durable_mutation_authorized()?;
+        let process_record = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "autonomous lifecycle cursor CAS lacks a durable process generation",
+                )
+            })?;
+        let lease_local_peer = lease
+            .validator_set
+            .get(usize::from(lease.binding.local_validator_index));
+        if lease.owner_generation != process_record.body.generation
+            || lease.process_generation_record_hash != process_record.record_hash
+            || lease.binding.chain_id_hash != process_record.body.chain_id_hash
+            || lease_local_peer != Some(&process_record.body.local_peer_id)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous lifecycle cursor lease conflicts with the durable process generation",
+            ));
+        }
+        next.validate_against_validator_set(&lease.validator_set)
+            .map_err(|message| Self::invalid_lane_artifact_error(lease.path.clone(), message))?;
+        Self::validate_autonomous_lifecycle_cursor_process_generation(&process_record, &next)
+            .map_err(|message| Self::invalid_lane_artifact_error(lease.path.clone(), message))?;
+        if next.binding() != &lease.binding {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "autonomous lifecycle cursor binding drifted from its CAS lease",
+                ),
+                lease.path,
+            ));
+        }
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lease.binding.lane_id)?;
+        let (active_incarnation, activation_height) =
+            self.active_lane_incarnation_marker(&entry)?;
+        if entry.dataspace_id != lease.binding.dataspace_id
+            || active_incarnation != lease.binding.lane_incarnation
+            || lease.binding.proposal_height <= activation_height
+            || lease.path
+                != Self::autonomous_lifecycle_cursor_path_for_entry(
+                    &entry,
+                    &self.store_root,
+                    lease.binding.lane_block_height,
+                    lease.binding.proposal_height,
+                )
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "autonomous lifecycle cursor CAS targets stale lane geometry",
+                ),
+                lease.path,
+            ));
+        }
+        let parent = lease.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                lease.path.clone(),
+                "autonomous lifecycle cursor CAS path has no parent directory",
+            )
+        })?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let attempt = self
+            .read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                lease.binding.lane_id,
+                lease.binding.lane_block_height,
+                lease.binding.proposal_height,
+                lease.binding.chain_id_hash,
+                lease.binding.epoch,
+                false,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    lease.path.clone(),
+                    "autonomous lifecycle cursor CAS lacks its exact immutable payload attempt",
+                )
+            })?;
+        lease
+            .binding
+            .validate_for_payload(&attempt.artifact.executable_payload)
+            .map_err(|message| Self::invalid_lane_artifact_error(lease.path.clone(), message))?;
+        let current_bytes = self.read_regular_sidecar_bytes(
+            &lease.path,
+            parent,
+            AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+        )?;
+        if current_bytes != lease.expected_bytes
+            || current_bytes.as_ref().map(Hash::new) != lease.expected_bytes_hash
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle cursor changed after its CAS lease was minted",
+                ),
+                lease.path,
+            ));
+        }
+        let current = current_bytes
+            .as_deref()
+            .map(|bytes| Self::decode_autonomous_lifecycle_cursor(&lease.path, bytes))
+            .transpose()?;
+        if current.as_ref().map(AutonomousLifecycleCursorV2::sequence)
+            != (lease.sequence != 0).then_some(lease.sequence)
+            || current
+                .as_ref()
+                .map(AutonomousLifecycleCursorV2::cursor_hash)
+                != lease.cursor_hash
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle cursor logical head differs from its CAS lease",
+                ),
+                lease.path,
+            ));
+        }
+        let latest_process_record = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
+        if latest_process_record.as_ref() != Some(&process_record) {
+            return Err(Self::invalid_lane_artifact_error(
+                lease.path,
+                "autonomous lifecycle process generation changed after the cursor lease was checked",
+            ));
+        }
+        Self::validate_autonomous_lifecycle_cursor_successor(&lease, current.as_ref(), &next)
+            .map_err(|message| {
+                Error::IO(
+                    std::io::Error::new(ErrorKind::InvalidInput, message),
+                    lease.path.clone(),
+                )
+            })?;
+        let next_bytes = next.encode_framed().map_err(Error::NoritoFrame)?;
+        let (related_files, _, related_bytes) = self
+            .autonomous_lane_attempt_inventory_counts_locked(
+                &entry,
+                lease.binding.lane_block_height,
+            )?;
+        let replacing_existing = current_bytes.is_some();
+        let previous_len = current_bytes
+            .as_ref()
+            .map_or(Ok(0), |bytes| u64::try_from(bytes.len()))?;
+        let next_len = u64::try_from(next_bytes.len())?;
+        Self::validate_autonomous_lifecycle_cursor_cas_budget(
+            related_files,
+            related_bytes,
+            previous_len,
+            next_len,
+            replacing_existing,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(lease.path.clone(), message))?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        if replacing_existing {
+            self.write_atomic_synced_replace(&lease.path, &next_bytes)?;
+        } else if !self.write_atomic_synced_noclobber(&lease.path, &next_bytes)? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle cursor appeared during create-if-absent CAS",
+                ),
+                lease.path,
+            ));
+        }
+        self.update_disk_usage_delta(previous_len, next_len);
+        self.update_total_disk_usage_delta(previous_len, next_len);
+        accounting_mutation.finish();
+        let next_hash = Hash::new(&next_bytes);
+        let next_sequence = next.sequence();
+        let next_cursor_hash = next.cursor_hash();
+        Ok(AutonomousLifecycleCursorRead {
+            cursor: Some(next),
+            lease: AutonomousLifecycleCursorLease {
+                path: lease.path,
+                expected_bytes: Some(next_bytes),
+                expected_bytes_hash: Some(next_hash),
+                sequence: next_sequence,
+                cursor_hash: Some(next_cursor_hash),
+                owner_generation: lease.owner_generation,
+                process_generation_record_hash: lease.process_generation_record_hash,
+                actor: lease.actor,
+                binding: lease.binding,
+                validator_set: lease.validator_set,
+            },
+        })
+    }
+
     fn read_autonomous_lane_block_latest_attempt_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -32058,176 +32825,13 @@ impl Kura {
         Ok(())
     }
 
-    /// Persist the locally produced executable payload only while Queue still
-    /// fences its exact durable V4/V5 reservation group.
-    ///
-    /// This is the production linearization point for the composed
-    /// `ActivateKura` action. The move-only authorization keeps every signed
-    /// transaction unavailable to concurrent Queue Commit/release until the
-    /// persistence attempt returns.
-    pub(crate) fn persist_producer_lane_executable_payload(
-        &self,
-        payload: &LaneExecutablePayloadV1,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-        authorization: AutonomousLaneKuraActivationAuthorization<'_>,
-    ) -> Result<()> {
-        payload
-            .validate(expected_chain_id_hash, expected_epoch)
-            .map_err(|error| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    format!("invalid producer autonomous lane payload: {error}"),
-                )
-            })?;
-        let descriptor = &payload.origin_proposal.descriptor;
-        let (height_context_id, validator_count, producer, reservation_group) =
-            authorization.facts();
-        if validator_count == 0
-            || validator_count > 128
-            || usize::from(validator_count) != descriptor.validator_set.len()
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "producer Kura activation has noncanonical committee width",
-            ));
-        }
-        let producer_index = descriptor
-            .validator_set
-            .iter()
-            .position(|peer| peer == &payload.producer)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "producer Kura activation signer is outside the exact committee",
-                )
-            })?;
-        let expected_producer = 1_u128
-            .checked_shl(u32::try_from(producer_index).map_err(|_| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "producer Kura activation committee index exceeds u32",
-                )
-            })?)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "producer Kura activation committee index exceeds the refinement width",
-                )
-            })?;
-        if producer != expected_producer {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "producer Kura activation authority names another committee member",
-            ));
-        }
-        let (expected_reservation_owner_hash, expected_proposal_identity_hash) =
-            autonomous_lane_reservation_identity_hashes_for_proposal(
-                expected_chain_id_hash,
-                height_context_id,
-                expected_epoch,
-                &payload.origin_proposal,
-                &payload.producer,
-            )
-            .map_err(|error| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    format!(
-                        "producer Kura activation cannot derive canonical slot identity: {error}"
-                    ),
-                )
-            })?;
-        let payload_group =
-            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
-                .map_err(|reason| {
-                    Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        format!("invalid producer Kura reservation group: {reason}"),
-                    )
-                })?;
-        if payload_group != reservation_group
-            || reservation_group.identity.lane_id != descriptor.lane_id
-            || reservation_group.identity.dataspace_id != descriptor.dataspace_id
-            || reservation_group.identity.lane_incarnation != descriptor.lane_incarnation
-            || reservation_group.identity.proposal_height != descriptor.proposal_height
-            || reservation_group.identity.lane_block_height != descriptor.lane_block_height
-            || reservation_group.identity.lane_block_view != descriptor.lane_block_view
-            || reservation_group.identity.reservation_owner_hash != expected_reservation_owner_hash
-            || reservation_group.identity.proposal_identity_hash != expected_proposal_identity_hash
-            || usize::try_from(reservation_group.reservation_count).ok()
-                != Some(payload.entrypoints.len())
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "producer Kura activation payload differs from its Queue-fenced reservation group",
-            ));
-        }
-        let validator_mask = if validator_count == 128 {
-            u128::MAX
-        } else {
-            (1_u128 << validator_count) - 1
-        };
-        let binding_a =
-            canonical_lane_queue_reservation_group_identity_projection(reservation_group);
-        let before = ProductionInFlightFirstReleaseStateProjection {
-            validator_count,
-            producer,
-            producer_selected_owner: producer,
-            replicated_carrier_owners: validator_mask & !producer,
-            payload_binding_a: producer,
-            binding_a,
-            queue: ProductionInFlightFirstReleaseQueueProjection {
-                plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
-                selected_count: reservation_group.reservation_count,
-                reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
-            },
-            carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
-            session: ProductionInFlightFirstReleaseSessionProjection {
-                bodies: producer,
-                producer_alive: true,
-                ..ProductionInFlightFirstReleaseSessionProjection::default()
-            },
-            history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
-                ..ProductionInFlightFirstReleaseHistoryProjection::default()
-            },
-            decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
-            release: ProductionInFlightFirstReleaseReleaseProjection::default(),
-        };
-        let mut after = before;
-        after.carrier.kura_active = producer;
-        let projection = ProductionInFlightFirstReleaseTransitionProjection {
-            action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
-            actor: producer,
-            target: 0,
-            before,
-            after,
-        };
-        let checked =
-            check_production_in_flight_first_release_transition(projection).ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "producer Kura activation failed the composed first-release transition gate",
-                )
-            })?;
-        if checked.into_projection() != projection {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "checked producer Kura activation changed before persistence",
-            ));
-        }
-
-        self.persist_lane_executable_payload(payload, expected_chain_id_hash, expected_epoch)
-    }
-
     /// Persist a producer-authenticated, lane-owned executable payload.
     ///
     /// The first valid payload owns the `(lane incarnation, lane height)` slot.
     /// A duplicate from another transport path is accepted only when its
     /// canonical origin proposal and executable body are byte-for-byte equal;
     /// conflicting payloads fail closed and never replace durable state.
-    pub(crate) fn persist_lane_executable_payload(
+    fn persist_lane_executable_payload_impl(
         &self,
         payload: &LaneExecutablePayloadV1,
         expected_chain_id_hash: Hash,
@@ -32390,6 +32994,18 @@ impl Kura {
         self.finalize_autonomous_lane_entrypoint_claims_locked(&staged_claims)?;
         self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
         Ok(())
+    }
+
+    /// Test-only access to the low-level autonomous payload writer. Production
+    /// code must cross a Queue or source-specific signed lifecycle bootstrap.
+    #[cfg(test)]
+    pub(crate) fn persist_lane_executable_payload(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> Result<()> {
+        self.persist_lane_executable_payload_impl(payload, expected_chain_id_hash, expected_epoch)
     }
 
     /// Durably close one exact autonomous lane-height slot before releasing its reservations.
@@ -33378,6 +33994,9 @@ impl Kura {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        let lifecycle_process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
         let _sidecar_guard = self.sidecar_lock.lock();
         for entry in entries {
             let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
@@ -33405,6 +34024,12 @@ impl Kura {
                         "autonomous startup inventory contains a non-UTF-8 artifact",
                     )
                 })?;
+                if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous startup inventory found a bootstrap atomic temporary",
+                    ));
+                }
                 let is_temporary = name.starts_with(".kura-sidecar-");
                 if !is_temporary && !name.starts_with("autonomous_") {
                     continue;
@@ -33475,6 +34100,9 @@ impl Kura {
             let mut view_identities = BTreeSet::<(u64, u64)>::new();
             let mut pointer_heights = BTreeSet::<u64>::new();
             let mut route_pointer_present = false;
+            let mut lifecycle_cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV2>::new();
+            let mut lifecycle_bootstraps =
+                BTreeMap::<(u64, u64), (PathBuf, AutonomousLifecycleBootstrapV1)>::new();
             let mut inventory_files = 0_usize;
             let mut inventory_bytes = 0_u64;
             for directory_entry in directory_entries {
@@ -33487,6 +34115,12 @@ impl Kura {
                         "autonomous startup inventory contains a non-UTF-8 artifact",
                     )
                 })?;
+                if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous startup inventory found a bootstrap atomic temporary",
+                    ));
+                }
                 if name.starts_with(".kura-sidecar-") {
                     continue;
                 }
@@ -33684,6 +34318,81 @@ impl Kura {
                     }
                     continue;
                 }
+                if let Some((lane_block_height, proposal_height)) =
+                    Self::autonomous_lifecycle_cursor_coordinates(&name)
+                {
+                    let bytes = self
+                        .read_regular_sidecar_bytes(
+                            &path,
+                            &directory,
+                            AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+                        )?
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "autonomous lifecycle cursor disappeared during startup reconstruction",
+                            )
+                        })?;
+                    let cursor = Self::decode_autonomous_lifecycle_cursor(&path, &bytes)?;
+                    let binding = cursor.binding();
+                    let (active_incarnation, activation_height) =
+                        self.active_lane_incarnation_marker(&entry)?;
+                    if binding.lane_id != entry.lane_id
+                        || binding.dataspace_id != entry.dataspace_id
+                        || binding.lane_incarnation != active_incarnation
+                        || binding.proposal_height <= activation_height
+                        || binding.lane_block_height != lane_block_height
+                        || binding.proposal_height != proposal_height
+                        || lifecycle_cursors
+                            .insert((lane_block_height, proposal_height), cursor)
+                            .is_some()
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "autonomous lifecycle cursor has a stale, duplicate, or namespace-conflicting identity",
+                        ));
+                    }
+                    continue;
+                }
+                if let Some((lane_block_height, proposal_height)) =
+                    Self::autonomous_lifecycle_bootstrap_coordinates(&name)
+                {
+                    let bytes = self
+                        .read_regular_sidecar_bytes(
+                            &path,
+                            &directory,
+                            AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                        )?
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "autonomous lifecycle bootstrap disappeared during startup reconstruction",
+                            )
+                        })?;
+                    let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
+                    let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+                    let (active_incarnation, activation_height) =
+                        self.active_lane_incarnation_marker(&entry)?;
+                    if descriptor.lane_id != entry.lane_id
+                        || descriptor.dataspace_id != entry.dataspace_id
+                        || descriptor.lane_incarnation != active_incarnation
+                        || descriptor.proposal_height <= activation_height
+                        || descriptor.lane_block_height != lane_block_height
+                        || descriptor.proposal_height != proposal_height
+                        || lifecycle_bootstraps
+                            .insert(
+                                (lane_block_height, proposal_height),
+                                (path.clone(), bootstrap),
+                            )
+                            .is_some()
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "autonomous lifecycle bootstrap has a stale, duplicate, or namespace-conflicting identity",
+                        ));
+                    }
+                    continue;
+                }
                 if let Some(identity) = Self::autonomous_two_height_coordinates(
                     &name,
                     AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
@@ -33731,6 +34440,133 @@ impl Kura {
                     "autonomous route-latest pointer exists without payload attempts",
                 ));
             }
+            let mut payload_only_bootstrap_identities = BTreeSet::new();
+            for (identity, (path, bootstrap)) in &lifecycle_bootstraps {
+                let process_generation = lifecycle_process_generation.as_ref().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous lifecycle bootstrap exists without a Kura-root process generation",
+                    )
+                })?;
+                Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                    process_generation,
+                    bootstrap,
+                )
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+                let stage =
+                    self.classify_autonomous_lifecycle_bootstrap_locked(&entry, bootstrap)?;
+                let payload_present = attempts.get(&identity.0).is_some_and(|attempts_at_height| {
+                    attempts_at_height.iter().any(|(pointer, record)| {
+                        pointer.proposal_height == identity.1
+                            && record.artifact.executable_payload
+                                == bootstrap.body.executable_payload
+                    })
+                });
+                let cursor = lifecycle_cursors.get(identity);
+                let stage_matches = match stage {
+                    AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly => {
+                        !payload_present && cursor.is_none()
+                    }
+                    AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable => {
+                        payload_only_bootstrap_identities.insert(*identity);
+                        payload_present && cursor.is_none()
+                    }
+                    AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable => {
+                        payload_present && cursor == Some(&bootstrap.body.prepared_activate)
+                    }
+                    AutonomousLifecycleBootstrapRecoveryStage::LiveDurable => {
+                        payload_present && cursor == Some(&bootstrap.body.live_activate)
+                    }
+                };
+                if !stage_matches {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous lifecycle bootstrap crash boundary conflicts with startup inventory",
+                    ));
+                }
+            }
+            if attempt_identities.iter().any(|identity| {
+                !lifecycle_cursors.contains_key(identity)
+                    && !payload_only_bootstrap_identities.contains(identity)
+            }) {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous payload attempt lacks its exact lifecycle cursor or signed payload-durable bootstrap",
+                ));
+            }
+            for (identity, cursor) in &lifecycle_cursors {
+                let matching_payload = attempts.get(&identity.0).and_then(|attempts_at_height| {
+                    attempts_at_height.iter().find_map(|(pointer, record)| {
+                        (pointer.proposal_height == identity.1)
+                            .then_some(&record.artifact.executable_payload)
+                    })
+                });
+                let payload = matching_payload.ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        Self::autonomous_lifecycle_cursor_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            identity.0,
+                            identity.1,
+                        ),
+                        "autonomous lifecycle cursor is orphaned from its exact payload attempt",
+                    )
+                })?;
+                cursor.validate_for_payload(payload).map_err(|message| {
+                    Self::invalid_lane_artifact_error(
+                        Self::autonomous_lifecycle_cursor_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            identity.0,
+                            identity.1,
+                        ),
+                        message,
+                    )
+                })?;
+                let process_generation = lifecycle_process_generation.as_ref().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        Self::autonomous_lifecycle_cursor_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            identity.0,
+                            identity.1,
+                        ),
+                        "autonomous lifecycle cursor exists without a Kura-root process generation",
+                    )
+                })?;
+                Self::validate_autonomous_lifecycle_cursor_process_generation(
+                    process_generation,
+                    cursor,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(
+                        Self::autonomous_lifecycle_cursor_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            identity.0,
+                            identity.1,
+                        ),
+                        message,
+                    )
+                })?;
+                if cursor.sequence() == 1
+                    && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV2::Prepared
+                    && !lifecycle_bootstraps.contains_key(identity)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        Self::autonomous_lifecycle_cursor_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            identity.0,
+                            identity.1,
+                        ),
+                        "initial Prepared lifecycle cursor is orphaned from its signed bootstrap",
+                    ));
+                }
+            }
+            // Bootstrap-only state is intentionally retained without mutating its
+            // embedded payload. Recovery can advance it only after a coordinator
+            // supplies a fresh exact Queue/height-context authorization.
             for attempts_at_height in attempts.values_mut() {
                 attempts_at_height.sort_by_key(|(pointer, _)| pointer.proposal_height);
                 for adjacent in attempts_at_height.windows(2) {
@@ -33823,6 +34659,7 @@ impl Kura {
                     )
                 })?;
                 if name.starts_with(".kura-sidecar-")
+                    || name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX)
                     || Self::autonomous_lane_block_attempt_view_temp_coordinates(name).is_some()
                 {
                     return Err(Self::invalid_lane_artifact_error(
@@ -35379,16 +36216,14 @@ impl Kura {
             )?;
         }
         let finality_artifact_hash = HashOf::new(&finality);
-        let evidence = native_amx_participant_application_artifacts(
-            &native_manifest,
-            finality_artifact_hash,
-        )
-        .ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "Native AMX manifest builder did not produce every route artifact",
-            )
-        })?;
+        let evidence =
+            native_amx_participant_application_artifacts(&native_manifest, finality_artifact_hash)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "Native AMX manifest builder did not produce every route artifact",
+                    )
+                })?;
         for (manifest_artifact, receipt) in &evidence {
             Self::validate_native_amx_participant_application_manifest_artifact(manifest_artifact)
                 .map_err(|message| {
@@ -35516,30 +36351,19 @@ impl Kura {
             && u64::try_from(leaf.members.len()).ok() == Some(marker.source_count)
     }
 
-    /// Read-only all-item preflight for State-owned Native participant repair.
-    ///
-    /// Every exact replicated frontier must occur once in the QC-authenticated
-    /// carrier manifest. The complete carrier plan, including sibling routes
-    /// not named by `markers`, is then checked against active geometry and all
-    /// existing manifest/receipt/latest-index files without publishing bytes.
-    pub(crate) fn preflight_native_amx_participant_application_evidence_repair(
+    fn native_amx_participant_application_repair_target_indices(
         &self,
-        block: &SignedBlock,
+        plan: &NativeAmxParticipantApplicationEvidencePlan,
         markers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
-    ) -> Result<()> {
+    ) -> Result<Vec<usize>> {
         if markers.is_empty() {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "Native AMX startup repair received no State frontier markers",
             ));
         }
-        let _publication_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let plan = self
-            .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, true,
-            )?;
         let mut routes = BTreeSet::new();
+        let mut targets = BTreeSet::new();
         for marker in markers {
             if marker.application_block_height != plan.application_block_height
                 || marker.application_block_hash != plan.application_block_hash
@@ -35550,30 +36374,65 @@ impl Kura {
                     "Native AMX startup repair contains a conflicting carrier or duplicate route",
                 ));
             }
-            let matches = plan
+            let mut matches = plan
                 .artifacts
                 .iter()
-                .filter(|(manifest, _)| {
+                .enumerate()
+                .filter(|(_, (manifest, _))| {
                     Self::native_amx_manifest_leaf_matches_frontier_marker(&manifest.leaf, marker)
-                })
-                .count();
-            if matches != 1 {
+                });
+            let Some((index, _)) = matches.next() else {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
-                    "Native AMX State frontier is absent from or duplicated in its authenticated carrier manifest",
+                    "Native AMX State frontier is absent from its authenticated carrier manifest",
+                ));
+            };
+            if matches.next().is_some() || !targets.insert(index) {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX State frontier is duplicated in its authenticated carrier manifest",
                 ));
             }
         }
-        let _ =
-            self.preflight_native_amx_participant_application_plan_under_publication_guard(&plan)?;
+        Ok(targets.into_iter().collect())
+    }
+
+    /// Read-only all-item preflight for State-owned Native participant repair.
+    ///
+    /// Every exact replicated frontier must occur once in the QC-authenticated
+    /// carrier manifest. The complete carrier and every manifest leaf/proof are
+    /// authenticated while reconstructing `plan`; only marker-owned active
+    /// routes are then checked against current storage geometry and existing
+    /// manifest/receipt/latest-index files. Historical sibling leaves are never
+    /// interpreted as current storage work.
+    pub(crate) fn preflight_native_amx_participant_application_evidence_repair(
+        &self,
+        block: &SignedBlock,
+        markers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+    ) -> Result<()> {
+        let _publication_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let plan = self
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                block, true,
+            )?;
+        let target_indices =
+            self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
+        let _ = self
+            .preflight_native_amx_participant_application_repair_targets_under_publication_guard(
+                &plan,
+                &target_indices,
+            )?;
         Ok(())
     }
 
-    /// Repair Native AMX evidence after WSV commit and its Kura metadata join.
+    /// Repair every Native AMX participant route after fresh WSV application.
     ///
-    /// Startup repair requires and revalidates the exact checkpoint and commit
-    /// manifest in the same prune critical section as finality, manifest
-    /// proofs, and sidecar publication.
+    /// Fresh application owns every participant route in the just-committed
+    /// carrier, so it retains the whole-plan publication boundary. Startup
+    /// recovery must instead use
+    /// [`Self::repair_native_amx_participant_application_evidence_for_markers`]
+    /// to avoid interpreting historical sibling leaves as current work.
     pub(crate) fn repair_native_amx_participant_application_evidence(
         &self,
         block: &SignedBlock,
@@ -35584,13 +36443,96 @@ impl Kura {
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
                 block, true,
             )?;
-        let persisted = plan.artifacts.len();
+        let repaired = plan.artifacts.len();
         let _ = self.persist_native_amx_participant_application_evidence_under_publication_guard(
             block,
             &plan,
             NativeAmxParticipantApplicationPublicationMode::PostWsvRepair,
         )?;
-        Ok(persisted)
+        Ok(repaired)
+    }
+
+    /// Repair State-owned Native AMX evidence after WSV commit and metadata join.
+    ///
+    /// Startup repair requires and revalidates the exact checkpoint and commit
+    /// manifest in the same prune critical section as finality, manifest
+    /// proofs, and sidecar publication. Only exact State marker targets may
+    /// consult or mutate current lane namespaces.
+    pub(crate) fn repair_native_amx_participant_application_evidence_for_markers(
+        &self,
+        block: &SignedBlock,
+        markers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+    ) -> Result<usize> {
+        let _publication_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let plan = self
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                block, true,
+            )?;
+        let target_indices =
+            self.native_amx_participant_application_repair_target_indices(&plan, markers)?;
+        self.persist_native_amx_participant_application_repair_targets_under_publication_guard(
+            block,
+            &plan,
+            &target_indices,
+        )
+    }
+
+    fn preflight_native_amx_participant_application_repair_targets_under_publication_guard(
+        &self,
+        plan: &NativeAmxParticipantApplicationEvidencePlan,
+        target_indices: &[usize],
+    ) -> Result<Vec<NativeAmxParticipantApplicationRoutePreflight>> {
+        if target_indices.is_empty() {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX startup repair has no authenticated target routes",
+            ));
+        }
+        let mut indices = BTreeSet::new();
+        let mut routes = BTreeSet::new();
+        let mut preflights = Vec::with_capacity(target_indices.len());
+        for &index in target_indices {
+            let (manifest, receipt) = plan.artifacts.get(index).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX startup repair target index is outside the authenticated manifest",
+                )
+            })?;
+            let leaf = &manifest.leaf;
+            if usize::try_from(manifest.leaf_index).ok() != Some(index)
+                || manifest.manifest_root != plan.manifest_root
+                || manifest.manifest_leaf_count != plan.manifest_leaf_count
+                || manifest.finality_artifact_hash != plan.finality_artifact_hash
+                || leaf.application_block_height != plan.application_block_height
+                || leaf.application_block_hash != plan.application_block_hash
+                || leaf.executed_block_wire_hash != plan.executed_block_wire_hash
+                || Self::validate_native_amx_participant_application_manifest_artifact(manifest)
+                    .is_err()
+                || Self::validate_native_amx_participant_application_receipt_artifact(receipt)
+                    .is_err()
+                || !Self::native_amx_participant_receipt_matches_manifest_leaf(receipt, leaf)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX startup repair target differs from its authenticated carrier plan",
+                ));
+            }
+            if !indices.insert(index)
+                || !routes.insert((leaf.lane_id, leaf.dataspace_id, leaf.lane_incarnation))
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX startup repair repeats a target route/incarnation",
+                ));
+            }
+            preflights.push(
+                self.preflight_native_amx_participant_application_route_under_publication_guard(
+                    manifest, receipt,
+                )?,
+            );
+        }
+        Ok(preflights)
     }
 
     fn preflight_native_amx_participant_application_plan_under_publication_guard(
@@ -36071,6 +37013,136 @@ impl Kura {
         })
     }
 
+    fn read_back_native_amx_repair_target_manifests_under_publication_guard(
+        &self,
+        plan: &NativeAmxParticipantApplicationEvidencePlan,
+        target_indices: &[usize],
+    ) -> Result<()> {
+        for &index in target_indices {
+            let (expected, _) = plan.artifacts.get(index).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX startup repair read-back target is outside the authenticated manifest",
+                )
+            })?;
+            let leaf = &expected.leaf;
+            let _canonical_chain_guard = self.canonical_chain_lock.lock();
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let entry = self.lane_storage_entry(leaf.lane_id)?;
+            self.require_active_lane_incarnation(
+                &entry,
+                leaf.lane_incarnation,
+                leaf.application_block_height,
+            )?;
+            let _sidecar_guard = self.sidecar_lock.lock();
+            let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
+            let path = Self::native_amx_application_manifest_path_for_entry(
+                &entry,
+                &self.store_root,
+                leaf.participant_height,
+            );
+            let durable = self
+                .read_native_amx_participant_application_manifest_from_paths_locked(
+                    &entry,
+                    leaf.participant_height,
+                    &path,
+                    &namespace,
+                )
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path,
+                        "Native AMX startup repair all-target manifest read-back is incomplete",
+                    )
+                })?;
+            if durable != *expected
+                || !self
+                    .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
+                        &durable,
+                    )
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    namespace.data_path.clone(),
+                    "Native AMX startup repair manifest read-back differs from authenticated carrier evidence",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn persist_native_amx_participant_application_repair_targets_under_publication_guard(
+        &self,
+        block: &SignedBlock,
+        plan: &NativeAmxParticipantApplicationEvidencePlan,
+        target_indices: &[usize],
+    ) -> Result<usize> {
+        let canonical_height = usize::try_from(block.header().height().get())
+            .ok()
+            .and_then(NonZeroUsize::new);
+        if canonical_height.and_then(|height| self.get_durable_block_hash(height))
+            != Some(block.hash())
+            || plan.application_block_height != block.header().height().get()
+            || plan.application_block_hash != block.hash()
+            || usize::try_from(plan.manifest_leaf_count).ok() != Some(plan.artifacts.len())
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX startup repair carrier or manifest changed before publication",
+            ));
+        }
+        let route_preflights = self
+            .preflight_native_amx_participant_application_repair_targets_under_publication_guard(
+                plan,
+                target_indices,
+            )?;
+
+        // Repair keeps the same crash boundary as live publication, but only
+        // marker-owned routes may touch current storage. Authenticate and
+        // publish every target manifest before promoting any target receipt.
+        for &index in target_indices {
+            let (manifest, _) = &plan.artifacts[index];
+            self.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
+                manifest,
+                true,
+            )?;
+        }
+        self.read_back_native_amx_repair_target_manifests_under_publication_guard(
+            plan,
+            target_indices,
+        )?;
+        for &index in target_indices {
+            let (manifest, receipt) = &plan.artifacts[index];
+            self.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(
+                receipt,
+                manifest,
+                true,
+            )?;
+        }
+        for (&index, preflight) in target_indices.iter().zip(route_preflights.iter()) {
+            let (manifest, receipt) = &plan.artifacts[index];
+            self.write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard(
+                receipt,
+                manifest,
+                true,
+                preflight,
+            )?;
+        }
+        for &index in target_indices {
+            let (manifest, receipt) = &plan.artifacts[index];
+            let _ = self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(
+                manifest,
+                receipt,
+                true,
+            )?;
+        }
+        for &index in target_indices {
+            let (_, receipt) = &plan.artifacts[index];
+            self.cleanup_native_amx_participant_application_evidence_under_publication_guard(
+                receipt,
+            )?;
+        }
+        Ok(target_indices.len())
+    }
+
     fn persist_native_amx_participant_application_evidence_under_publication_guard(
         &self,
         block: &SignedBlock,
@@ -36254,12 +37326,12 @@ impl Kura {
         if !permit_retention_cleanup {
             self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;
         }
+        self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;
         self.recover_native_amx_evidence_publication_temp_locked(
             &entry,
             &namespace,
             NativeAmxEvidenceRecoveryPhase::ManifestPublication,
         )?;
-        self.discard_native_amx_latest_index_temp_locked(&namespace)?;
         let payload = artifact.encode_framed()?;
         if u64::try_from(payload.len()).map_or(true, |len| len > STRICT_INIT_MAX_BLOCK_BYTES) {
             return Err(Self::invalid_lane_artifact_error(
@@ -36515,12 +37587,12 @@ impl Kura {
         if !permit_retention_cleanup {
             self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;
         }
+        self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;
         self.recover_native_amx_evidence_publication_temp_locked(
             &entry,
             &namespace,
             NativeAmxEvidenceRecoveryPhase::ReceiptPublication,
         )?;
-        self.discard_native_amx_latest_index_temp_locked(&namespace)?;
         let manifest_path = Self::native_amx_application_manifest_path_for_entry(
             &entry,
             &self.store_root,
@@ -37476,13 +38548,22 @@ impl Kura {
                 }
             }
             let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
-            self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
-            self.recover_native_amx_evidence_publication_temp_locked(
-                &entry,
-                &namespace,
-                NativeAmxEvidenceRecoveryPhase::Startup,
-            )?;
-            self.discard_native_amx_latest_index_temp_locked(&namespace)?;
+            let latest_temp_present = self
+                .native_amx_latest_index_temp_bytes_locked(&namespace)?
+                .is_some();
+            if latest_temp_present {
+                // Pointer staging follows complete pair publication and
+                // precedes pruning. Do not consume another recovery journal
+                // when these mutually exclusive crash shapes overlap.
+                self.require_native_amx_latest_index_temp_recovery_unambiguous_locked(&namespace)?;
+            } else {
+                self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+                self.recover_native_amx_evidence_publication_temp_locked(
+                    &entry,
+                    &namespace,
+                    NativeAmxEvidenceRecoveryPhase::Startup,
+                )?;
+            }
             let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, true)?;
             let receipt_payload_heights =
                 inventory.receipts.keys().copied().collect::<BTreeSet<_>>();
@@ -37575,6 +38656,33 @@ impl Kura {
             let expected = expected_receipt
                 .as_ref()
                 .map(NativeAmxParticipantReceiptLatestIndexV2::from_receipt);
+            let mut authenticated_complete = BTreeMap::new();
+            for (height, receipt) in &validated_receipts {
+                let Some(manifest) = validated_manifests.get(height) else {
+                    continue;
+                };
+                let identity = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(receipt);
+                if !identity.matches_manifest(manifest) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        evidence_directory.clone(),
+                        format!(
+                            "Native AMX complete startup pair at height {height} has conflicting latest-index projections"
+                        ),
+                    ));
+                }
+                authenticated_complete.insert(*height, identity);
+            }
+            if self.reconcile_native_amx_latest_index_temp_locked(
+                &entry,
+                &namespace,
+                &latest_index_path,
+                &authenticated_complete,
+                expected,
+                expected_can_publish,
+            )? == NativeAmxLatestIndexTempReconciliation::Promoted
+            {
+                rebuilt = rebuilt.saturating_add(1);
+            }
             let current = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
                 &entry,
                 &latest_index_path,
@@ -37713,6 +38821,15 @@ impl Kura {
             self.update_disk_usage_delta(before_bytes, after_bytes);
         }
         accounting_mutation.finish();
+        if !self.disk_usage_initialized.load(Ordering::Relaxed)
+            || !self.disk_usage_total_initialized.load(Ordering::Relaxed)
+        {
+            // A prior failed recovery attempt deliberately invalidates both
+            // caches. The successful retry has now released its mutation
+            // guard, so rebuild the complete enforced/total snapshot instead
+            // of publishing a delta against stale cached totals.
+            self.refresh_disk_usage_bytes()?;
+        }
         Ok(rebuilt)
     }
 
@@ -37820,7 +38937,7 @@ impl Kura {
     ///
     /// This explicit-carrier writer is retained only for historical
     /// merge-settlement tests. Production uses
-    /// [`Self::persist_merge_lane_block_application_receipts_from_committed_log`]
+    /// [`Self::persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations`]
     /// after State has proved that the exact committed merge execution already
     /// reached WSV.
     #[cfg(test)]
@@ -37885,8 +39002,144 @@ impl Kura {
             .is_ok()
     }
 
+    fn consume_post_carrier_evidence_repair_authorizations(
+        &self,
+        entry: &MergeLedgerEntry,
+        carrier_block_height: u64,
+        carrier_block_hash: HashOf<BlockHeader>,
+        authorizations: Vec<PostCarrierEvidenceRepairAuthorization>,
+    ) -> Result<()> {
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            if authorizations.is_empty() {
+                return Ok(());
+            }
+            return Err(Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "non-execution merge entry received post-carrier repair authority",
+            ));
+        };
+        let groups =
+            crate::state::certified_merge_queue_reservation_groups(entry).map_err(|error| {
+                Self::invalid_pending_merge_entry_error(
+                    self.store_root.clone(),
+                    format!(
+                        "post-carrier repair cannot reconstruct exact reservation groups: {error}"
+                    ),
+                )
+            })?;
+        if groups.len() != batch.lanes.len() || authorizations.len() != groups.len() {
+            return Err(Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "post-carrier repair authority cardinality differs from the committed execution entry",
+            ));
+        }
+        let entry_hash = crate::merge::merge_ledger_entry_hash(entry);
+        for (group, authorization) in groups.into_iter().zip(authorizations) {
+            let reservation_group = lane_queue_reservation_group_binding_from_ordered_keys(
+                group.iter().map(|(_, key)| key),
+            )
+            .map_err(|reason| {
+                Self::invalid_pending_merge_entry_error(
+                    self.store_root.clone(),
+                    format!("post-carrier repair reservation group is invalid: {reason}"),
+                )
+            })?;
+            if authorization
+                .consume_for_kura(
+                    entry_hash,
+                    carrier_block_height,
+                    carrier_block_hash,
+                    reservation_group,
+                )
+                .is_none()
+            {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    self.store_root.clone(),
+                    "post-carrier repair authority names another committed carrier or reservation group",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn persist_merge_lane_block_application_receipts_after_repair_authorization(
+        &self,
+        entry: &MergeLedgerEntry,
+        carrier_block_height: u64,
+        carrier_block_hash: HashOf<BlockHeader>,
+    ) -> Result<()> {
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            return Ok(());
+        };
+        for execution in &batch.lanes {
+            if !self.merge_lane_execution_targets_active_geometry(execution) {
+                iroha_logger::debug!(
+                    lane = %execution.proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = execution.proposal.descriptor.lane_block_height,
+                    "skipping active-segment receipt repair for historical merge execution"
+                );
+                continue;
+            }
+            self.persist_merge_lane_block_application_receipt(
+                entry,
+                batch,
+                execution,
+                carrier_block_height,
+                carrier_block_hash,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Repair merge application receipts from an entry already aligned with a
     /// canonical carrier block in the committed merge log.
+    ///
+    /// The caller proves canonical WSV application and supplies one move-only
+    /// checked repair authority for every autonomous lane. All authorities are
+    /// consumed after exact log/carrier preflight and before the first receipt
+    /// publication.
+    pub(crate) fn persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations(
+        &self,
+        entry: &MergeLedgerEntry,
+        authorizations: Vec<PostCarrierEvidenceRepairAuthorization>,
+    ) -> Result<()> {
+        let entry_hash = crate::merge::merge_ledger_entry_hash(entry);
+        if self.merge_log.lock().entry_by_hash(entry_hash)?.as_ref() != Some(entry) {
+            return Err(Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "merge receipt repair entry is absent from the committed merge log",
+            ));
+        }
+        let carrier = self.merge_carrier_for_entry(entry_hash)?.ok_or_else(|| {
+            Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "merge receipt carrier record is unavailable",
+            )
+        })?;
+        if self
+            .merge_entry_for_carrier(carrier.block_height, carrier.block_hash)?
+            .as_ref()
+            != Some(entry)
+        {
+            return Err(Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "merge receipt repair carrier does not match the committed full entry",
+            ));
+        }
+        self.consume_post_carrier_evidence_repair_authorizations(
+            entry,
+            carrier.block_height,
+            carrier.block_hash,
+            authorizations,
+        )?;
+        self.persist_merge_lane_block_application_receipts_after_repair_authorization(
+            entry,
+            carrier.block_height,
+            carrier.block_hash,
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn persist_merge_lane_block_application_receipts_from_committed_log(
         &self,
         entry: &MergeLedgerEntry,
@@ -37914,27 +39167,11 @@ impl Kura {
                 "merge receipt repair carrier does not match the committed full entry",
             ));
         }
-        let Some(batch) = entry.execution_batch.as_ref() else {
-            return Ok(());
-        };
-        for execution in &batch.lanes {
-            if !self.merge_lane_execution_targets_active_geometry(execution) {
-                iroha_logger::debug!(
-                    lane = %execution.proposal.descriptor.lane_id.as_u32(),
-                    lane_block_height = execution.proposal.descriptor.lane_block_height,
-                    "skipping active-segment receipt repair for historical merge execution"
-                );
-                continue;
-            }
-            self.persist_merge_lane_block_application_receipt(
-                entry,
-                batch,
-                execution,
-                carrier.block_height,
-                carrier.block_hash,
-            )?;
-        }
-        Ok(())
+        self.persist_merge_lane_block_application_receipts_after_repair_authorization(
+            entry,
+            carrier.block_height,
+            carrier.block_hash,
+        )
     }
 
     /// Persist a recoverable application receipt through a strict power-loss boundary.
@@ -40210,4611 +41447,7 @@ impl Kura {
         Some(artifact)
     }
 
-    /// Enqueue pipeline recovery metadata for asynchronous persistence.
-    ///
-    /// This avoids consensus-path I/O; the Kura writer thread flushes the queue.
-    /// If the queue is full, the sidecar is rejected because pipeline recovery
-    /// metadata is best-effort diagnostic state. An active or interrupted canonical
-    /// prune also rejects immediately without waiting for disk mutation locks.
-    pub fn enqueue_pipeline_metadata(
-        &self,
-        sidecar: PipelineRecoverySidecar,
-    ) -> PipelineSidecarEnqueueResult {
-        if self.prune_blocks_sidecar_enqueue() {
-            return PipelineSidecarEnqueueResult::RejectedPruneRecovery;
-        }
-        let cap = self
-            .pipeline_sidecar_queue_cap
-            .load(Ordering::Relaxed)
-            .max(1);
-        let (should_notify, queue_depth) = {
-            let mut queue = self.pipeline_sidecar_queue.lock();
-            if self.prune_blocks_sidecar_enqueue() {
-                return PipelineSidecarEnqueueResult::RejectedPruneRecovery;
-            }
-            if queue.len() >= cap {
-                return PipelineSidecarEnqueueResult::RejectedQueueFull { cap };
-            }
-            let should_notify = queue.is_empty();
-            queue.push_back(sidecar);
-            (should_notify, queue.len())
-        };
-        if should_notify {
-            self.notify_block_writer(BlockNotify::NewBlock, "pipeline sidecar");
-        }
-        PipelineSidecarEnqueueResult::Enqueued { queue_depth }
-    }
-
-    fn flush_pipeline_sidecars(&self) -> usize {
-        let sidecars = {
-            let mut queue = self.pipeline_sidecar_queue.lock();
-            if queue.is_empty() {
-                return 0;
-            }
-            queue.drain(..).collect::<Vec<_>>()
-        };
-        let count = sidecars.len();
-        for sidecar in sidecars {
-            self.write_pipeline_metadata_unlocked(&sidecar);
-        }
-        count
-    }
-
-    /// Enqueue a FASTPQ proof attachment for asynchronous persistence in the block sidecar.
-    ///
-    /// An active or interrupted canonical prune rejects immediately without waiting for disk
-    /// mutation locks.
-    pub fn enqueue_fastpq_proof_snapshot(
-        &self,
-        snapshot: FastpqProofSnapshot,
-    ) -> FastpqProofEnqueueResult {
-        if self.prune_blocks_sidecar_enqueue() {
-            return FastpqProofEnqueueResult::RejectedPruneRecovery;
-        }
-        let telemetry = FastpqProofSidecarTelemetry;
-        let snapshot = snapshot.compact_for_sidecar();
-        let max_bytes = self
-            .fastpq_proof_sidecar_max_bytes
-            .load(Ordering::Relaxed)
-            .max(1);
-        let actual = match norito::encode_canonical(&snapshot) {
-            Ok(bytes) => bytes.len(),
-            Err(err) => {
-                telemetry.record_event("rejected_encode");
-                iroha_logger::warn!(
-                    ?err,
-                    "failed to encode FASTPQ proof snapshot before enqueue"
-                );
-                return FastpqProofEnqueueResult::RejectedEncode {
-                    reason: format!("{err:?}"),
-                };
-            }
-        };
-        if actual > max_bytes {
-            telemetry.record_event("rejected_too_large");
-            return FastpqProofEnqueueResult::RejectedTooLarge {
-                actual,
-                max: max_bytes,
-            };
-        }
-
-        let cap = self
-            .fastpq_proof_sidecar_queue_cap
-            .load(Ordering::Relaxed)
-            .max(1);
-        let (queue_depth, should_notify) = {
-            let mut queue = self.fastpq_proof_queue.lock();
-            if self.prune_blocks_sidecar_enqueue() {
-                return FastpqProofEnqueueResult::RejectedPruneRecovery;
-            }
-            if queue.len() >= cap {
-                telemetry.record_event("rejected_queue_full");
-                telemetry.set_queue_depth(queue.len());
-                return FastpqProofEnqueueResult::RejectedQueueFull { cap };
-            }
-            let should_notify = queue.is_empty();
-            queue.push_back(QueuedFastpqProofSnapshot {
-                snapshot,
-                retries: 0,
-            });
-            (queue.len(), should_notify)
-        };
-        telemetry.record_event("enqueued");
-        telemetry.set_queue_depth(queue_depth);
-        if should_notify {
-            self.notify_block_writer(BlockNotify::NewBlock, "FASTPQ proof sidecar");
-        }
-        FastpqProofEnqueueResult::Enqueued { queue_depth }
-    }
-
-    fn flush_fastpq_proof_snapshots(&self) -> usize {
-        let telemetry = FastpqProofSidecarTelemetry;
-        let snapshots = {
-            let mut queue = self.fastpq_proof_queue.lock();
-            if queue.is_empty() {
-                telemetry.set_queue_depth(0);
-                return 0;
-            }
-            queue.drain(..).collect::<Vec<_>>()
-        };
-        let mut groups: Vec<Vec<QueuedFastpqProofSnapshot>> = Vec::new();
-        for snapshot in snapshots {
-            if let Some(group) = groups.iter_mut().find(|group| {
-                group.first().is_some_and(|queued| {
-                    queued.snapshot.height == snapshot.snapshot.height
-                        && queued.snapshot.block_hash == snapshot.snapshot.block_hash
-                })
-            }) {
-                group.push(snapshot);
-            } else {
-                groups.push(vec![snapshot]);
-            }
-        }
-
-        let mut written = 0usize;
-        let mut retry = VecDeque::new();
-        let max_retries = self
-            .fastpq_proof_sidecar_max_retries
-            .load(Ordering::Relaxed)
-            .max(1);
-        for group in groups {
-            let snapshots = group
-                .iter()
-                .map(|queued| &queued.snapshot)
-                .collect::<Vec<_>>();
-            match self.write_fastpq_proof_snapshots(&snapshots) {
-                FastpqProofWriteResult::Written => {
-                    telemetry.record_event("written");
-                    written = written.saturating_add(group.len());
-                }
-                FastpqProofWriteResult::Retry => {
-                    for mut queued in group {
-                        let next_retries = queued.retries.saturating_add(1);
-                        if next_retries >= max_retries {
-                            telemetry.record_event("dropped");
-                            iroha_logger::warn!(
-                                height = queued.snapshot.height,
-                                retries = next_retries,
-                                max_retries,
-                                "dropping FASTPQ proof snapshot after retry limit"
-                            );
-                        } else {
-                            telemetry.record_event("retried");
-                            queued.retries = next_retries;
-                            retry.push_back(queued);
-                        }
-                    }
-                }
-                FastpqProofWriteResult::Drop => {
-                    for _ in group {
-                        telemetry.record_event("dropped");
-                    }
-                }
-            }
-        }
-        let queue_depth = {
-            let mut queue = self.fastpq_proof_queue.lock();
-            if !retry.is_empty() {
-                queue.extend(retry);
-            }
-            queue.len()
-        };
-        telemetry.set_queue_depth(queue_depth);
-        written
-    }
-
-    /// Write per-block pipeline recovery metadata sidecar under the store dir. Best-effort: errors
-    /// are logged and ignored.
-    pub fn write_pipeline_metadata(&self, sidecar: &PipelineRecoverySidecar) {
-        let _prune_guard = self.prune_lock.lock();
-        if self.prune_recovery_is_required() {
-            warn!(
-                height = sidecar.height,
-                "refusing pipeline sidecar write until prune recovery completes after restart"
-            );
-            return;
-        }
-        if let Err(error) = self.durable_mutation_authorized() {
-            iroha_logger::warn!(
-                ?error,
-                height = sidecar.height,
-                "refusing pipeline sidecar mutation while Kura output is unauthorized"
-            );
-            return;
-        }
-        self.write_pipeline_metadata_unlocked(sidecar);
-    }
-
-    fn write_pipeline_metadata_unlocked(&self, sidecar: &PipelineRecoverySidecar) {
-        if let Some(mut dir) = self.store_dir() {
-            let _guard = self.sidecar_lock.lock();
-            dir.push(PIPELINE_DIR_NAME);
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                iroha_logger::warn!(?e, ?dir, "failed to create pipeline dir");
-                return;
-            }
-            let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
-            let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-            let json_sidecar_path = dir.join(format!("block_{}.json", sidecar.height));
-            let before_bytes = match Self::sidecar_tracked_bytes(
-                &data_path,
-                &index_path,
-                Some(&json_sidecar_path),
-            ) {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure pipeline sidecar bytes before write"
-                    );
-                    None
-                }
-            };
-            let fsync_mode = self.sidecar_fsync_mode();
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
-            let wrote_norito = match sidecar.encode_framed() {
-                Ok(buf) => Self::append_indexed_sidecar(
-                    &data_path,
-                    &index_path,
-                    sidecar.height,
-                    &buf,
-                    "pipeline sidecar",
-                    fsync_mode,
-                    None,
-                    SidecarIndexOrigin::HeightOne,
-                ),
-                Err(err) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        height = sidecar.height,
-                        "failed to encode pipeline metadata"
-                    );
-                    false
-                }
-            };
-
-            if wrote_norito {
-                if json_sidecar_path.exists()
-                    && let Err(e) = std::fs::remove_file(&json_sidecar_path)
-                {
-                    iroha_logger::debug!(
-                        ?e,
-                        ?json_sidecar_path,
-                        "failed to remove JSON pipeline sidecar"
-                    );
-                }
-            }
-            let mut accounting_complete = before_bytes.is_some();
-            if let Some(before_bytes) = before_bytes {
-                match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path))
-                {
-                    Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                    Err(err) => {
-                        accounting_complete = false;
-                        iroha_logger::warn!(
-                            ?err,
-                            ?dir,
-                            "failed to measure pipeline sidecar bytes after write"
-                        );
-                    }
-                }
-            }
-            if accounting_complete {
-                accounting_mutation.finish();
-            }
-        }
-    }
-
-    fn write_fastpq_proof_snapshots(
-        &self,
-        snapshots: &[&FastpqProofSnapshot],
-    ) -> FastpqProofWriteResult {
-        if let Err(error) = self.durable_mutation_authorized() {
-            let retry = matches!(&error, Error::SnapshotBootstrapAuthenticationPending);
-            iroha_logger::warn!(
-                ?error,
-                "refusing FASTPQ proof sidecar mutation while Kura output is unauthorized"
-            );
-            return if retry {
-                FastpqProofWriteResult::Retry
-            } else {
-                FastpqProofWriteResult::Drop
-            };
-        }
-        let Some(first_snapshot) = snapshots.first().copied() else {
-            return FastpqProofWriteResult::Written;
-        };
-        let height = first_snapshot.height;
-        let block_hash = first_snapshot.block_hash;
-        if height == 0 {
-            iroha_logger::warn!("refusing to store FASTPQ proof snapshot for zero height");
-            return FastpqProofWriteResult::Drop;
-        }
-        let Some(mut dir) = self.store_dir() else {
-            iroha_logger::warn!("FASTPQ proof snapshot has no Kura store directory");
-            return FastpqProofWriteResult::Drop;
-        };
-        let _guard = self.sidecar_lock.lock();
-        dir.push(PIPELINE_DIR_NAME);
-        if let Err(err) = std::fs::create_dir_all(&dir) {
-            iroha_logger::warn!(?err, ?dir, "failed to create pipeline dir for FASTPQ proof");
-            return FastpqProofWriteResult::Retry;
-        }
-        let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
-        let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-        let json_sidecar_path = dir.join(format!("block_{height}.json"));
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let Some(mut sidecar) = self.read_indexed_sidecar(
-            height,
-            PIPELINE_SIDECARS_DATA_FILE,
-            PIPELINE_SIDECARS_INDEX_FILE,
-            norito::decode_canonical::<PipelineRecoverySidecar>,
-            "pipeline sidecar",
-        ) else {
-            iroha_logger::debug!(
-                height,
-                "pipeline sidecar not ready for FASTPQ proof attachment"
-            );
-            return FastpqProofWriteResult::Retry;
-        };
-        if sidecar.block_hash != block_hash {
-            iroha_logger::warn!(
-                height,
-                expected = %sidecar.block_hash,
-                actual = %block_hash,
-                "dropping FASTPQ proof snapshot for mismatched block hash"
-            );
-            return FastpqProofWriteResult::Drop;
-        }
-        let mut added = 0usize;
-        for snapshot in snapshots {
-            if snapshot.height != height || snapshot.block_hash != block_hash {
-                iroha_logger::warn!(
-                    height = snapshot.height,
-                    expected_height = height,
-                    expected_hash = %block_hash,
-                    actual_hash = %snapshot.block_hash,
-                    "dropping FASTPQ proof snapshot grouped with a different block"
-                );
-                continue;
-            }
-            if sidecar
-                .fastpq_proofs
-                .iter()
-                .any(|existing| existing.same_attachment(snapshot))
-            {
-                continue;
-            }
-            sidecar.fastpq_proofs.push(snapshot.compact_for_sidecar());
-            added = added.saturating_add(1);
-        }
-        if added == 0 {
-            return FastpqProofWriteResult::Written;
-        }
-        let before_bytes =
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path)) {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure pipeline sidecar bytes before FASTPQ proof write"
-                    );
-                    None
-                }
-            };
-        let payload = match sidecar.encode_framed() {
-            Ok(payload) => payload,
-            Err(err) => {
-                iroha_logger::warn!(?err, height, "failed to encode FASTPQ proof sidecar update");
-                return FastpqProofWriteResult::Retry;
-            }
-        };
-        let wrote = Self::append_indexed_sidecar(
-            &data_path,
-            &index_path,
-            height,
-            &payload,
-            "pipeline sidecar",
-            self.sidecar_fsync_mode(),
-            None,
-            SidecarIndexOrigin::HeightOne,
-        );
-        if wrote {
-            if json_sidecar_path.exists()
-                && let Err(err) = std::fs::remove_file(&json_sidecar_path)
-            {
-                iroha_logger::debug!(
-                    ?err,
-                    ?json_sidecar_path,
-                    "failed to remove JSON pipeline sidecar after FASTPQ proof update"
-                );
-            }
-            let mut accounting_complete = before_bytes.is_some();
-            if let Some(before_bytes) = before_bytes {
-                match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path))
-                {
-                    Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                    Err(err) => {
-                        accounting_complete = false;
-                        iroha_logger::warn!(
-                            ?err,
-                            ?dir,
-                            "failed to measure pipeline sidecar bytes after FASTPQ proof write"
-                        );
-                    }
-                }
-            }
-            if accounting_complete {
-                accounting_mutation.finish();
-            }
-            FastpqProofWriteResult::Written
-        } else {
-            FastpqProofWriteResult::Retry
-        }
-    }
-
-    /// Write safety-critical per-block roster metadata alongside the block store.
-    ///
-    /// The prune fence excludes canonical truncation while the payload, index,
-    /// and containing directory are fsynced. The return value is true only when
-    /// the strict write completed.
-    pub fn write_roster_metadata(&self, sidecar: &RosterSidecar) -> bool {
-        let _prune_guard = self.prune_lock.lock();
-        if self.prune_recovery_is_required() {
-            warn!(
-                height = sidecar.height,
-                "refusing roster sidecar write until prune recovery completes after restart"
-            );
-            return false;
-        }
-        if let Err(error) = self.durable_mutation_authorized() {
-            warn!(
-                ?error,
-                height = sidecar.height,
-                "refusing roster sidecar mutation while Kura output is unauthorized"
-            );
-            return false;
-        }
-        #[cfg(test)]
-        if self
-            .fail_next_roster_sidecar_writes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
-            iroha_logger::warn!(
-                height = sidecar.height,
-                "injected roster sidecar write failure"
-            );
-            return false;
-        }
-        let Some(mut dir) = self.store_dir() else {
-            return false;
-        };
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return false;
-        }
-        dir.push(PIPELINE_DIR_NAME);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            iroha_logger::warn!(
-                ?e,
-                ?dir,
-                "failed to create pipeline dir for roster sidecars"
-            );
-            return false;
-        }
-        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-            Ok(bytes) => Some(bytes),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    ?dir,
-                    "failed to measure roster sidecar bytes before write"
-                );
-                None
-            }
-        };
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let wrote_norito = match sidecar.encode_framed() {
-            Ok(buf) => Self::append_indexed_sidecar_with_pinned_height(
-                &data_path,
-                &index_path,
-                sidecar.height,
-                &buf,
-                "roster sidecar",
-                FsyncMode::Always,
-                Some(self.roster_sidecar_retention),
-                Some(1),
-                SidecarIndexOrigin::HeightOne,
-                None,
-            ),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    height = sidecar.height,
-                    "failed to encode roster metadata"
-                );
-                false
-            }
-        };
-        if !wrote_norito {
-            iroha_logger::warn!(
-                height = sidecar.height,
-                "failed to persist roster metadata sidecar"
-            );
-        }
-        let mut accounting_complete = before_bytes.is_some();
-        if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => {
-                    accounting_complete = false;
-                    iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure roster sidecar bytes after write"
-                    );
-                }
-            }
-        }
-        if accounting_complete {
-            accounting_mutation.finish();
-        }
-        wrote_norito
-    }
-
-    fn truncate_roster_metadata_above_at(blocks_dir: &Path, height: u64) -> Result<()> {
-        if blocks_dir.as_os_str().is_empty() {
-            return Err(Error::EmptyStoreRoot);
-        }
-        let dir = blocks_dir.join(PIPELINE_DIR_NAME);
-        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-        if !Self::truncate_indexed_sidecars_to_height(
-            &data_path,
-            &index_path,
-            height,
-            "roster sidecar",
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other(format!(
-                    "failed to truncate roster sidecars to canonical height {height}"
-                )),
-                index_path,
-            ));
-        }
-        Ok(())
-    }
-
-    /// Decode pipeline recovery metadata without assigning it canonical block authority.
-    ///
-    /// Callers must validate the returned sidecar against either Kura's canonical block hash or
-    /// an explicit candidate block hash before using it. Keeping this helper private prevents an
-    /// identity-unchecked sidecar from escaping the storage boundary.
-    fn read_pipeline_metadata_payload(&self, height: u64) -> Option<PipelineRecoverySidecar> {
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let sidecar = {
-            let _guard = self.sidecar_lock.lock();
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            self.read_indexed_sidecar(
-                height,
-                PIPELINE_SIDECARS_DATA_FILE,
-                PIPELINE_SIDECARS_INDEX_FILE,
-                norito::decode_canonical::<PipelineRecoverySidecar>,
-                "pipeline sidecar",
-            )
-        }?;
-        if sidecar.height != height {
-            iroha_logger::warn!(
-                height,
-                sidecar_height = sidecar.height,
-                "pipeline sidecar height mismatch"
-            );
-            return None;
-        }
-        Some(sidecar)
-    }
-
-    /// Read per-block pipeline recovery metadata if present. Returns `None` on errors.
-    ///
-    /// This canonical reader exposes a sidecar only when its block hash agrees with Kura's
-    /// canonical or durable block identity for `height`.
-    pub fn read_pipeline_metadata(&self, height: u64) -> Option<PipelineRecoverySidecar> {
-        let sidecar = self.read_pipeline_metadata_payload(height)?;
-        let expected = usize::try_from(height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .and_then(|height| {
-                self.get_block_hash(height)
-                    .or_else(|| self.get_durable_block_hash(height))
-            });
-        if expected != Some(sidecar.block_hash) {
-            iroha_logger::warn!(
-                height,
-                expected = ?expected,
-                actual = %sidecar.block_hash,
-                "pipeline sidecar block hash mismatch"
-            );
-            return None;
-        }
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        Some(sidecar)
-    }
-
-    /// Read pipeline recovery metadata for an explicitly identified candidate block.
-    ///
-    /// This is an execution-cache boundary, not a source of canonical block authority. It permits
-    /// a speculative executor to reuse metadata that it previously persisted for the same exact
-    /// block while rejecting metadata from a competing candidate at the same height.
-    pub(crate) fn read_pipeline_metadata_for_block(
-        &self,
-        height: u64,
-        expected_block_hash: HashOf<BlockHeader>,
-    ) -> Option<PipelineRecoverySidecar> {
-        let sidecar = self.read_pipeline_metadata_payload(height)?;
-        if sidecar.block_hash != expected_block_hash {
-            iroha_logger::debug!(
-                height,
-                expected = %expected_block_hash,
-                actual = %sidecar.block_hash,
-                "pipeline sidecar candidate block hash mismatch"
-            );
-            return None;
-        }
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        Some(sidecar)
-    }
-
-    /// Read persisted FASTPQ proof snapshots for a committed block.
-    #[must_use]
-    pub fn fastpq_proofs_for_block(&self, height: u64) -> Vec<FastpqProofSnapshot> {
-        self.read_pipeline_metadata(height)
-            .map(|sidecar| sidecar.fastpq_proofs)
-            .unwrap_or_default()
-    }
-
-    /// Read roster metadata sidecar for `height` if present. Returns `None` on errors or missing
-    /// entries. Valid roster metadata is exposed only after reissuing the ordered data, index, and
-    /// parent-directory durability barriers. This prevents readable page-cache state left by a
-    /// failed strict write from being mistaken for durable recovery authority.
-    pub fn read_roster_metadata(&self, height: u64) -> Option<RosterSidecar> {
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let sidecar = {
-            let _guard = self.sidecar_lock.lock();
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            let mut dir = self.store_dir()?;
-            dir.push(PIPELINE_DIR_NAME);
-            let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-            let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-            let sidecar = Self::read_indexed_sidecar_from_paths(
-                height,
-                &data_path,
-                &index_path,
-                norito::decode_canonical::<RosterSidecar>,
-                "roster sidecar",
-            )?;
-            if sidecar.height != height {
-                iroha_logger::warn!(
-                    height,
-                    sidecar_height = sidecar.height,
-                    "roster sidecar height mismatch"
-                );
-                return None;
-            }
-            let Some(canonical_height) = usize::try_from(height).ok().and_then(NonZeroUsize::new)
-            else {
-                iroha_logger::warn!(height, "roster sidecar has no canonical Kura height");
-                return None;
-            };
-            let Some(expected) = self
-                .get_block_hash(canonical_height)
-                .or_else(|| self.get_durable_block_hash(canonical_height))
-            else {
-                iroha_logger::warn!(
-                    height,
-                    actual = %sidecar.block_hash,
-                    "roster sidecar has no canonical Kura block hash"
-                );
-                return None;
-            };
-            if expected != sidecar.block_hash {
-                iroha_logger::warn!(
-                    height,
-                    expected = %expected,
-                    actual = %sidecar.block_hash,
-                    "roster sidecar block hash mismatch"
-                );
-                return None;
-            }
-            if let Some(cert) = sidecar.commit_qc.as_ref() {
-                let cert_block_hash = cert.subject_block_hash;
-                if cert.height != sidecar.height || cert_block_hash != sidecar.block_hash {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        sidecar_hash = %sidecar.block_hash,
-                        cert_height = cert.height,
-                        cert_hash = %cert_block_hash,
-                        "roster sidecar commit certificate metadata mismatch"
-                    );
-                    return None;
-                }
-            }
-            if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref() {
-                if checkpoint.height != sidecar.height
-                    || checkpoint.block_hash != sidecar.block_hash
-                {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        sidecar_hash = %sidecar.block_hash,
-                        checkpoint_height = checkpoint.height,
-                        checkpoint_hash = %checkpoint.block_hash,
-                        "roster sidecar checkpoint metadata mismatch"
-                    );
-                    return None;
-                }
-            }
-            if !Self::sync_indexed_sidecar_barriers(&data_path, &index_path, "roster sidecar") {
-                return None;
-            }
-            sidecar
-        };
-        if self.prune_recovery_is_required() {
-            None
-        } else {
-            Some(sidecar)
-        }
-    }
-
-    fn bound_progress_index_layout_classified(
-        index: &mut std::fs::File,
-        index_len: u64,
-    ) -> std::result::Result<SidecarIndexLayout, BoundProgressRecoveryFailure> {
-        if index_len < PIPELINE_INDEX_ENTRY_SIZE_U64 {
-            return Ok(SidecarIndexLayout::legacy(index_len));
-        }
-
-        let mut first = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        index
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| index.read_exact(&mut first))
-            .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-        let marker = SidecarIndexEntry::from_bytes(first);
-        let marker_field_present = marker.offset == u64::MAX || marker.len == u64::MAX;
-        if !marker_field_present {
-            return Ok(SidecarIndexLayout::legacy(index_len));
-        }
-        if marker.offset != u64::MAX || marker.len != u64::MAX {
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-
-        let mut metadata = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        index
-            .read_exact(&mut metadata)
-            .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-        let metadata = SidecarIndexEntry::from_bytes(metadata);
-        if metadata.len != metadata.offset ^ INDEXED_SIDECAR_BASE_CHECK_MASK {
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        SidecarIndexLayout::based(metadata.offset, index_len)
-            .map_err(|_| BoundProgressRecoveryFailure::InvalidData)
-    }
-
-    fn bound_sidecar_index_snapshot(
-        index: &mut std::fs::File,
-        index_path: &Path,
-        data_len: u64,
-        kind: &str,
-        label: &str,
-    ) -> Option<BoundSidecarIndexSnapshot> {
-        Self::bound_sidecar_index_snapshot_classified(index, index_path, data_len, kind, label).ok()
-    }
-
-    fn bound_sidecar_index_snapshot_classified(
-        index: &mut std::fs::File,
-        index_path: &Path,
-        data_len: u64,
-        kind: &str,
-        label: &str,
-    ) -> std::result::Result<BoundSidecarIndexSnapshot, BoundProgressRecoveryFailure> {
-        let index_len = index
-            .metadata()
-            .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-            .len();
-        let layout = match Self::bound_progress_index_layout_classified(index, index_len) {
-            Ok(layout) => layout,
-            Err(failure) => {
-                warn!(
-                    ?failure,
-                    len = index_len,
-                    ?index_path,
-                    kind,
-                    label,
-                    "failed to classify bound sidecar index layout"
-                );
-                return Err(failure);
-            }
-        };
-        if layout.aligned_len != index_len {
-            warn!(
-                len = index_len,
-                aligned_len = layout.aligned_len,
-                ?index_path,
-                kind,
-                label,
-                "bound sidecar index length is misaligned"
-            );
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        let capacity = usize::try_from(layout.entry_count)
-            .map_err(|_| BoundProgressRecoveryFailure::InvalidData)?;
-        index
-            .seek(SeekFrom::Start(layout.entries_offset))
-            .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-        let mut entries = Vec::new();
-        if entries.try_reserve_exact(capacity).is_err() {
-            warn!(
-                entry_count = layout.entry_count,
-                ?index_path,
-                kind,
-                label,
-                "bound sidecar recovery index exceeds available memory"
-            );
-            return Err(BoundProgressRecoveryFailure::RetryableIo);
-        }
-        let mut ranges = Vec::new();
-        if ranges.try_reserve_exact(capacity.min(4_096)).is_err() {
-            return Err(BoundProgressRecoveryFailure::RetryableIo);
-        }
-        let mut indexed_end = 0_u64;
-        let mut encoded = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        for _ in 0..layout.entry_count {
-            index
-                .read_exact(&mut encoded)
-                .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-            let entry = SidecarIndexEntry::from_bytes(encoded);
-            if entry.len == 0 {
-                if entry.offset != 0 {
-                    warn!(
-                        offset = entry.offset,
-                        ?index_path,
-                        kind,
-                        label,
-                        "zero-length bound sidecar index entry has a non-zero offset"
-                    );
-                    return Err(BoundProgressRecoveryFailure::InvalidData);
-                }
-            } else {
-                let Some(end) = entry.offset.checked_add(entry.len) else {
-                    warn!(
-                        offset = entry.offset,
-                        len = entry.len,
-                        ?index_path,
-                        kind,
-                        label,
-                        "bound sidecar index entry overflows"
-                    );
-                    return Err(BoundProgressRecoveryFailure::InvalidData);
-                };
-                if entry.len > STRICT_INIT_MAX_BLOCK_BYTES || end > data_len {
-                    warn!(
-                        offset = entry.offset,
-                        len = entry.len,
-                        data_len,
-                        ?index_path,
-                        kind,
-                        label,
-                        "bound sidecar index entry has an invalid payload range"
-                    );
-                    return Err(BoundProgressRecoveryFailure::InvalidData);
-                }
-                indexed_end = indexed_end.max(end);
-                if ranges.try_reserve(1).is_err() {
-                    return Err(BoundProgressRecoveryFailure::RetryableIo);
-                }
-                ranges.push((entry.offset, end));
-            }
-            entries.push(entry);
-        }
-        ranges.sort_unstable_by_key(|&(start, end)| (start, end));
-        if ranges.windows(2).any(|pair| pair[1].0 < pair[0].1) {
-            warn!(
-                ?index_path,
-                kind, label, "bound sidecar recovery index contains overlapping payload ranges"
-            );
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        Ok(BoundSidecarIndexSnapshot {
-            layout,
-            entries,
-            indexed_end,
-        })
-    }
-
-    fn bound_progress_index_is_incomplete_initial_header(
-        index: &mut std::fs::File,
-        index_len: u64,
-    ) -> bool {
-        Self::bound_progress_index_is_incomplete_initial_header_classified(index, index_len)
-            .unwrap_or(false)
-    }
-
-    fn bound_progress_index_is_incomplete_initial_header_classified(
-        index: &mut std::fs::File,
-        index_len: u64,
-    ) -> std::result::Result<bool, BoundProgressRecoveryFailure> {
-        if !(PIPELINE_INDEX_ENTRY_SIZE_U64..INDEXED_SIDECAR_BASE_HEADER_SIZE_U64)
-            .contains(&index_len)
-        {
-            return Ok(false);
-        }
-        let mut first = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        index
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| index.read_exact(&mut first))
-            .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-        let marker = SidecarIndexEntry::from_bytes(first);
-        Ok(marker.offset == u64::MAX && marker.len == u64::MAX)
-    }
-
-    fn decode_bound_progress_append_intent(
-        intent_file: &mut std::fs::File,
-        intent_path: &Path,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        kind: &str,
-    ) -> std::result::Result<BoundProgressAppendIntentV1, BoundProgressRecoveryFailure> {
-        let intent_len = match intent_file.metadata() {
-            Ok(metadata) => usize::try_from(metadata.len())
-                .map_err(|_| BoundProgressRecoveryFailure::InvalidData)?,
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?intent_path,
-                    kind,
-                    "failed to stat progress append intent"
-                );
-                return Err(BoundProgressRecoveryFailure::from_io(&error));
-            }
-        };
-        if intent_len == 0 || intent_len > BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES {
-            warn!(
-                intent_len,
-                ?intent_path,
-                kind,
-                "progress append intent has an invalid byte length"
-            );
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        let mut bytes = Vec::new();
-        if bytes.try_reserve_exact(intent_len).is_err() {
-            warn!(
-                intent_len,
-                ?intent_path,
-                kind,
-                "failed to reserve progress append-intent bytes"
-            );
-            return Err(BoundProgressRecoveryFailure::RetryableIo);
-        }
-        bytes.resize(intent_len, 0);
-        if let Err(error) = intent_file
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| intent_file.read_exact(&mut bytes))
-        {
-            warn!(
-                ?error,
-                ?intent_path,
-                kind,
-                "failed to read progress append intent"
-            );
-            return Err(BoundProgressRecoveryFailure::from_io(&error));
-        }
-        let intent = match norito::decode_canonical::<BoundProgressAppendIntentV1>(&bytes) {
-            Ok(intent) => intent,
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?intent_path,
-                    kind,
-                    "failed to decode progress append intent"
-                );
-                return Err(BoundProgressRecoveryFailure::InvalidData);
-            }
-        };
-        if let Err(reason) = intent.validate_for(namespace, data_path, index_path) {
-            warn!(
-                reason,
-                ?intent_path,
-                kind,
-                "progress append intent is invalid"
-            );
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
-        Ok(intent)
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn recover_bound_progress_append_intent(
-        &self,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        build_path: &Path,
-        build: Option<std::fs::File>,
-        intent_path: &Path,
-        mut intent_file: std::fs::File,
-        kind: &str,
-    ) -> bool {
-        let Ok(intent) = Self::decode_bound_progress_append_intent(
-            &mut intent_file,
-            intent_path,
-            namespace,
-            data_path,
-            index_path,
-            kind,
-        ) else {
-            return false;
-        };
-
-        if let Some(build) = build {
-            drop(build);
-            if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, build_path) {
-                warn!(
-                    ?error,
-                    ?build_path,
-                    kind,
-                    "failed to discard superseded append-intent build"
-                );
-                return false;
-            }
-            if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
-                warn!(
-                    ?error,
-                    ?build_path,
-                    kind,
-                    "failed to sync append-intent build cleanup"
-                );
-                return false;
-            }
-        }
-
-        let mut data = match self.open_optional_bound_progress_file(namespace, data_path) {
-            Ok(data) => data,
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    kind,
-                    "failed to bind progress data during append recovery"
-                );
-                return false;
-            }
-        };
-        let mut index = match self.open_optional_bound_progress_file(namespace, index_path) {
-            Ok(index) => index,
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to bind progress index during append recovery"
-                );
-                return false;
-            }
-        };
-        if intent.pair_was_present && (data.is_none() || index.is_none()) {
-            warn!(
-                ?data_path,
-                ?index_path,
-                kind,
-                "a previously present progress pair lost one of its main files"
-            );
-            return false;
-        }
-
-        let data_len = match data.as_ref() {
-            Some(data) => match data.metadata() {
-                Ok(metadata) => metadata.len(),
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?data_path,
-                        kind,
-                        "failed to stat progress append-recovery data"
-                    );
-                    return false;
-                }
-            },
-            None => 0,
-        };
-        if data_len < intent.old_data_len || data_len > intent.new_data_len {
-            warn!(
-                data_len,
-                old_data_len = intent.old_data_len,
-                new_data_len = intent.new_data_len,
-                ?data_path,
-                kind,
-                "progress append-recovery data length is outside the journaled range"
-            );
-            return false;
-        }
-        let roll_forward = if data_len == intent.new_data_len {
-            let payload_len = intent
-                .payload_len()
-                .expect("validated progress intent has a payload length");
-            let Ok(payload_len) = usize::try_from(payload_len) else {
-                return false;
-            };
-            let mut payload = Vec::new();
-            if payload.try_reserve_exact(payload_len).is_err() {
-                return false;
-            }
-            payload.resize(payload_len, 0);
-            let Some(data) = data.as_mut() else {
-                return false;
-            };
-            if data
-                .seek(SeekFrom::Start(intent.old_data_len))
-                .and_then(|_| data.read_exact(&mut payload))
-                .is_err()
-            {
-                return false;
-            }
-            BoundProgressAppendIntentV1::payload_digest(&payload) == intent.payload_hash
-        } else {
-            false
-        };
-
-        if let Some(index) = index.as_mut() {
-            let index_len = match index.metadata() {
-                Ok(metadata) => metadata.len(),
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?index_path,
-                        kind,
-                        "failed to stat progress append-recovery index"
-                    );
-                    return false;
-                }
-            };
-            if index_len > intent.old_index_len.max(intent.new_index_len)
-                || (intent.pair_was_present && index_len < intent.old_index_len)
-            {
-                warn!(
-                    index_len,
-                    old_index_len = intent.old_index_len,
-                    new_index_len = intent.new_index_len,
-                    ?index_path,
-                    kind,
-                    "progress append-recovery index length is outside the journaled range"
-                );
-                return false;
-            }
-            let old_layout = if intent.old_index_len == 0 {
-                SidecarIndexLayout::legacy(0)
-            } else {
-                match SidecarIndexLayout::read_from(index, intent.old_index_len) {
-                    Ok(layout) => layout,
-                    Err(reason) => {
-                        warn!(
-                            reason,
-                            ?index_path,
-                            kind,
-                            "failed to validate the append-intent old index layout"
-                        );
-                        return false;
-                    }
-                }
-            };
-            if let Err(reason) = intent.validate_against_old_layout(old_layout) {
-                warn!(
-                    reason,
-                    ?intent_path,
-                    kind,
-                    "progress append intent is inconsistent with its old index layout"
-                );
-                return false;
-            }
-            if !intent.old_index_bytes.is_empty()
-                && index
-                    .seek(SeekFrom::Start(intent.index_write_offset))
-                    .and_then(|_| index.write_all(&intent.old_index_bytes))
-                    .is_err()
-            {
-                return false;
-            }
-            if index.set_len(intent.old_index_len).is_err() || index.flush().is_err() {
-                return false;
-            }
-        } else {
-            if intent.pair_was_present {
-                return false;
-            }
-            if let Err(reason) = intent.validate_against_old_layout(SidecarIndexLayout::legacy(0)) {
-                warn!(
-                    reason,
-                    ?intent_path,
-                    kind,
-                    "initial progress append intent has an invalid index layout"
-                );
-                return false;
-            }
-        }
-
-        if intent.pair_was_present {
-            let Some(index) = index.as_mut() else {
-                return false;
-            };
-            let Some(snapshot) = Self::bound_sidecar_index_snapshot(
-                index,
-                index_path,
-                intent.old_data_len,
-                kind,
-                "append-intent preimage",
-            ) else {
-                return false;
-            };
-            if snapshot.indexed_end != intent.old_data_len {
-                warn!(
-                    indexed_end = snapshot.indexed_end,
-                    old_data_len = intent.old_data_len,
-                    ?index_path,
-                    kind,
-                    "progress append intent does not reconstruct the exact old pair"
-                );
-                return false;
-            }
-        }
-
-        if roll_forward {
-            if index.is_none() {
-                index = match Self::open_direct_sidecar_file_in_namespace(
-                    index_path,
-                    true,
-                    false,
-                    Some(namespace),
-                ) {
-                    Ok(index) => Some(index),
-                    Err(error) => {
-                        warn!(
-                            ?error,
-                            ?index_path,
-                            kind,
-                            "failed to create progress index during append recovery"
-                        );
-                        return false;
-                    }
-                };
-            }
-            let Some(index) = index.as_mut() else {
-                return false;
-            };
-            if index
-                .seek(SeekFrom::Start(intent.index_write_offset))
-                .and_then(|_| index.write_all(&intent.new_index_bytes))
-                .and_then(|_| index.set_len(intent.new_index_len))
-                .and_then(|_| index.flush())
-                .and_then(|_| index.sync_data())
-                .is_err()
-            {
-                return false;
-            }
-            let Some(snapshot) = Self::bound_sidecar_index_snapshot(
-                index,
-                index_path,
-                intent.new_data_len,
-                kind,
-                "append-intent result",
-            ) else {
-                return false;
-            };
-            let Some(relative_height) = intent.height.checked_sub(snapshot.layout.base_height)
-            else {
-                return false;
-            };
-            let Some(entry) = usize::try_from(relative_height)
-                .ok()
-                .and_then(|position| snapshot.entries.get(position))
-            else {
-                return false;
-            };
-            let expected_entry = SidecarIndexEntry {
-                offset: intent.old_data_len,
-                len: intent
-                    .payload_len()
-                    .expect("validated progress intent has a payload length"),
-            };
-            if *entry != expected_entry || snapshot.indexed_end != intent.new_data_len {
-                warn!(
-                    height = intent.height,
-                    ?index_path,
-                    kind,
-                    "progress append intent does not reconstruct its exact target entry"
-                );
-                return false;
-            }
-            let Some(data) = data.as_ref() else {
-                return false;
-            };
-            if !Self::sync_indexed_sidecar_bound_mutation(data, index, namespace, kind) {
-                return false;
-            }
-        } else if intent.pair_was_present {
-            let (Some(data), Some(index)) = (data.as_ref(), index.as_ref()) else {
-                return false;
-            };
-            if data.set_len(intent.old_data_len).is_err()
-                || !Self::sync_indexed_sidecar_bound_mutation(data, index, namespace, kind)
-            {
-                return false;
-            }
-        } else {
-            if let Some(data_file) = data.take() {
-                if data_file.set_len(0).is_err() || data_file.sync_data().is_err() {
-                    return false;
-                }
-                drop(data_file);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, data_path)
-                {
-                    warn!(
-                        ?error,
-                        ?data_path,
-                        kind,
-                        "failed to remove rolled-back progress data"
-                    );
-                    return false;
-                }
-            }
-            if let Some(index_file) = index.take() {
-                if index_file.set_len(0).is_err() || index_file.sync_data().is_err() {
-                    return false;
-                }
-                drop(index_file);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, index_path)
-                {
-                    warn!(
-                        ?error,
-                        ?index_path,
-                        kind,
-                        "failed to remove rolled-back progress index"
-                    );
-                    return false;
-                }
-            }
-            if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
-                warn!(?error, kind, "failed to sync absent progress-pair rollback");
-                return false;
-            }
-        }
-
-        drop(index);
-        drop(data);
-        drop(intent_file);
-        if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, intent_path) {
-            warn!(
-                ?error,
-                ?intent_path,
-                kind,
-                "failed to clear recovered progress append intent"
-            );
-            return false;
-        }
-        if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
-            warn!(
-                ?error,
-                ?intent_path,
-                kind,
-                "failed to sync recovered append-intent cleanup"
-            );
-            return false;
-        }
-        Self::progress_mutation_namespace_unchanged(namespace)
-    }
-
-    #[must_use]
-    fn recover_bound_progress_sidecar_artifacts(
-        &self,
-        data_path: &Path,
-        index_path: &Path,
-        kind: &str,
-    ) -> bool {
-        let namespace = match self.open_bound_progress_namespace(data_path, index_path) {
-            Ok(namespace) => namespace,
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    ?index_path,
-                    kind,
-                    "failed to bind progress sidecar recovery namespace"
-                );
-                return false;
-            }
-        };
-        self.recover_bound_progress_sidecar_artifacts_in_namespace(
-            &namespace, data_path, index_path, kind,
-        )
-    }
-
-    fn recover_bound_progress_sidecar_artifacts_in_namespace(
-        &self,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        kind: &str,
-    ) -> bool {
-        self.recover_bound_progress_sidecar_artifacts_in_namespace_classified(
-            namespace, data_path, index_path, kind,
-        )
-        .is_ok()
-    }
-
-    /// Recover a descriptor-bound progress pair and distinguish transient
-    /// durability failure from malformed or ambiguous protocol state.
-    fn recover_bound_progress_sidecar_artifacts_in_namespace_classified(
-        &self,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        kind: &str,
-    ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
-        if self.recover_bound_progress_sidecar_artifacts_in_namespace_impl(
-            namespace, data_path, index_path, kind,
-        ) {
-            Ok(())
-        } else {
-            Err(self
-                .classify_bound_progress_recovery_failure(namespace, data_path, index_path, kind))
-        }
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn recover_bound_progress_sidecar_artifacts_in_namespace_impl(
-        &self,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        kind: &str,
-    ) -> bool {
-        let temp_data_path = data_path.with_extension("norito.tmp");
-        let temp_index_path = index_path.with_extension("index.tmp");
-        let prepend_index_path = index_path.with_extension("index.prepend.tmp");
-        let append_build_path = Self::bound_progress_append_build_path(index_path);
-        let append_intent_path = Self::bound_progress_append_intent_path(index_path);
-        let open_optional =
-            |path: &Path| match self.open_optional_bound_progress_file(namespace, path) {
-                Ok(file) => Some(file),
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?path,
-                        kind,
-                        "failed to bind progress sidecar recovery file"
-                    );
-                    None
-                }
-            };
-        let Some(temp_data) = open_optional(&temp_data_path) else {
-            return false;
-        };
-        let Some(temp_index) = open_optional(&temp_index_path) else {
-            return false;
-        };
-        let Some(prepend_index) = open_optional(&prepend_index_path) else {
-            return false;
-        };
-        let Some(append_build) = open_optional(&append_build_path) else {
-            return false;
-        };
-        let Some(append_intent) = open_optional(&append_intent_path) else {
-            return false;
-        };
-
-        if append_intent.is_some()
-            && (temp_data.is_some() || temp_index.is_some() || prepend_index.is_some())
-        {
-            warn!(
-                ?data_path,
-                ?index_path,
-                kind,
-                "progress sidecar has conflicting append and rewrite recovery artifacts"
-            );
-            return false;
-        }
-        if let Some(append_intent) = append_intent {
-            return self.recover_bound_progress_append_intent(
-                namespace,
-                data_path,
-                index_path,
-                &append_build_path,
-                append_build,
-                &append_intent_path,
-                append_intent,
-                kind,
-            );
-        }
-        if let Some(append_build) = append_build {
-            // Main-file mutation is forbidden until the build is atomically
-            // renamed to the durable intent name, so a build alone is always
-            // safe to discard.
-            drop(append_build);
-            if !Self::discard_bound_progress_temps(namespace, &[append_build_path.as_path()], kind)
-            {
-                return false;
-            }
-        }
-
-        if prepend_index.is_some() && (temp_data.is_some() || temp_index.is_some()) {
-            warn!(
-                ?data_path,
-                ?index_path,
-                kind,
-                "progress sidecar has conflicting rewrite and prepend recovery artifacts"
-            );
-            return false;
-        }
-        if let Some(prepend_index) = prepend_index {
-            return self.recover_bound_progress_prepend_temp(
-                namespace,
-                data_path,
-                index_path,
-                &prepend_index_path,
-                prepend_index,
-                kind,
-            );
-        }
-        let Some(mut temp_index) = temp_index else {
-            if let Some(temp_data) = temp_data {
-                // The temp index is the rewrite commit marker. A lone data temp
-                // therefore precedes publication and is safe to discard.
-                drop(temp_data);
-                return Self::discard_bound_progress_temps(
-                    namespace,
-                    &[temp_data_path.as_path()],
-                    kind,
-                );
-            }
-            return self.repair_bound_progress_main_tail(namespace, data_path, index_path, kind);
-        };
-
-        let temp_data_was_present = temp_data.is_some();
-        let recovery_data = if let Some(temp_data) = temp_data {
-            temp_data
-        } else {
-            match self.open_optional_bound_progress_file(namespace, data_path) {
-                Ok(Some(data)) => data,
-                Ok(None) => {
-                    warn!(
-                        ?data_path,
-                        ?temp_index_path,
-                        kind,
-                        "progress temp index has no recovery payload"
-                    );
-                    return false;
-                }
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?data_path,
-                        kind,
-                        "failed to bind progress recovery payload"
-                    );
-                    return false;
-                }
-            }
-        };
-        let data_len = match recovery_data.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    kind,
-                    "failed to stat progress recovery payload"
-                );
-                return false;
-            }
-        };
-        let temp_snapshot = Self::bound_sidecar_index_snapshot(
-            &mut temp_index,
-            &temp_index_path,
-            data_len,
-            kind,
-            "rewrite temp",
-        );
-        let temp_is_complete = temp_snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.layout.entry_count > 0 && snapshot.indexed_end == data_len
-        });
-        if !temp_is_complete {
-            if temp_data_was_present {
-                // Neither main file has been published while both temp names
-                // still exist. Discard the incomplete rewrite and retain the
-                // authoritative main pair.
-                drop(temp_index);
-                drop(recovery_data);
-                if !Self::discard_bound_progress_temps(
-                    namespace,
-                    &[temp_index_path.as_path()],
-                    kind,
-                ) {
-                    return false;
-                }
-                return Self::discard_bound_progress_temps(
-                    namespace,
-                    &[temp_data_path.as_path()],
-                    kind,
-                );
-            }
-            let indexed_end = temp_snapshot
-                .as_ref()
-                .map_or(0, |snapshot| snapshot.indexed_end);
-            warn!(
-                indexed_end,
-                data_len,
-                ?temp_index_path,
-                kind,
-                "index-only progress rewrite temp does not cover its exact published payload"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_data(&recovery_data) {
-            warn!(
-                ?error,
-                ?data_path,
-                kind,
-                "failed to sync progress recovery payload"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_index(&temp_index) {
-            warn!(
-                ?error,
-                ?temp_index_path,
-                kind,
-                "failed to sync progress recovery index"
-            );
-            return false;
-        }
-        if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
-            return false;
-        }
-        if temp_data_was_present {
-            if let Err(error) = Self::promote_bound_progress_temp(
-                namespace,
-                &temp_data_path,
-                data_path,
-                &recovery_data,
-            ) {
-                warn!(
-                    source = ?error.source,
-                    published = error.published,
-                    ?temp_data_path,
-                    ?data_path,
-                    kind,
-                    "failed to promote bound progress temp data"
-                );
-                return false;
-            }
-            if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
-                return false;
-            }
-        }
-        if let Err(error) =
-            Self::promote_bound_progress_temp(namespace, &temp_index_path, index_path, &temp_index)
-        {
-            warn!(
-                source = ?error.source,
-                published = error.published,
-                ?temp_index_path,
-                ?index_path,
-                kind,
-                "failed to promote bound progress temp index"
-            );
-            return false;
-        }
-        Self::sync_indexed_sidecar_bound_mutation(&recovery_data, &temp_index, namespace, kind)
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn classify_bound_progress_recovery_failure(
-        &self,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        kind: &str,
-    ) -> BoundProgressRecoveryFailure {
-        if namespace.data_path != data_path || namespace.index_path != index_path {
-            return BoundProgressRecoveryFailure::InvalidData;
-        }
-        if let Err(failure) = Self::progress_mutation_namespace_classified(namespace) {
-            return failure;
-        }
-        let classification = (|| {
-            let temp_data_path = data_path.with_extension("norito.tmp");
-            let temp_index_path = index_path.with_extension("index.tmp");
-            let prepend_index_path = index_path.with_extension("index.prepend.tmp");
-            let append_build_path = Self::bound_progress_append_build_path(index_path);
-            let append_intent_path = Self::bound_progress_append_intent_path(index_path);
-            let open = |path: &Path| {
-                self.open_optional_bound_progress_file(namespace, path)
-                    .map_err(|error| BoundProgressRecoveryFailure::from_kura(&error))
-            };
-            let temp_data = open(&temp_data_path)?;
-            let mut temp_index = open(&temp_index_path)?;
-            let prepend_index = open(&prepend_index_path)?;
-            let _append_build = open(&append_build_path)?;
-            let mut append_intent = open(&append_intent_path)?;
-
-            if append_intent.is_some()
-                && (temp_data.is_some() || temp_index.is_some() || prepend_index.is_some())
-            {
-                return Err(BoundProgressRecoveryFailure::InvalidData);
-            }
-            if let Some(intent_file) = append_intent.as_mut() {
-                let intent = Self::decode_bound_progress_append_intent(
-                    intent_file,
-                    &append_intent_path,
-                    namespace,
-                    data_path,
-                    index_path,
-                    kind,
-                )?;
-                let data = open(data_path)?;
-                let mut index = open(index_path)?;
-                if intent.pair_was_present && (data.is_none() || index.is_none()) {
-                    return Err(BoundProgressRecoveryFailure::InvalidData);
-                }
-                let data_len = match data.as_ref() {
-                    Some(file) => file
-                        .metadata()
-                        .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                        .len(),
-                    None => 0,
-                };
-                let index_len = match index.as_ref() {
-                    Some(file) => file
-                        .metadata()
-                        .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                        .len(),
-                    None => 0,
-                };
-                if data_len < intent.old_data_len
-                    || data_len > intent.new_data_len
-                    || index_len > intent.old_index_len.max(intent.new_index_len)
-                    || (intent.pair_was_present && index_len < intent.old_index_len)
-                {
-                    return Err(BoundProgressRecoveryFailure::InvalidData);
-                }
-                let old_layout = match index.as_mut() {
-                    Some(index) if intent.old_index_len != 0 => {
-                        Self::bound_progress_index_layout_classified(index, intent.old_index_len)?
-                    }
-                    _ => SidecarIndexLayout::legacy(0),
-                };
-                intent
-                    .validate_against_old_layout(old_layout)
-                    .map_err(|_| BoundProgressRecoveryFailure::InvalidData)?;
-                return Ok(BoundProgressRecoveryFailure::RetryableIo);
-            }
-
-            if prepend_index.is_some() && (temp_data.is_some() || temp_index.is_some()) {
-                return Err(BoundProgressRecoveryFailure::InvalidData);
-            }
-            if prepend_index.is_some() {
-                let data = open(data_path)?.ok_or(BoundProgressRecoveryFailure::InvalidData)?;
-                let mut index =
-                    open(index_path)?.ok_or(BoundProgressRecoveryFailure::InvalidData)?;
-                let data_len = data
-                    .metadata()
-                    .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                    .len();
-                Self::bound_sidecar_index_snapshot_classified(
-                    &mut index,
-                    index_path,
-                    data_len,
-                    kind,
-                    "recovery classification prepend main",
-                )?;
-                return Ok(BoundProgressRecoveryFailure::RetryableIo);
-            }
-
-            if let Some(temp_index) = temp_index.as_mut() {
-                let main_data = if temp_data.is_none() {
-                    Some(open(data_path)?)
-                } else {
-                    None
-                };
-                let recovery_data = temp_data
-                    .as_ref()
-                    .or_else(|| main_data.as_ref().and_then(Option::as_ref))
-                    .ok_or(BoundProgressRecoveryFailure::InvalidData)?;
-                let data_len = recovery_data
-                    .metadata()
-                    .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                    .len();
-                let complete = Self::bound_sidecar_index_snapshot_classified(
-                    temp_index,
-                    &temp_index_path,
-                    data_len,
-                    kind,
-                    "recovery classification rewrite temp",
-                )
-                .map(|snapshot| {
-                    snapshot.layout.entry_count > 0 && snapshot.indexed_end == data_len
-                })?;
-                if temp_data.is_none() && !complete {
-                    return Err(BoundProgressRecoveryFailure::InvalidData);
-                }
-                return Ok(BoundProgressRecoveryFailure::RetryableIo);
-            }
-            if temp_data.is_some() {
-                return Ok(BoundProgressRecoveryFailure::RetryableIo);
-            }
-
-            let data = open(data_path)?;
-            let mut index = open(index_path)?;
-            match (data, index.as_mut()) {
-                (None, None) => Ok(BoundProgressRecoveryFailure::RetryableIo),
-                (Some(data), None) => {
-                    let data_len = data
-                        .metadata()
-                        .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                        .len();
-                    if data_len == 0 {
-                        Ok(BoundProgressRecoveryFailure::RetryableIo)
-                    } else {
-                        Err(BoundProgressRecoveryFailure::InvalidData)
-                    }
-                }
-                (None, Some(index)) => {
-                    let len = index
-                        .metadata()
-                        .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                        .len();
-                    let removable = if len == 0
-                        || Self::bound_progress_index_is_incomplete_initial_header_classified(
-                            index, len,
-                        )? {
-                        true
-                    } else {
-                        let layout = Self::bound_progress_index_layout_classified(index, len)?;
-                        layout.aligned_len == len && layout.entry_count == 0
-                    };
-                    if removable {
-                        Ok(BoundProgressRecoveryFailure::RetryableIo)
-                    } else {
-                        Err(BoundProgressRecoveryFailure::InvalidData)
-                    }
-                }
-                (Some(data), Some(index)) => {
-                    let data_len = data
-                        .metadata()
-                        .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                        .len();
-                    let index_len = index
-                        .metadata()
-                        .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?
-                        .len();
-                    if Self::bound_progress_index_is_incomplete_initial_header_classified(
-                        index, index_len,
-                    )? {
-                        return Ok(BoundProgressRecoveryFailure::RetryableIo);
-                    }
-                    let layout = Self::bound_progress_index_layout_classified(index, index_len)?;
-                    if layout.aligned_len != index_len {
-                        return Ok(BoundProgressRecoveryFailure::RetryableIo);
-                    }
-                    Self::bound_sidecar_index_snapshot_classified(
-                        index,
-                        index_path,
-                        data_len,
-                        kind,
-                        "recovery classification main",
-                    )?;
-                    Ok(BoundProgressRecoveryFailure::RetryableIo)
-                }
-            }
-        })()
-        .unwrap_or_else(|failure| failure);
-        match Self::progress_mutation_namespace_classified(namespace) {
-            Ok(()) => classification,
-            Err(failure) => failure,
-        }
-    }
-
-    fn repair_bound_progress_main_tail(
-        &self,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        kind: &str,
-    ) -> bool {
-        let data = match self.open_optional_bound_progress_file(namespace, data_path) {
-            Ok(data) => data,
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    kind,
-                    "failed to bind progress main payload"
-                );
-                return false;
-            }
-        };
-        let index = match self.open_optional_bound_progress_file(namespace, index_path) {
-            Ok(index) => index,
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to bind progress main index"
-                );
-                return false;
-            }
-        };
-        let (data, mut index) = match (data, index) {
-            (Some(data), Some(index)) => (data, index),
-            (None, None) => return Self::progress_mutation_namespace_unchanged(namespace),
-            (None, Some(mut index)) => {
-                let removable = index.metadata().ok().is_some_and(|metadata| {
-                    let len = metadata.len();
-                    len == 0
-                        || Self::bound_progress_index_is_incomplete_initial_header(&mut index, len)
-                        || SidecarIndexLayout::read_from(&mut index, len).is_ok_and(|layout| {
-                            layout.aligned_len == len && layout.entry_count == 0
-                        })
-                });
-                if !removable {
-                    warn!(
-                        ?data_path,
-                        ?index_path,
-                        kind,
-                        "progress main index exists without a recoverable data preimage"
-                    );
-                    return false;
-                }
-                drop(index);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, index_path)
-                {
-                    warn!(
-                        ?error,
-                        ?index_path,
-                        kind,
-                        "failed to remove empty orphan progress index"
-                    );
-                    return false;
-                }
-                return Self::sync_bound_progress_intent_directories(namespace).is_ok()
-                    && Self::progress_mutation_namespace_unchanged(namespace);
-            }
-            (Some(data), None) if data.metadata().is_ok_and(|metadata| metadata.len() == 0) => {
-                drop(data);
-                if let Err(error) =
-                    Self::remove_bound_progress_temp_if_present(namespace, data_path)
-                {
-                    warn!(
-                        ?error,
-                        ?data_path,
-                        kind,
-                        "failed to remove empty orphan progress data"
-                    );
-                    return false;
-                }
-                return Self::sync_bound_progress_intent_directories(namespace).is_ok()
-                    && Self::progress_mutation_namespace_unchanged(namespace);
-            }
-            (Some(_), None) => {
-                warn!(
-                    ?data_path,
-                    ?index_path,
-                    kind,
-                    "progress main data and index are only partially present"
-                );
-                return false;
-            }
-        };
-        let data_len = match data.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    kind,
-                    "failed to stat progress main payload"
-                );
-                return false;
-            }
-        };
-        let index_len = match index.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to stat progress main index"
-                );
-                return false;
-            }
-        };
-        if Self::bound_progress_index_is_incomplete_initial_header(&mut index, index_len) {
-            if let Err(error) = index
-                .set_len(0)
-                .and_then(|_| data.set_len(0))
-                .and_then(|_| index.sync_data())
-            {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to roll back incomplete progress base-height header"
-                );
-                return false;
-            }
-            return Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind);
-        }
-        let layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
-            Ok(layout) => layout,
-            Err(reason) => {
-                warn!(
-                    reason,
-                    ?index_path,
-                    kind,
-                    "progress main index layout is malformed"
-                );
-                return false;
-            }
-        };
-        let repaired_index_tail = layout.aligned_len != index_len;
-        if repaired_index_tail {
-            if let Err(error) = index
-                .set_len(layout.aligned_len)
-                .and_then(|_| index.sync_data())
-            {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to truncate partial progress index entry"
-                );
-                return false;
-            }
-        }
-        let Some(snapshot) = Self::bound_sidecar_index_snapshot(
-            &mut index,
-            index_path,
-            data_len,
-            kind,
-            "main tail repair",
-        ) else {
-            return false;
-        };
-        if snapshot.indexed_end == data_len {
-            return !repaired_index_tail
-                || Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind);
-        }
-        if let Err(error) = data.set_len(snapshot.indexed_end) {
-            warn!(
-                ?error,
-                ?data_path,
-                indexed_end = snapshot.indexed_end,
-                kind,
-                "failed to truncate unindexed progress main suffix"
-            );
-            return false;
-        }
-        Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
-    }
-
-    fn discard_bound_progress_temps(
-        namespace: &BoundProgressNamespace,
-        paths: &[&Path],
-        kind: &str,
-    ) -> bool {
-        for path in paths {
-            if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, path) {
-                warn!(
-                    ?error,
-                    ?path,
-                    kind,
-                    "failed to discard an unpublished bound progress temp"
-                );
-                return false;
-            }
-        }
-        Self::sync_bound_progress_mutation_directories(namespace, kind)
-    }
-
-    fn rollback_bound_progress_prepend(
-        namespace: &BoundProgressNamespace,
-        data: &std::fs::File,
-        index: &std::fs::File,
-        prepend_index_path: &Path,
-        indexed_end: u64,
-        kind: &str,
-    ) -> bool {
-        if let Err(error) = data.set_len(indexed_end) {
-            warn!(
-                ?error,
-                ?prepend_index_path,
-                indexed_end,
-                kind,
-                "failed to truncate an unpublished progress prepend payload"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_data(data) {
-            warn!(
-                ?error,
-                indexed_end, kind, "failed to sync rolled-back progress payload"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_index(index) {
-            warn!(
-                ?error,
-                kind, "failed to sync authoritative progress index after rollback"
-            );
-            return false;
-        }
-        Self::discard_bound_progress_temps(namespace, &[prepend_index_path], kind)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn recover_bound_progress_prepend_temp(
-        &self,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        prepend_index_path: &Path,
-        mut prepend_index: std::fs::File,
-        kind: &str,
-    ) -> bool {
-        let data = match self.open_optional_bound_progress_file(namespace, data_path) {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                warn!(
-                    ?data_path,
-                    kind, "progress prepend temp has no main payload"
-                );
-                return false;
-            }
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    kind,
-                    "failed to bind progress prepend payload"
-                );
-                return false;
-            }
-        };
-        let mut index = match self.open_optional_bound_progress_file(namespace, index_path) {
-            Ok(Some(index)) => index,
-            Ok(None) => {
-                warn!(?index_path, kind, "progress prepend temp has no main index");
-                return false;
-            }
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to bind progress prepend index"
-                );
-                return false;
-            }
-        };
-        let data_len = match data.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    kind,
-                    "failed to stat progress prepend payload"
-                );
-                return false;
-            }
-        };
-        let Some(main_snapshot) = Self::bound_sidecar_index_snapshot(
-            &mut index,
-            index_path,
-            data_len,
-            kind,
-            "prepend main",
-        ) else {
-            return false;
-        };
-        if main_snapshot.indexed_end == data_len {
-            drop(prepend_index);
-            return Self::rollback_bound_progress_prepend(
-                namespace,
-                &data,
-                &index,
-                prepend_index_path,
-                main_snapshot.indexed_end,
-                kind,
-            );
-        }
-
-        let prepend_snapshot = Self::bound_sidecar_index_snapshot(
-            &mut prepend_index,
-            prepend_index_path,
-            data_len,
-            kind,
-            "prepend temp",
-        );
-        let Some(prepend_snapshot) = prepend_snapshot else {
-            drop(prepend_index);
-            return Self::rollback_bound_progress_prepend(
-                namespace,
-                &data,
-                &index,
-                prepend_index_path,
-                main_snapshot.indexed_end,
-                kind,
-            );
-        };
-        let prepend_count = main_snapshot
-            .layout
-            .base_height
-            .checked_sub(prepend_snapshot.layout.base_height)
-            .and_then(|count| usize::try_from(count).ok())
-            .filter(|count| *count > 0);
-        let first = prepend_snapshot.entries.first().copied();
-        let structurally_valid = prepend_count.is_some_and(|prepend_count| {
-            prepend_count
-                .checked_add(main_snapshot.entries.len())
-                .is_some_and(|expected_len| {
-                    prepend_snapshot.entries.len() == expected_len
-                        && prepend_snapshot.entries[prepend_count..] == main_snapshot.entries
-                        && prepend_snapshot.entries[1..prepend_count]
-                            .iter()
-                            .all(|entry| entry.offset == 0 && entry.len == 0)
-                        && first.is_some_and(|entry| {
-                            entry.len > 0
-                                && entry.offset == main_snapshot.indexed_end
-                                && entry.offset.checked_add(entry.len) == Some(data_len)
-                        })
-                        && prepend_snapshot.indexed_end == data_len
-                })
-        });
-        if !structurally_valid {
-            warn!(
-                ?prepend_index_path,
-                ?index_path,
-                indexed_end = main_snapshot.indexed_end,
-                data_len,
-                kind,
-                "refusing a progress prepend temp that is not an exact extension of the main index"
-            );
-            drop(prepend_index);
-            return Self::rollback_bound_progress_prepend(
-                namespace,
-                &data,
-                &index,
-                prepend_index_path,
-                main_snapshot.indexed_end,
-                kind,
-            );
-        }
-        if let Err(error) = sync_indexed_sidecar_data(&data) {
-            warn!(
-                ?error,
-                ?data_path,
-                kind,
-                "failed to sync recovered prepend payload"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_index(&prepend_index) {
-            warn!(
-                ?error,
-                ?prepend_index_path,
-                kind,
-                "failed to sync recovered prepend index"
-            );
-            return false;
-        }
-        if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
-            return false;
-        }
-        if let Err(error) = Self::promote_bound_progress_temp(
-            namespace,
-            prepend_index_path,
-            index_path,
-            &prepend_index,
-        ) {
-            warn!(
-                source = ?error.source,
-                published = error.published,
-                ?prepend_index_path,
-                ?index_path,
-                kind,
-                "failed to promote recovered bound progress prepend index"
-            );
-            return false;
-        }
-        Self::sync_indexed_sidecar_bound_mutation(&data, &prepend_index, namespace, kind)
-    }
-
-    #[must_use]
-    fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) -> bool {
-        let temp_data_path = data_path.with_extension("norito.tmp");
-        let temp_index_path = index_path.with_extension("index.tmp");
-        let temp_index_exists = temp_index_path.exists();
-        let temp_data_exists = temp_data_path.exists();
-        if !temp_index_exists {
-            if temp_data_exists {
-                warn!(
-                    ?temp_data_path,
-                    kind, "sidecar temp data exists without temp index; failing closed"
-                );
-                return false;
-            }
-            return true;
-        }
-
-        // A temp index is the durable commit marker for a prune rewrite. When both files remain,
-        // validate them as a pair. When only the index remains, the crash happened after data
-        // promotion, so validate it against main data. Never publish an index before the payload
-        // it references is in its final location.
-        let recovery_data_path = if temp_data_exists {
-            &temp_data_path
-        } else {
-            data_path
-        };
-        let data_len = match std::fs::metadata(recovery_data_path).map(|meta| meta.len()) {
-            Ok(data_len) => data_len,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    ?temp_index_path,
-                    ?recovery_data_path,
-                    kind,
-                    "failed to read sidecar data length for temp index validation"
-                );
-                return false;
-            }
-        };
-        if !Self::sidecar_index_sane_with_label(&temp_index_path, data_len, kind, "temp") {
-            warn!(
-                ?temp_index_path,
-                kind, "refusing to promote invalid sidecar temp index"
-            );
-            return false;
-        }
-
-        if temp_data_exists && !Self::promote_sidecar_temp(&temp_data_path, data_path, kind, "data")
-        {
-            warn!(
-                ?temp_data_path,
-                kind, "sidecar temp data promotion failed; leaving temp index unpublished"
-            );
-            return false;
-        }
-        if !Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index") {
-            warn!(
-                ?temp_index_path,
-                kind,
-                "sidecar temp index promotion failed after data promotion; leaving it for recovery"
-            );
-            return false;
-        }
-        true
-    }
-
-    #[must_use]
-    fn promote_sidecar_temp(temp_path: &Path, main_path: &Path, kind: &str, label: &str) -> bool {
-        if !temp_path.exists() {
-            return false;
-        }
-        if let Err(err) = std::fs::rename(temp_path, main_path) {
-            if main_path.exists() {
-                if let Err(remove_err) = std::fs::remove_file(main_path) {
-                    warn!(
-                        ?remove_err,
-                        ?main_path,
-                        kind,
-                        label,
-                        "failed to remove sidecar file before promoting temp"
-                    );
-                    return false;
-                }
-                if let Err(err) = std::fs::rename(temp_path, main_path) {
-                    warn!(
-                        ?err,
-                        ?temp_path,
-                        ?main_path,
-                        kind,
-                        label,
-                        "failed to promote sidecar temp file after removal"
-                    );
-                    return false;
-                }
-            } else {
-                warn!(
-                    ?err,
-                    ?temp_path,
-                    ?main_path,
-                    kind,
-                    label,
-                    "failed to promote sidecar temp file"
-                );
-                return false;
-            }
-        }
-        if let Some(parent) = main_path.parent() {
-            if let Err(err) = sync_sidecar_promotion_dir(parent) {
-                warn!(
-                    ?err,
-                    ?parent,
-                    kind,
-                    label,
-                    "failed to sync sidecar parent after temp promotion"
-                );
-                return false;
-            }
-        }
-        true
-    }
-
-    fn sidecar_index_sane_with_label(
-        index_path: &Path,
-        data_len: u64,
-        kind: &str,
-        label: &str,
-    ) -> bool {
-        let mut index = match std::fs::File::open(index_path) {
-            Ok(file) => file,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    ?index_path,
-                    kind,
-                    label,
-                    "failed to open sidecar index"
-                );
-                return false;
-            }
-        };
-        let index_len = match index.metadata() {
-            Ok(meta) => meta.len(),
-            Err(err) => {
-                warn!(
-                    ?err,
-                    ?index_path,
-                    kind,
-                    label,
-                    "failed to stat sidecar index"
-                );
-                return false;
-            }
-        };
-        if index_len == 0 {
-            warn!(?index_path, kind, label, "sidecar index is empty");
-            return false;
-        }
-        let layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
-            Ok(layout) => layout,
-            Err(reason) => {
-                warn!(
-                    reason,
-                    len = index_len,
-                    ?index_path,
-                    kind,
-                    label,
-                    "sidecar index layout is malformed"
-                );
-                return false;
-            }
-        };
-        if layout.entry_count == 0 {
-            warn!(?index_path, kind, label, "sidecar index has no entries");
-            return false;
-        }
-        if index_len != layout.aligned_len {
-            warn!(
-                len = index_len,
-                aligned_len = layout.aligned_len,
-                ?index_path,
-                kind,
-                label,
-                "sidecar index length misaligned"
-            );
-            return false;
-        }
-        if index.seek(SeekFrom::Start(layout.entries_offset)).is_err() {
-            warn!(
-                ?index_path,
-                kind, label, "failed to seek to sidecar index entries"
-            );
-            return false;
-        }
-        let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        for _ in 0..layout.entry_count {
-            if let Err(err) = index.read_exact(&mut buf) {
-                warn!(
-                    ?err,
-                    ?index_path,
-                    kind,
-                    label,
-                    "failed to read sidecar index entry"
-                );
-                return false;
-            }
-            let entry = SidecarIndexEntry::from_bytes(buf);
-            if entry.len == 0 {
-                continue;
-            }
-            if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
-                warn!(
-                    len = entry.len,
-                    limit = STRICT_INIT_MAX_BLOCK_BYTES,
-                    ?index_path,
-                    kind,
-                    label,
-                    "sidecar index entry length exceeds limit"
-                );
-                return false;
-            }
-            let entry_end = if let Some(end) = entry.offset.checked_add(entry.len) {
-                end
-            } else {
-                warn!(
-                    offset = entry.offset,
-                    len = entry.len,
-                    ?index_path,
-                    kind,
-                    label,
-                    "sidecar index entry overflows offset"
-                );
-                return false;
-            };
-            if entry_end > data_len {
-                warn!(
-                    offset = entry.offset,
-                    len = entry.len,
-                    data_len,
-                    ?index_path,
-                    kind,
-                    label,
-                    "sidecar index entry points past data file"
-                );
-                return false;
-            }
-        }
-        true
-    }
-
-    fn indexed_sidecar_height_range(
-        index_path: &Path,
-        kind: &str,
-    ) -> Option<core::ops::RangeInclusive<u64>> {
-        let mut index = match std::fs::File::open(index_path) {
-            Ok(index) => index,
-            Err(err) => {
-                iroha_logger::debug!(?err, ?index_path, kind, "sidecar index is unavailable");
-                return None;
-            }
-        };
-        let index_len = match index.metadata() {
-            Ok(meta) => meta.len(),
-            Err(err) => {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to stat sidecar index");
-                return None;
-            }
-        };
-        let layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
-            Ok(layout) => layout,
-            Err(reason) => {
-                iroha_logger::warn!(
-                    reason,
-                    len = index_len,
-                    ?index_path,
-                    kind,
-                    "refusing malformed sidecar index"
-                );
-                return None;
-            }
-        };
-        if index_len != layout.aligned_len {
-            iroha_logger::warn!(
-                len = index_len,
-                aligned_len = layout.aligned_len,
-                ?index_path,
-                kind,
-                "sidecar index length misaligned; ignoring trailing bytes"
-            );
-        }
-        layout.height_range()
-    }
-
-    fn repair_unindexed_sidecar_tail(
-        data: &std::fs::File,
-        index: &mut std::fs::File,
-        layout: SidecarIndexLayout,
-        data_path: &Path,
-        index_path: &Path,
-        kind: &str,
-    ) -> bool {
-        let data_len = match data.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(error) => {
-                iroha_logger::warn!(?error, ?data_path, kind, "failed to stat sidecar payload");
-                return false;
-            }
-        };
-        if index.seek(SeekFrom::Start(layout.entries_offset)).is_err() {
-            iroha_logger::warn!(
-                ?index_path,
-                kind,
-                "failed to seek sidecar index for tail repair"
-            );
-            return false;
-        }
-        let Ok(entry_capacity) = usize::try_from(layout.entry_count) else {
-            iroha_logger::warn!(?index_path, kind, "sidecar index entry count exceeds usize");
-            return false;
-        };
-        let mut ranges = Vec::with_capacity(entry_capacity.min(4096));
-        let mut encoded = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        for _ in 0..layout.entry_count {
-            if let Err(error) = index.read_exact(&mut encoded) {
-                iroha_logger::warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to read sidecar index during tail repair"
-                );
-                return false;
-            }
-            let entry = SidecarIndexEntry::from_bytes(encoded);
-            if entry.len == 0 {
-                if entry.offset != 0 {
-                    iroha_logger::warn!(
-                        offset = entry.offset,
-                        ?index_path,
-                        kind,
-                        "zero-length sidecar index entry has a non-zero offset"
-                    );
-                    return false;
-                }
-                continue;
-            }
-            if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
-                iroha_logger::warn!(
-                    len = entry.len,
-                    limit = STRICT_INIT_MAX_BLOCK_BYTES,
-                    ?index_path,
-                    kind,
-                    "sidecar index entry exceeds the payload limit during tail repair"
-                );
-                return false;
-            }
-            let Some(end) = entry.offset.checked_add(entry.len) else {
-                iroha_logger::warn!(
-                    offset = entry.offset,
-                    len = entry.len,
-                    ?index_path,
-                    kind,
-                    "sidecar index entry overflows during tail repair"
-                );
-                return false;
-            };
-            if end > data_len {
-                iroha_logger::warn!(
-                    offset = entry.offset,
-                    len = entry.len,
-                    data_len,
-                    ?index_path,
-                    kind,
-                    "sidecar index points past the payload during tail repair"
-                );
-                return false;
-            }
-            ranges.push((entry.offset, end));
-        }
-        ranges.sort_unstable_by_key(|&(start, end)| (start, end));
-        if ranges.windows(2).any(|pair| pair[1].0 < pair[0].1) {
-            iroha_logger::warn!(
-                ?index_path,
-                kind,
-                "sidecar index contains overlapping active payload ranges"
-            );
-            return false;
-        }
-        let indexed_end = ranges.iter().map(|&(_, end)| end).max().unwrap_or(0);
-        if data_len == indexed_end {
-            return true;
-        }
-        if let Err(error) = data.set_len(indexed_end) {
-            iroha_logger::warn!(
-                ?error,
-                ?data_path,
-                data_len,
-                indexed_end,
-                kind,
-                "failed to truncate unindexed sidecar crash residue"
-            );
-            return false;
-        }
-        if let Err(error) = data.sync_data() {
-            iroha_logger::warn!(
-                ?error,
-                ?data_path,
-                indexed_end,
-                kind,
-                "failed to durably repair unindexed sidecar crash residue"
-            );
-            return false;
-        }
-        true
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn append_preceding_indexed_sidecar(
-        data_path: &Path,
-        index_path: &Path,
-        height: u64,
-        payload: &[u8],
-        kind: &str,
-        should_sync: bool,
-        retention: Option<NonZeroUsize>,
-        layout: SidecarIndexLayout,
-        namespace: Option<&BoundProgressNamespace>,
-    ) -> bool {
-        debug_assert!(layout.is_based());
-        debug_assert!(height < layout.base_height);
-
-        let prepend = layout.base_height - height;
-        if prepend > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
-            iroha_logger::warn!(
-                height,
-                base_height = layout.base_height,
-                prepend,
-                limit = MAX_INDEXED_SIDECAR_GAP_ENTRIES,
-                ?index_path,
-                kind,
-                "refusing oversized backward sidecar index gap"
-            );
-            return false;
-        }
-        let Some(old_entries_len) = layout
-            .entry_count
-            .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-        else {
-            iroha_logger::warn!(?index_path, kind, "sidecar entry byte length overflows");
-            return false;
-        };
-        let Some(new_entry_count) = prepend.checked_add(layout.entry_count) else {
-            iroha_logger::warn!(?index_path, kind, "sidecar entry count overflows");
-            return false;
-        };
-        let new_entries_offset = if height == SidecarIndexLayout::LEGACY_BASE_HEIGHT {
-            0
-        } else {
-            INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
-        };
-        let Some(projected_index_len) = new_entry_count
-            .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-            .and_then(|entries_len| new_entries_offset.checked_add(entries_len))
-        else {
-            iroha_logger::warn!(?index_path, kind, "sidecar prepend length overflows");
-            return false;
-        };
-
-        let data_existed = data_path.exists();
-        let mut data =
-            match Self::open_direct_sidecar_file_in_namespace(data_path, true, false, namespace) {
-                Ok(file) => file,
-                Err(err) => {
-                    iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
-                    return false;
-                }
-            };
-        let mut repair_index = match Self::open_direct_sidecar_file_in_namespace(
-            index_path, false, false, namespace,
-        ) {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to open sidecar index");
-                return false;
-            }
-        };
-        if !Self::repair_unindexed_sidecar_tail(
-            &data,
-            &mut repair_index,
-            layout,
-            data_path,
-            index_path,
-            kind,
-        ) {
-            return false;
-        }
-        drop(repair_index);
-        let data_len = match data.metadata() {
-            Ok(meta) => meta.len(),
-            Err(err) => {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to stat sidecar store");
-                return false;
-            }
-        };
-        let payload_len = match u64::try_from(payload.len()) {
-            Ok(len) => len,
-            Err(_) => {
-                iroha_logger::warn!(
-                    len = payload.len(),
-                    kind,
-                    "sidecar payload length exceeds u64"
-                );
-                return false;
-            }
-        };
-        let Some(projected_data_len) = data_len.checked_add(payload_len) else {
-            iroha_logger::warn!(data_len, payload_len, kind, "sidecar data length overflows");
-            return false;
-        };
-
-        let temp_index_path = index_path.with_extension("index.prepend.tmp");
-        let remove_temp = || match namespace {
-            Some(namespace) => {
-                Self::remove_bound_progress_temp_if_present(namespace, &temp_index_path)
-            }
-            None => match std::fs::remove_file(&temp_index_path) {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            },
-        };
-        if let Err(err) = remove_temp() {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_index_path,
-                kind,
-                "failed to remove stale sidecar prepend temp index"
-            );
-            return false;
-        }
-        let mut source_index = match Self::open_direct_sidecar_file_in_namespace(
-            index_path, false, false, namespace,
-        ) {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to reopen sidecar index");
-                return false;
-            }
-        };
-        let mut temp_index = match match namespace {
-            Some(namespace) => Self::create_new_bound_progress_temp(namespace, &temp_index_path),
-            None => std::fs::OpenOptions::new()
-                .create_new(true)
-                .read(true)
-                .write(true)
-                .open(&temp_index_path),
-        } {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    ?temp_index_path,
-                    kind,
-                    "failed to create sidecar prepend temp index"
-                );
-                return false;
-            }
-        };
-
-        let entry = SidecarIndexEntry {
-            offset: data_len,
-            len: payload_len,
-        };
-        let build_result = (|| -> std::io::Result<()> {
-            if height > SidecarIndexLayout::LEGACY_BASE_HEIGHT {
-                temp_index.write_all(&SidecarIndexLayout::base_header(height))?;
-            }
-            temp_index.write_all(&entry.to_bytes())?;
-            let filler_entries = prepend.saturating_sub(1);
-            let filler_len = filler_entries
-                .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-                .and_then(|len| usize::try_from(len).ok())
-                .ok_or_else(|| std::io::Error::other("sidecar prepend filler is too large"))?;
-            temp_index.write_all(&vec![0_u8; filler_len])?;
-            source_index.seek(SeekFrom::Start(layout.entries_offset))?;
-            let copied = std::io::copy(
-                &mut (&mut source_index).take(old_entries_len),
-                &mut temp_index,
-            )?;
-            if copied != old_entries_len {
-                return Err(std::io::Error::new(
-                    ErrorKind::UnexpectedEof,
-                    "sidecar source index ended during prepend",
-                ));
-            }
-            temp_index.flush()?;
-            if should_sync {
-                temp_index.sync_data()?;
-            }
-            Ok(())
-        })();
-        if let Err(err) = build_result {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_index_path,
-                kind,
-                "failed to build sidecar prepend temp index"
-            );
-            drop(temp_index);
-            let _ = remove_temp();
-            return false;
-        }
-        let temp_index_len = temp_index.metadata().map(|meta| meta.len());
-        if !matches!(temp_index_len, Ok(len) if len == projected_index_len) {
-            iroha_logger::warn!(
-                projected_index_len,
-                ?temp_index_path,
-                kind,
-                "sidecar prepend temp index has unexpected length"
-            );
-            drop(temp_index);
-            let _ = remove_temp();
-            return false;
-        }
-        drop(source_index);
-
-        if let Err(err) = data
-            .seek(SeekFrom::Start(data_len))
-            .and_then(|_| data.write_all(payload))
-            .and_then(|_| data.flush())
-        {
-            iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
-            let _ = rollback_unindexed_sidecar_payload(&data, data_len, data_path, kind);
-            drop(data);
-            if !data_existed && namespace.is_none() {
-                let _ = std::fs::remove_file(data_path);
-            }
-            drop(temp_index);
-            let _ = remove_temp();
-            return false;
-        }
-        if should_sync && let Err(err) = sync_indexed_sidecar_initial_data(&data) {
-            iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-            let _ = rollback_unindexed_sidecar_payload(&data, data_len, data_path, kind);
-            drop(data);
-            if !data_existed && namespace.is_none() {
-                let _ = std::fs::remove_file(data_path);
-            }
-            drop(temp_index);
-            let _ = remove_temp();
-            return false;
-        }
-        let mut index_was_published = false;
-        let promoted = if let Some(namespace) = namespace {
-            let temp_layout = temp_index.metadata().ok().and_then(|metadata| {
-                SidecarIndexLayout::read_from(&mut temp_index, metadata.len()).ok()
-            });
-            if temp_layout.is_some_and(|temp_layout| {
-                temp_layout.entry_count > 0
-                    && temp_layout.aligned_len == projected_index_len
-                    && Self::repair_unindexed_sidecar_tail(
-                        &data,
-                        &mut temp_index,
-                        temp_layout,
-                        data_path,
-                        &temp_index_path,
-                        kind,
-                    )
-            }) {
-                match Self::promote_bound_progress_temp(
-                    namespace,
-                    &temp_index_path,
-                    index_path,
-                    &temp_index,
-                ) {
-                    Ok(()) => {
-                        index_was_published = true;
-                        Self::sync_indexed_sidecar_bound_mutation(
-                            &data,
-                            &temp_index,
-                            namespace,
-                            kind,
-                        )
-                    }
-                    Err(error) => {
-                        index_was_published = error.published;
-                        iroha_logger::warn!(
-                            source = ?error.source,
-                            published = error.published,
-                            ?temp_index_path,
-                            ?index_path,
-                            kind,
-                            "failed to promote bound progress prepend index"
-                        );
-                        false
-                    }
-                }
-            } else {
-                false
-            }
-        } else {
-            Self::sidecar_index_sane_with_label(
-                &temp_index_path,
-                projected_data_len,
-                kind,
-                "prepend temp",
-            ) && Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "prepend index")
-        };
-        if !promoted {
-            // Once rename publishes the new index, its new entry owns the
-            // appended payload even if a later directory barrier fails. Keep
-            // that consistent pair intact so an exact retry can reissue the
-            // complete barrier sequence; truncating now would leave the main
-            // index pointing past EOF.
-            if !index_was_published
-                && rollback_unindexed_sidecar_payload(&data, data_len, data_path, kind)
-                && !data_existed
-                && namespace.is_none()
-            {
-                drop(data);
-                let _ = std::fs::remove_file(data_path);
-            }
-            drop(temp_index);
-            let _ = remove_temp();
-            return false;
-        }
-        drop(temp_index);
-        drop(data);
-
-        if let Some(retention) = retention
-            && !Self::prune_indexed_sidecars(data_path, index_path, retention, kind)
-        {
-            return false;
-        }
-        true
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn append_indexed_sidecar(
-        data_path: &Path,
-        index_path: &Path,
-        height: u64,
-        payload: &[u8],
-        kind: &str,
-        fsync_mode: FsyncMode,
-        retention: Option<NonZeroUsize>,
-        origin: SidecarIndexOrigin,
-    ) -> bool {
-        Self::append_indexed_sidecar_with_pinned_height(
-            data_path, index_path, height, payload, kind, fsync_mode, retention, None, origin, None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn append_indexed_bound_progress_sidecar(
-        data_path: &Path,
-        index_path: &Path,
-        height: u64,
-        payload: &[u8],
-        kind: &str,
-        origin: SidecarIndexOrigin,
-        namespace: &BoundProgressNamespace,
-    ) -> bool {
-        let Ok(payload_len) = u64::try_from(payload.len()) else {
-            warn!(
-                len = payload.len(),
-                kind, "progress payload length exceeds u64"
-            );
-            return false;
-        };
-        if namespace.data_path != data_path
-            || namespace.index_path != index_path
-            || height == 0
-            || height == u64::MAX
-            || payload_len == 0
-            || payload_len > STRICT_INIT_MAX_BLOCK_BYTES
-            || !Self::progress_mutation_namespace_unchanged(namespace)
-        {
-            warn!(
-                height,
-                len = payload.len(),
-                ?data_path,
-                ?index_path,
-                kind,
-                "refusing invalid bound progress sidecar append"
-            );
-            return false;
-        }
-        let namespace_components = match namespace.stable_relative_components(data_path, index_path)
-        {
-            Ok(components) => components,
-            Err(reason) => {
-                warn!(
-                    reason,
-                    ?data_path,
-                    ?index_path,
-                    kind,
-                    "failed to derive the bound progress namespace identity"
-                );
-                return false;
-            }
-        };
-        let build_path = Self::bound_progress_append_build_path(index_path);
-        let intent_path = Self::bound_progress_append_intent_path(index_path);
-        for artifact_path in [&build_path, &intent_path] {
-            match std::fs::symlink_metadata(artifact_path) {
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Ok(_) => {
-                    warn!(
-                        ?artifact_path,
-                        kind, "progress append recovery artifact must be resolved before mutation"
-                    );
-                    return false;
-                }
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?artifact_path,
-                        kind,
-                        "failed to inspect progress append artifact"
-                    );
-                    return false;
-                }
-            }
-        }
-
-        let opened_data =
-            Self::open_direct_sidecar_file_in_namespace(data_path, false, false, Some(namespace));
-        let opened_index =
-            Self::open_direct_sidecar_file_in_namespace(index_path, false, false, Some(namespace));
-        let (pair_was_present, mut data, mut index) = match (opened_data, opened_index) {
-            (Ok(data), Ok(index)) => (true, Some(data), Some(index)),
-            (Err(data_error), Err(index_error))
-                if data_error.kind() == ErrorKind::NotFound
-                    && index_error.kind() == ErrorKind::NotFound =>
-            {
-                (false, None, None)
-            }
-            (data, index) => {
-                warn!(
-                    data_error = ?data.err(),
-                    index_error = ?index.err(),
-                    ?data_path,
-                    ?index_path,
-                    kind,
-                    "progress main data and index are only partially present or unsafe"
-                );
-                return false;
-            }
-        };
-
-        let old_data_len = match data.as_ref() {
-            Some(data) => match data.metadata() {
-                Ok(metadata) => metadata.len(),
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?data_path,
-                        kind,
-                        "failed to stat bound progress data"
-                    );
-                    return false;
-                }
-            },
-            None => 0,
-        };
-        // Production callers run full recovery while holding `sidecar_lock`
-        // immediately before binding this namespace. Re-read only the bounded
-        // layout and target entry here instead of allocating and sorting the
-        // entire historical index a second time on every consensus write.
-        let (mut layout, old_index_len) = match index.as_mut() {
-            Some(index) => {
-                let old_index_len = match index.metadata() {
-                    Ok(metadata) => metadata.len(),
-                    Err(error) => {
-                        warn!(
-                            ?error,
-                            ?index_path,
-                            kind,
-                            "failed to stat bound progress index"
-                        );
-                        return false;
-                    }
-                };
-                let layout = match SidecarIndexLayout::read_from(index, old_index_len) {
-                    Ok(layout) if layout.aligned_len == old_index_len => layout,
-                    Ok(_) => {
-                        warn!(
-                            ?index_path,
-                            kind, "bound progress index has a partial trailing entry"
-                        );
-                        return false;
-                    }
-                    Err(reason) => {
-                        warn!(
-                            reason,
-                            ?index_path,
-                            kind,
-                            "failed to read the recovered progress index layout"
-                        );
-                        return false;
-                    }
-                };
-                (layout, old_index_len)
-            }
-            None => (SidecarIndexLayout::legacy(0), 0),
-        };
-
-        if let Some(entry_pos) = layout.entry_position(height) {
-            let Some(index_file) = index.as_mut() else {
-                return false;
-            };
-            let mut entry_bytes = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-            if let Err(error) = index_file
-                .seek(SeekFrom::Start(entry_pos))
-                .and_then(|_| index_file.read_exact(&mut entry_bytes))
-            {
-                warn!(
-                    ?error,
-                    height,
-                    ?index_path,
-                    kind,
-                    "failed to read the recovered progress target entry"
-                );
-                return false;
-            }
-            let entry = SidecarIndexEntry::from_bytes(entry_bytes);
-            if entry.len > 0 {
-                let Some(end) = entry.offset.checked_add(entry.len) else {
-                    return false;
-                };
-                let Ok(existing_len) = usize::try_from(entry.len) else {
-                    return false;
-                };
-                let mut existing = Vec::new();
-                if existing.try_reserve_exact(existing_len).is_err() {
-                    return false;
-                }
-                existing.resize(existing_len, 0);
-                let Some(data_file) = data.as_mut() else {
-                    return false;
-                };
-                if end > old_data_len {
-                    warn!(
-                        height,
-                        ?data_path,
-                        kind,
-                        "progress index entry extends beyond the recovered data file"
-                    );
-                    return false;
-                }
-                if let Err(error) = data_file
-                    .seek(SeekFrom::Start(entry.offset))
-                    .and_then(|_| data_file.read_exact(&mut existing))
-                {
-                    warn!(
-                        ?error,
-                        height,
-                        ?data_path,
-                        kind,
-                        "failed to read the existing progress payload"
-                    );
-                    return false;
-                }
-                if existing == payload {
-                    let Some(index_file) = index.as_ref() else {
-                        return false;
-                    };
-                    return Self::sync_indexed_sidecar_bound_mutation(
-                        data_file, index_file, namespace, kind,
-                    ) && Self::progress_mutation_namespace_unchanged(namespace);
-                }
-            }
-
-            let Some(new_data_len) = old_data_len.checked_add(payload_len) else {
-                return false;
-            };
-            let new_entry = SidecarIndexEntry {
-                offset: old_data_len,
-                len: payload_len,
-            };
-            let intent = BoundProgressAppendIntentV1 {
-                version: BOUND_PROGRESS_APPEND_INTENT_VERSION,
-                namespace_components: namespace_components.clone(),
-                data_file: match data_path.file_name().and_then(std::ffi::OsStr::to_str) {
-                    Some(name) => name.to_owned(),
-                    None => return false,
-                },
-                index_file: match index_path.file_name().and_then(std::ffi::OsStr::to_str) {
-                    Some(name) => name.to_owned(),
-                    None => return false,
-                },
-                height,
-                pair_was_present,
-                old_data_len,
-                new_data_len,
-                payload_hash: BoundProgressAppendIntentV1::payload_digest(payload),
-                old_index_len,
-                new_index_len: old_index_len,
-                index_write_offset: entry_pos,
-                old_index_bytes: entry.to_bytes().to_vec(),
-                new_index_bytes: new_entry.to_bytes().to_vec(),
-                integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
-            }
-            .seal();
-            return Self::execute_bound_progress_append(
-                data_path, index_path, payload, kind, namespace, intent, data, index,
-            );
-        }
-
-        if layout.is_based() && height < layout.base_height {
-            drop(index);
-            drop(data);
-            return Self::append_preceding_indexed_sidecar(
-                data_path,
-                index_path,
-                height,
-                payload,
-                kind,
-                true,
-                None,
-                layout,
-                Some(namespace),
-            );
-        }
-
-        let mut new_index_bytes = Vec::new();
-        let index_write_offset;
-        if layout.aligned_len == 0
-            && height > SidecarIndexLayout::LEGACY_BASE_HEIGHT
-            && origin == SidecarIndexOrigin::FirstWrite
-        {
-            new_index_bytes.extend_from_slice(&SidecarIndexLayout::base_header(height));
-            layout = match SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64) {
-                Ok(layout) => layout,
-                Err(reason) => {
-                    warn!(
-                        reason,
-                        height,
-                        ?index_path,
-                        kind,
-                        "invalid initial progress index base"
-                    );
-                    return false;
-                }
-            };
-            index_write_offset = 0;
-        } else {
-            index_write_offset = old_index_len;
-        }
-        let Some(expected_height) = layout.next_height() else {
-            return false;
-        };
-        if height < expected_height {
-            warn!(
-                height,
-                expected_height,
-                base_height = layout.base_height,
-                ?index_path,
-                kind,
-                "progress height precedes the compact index base"
-            );
-            return false;
-        }
-        let missing = height - expected_height;
-        if missing > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
-            warn!(
-                height,
-                expected_height,
-                missing,
-                limit = MAX_INDEXED_SIDECAR_GAP_ENTRIES,
-                ?index_path,
-                kind,
-                "refusing oversized progress index gap"
-            );
-            return false;
-        }
-        let Some(filler_len) = missing
-            .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-            .and_then(|len| usize::try_from(len).ok())
-        else {
-            return false;
-        };
-        if new_index_bytes
-            .try_reserve(filler_len + PIPELINE_INDEX_ENTRY_SIZE)
-            .is_err()
-        {
-            return false;
-        }
-        new_index_bytes.resize(new_index_bytes.len() + filler_len, 0);
-        let Some(new_data_len) = old_data_len.checked_add(payload_len) else {
-            return false;
-        };
-        new_index_bytes.extend_from_slice(
-            &SidecarIndexEntry {
-                offset: old_data_len,
-                len: payload_len,
-            }
-            .to_bytes(),
-        );
-        let Some(new_index_len) = index_write_offset
-            .checked_add(u64::try_from(new_index_bytes.len()).expect("bounded index window"))
-        else {
-            return false;
-        };
-        let intent = BoundProgressAppendIntentV1 {
-            version: BOUND_PROGRESS_APPEND_INTENT_VERSION,
-            namespace_components,
-            data_file: match data_path.file_name().and_then(std::ffi::OsStr::to_str) {
-                Some(name) => name.to_owned(),
-                None => return false,
-            },
-            index_file: match index_path.file_name().and_then(std::ffi::OsStr::to_str) {
-                Some(name) => name.to_owned(),
-                None => return false,
-            },
-            height,
-            pair_was_present,
-            old_data_len,
-            new_data_len,
-            payload_hash: BoundProgressAppendIntentV1::payload_digest(payload),
-            old_index_len,
-            new_index_len,
-            index_write_offset,
-            old_index_bytes: Vec::new(),
-            new_index_bytes,
-            integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
-        }
-        .seal();
-        Self::execute_bound_progress_append(
-            data_path, index_path, payload, kind, namespace, intent, data, index,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn execute_bound_progress_append(
-        data_path: &Path,
-        index_path: &Path,
-        payload: &[u8],
-        kind: &str,
-        namespace: &BoundProgressNamespace,
-        intent: BoundProgressAppendIntentV1,
-        mut data: Option<std::fs::File>,
-        mut index: Option<std::fs::File>,
-    ) -> bool {
-        let intent_path = Self::bound_progress_append_intent_path(index_path);
-        if let Err(reason) = intent.validate_for(namespace, data_path, index_path) {
-            warn!(
-                reason,
-                ?data_path,
-                ?index_path,
-                kind,
-                "refusing invalid progress append plan"
-            );
-            return false;
-        }
-        let old_layout = match index.as_mut() {
-            Some(index) if intent.old_index_len != 0 => {
-                match SidecarIndexLayout::read_from(index, intent.old_index_len) {
-                    Ok(layout) => layout,
-                    Err(reason) => {
-                        warn!(
-                            reason,
-                            ?index_path,
-                            kind,
-                            "refusing progress append with an unreadable old index layout"
-                        );
-                        return false;
-                    }
-                }
-            }
-            _ => SidecarIndexLayout::legacy(0),
-        };
-        if let Err(reason) = intent.validate_against_old_layout(old_layout) {
-            warn!(
-                reason,
-                ?data_path,
-                ?index_path,
-                kind,
-                "refusing progress append inconsistent with the old index layout"
-            );
-            return false;
-        }
-        let Some(intent_file) =
-            Self::publish_bound_progress_append_intent(namespace, index_path, &intent, kind)
-        else {
-            return false;
-        };
-        if !Self::progress_mutation_namespace_unchanged(namespace) {
-            return false;
-        }
-        if data.is_none() {
-            data = match Self::open_direct_sidecar_file_in_namespace(
-                data_path,
-                true,
-                false,
-                Some(namespace),
-            ) {
-                Ok(data) => Some(data),
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?data_path,
-                        kind,
-                        "failed to create bound progress data"
-                    );
-                    return false;
-                }
-            };
-        }
-        if index.is_none() {
-            index = match Self::open_direct_sidecar_file_in_namespace(
-                index_path,
-                true,
-                false,
-                Some(namespace),
-            ) {
-                Ok(index) => Some(index),
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        ?index_path,
-                        kind,
-                        "failed to create bound progress index"
-                    );
-                    return false;
-                }
-            };
-        }
-        let (Some(data), Some(index)) = (data.as_mut(), index.as_mut()) else {
-            return false;
-        };
-        if !data
-            .metadata()
-            .is_ok_and(|metadata| metadata.len() == intent.old_data_len)
-            || !index
-                .metadata()
-                .is_ok_and(|metadata| metadata.len() == intent.old_index_len)
-        {
-            warn!(
-                ?data_path,
-                ?index_path,
-                kind,
-                "progress pair changed after intent publication"
-            );
-            return false;
-        }
-        if let Err(error) = data
-            .seek(SeekFrom::Start(intent.old_data_len))
-            .and_then(|_| data.write_all(payload))
-            .and_then(|_| data.flush())
-            .and_then(|_| sync_bound_progress_append_data(data))
-        {
-            warn!(
-                ?error,
-                ?data_path,
-                kind,
-                "failed to append journaled progress payload"
-            );
-            return false;
-        }
-        if let Err(error) = index
-            .seek(SeekFrom::Start(intent.index_write_offset))
-            .and_then(|_| index.write_all(&intent.new_index_bytes))
-            .and_then(|_| index.set_len(intent.new_index_len))
-            .and_then(|_| index.flush())
-            .and_then(|_| sync_bound_progress_append_index(index))
-        {
-            warn!(
-                ?error,
-                ?index_path,
-                kind,
-                "failed to apply journaled progress index mutation"
-            );
-            return false;
-        }
-        let Some(snapshot) = Self::bound_sidecar_index_snapshot(
-            index,
-            index_path,
-            intent.new_data_len,
-            kind,
-            "journaled progress append result",
-        ) else {
-            return false;
-        };
-        let Some(relative_height) = intent.height.checked_sub(snapshot.layout.base_height) else {
-            return false;
-        };
-        let Some(entry) = usize::try_from(relative_height)
-            .ok()
-            .and_then(|position| snapshot.entries.get(position))
-        else {
-            return false;
-        };
-        let expected_entry = SidecarIndexEntry {
-            offset: intent.old_data_len,
-            len: intent
-                .payload_len()
-                .expect("validated progress intent has a payload length"),
-        };
-        if *entry != expected_entry || snapshot.indexed_end != intent.new_data_len {
-            warn!(
-                height = intent.height,
-                ?index_path,
-                kind,
-                "journaled progress append produced the wrong target entry"
-            );
-            return false;
-        }
-        if !Self::sync_indexed_sidecar_bound_mutation(data, index, namespace, kind) {
-            return false;
-        }
-        drop(intent_file);
-        if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, &intent_path) {
-            warn!(
-                ?error,
-                ?intent_path,
-                kind,
-                "failed to clear completed progress append intent"
-            );
-            return false;
-        }
-        if let Err(error) = Self::sync_bound_progress_intent_directories(namespace) {
-            warn!(
-                ?error,
-                ?intent_path,
-                kind,
-                "failed to sync completed append-intent cleanup"
-            );
-            return false;
-        }
-        Self::progress_mutation_namespace_unchanged(namespace)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn append_indexed_progress_sidecar(
-        data_path: &Path,
-        index_path: &Path,
-        height: u64,
-        payload: &[u8],
-        kind: &str,
-        retention: Option<NonZeroUsize>,
-        origin: SidecarIndexOrigin,
-        namespace: &BoundProgressNamespace,
-    ) -> bool {
-        if retention.is_some() || !Self::progress_mutation_namespace_unchanged(namespace) {
-            warn!(
-                kind,
-                "progress sidecar retention must be handled outside strict append"
-            );
-            return false;
-        }
-        let wrote = Self::append_indexed_bound_progress_sidecar(
-            data_path, index_path, height, payload, kind, origin, namespace,
-        );
-        wrote && Self::progress_mutation_namespace_unchanged(namespace)
-    }
-
-    fn progress_mutation_namespace_unchanged(namespace: &BoundProgressNamespace) -> bool {
-        Self::progress_mutation_namespace_classified(namespace).is_ok()
-    }
-
-    fn progress_mutation_namespace_classified(
-        namespace: &BoundProgressNamespace,
-    ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
-        for directory in &namespace.directories {
-            let opened = directory
-                .file
-                .metadata()
-                .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-            let current = std::fs::symlink_metadata(&directory.expected_path)
-                .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-            if !opened.is_dir()
-                || !current.is_dir()
-                || current.file_type().is_symlink()
-                || !Self::sidecar_metadata_same_object(&directory.metadata, &opened)
-                || !Self::sidecar_metadata_same_object(&directory.metadata, &current)
-            {
-                return Err(BoundProgressRecoveryFailure::InvalidData);
-            }
-        }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn append_indexed_sidecar_with_pinned_height(
-        data_path: &Path,
-        index_path: &Path,
-        height: u64,
-        payload: &[u8],
-        kind: &str,
-        fsync_mode: FsyncMode,
-        retention: Option<NonZeroUsize>,
-        pinned_height: Option<u64>,
-        origin: SidecarIndexOrigin,
-        namespace: Option<&BoundProgressNamespace>,
-    ) -> bool {
-        // Sidecars are best-effort; only fsync when strict durability is requested.
-        let should_sync = matches!(fsync_mode, FsyncMode::Always);
-        if height == 0 || height == u64::MAX {
-            iroha_logger::warn!(
-                height,
-                kind,
-                "refusing to store sidecar for unrepresentable height"
-            );
-            return false;
-        }
-
-        if namespace.is_none()
-            && !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind)
-        {
-            return false;
-        }
-
-        let mut index =
-            match Self::open_direct_sidecar_file_in_namespace(index_path, true, false, namespace) {
-                Ok(file) => file,
-                Err(err) => {
-                    iroha_logger::warn!(?err, ?index_path, kind, "failed to open sidecar index");
-                    return false;
-                }
-            };
-        let index_len = match index.metadata() {
-            Ok(meta) => meta.len(),
-            Err(err) => {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to stat sidecar index");
-                return false;
-            }
-        };
-        let mut layout = match SidecarIndexLayout::read_from(&mut index, index_len) {
-            Ok(layout) => layout,
-            Err(reason) => {
-                iroha_logger::warn!(
-                    reason,
-                    len = index_len,
-                    ?index_path,
-                    kind,
-                    "refusing malformed sidecar index"
-                );
-                return false;
-            }
-        };
-        if index_len != layout.aligned_len {
-            iroha_logger::warn!(
-                len = index_len,
-                aligned_len = layout.aligned_len,
-                ?index_path,
-                kind,
-                "sidecar index length misaligned; truncating trailing bytes"
-            );
-            if let Err(err) = index.set_len(layout.aligned_len) {
-                iroha_logger::warn!(
-                    ?err,
-                    ?index_path,
-                    kind,
-                    "failed to truncate misaligned sidecar index"
-                );
-                return false;
-            }
-        }
-
-        if layout.aligned_len == 0
-            && height > SidecarIndexLayout::LEGACY_BASE_HEIGHT
-            && origin == SidecarIndexOrigin::FirstWrite
-        {
-            let header = SidecarIndexLayout::base_header(height);
-            if let Err(err) = index
-                .seek(SeekFrom::Start(0))
-                .and_then(|_| index.write_all(&header))
-            {
-                iroha_logger::warn!(
-                    ?err,
-                    height,
-                    ?index_path,
-                    kind,
-                    "failed to initialize based sidecar index"
-                );
-                return false;
-            }
-            layout = match SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64) {
-                Ok(layout) => layout,
-                Err(reason) => {
-                    iroha_logger::warn!(
-                        reason,
-                        height,
-                        ?index_path,
-                        kind,
-                        "invalid initial sidecar base height"
-                    );
-                    return false;
-                }
-            };
-        }
-
-        if layout.is_based() && height < layout.base_height {
-            drop(index);
-            return Self::append_preceding_indexed_sidecar(
-                data_path,
-                index_path,
-                height,
-                payload,
-                kind,
-                should_sync,
-                retention,
-                layout,
-                namespace,
-            );
-        }
-
-        let mut data =
-            match Self::open_direct_sidecar_file_in_namespace(data_path, true, false, namespace) {
-                Ok(file) => file,
-                Err(err) => {
-                    iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
-                    return false;
-                }
-            };
-        if !Self::repair_unindexed_sidecar_tail(
-            &data, &mut index, layout, data_path, index_path, kind,
-        ) {
-            return false;
-        }
-
-        let expected_height = match layout.next_height() {
-            Some(height) => height,
-            None => {
-                iroha_logger::warn!(
-                    base_height = layout.base_height,
-                    entries = layout.entry_count,
-                    ?index_path,
-                    kind,
-                    "sidecar index height range overflows"
-                );
-                return false;
-            }
-        };
-        if let Some(entry_pos) = layout.entry_position(height) {
-            let mut entry_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-            if index
-                .seek(SeekFrom::Start(entry_pos))
-                .and_then(|_| index.read_exact(&mut entry_buf))
-                .is_err()
-            {
-                iroha_logger::warn!(
-                    height,
-                    ?index_path,
-                    kind,
-                    "failed to read sidecar index entry for update"
-                );
-                return false;
-            }
-            let entry = SidecarIndexEntry::from_bytes(entry_buf);
-
-            let mut matches_existing = false;
-            if entry.len > 0 {
-                if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
-                    iroha_logger::warn!(
-                        height,
-                        len = entry.len,
-                        limit = STRICT_INIT_MAX_BLOCK_BYTES,
-                        kind,
-                        "existing sidecar payload length exceeds limit"
-                    );
-                    return false;
-                }
-                let len_usize = if let Ok(len) = usize::try_from(entry.len) {
-                    len
-                } else {
-                    iroha_logger::warn!(
-                        len = entry.len,
-                        kind,
-                        "sidecar payload length exceeds usize"
-                    );
-                    return false;
-                };
-                let data_len = match data.metadata() {
-                    Ok(meta) => meta.len(),
-                    Err(err) => {
-                        iroha_logger::warn!(?err, ?data_path, kind, "failed to stat sidecar store");
-                        return false;
-                    }
-                };
-                if entry
-                    .offset
-                    .checked_add(entry.len)
-                    .is_some_and(|end| end <= data_len)
-                {
-                    let mut existing = vec![0u8; len_usize];
-                    if data
-                        .seek(SeekFrom::Start(entry.offset))
-                        .and_then(|_| data.read_exact(&mut existing))
-                        .is_ok()
-                    {
-                        matches_existing = existing == payload;
-                    } else {
-                        iroha_logger::debug!(
-                            height,
-                            ?data_path,
-                            kind,
-                            "failed to read existing sidecar payload; overwriting entry"
-                        );
-                    }
-                } else {
-                    iroha_logger::debug!(
-                        height,
-                        offset = entry.offset,
-                        len = entry.len,
-                        data_len,
-                        ?data_path,
-                        kind,
-                        "sidecar entry points past data file; overwriting entry"
-                    );
-                }
-            }
-
-            if matches_existing {
-                iroha_logger::debug!(
-                    height,
-                    index_entries = layout.entry_count,
-                    ?index_path,
-                    kind,
-                    "sidecar already recorded; revalidating strict durability"
-                );
-                if should_sync
-                    && let Some(namespace) = namespace
-                    && !Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
-                {
-                    return false;
-                }
-                drop(index);
-                drop(data);
-                if let Some(retention) = retention {
-                    if !Self::prune_indexed_sidecars_with_pinned_height(
-                        data_path,
-                        index_path,
-                        retention,
-                        pinned_height,
-                        kind,
-                    ) {
-                        return false;
-                    }
-                }
-                if should_sync
-                    && namespace.is_none()
-                    && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind)
-                {
-                    return false;
-                }
-                return true;
-            }
-
-            let offset = match data.metadata() {
-                Ok(meta) => meta.len(),
-                Err(err) => {
-                    iroha_logger::warn!(?err, ?data_path, kind, "failed to stat sidecar store");
-                    return false;
-                }
-            };
-            let len_u64 = if let Ok(len) = u64::try_from(payload.len()) {
-                len
-            } else {
-                iroha_logger::warn!(
-                    len = payload.len(),
-                    kind,
-                    "sidecar payload length exceeds u64"
-                );
-                return false;
-            };
-
-            if let Err(err) = data
-                .seek(SeekFrom::Start(offset))
-                .and_then(|_| data.write_all(payload))
-            {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
-                let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-                return false;
-            }
-            if should_sync {
-                if let Err(err) = sync_indexed_sidecar_initial_data(&data) {
-                    iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-                    let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-                    return false;
-                }
-            }
-
-            let new_entry = SidecarIndexEntry {
-                offset,
-                len: len_u64,
-            };
-            if let Err(err) = index
-                .seek(SeekFrom::Start(entry_pos))
-                .and_then(|_| index.write_all(&new_entry.to_bytes()))
-            {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to update sidecar index");
-                let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-                return false;
-            }
-            if should_sync
-                && let Some(namespace) = namespace
-                && !Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
-            {
-                return false;
-            }
-            drop(index);
-            drop(data);
-            if let Some(retention) = retention {
-                if !Self::prune_indexed_sidecars_with_pinned_height(
-                    data_path,
-                    index_path,
-                    retention,
-                    pinned_height,
-                    kind,
-                ) {
-                    return false;
-                }
-            }
-            if should_sync
-                && namespace.is_none()
-                && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind)
-            {
-                return false;
-            }
-            return true;
-        }
-        if height < expected_height {
-            iroha_logger::warn!(
-                height,
-                base_height = layout.base_height,
-                expected_height,
-                ?index_path,
-                kind,
-                "sidecar height precedes the compact index base"
-            );
-            return false;
-        }
-        let missing = height - expected_height;
-        if missing > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
-            iroha_logger::warn!(
-                height,
-                expected_height,
-                missing,
-                limit = MAX_INDEXED_SIDECAR_GAP_ENTRIES,
-                ?index_path,
-                kind,
-                "refusing oversized sidecar index gap"
-            );
-            return false;
-        }
-        let Some(projected_index_len) = missing
-            .checked_add(1)
-            .and_then(|entries| entries.checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64))
-            .and_then(|growth| layout.aligned_len.checked_add(growth))
-        else {
-            iroha_logger::warn!(
-                height,
-                expected_height,
-                ?index_path,
-                kind,
-                "sidecar index growth overflows file offsets"
-            );
-            return false;
-        };
-        if height > expected_height {
-            iroha_logger::warn!(
-                height,
-                missing,
-                kind,
-                "sidecar gap detected; filling index placeholders"
-            );
-            let Some(filler_len_u64) = missing.checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64) else {
-                iroha_logger::warn!(
-                    height,
-                    missing,
-                    ?index_path,
-                    kind,
-                    "sidecar placeholder byte length overflows"
-                );
-                return false;
-            };
-            let Ok(filler_len) = usize::try_from(filler_len_u64) else {
-                iroha_logger::warn!(
-                    height,
-                    filler_len = filler_len_u64,
-                    ?index_path,
-                    kind,
-                    "sidecar placeholder byte length exceeds usize"
-                );
-                return false;
-            };
-            let filler = vec![0u8; filler_len];
-            if let Err(err) = index
-                .seek(SeekFrom::Start(layout.aligned_len))
-                .and_then(|_| index.write_all(&filler))
-            {
-                iroha_logger::warn!(
-                    ?err,
-                    ?index_path,
-                    kind,
-                    "failed to append placeholder sidecar index entries"
-                );
-                return false;
-            }
-        }
-
-        let offset = match data.metadata() {
-            Ok(meta) => meta.len(),
-            Err(err) => {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to stat sidecar store");
-                return false;
-            }
-        };
-        let len_u64 = if let Ok(len) = u64::try_from(payload.len()) {
-            len
-        } else {
-            iroha_logger::warn!(
-                len = payload.len(),
-                kind,
-                "sidecar payload length exceeds u64"
-            );
-            return false;
-        };
-
-        if let Err(err) = data
-            .seek(SeekFrom::Start(offset))
-            .and_then(|_| data.write_all(payload))
-        {
-            iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
-            let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-            return false;
-        }
-        if should_sync {
-            if let Err(err) = sync_indexed_sidecar_initial_data(&data) {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-                let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-                return false;
-            }
-        }
-
-        let entry = SidecarIndexEntry {
-            offset,
-            len: len_u64,
-        };
-        let Some(entry_pos) = projected_index_len.checked_sub(PIPELINE_INDEX_ENTRY_SIZE_U64) else {
-            iroha_logger::warn!(
-                projected_index_len,
-                ?index_path,
-                kind,
-                "sidecar index entry position underflows"
-            );
-            let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-            return false;
-        };
-        if let Err(err) = index
-            .seek(SeekFrom::Start(entry_pos))
-            .and_then(|_| index.write_all(&entry.to_bytes()))
-        {
-            iroha_logger::warn!(?err, ?index_path, kind, "failed to append sidecar index");
-            let _ = rollback_unindexed_sidecar_payload(&data, offset, data_path, kind);
-            return false;
-        }
-        if should_sync
-            && let Some(namespace) = namespace
-            && !Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
-        {
-            return false;
-        }
-        drop(index);
-        drop(data);
-        if let Some(retention) = retention {
-            if !Self::prune_indexed_sidecars_with_pinned_height(
-                data_path,
-                index_path,
-                retention,
-                pinned_height,
-                kind,
-            ) {
-                return false;
-            }
-        }
-        if should_sync
-            && namespace.is_none()
-            && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind)
-        {
-            return false;
-        }
-
-        true
-    }
-
-    fn sync_indexed_sidecar_bound_mutation(
-        data: &std::fs::File,
-        index: &std::fs::File,
-        namespace: &BoundProgressNamespace,
-        kind: &str,
-    ) -> bool {
-        if let Err(error) = sync_indexed_sidecar_data(data) {
-            iroha_logger::warn!(
-                ?error,
-                kind,
-                "failed to sync bound sidecar payload mutation"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_index(index) {
-            iroha_logger::warn!(?error, kind, "failed to sync bound sidecar index mutation");
-            return false;
-        }
-        Self::sync_bound_progress_mutation_directories(namespace, kind)
-    }
-
-    fn sync_bound_progress_mutation_directories(
-        namespace: &BoundProgressNamespace,
-        kind: &str,
-    ) -> bool {
-        for (position, directory) in namespace.directories.iter().enumerate() {
-            let result = if position == 0 {
-                sync_indexed_sidecar_dir_handle(&directory.file)
-            } else {
-                sync_progress_sidecar_ancestor_dir_handle(&directory.file)
-            };
-            if let Err(error) = result {
-                iroha_logger::warn!(
-                    ?error,
-                    path = ?directory.expected_path,
-                    kind,
-                    "failed to sync bound sidecar mutation directory"
-                );
-                return false;
-            }
-        }
-        Self::progress_mutation_namespace_unchanged(namespace)
-    }
-
-    /// Reissue the complete strict sidecar durability sequence in dependency order.
-    ///
-    /// Calling this for an exact existing payload is intentional: a prior attempt may have made
-    /// both files readable through the page cache while failing the index or directory barrier.
-    fn sync_indexed_sidecar_barriers(data_path: &Path, index_path: &Path, kind: &str) -> bool {
-        let data = match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(data_path)
-        {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    ?data_path,
-                    kind,
-                    "failed to open sidecar store for sync"
-                );
-                return false;
-            }
-        };
-        if let Err(err) = sync_indexed_sidecar_data(&data) {
-            iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-            return false;
-        }
-
-        let index = match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(index_path)
-        {
-            Ok(file) => file,
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    ?index_path,
-                    kind,
-                    "failed to open sidecar index for sync"
-                );
-                return false;
-            }
-        };
-        if let Err(err) = sync_indexed_sidecar_index(&index) {
-            iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
-            return false;
-        }
-
-        if let Some(parent) = data_path.parent()
-            && let Err(err) = sync_indexed_sidecar_dir(parent)
-        {
-            iroha_logger::warn!(
-                ?err,
-                ?parent,
-                kind,
-                "failed to sync sidecar parent directory"
-            );
-            return false;
-        }
-        if let Some(parent) = index_path.parent()
-            && Some(parent) != data_path.parent()
-            && let Err(err) = sync_indexed_sidecar_dir(parent)
-        {
-            iroha_logger::warn!(
-                ?err,
-                ?parent,
-                kind,
-                "failed to sync sidecar index parent directory"
-            );
-            return false;
-        }
-        true
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn read_indexed_sidecar<T, F>(
-        &self,
-        height: u64,
-        data_file: &str,
-        index_file: &str,
-        decoder: F,
-        kind: &str,
-    ) -> Option<T>
-    where
-        F: Fn(&[u8]) -> Result<T, norito::Error>,
-    {
-        let mut dir = self.store_dir()?;
-        dir.push(PIPELINE_DIR_NAME);
-        let data_path = dir.join(data_file);
-        let index_path = dir.join(index_file);
-
-        Self::read_indexed_sidecar_from_paths(height, &data_path, &index_path, decoder, kind)
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn read_indexed_sidecar_from_paths<T, F>(
-        height: u64,
-        data_path: &Path,
-        index_path: &Path,
-        decoder: F,
-        kind: &str,
-    ) -> Option<T>
-    where
-        F: Fn(&[u8]) -> Result<T, norito::Error>,
-    {
-        Self::read_indexed_sidecar_from_paths_with_recovery(
-            height, data_path, index_path, decoder, kind, true,
-        )
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn read_indexed_sidecar_from_paths_with_recovery<T, F>(
-        height: u64,
-        data_path: &Path,
-        index_path: &Path,
-        decoder: F,
-        kind: &str,
-        recover: bool,
-    ) -> Option<T>
-    where
-        F: Fn(&[u8]) -> Result<T, norito::Error>,
-    {
-        if height == 0 {
-            return None;
-        }
-
-        if recover && !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
-            return None;
-        }
-
-        let mut index = std::fs::File::open(index_path).ok()?;
-        let mut data = std::fs::File::open(data_path).ok()?;
-        Self::read_indexed_sidecar_from_open_files(
-            height, &mut data, &mut index, data_path, index_path, decoder, kind,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn read_indexed_sidecar_from_open_files<T, F>(
-        height: u64,
-        data: &mut std::fs::File,
-        index: &mut std::fs::File,
-        data_path: &Path,
-        index_path: &Path,
-        decoder: F,
-        kind: &str,
-    ) -> Option<T>
-    where
-        F: Fn(&[u8]) -> Result<T, norito::Error>,
-    {
-        let index_meta = index.metadata().ok()?;
-        let index_len = index_meta.len();
-        let layout = match SidecarIndexLayout::read_from(index, index_len) {
-            Ok(layout) => layout,
-            Err(reason) => {
-                iroha_logger::warn!(
-                    reason,
-                    len = index_len,
-                    ?index_path,
-                    kind,
-                    "refusing malformed sidecar index"
-                );
-                return None;
-            }
-        };
-        if index_len != layout.aligned_len {
-            iroha_logger::warn!(
-                len = index_len,
-                aligned_len = layout.aligned_len,
-                ?index_path,
-                kind,
-                "sidecar index length misaligned; ignoring trailing bytes"
-            );
-        }
-        let seek_pos = layout.entry_position(height)?;
-        let mut entry_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        if index
-            .seek(SeekFrom::Start(seek_pos))
-            .and_then(|_| index.read_exact(&mut entry_buf))
-            .is_err()
-        {
-            iroha_logger::warn!(
-                height,
-                ?index_path,
-                kind,
-                "failed to read sidecar index entry"
-            );
-            return None;
-        }
-
-        let entry = SidecarIndexEntry::from_bytes(entry_buf);
-        if entry.len == 0 {
-            iroha_logger::debug!(height, ?index_path, kind, "empty sidecar length; skipping");
-            return None;
-        }
-        if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
-            iroha_logger::warn!(
-                height,
-                len = entry.len,
-                limit = STRICT_INIT_MAX_BLOCK_BYTES,
-                ?index_path,
-                kind,
-                "sidecar length exceeds limit; skipping"
-            );
-            return None;
-        }
-        let len_usize = if let Ok(len) = usize::try_from(entry.len) {
-            len
-        } else {
-            iroha_logger::warn!(
-                len = entry.len,
-                ?index_path,
-                kind,
-                "sidecar length exceeds usize; skipping"
-            );
-            return None;
-        };
-
-        let data_len = data.metadata().ok()?.len();
-        let entry_end = match entry.offset.checked_add(entry.len) {
-            Some(end) => end,
-            None => {
-                iroha_logger::warn!(
-                    height,
-                    offset = entry.offset,
-                    len = entry.len,
-                    ?data_path,
-                    kind,
-                    "sidecar payload range overflows"
-                );
-                return None;
-            }
-        };
-        if entry_end > data_len {
-            iroha_logger::warn!(
-                height,
-                offset = entry.offset,
-                len = entry.len,
-                data_len,
-                ?data_path,
-                kind,
-                "sidecar entry points past data file"
-            );
-            return None;
-        }
-        if height > layout.base_height {
-            let prev_height = height - 1;
-            let Some(prev_pos) = layout.entry_position(prev_height) else {
-                iroha_logger::warn!(
-                    height,
-                    prev_height,
-                    ?index_path,
-                    kind,
-                    "sidecar previous index position is unrepresentable"
-                );
-                return None;
-            };
-            let mut prev_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-            if index
-                .seek(SeekFrom::Start(prev_pos))
-                .and_then(|_| index.read_exact(&mut prev_buf))
-                .is_err()
-            {
-                iroha_logger::warn!(
-                    height,
-                    ?index_path,
-                    kind,
-                    "failed to read previous sidecar index entry"
-                );
-                return None;
-            }
-            let prev = SidecarIndexEntry::from_bytes(prev_buf);
-            if prev.len > 0 {
-                let Some(prev_end) = prev.offset.checked_add(prev.len) else {
-                    iroha_logger::warn!(
-                        height,
-                        prev_offset = prev.offset,
-                        prev_len = prev.len,
-                        ?index_path,
-                        kind,
-                        "previous sidecar payload range overflows"
-                    );
-                    return None;
-                };
-                if prev_end <= data_len && entry.offset < prev_end && entry_end > prev.offset {
-                    iroha_logger::warn!(
-                        height,
-                        prev_offset = prev.offset,
-                        prev_len = prev.len,
-                        offset = entry.offset,
-                        len = entry.len,
-                        ?index_path,
-                        kind,
-                        "sidecar index entry overlaps previous payload; skipping"
-                    );
-                    return None;
-                }
-            }
-        }
-
-        let mut payload = vec![0u8; len_usize];
-        if data
-            .seek(SeekFrom::Start(entry.offset))
-            .and_then(|_| data.read_exact(&mut payload))
-            .is_err()
-        {
-            iroha_logger::warn!(height, ?data_path, kind, "failed to read sidecar payload");
-            return None;
-        }
-
-        match decoder(&payload) {
-            Ok(sidecar) => Some(sidecar),
-            Err(err) => {
-                iroha_logger::warn!(?err, height, ?data_path, kind, "failed to decode sidecar");
-                None
-            }
-        }
-    }
+    include!("kura/indexed_sidecar_io.rs");
 }
 
 impl Kura {
@@ -49678,64 +46311,7 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-#[derive(Clone, Copy)]
-struct ProgressAncestorSyncFault {
-    target_index: usize,
-    remaining_to_target: usize,
-    failures_remaining: usize,
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy)]
-struct ProgressIntentDirectorySyncFault {
-    calls_before_failure: usize,
-    target_index: usize,
-}
-
-#[cfg(test)]
-std::thread_local! {
-    static FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_INDEXED_SIDECAR_INITIAL_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_BOUND_PROGRESS_INTENT_FILE_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_BOUND_PROGRESS_INTENT_DIRECTORY_SYNC: std::cell::Cell<Option<ProgressIntentDirectorySyncFault>> = const { std::cell::Cell::new(None) };
-    static FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT: std::cell::Cell<Option<ProgressAncestorSyncFault>> = const { std::cell::Cell::new(None) };
-    static FAIL_ROLLBACK_AT: std::cell::Cell<Option<RollbackFaultPoint>> = const { std::cell::Cell::new(None) };
-    static FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_PERSISTENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-fn run_latest_certified_frontier_post_validation_hook_for_tests() {
-    let hook = LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
-#[cfg(test)]
-fn set_latest_certified_frontier_post_validation_hook_for_tests(hook: impl FnOnce() + 'static) {
-    LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK.with(|slot| {
-        let previous = slot.borrow_mut().replace(Box::new(hook));
-        assert!(previous.is_none(), "frontier test hook already installed");
-    });
-}
-
-#[cfg(test)]
-fn fail_next_certified_lane_block_artifact_validation_for_tests() {
-    FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_autonomous_merge_bundle_persistence_for_tests() {
-    FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_PERSISTENCE.with(|flag| flag.set(true));
-}
+include!("kura/test_fault_injection_state.rs");
 
 fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
     #[cfg(test)]
@@ -49785,6 +46361,16 @@ fn sync_bound_progress_append_index(file: &std::fs::File) -> std::io::Result<()>
         ));
     }
     file.sync_data()
+}
+
+fn sync_native_amx_latest_index_recovery_temp(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected Native AMX latest-index recovery temporary sync failure",
+        ));
+    }
+    file.sync_all()
 }
 
 fn sync_indexed_sidecar_data(file: &std::fs::File) -> std::io::Result<()> {
@@ -49909,109 +46495,7 @@ fn sync_sidecar_temp_marker_dir(path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-fn fail_next_sidecar_promotion_dir_sync_for_tests() {
-    FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_sidecar_temp_marker_dir_sync_for_tests() {
-    FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_indexed_sidecar_data_sync_for_tests() {
-    FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_indexed_sidecar_initial_data_sync_for_tests() {
-    FAIL_NEXT_INDEXED_SIDECAR_INITIAL_DATA_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_indexed_sidecar_index_sync_for_tests() {
-    FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_indexed_sidecar_dir_sync_for_tests() {
-    FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_bound_progress_intent_file_sync_for_tests() {
-    FAIL_NEXT_BOUND_PROGRESS_INTENT_FILE_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_bound_progress_append_data_sync_for_tests() {
-    FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_next_bound_progress_append_index_sync_for_tests() {
-    FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC.with(|flag| flag.set(true));
-}
-
-#[cfg(test)]
-fn fail_bound_progress_intent_directory_sync_for_tests(
-    calls_before_failure: usize,
-    target_index: usize,
-) {
-    FAIL_BOUND_PROGRESS_INTENT_DIRECTORY_SYNC.with(|fault| {
-        fault.set(Some(ProgressIntentDirectorySyncFault {
-            calls_before_failure,
-            target_index,
-        }));
-    });
-}
-
-#[cfg(test)]
-fn fail_progress_sidecar_ancestor_sync_at_for_tests(ancestor_index: usize) {
-    fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, 1);
-}
-
-#[cfg(test)]
-fn fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index: usize, failures_remaining: usize) {
-    assert!(
-        failures_remaining > 0,
-        "fault injection count must be non-zero"
-    );
-    FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT.with(|fault| {
-        fault.set(Some(ProgressAncestorSyncFault {
-            target_index: ancestor_index,
-            remaining_to_target: ancestor_index,
-            failures_remaining,
-        }));
-    });
-}
-
-#[cfg(test)]
-fn unique_retired_path(base: &Path, stem: &str, extension: Option<&str>) -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|dur| dur.as_secs())
-        .unwrap_or(0);
-
-    let mut counter = 0u32;
-
-    loop {
-        let mut name = format!("{stem}_{stamp}");
-        if counter > 0 {
-            name.push('_');
-            name.push_str(&counter.to_string());
-        }
-        if let Some(ext) = extension {
-            name.push('.');
-            name.push_str(ext);
-        }
-        let candidate = base.join(&name);
-        if !candidate.exists() {
-            return candidate;
-        }
-        counter = counter.saturating_add(1);
-    }
-}
+include!("kura/test_fault_injection_controls.rs");
 
 /// Helper to reduce boilerplate of file operations while preserving path context.
 struct FileWrap {
@@ -50358,7 +46842,6 @@ impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
 
 #[cfg(test)]
 mod tests {
-    // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/01a_retained_eviction_and_rewrite_tail.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");
@@ -50371,6 +46854,7 @@ mod tests {
     include!("kura/tests/07a_autonomous_reservation_reconciliation_support.rs");
     include!("kura/tests/07_autonomous_lanes_and_sidecars.rs");
     include!("kura/tests/07b_autonomous_reservation_reconciliation_tests.rs");
+    include!("kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs");
     include!("kura/tests/08_lane_receipts_and_artifacts.rs");
     include!("kura/tests/09_lane_artifacts_and_fastpq.rs");
     include!("kura/tests/10_native_amx_and_roster.rs");

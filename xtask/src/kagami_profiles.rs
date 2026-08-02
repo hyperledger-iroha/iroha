@@ -581,7 +581,6 @@ public_key = "{genesis_pk}"
         sorafs_site_bindings = sorafs_site_bindings,
         taira_nexus_overrides = taira_nexus_overrides,
         taira_mcp_overrides = taira_mcp_overrides,
-        taira_offline_overrides = taira_offline_overrides,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,
@@ -1016,7 +1015,7 @@ mod tests {
 
     #[test]
     fn profiles_do_not_emit_backend_offline_capability_switches() {
-        for profile in &PROFILES {
+        for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic generic peers");
             let seed = format!("config-{}-universal-offline-genesis", profile.slug);
             let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)

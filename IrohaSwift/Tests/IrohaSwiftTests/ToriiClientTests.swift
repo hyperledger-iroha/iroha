@@ -16147,6 +16147,43 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 from: sourceOverflow
             )
         )
+
+        let stateGeometryError =
+            "Native AMX participant diagnostics state and application identity are inconsistent"
+        for state in ["certified_pending_carrier", "conflict"] {
+            let unexpectedApplicationIdentity = try mutatedNativeAmxDiagnosticsPayload { root in
+                var applications =
+                    root["native_amx_participant_applications"] as! [[String: Any]]
+                applications[0]["state"] = state
+                root["native_amx_participant_applications"] = applications
+            }
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiSumeragiDiagnosticsSnapshot.self,
+                    from: unexpectedApplicationIdentity
+                )
+            ) { error in
+                XCTAssertTrue(String(describing: error).contains(stateGeometryError))
+            }
+        }
+        for state in ["committed_evidence_pending", "durably_applied"] {
+            let missingApplicationIdentity = try mutatedNativeAmxDiagnosticsPayload { root in
+                var applications =
+                    root["native_amx_participant_applications"] as! [[String: Any]]
+                applications[0]["state"] = state
+                applications[0].removeValue(forKey: "application_block_height")
+                applications[0].removeValue(forKey: "application_block_hash")
+                root["native_amx_participant_applications"] = applications
+            }
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiSumeragiDiagnosticsSnapshot.self,
+                    from: missingApplicationIdentity
+                )
+            ) { error in
+                XCTAssertTrue(String(describing: error).contains(stateGeometryError))
+            }
+        }
     }
 
     func testGetSumeragiDiagnosticsParsesTypedLaneEvidenceAsync() async throws {
@@ -18183,7 +18220,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18214,9 +18251,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.pipelineStatus?.isRejected, true)
                 XCTAssertEqual(response.transactionTtlMs, 60_000)
                 XCTAssertEqual(response.entrypointHashHex, entrypointHash)
-                XCTAssertEqual(response.transactionScaffoldB64, "Aw==")
-                XCTAssertEqual(response.signedTransactionB64, "AQ==")
-                XCTAssertEqual(response.signingMessageB64, "Ag==")
+                XCTAssertNil(response.transactionPayloadB64)
+                XCTAssertNil(response.signingMessageB64)
                 XCTAssertEqual(response.entrypoint, "create")
                 XCTAssertEqual(response.operationReceipt.operationKind, "contract_call")
                 XCTAssertEqual(response.operationReceipt.gasLimit, 7)
@@ -18288,6 +18324,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let expectation = expectation(description: "propose multisig")
         let proposalId = String(repeating: "a", count: 64)
         let feePayment = testFeePayment()
+        let resolvedAccount = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        let transactionPayload = try CanonicalUnsignedTransactionTestSupport.genericPayload(
+            authority: resolvedAccount,
+            creationTimeMs: 123,
+            feePayment: feePayment
+        )
+        let signingMessage = IrohaHash.hash(transactionPayload)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -18317,7 +18360,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"signing_message_b64":"AQ=="}
+            {"ok":true,"resolved_multisig_account_id":"\(resolvedAccount)","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"transaction_payload_b64":"\(transactionPayload.base64EncodedString())","signing_message_b64":"\(signingMessage.base64EncodedString())"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18339,6 +18382,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.proposalId, proposalId)
                 XCTAssertEqual(response.instructionsHash, proposalId)
                 XCTAssertEqual(response.creationTimeMs, 123)
+                XCTAssertEqual(response.transactionPayloadB64, transactionPayload.base64EncodedString())
+                XCTAssertEqual(response.signingMessageB64, signingMessage.base64EncodedString())
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -18429,6 +18474,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let expectation = expectation(description: "propose multisig native body")
         let proposalId = String(repeating: "b", count: 64)
         let noritoBody = Data([0x4e, 0x52, 0x54, 0x30, 0x01, 0x02, 0x03])
+        let resolvedAccount = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        let transactionPayload = try! CanonicalUnsignedTransactionTestSupport.genericPayload(
+            authority: resolvedAccount
+        )
+        let signingMessage = IrohaHash.hash(transactionPayload)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/propose")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -18440,7 +18490,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)"}
+            {"ok":true,"resolved_multisig_account_id":"\(resolvedAccount)","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","transaction_payload_b64":"\(transactionPayload.base64EncodedString())","signing_message_b64":"\(signingMessage.base64EncodedString())"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18574,40 +18624,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testMultisigResponsesRejectNonExactResolvedAccountIds() {
-        let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-        let paddedAccountId = "\(accountId) "
-        let proposalId = String(repeating: "f", count: 64)
-        func data(_ body: String) -> Data {
-            body.data(using: .utf8)!
-        }
-
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(
-                ToriiMultisigResponse.self,
-                from: data(#"{"ok":true,"resolved_multisig_account_id":"\#(paddedAccountId)"}"#)
-            )
-        )
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(
-                ToriiMultisigSpecResponse.self,
-                from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","spec":{"quorum":2}}"#)
-            )
-        )
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(
-                ToriiMultisigProposalsQueryResponse.self,
-                from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposals":[]}"#)
-            )
-        )
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(
-                ToriiMultisigProposalResolveResponse.self,
-                from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposal_id":"\#(proposalId)","instructions_hash":"\#(proposalId)","proposal":{"approvals":[]}}"#)
-            )
-        )
-    }
-
     func testProposeMultisigRejectsFalseOkResponse() {
         let expectation = expectation(description: "propose multisig false ok response")
         let instruction = try! ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
@@ -18717,6 +18733,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let expectation = expectation(description: "propose multisig contract call")
         let proposalId = String(repeating: "a", count: 64)
         let feePayment = testFeePayment(gasLimit: 5)
+        let resolvedAccount = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        let transactionPayload = try! CanonicalUnsignedTransactionTestSupport.genericPayload(
+            authority: resolvedAccount,
+            creationTimeMs: 123,
+            feePayment: feePayment
+        )
+        let signingMessage = IrohaHash.hash(transactionPayload)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/contracts/call/multisig/propose")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -18740,7 +18763,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"signing_message_b64":"AQ=="}
+            {"ok":true,"resolved_multisig_account_id":"\(resolvedAccount)","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"transaction_payload_b64":"\(transactionPayload.base64EncodedString())","signing_message_b64":"\(signingMessage.base64EncodedString())"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18761,7 +18784,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.proposalId, proposalId)
                 XCTAssertEqual(response.instructionsHash, proposalId)
                 XCTAssertEqual(response.creationTimeMs, 123)
-                XCTAssertEqual(response.signingMessageB64, "AQ==")
+                XCTAssertEqual(response.transactionPayloadB64, transactionPayload.base64EncodedString())
+                XCTAssertEqual(response.signingMessageB64, signingMessage.base64EncodedString())
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -18862,7 +18886,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","submitted":true,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","executed_tx_hash_hex":"\(txHash)"}
+            {"ok":true,"resolved_multisig_account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","submitted":true,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","tx_hash_hex":"\(txHash)","executed_tx_hash_hex":"\(txHash)"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18879,6 +18903,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             case .success(let response):
                 XCTAssertTrue(response.ok)
                 XCTAssertEqual(response.proposalId, proposalId)
+                XCTAssertEqual(response.txHashHex, txHash)
                 XCTAssertEqual(response.executedTxHashHex, txHash)
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")

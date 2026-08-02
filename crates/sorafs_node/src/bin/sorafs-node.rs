@@ -1,4 +1,4 @@
-//! CLI helpers for interacting with the SoraFS storage backend.
+//! Offline developer CLI helpers for inspecting the SoraFS storage backend.
 
 use std::{
     env, fs,
@@ -30,15 +30,16 @@ use sorafs_node::{
 };
 
 #[derive(Debug)]
-struct UnavailableCliPorRepairHandoff;
+struct RejectingOfflineCliPorRepairHandoff;
 
-impl PorRepairHandoff for UnavailableCliPorRepairHandoff {
+impl PorRepairHandoff for RejectingOfflineCliPorRepairHandoff {
     fn enqueue_failed_por_repair(
         &self,
         _intent: &PorFailedRepairIntentV1,
     ) -> Result<[u8; 32], PorRepairHandoffError> {
         Err(PorRepairHandoffError(
-            "the node developer CLI has no native repair transaction handoff".to_owned(),
+            "offline replay rejects failed verdicts; use Torii's authenticated lifecycle for native repair admission"
+                .to_owned(),
         ))
     }
 }
@@ -335,7 +336,7 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
                 &verdict,
                 &embedded_auditor_keys,
                 1,
-                &UnavailableCliPorRepairHandoff,
+                &RejectingOfflineCliPorRepairHandoff,
             )
             .map_err(|err| format!("failed to record verdict: {err}"))?;
         Some((verdict, outcome))

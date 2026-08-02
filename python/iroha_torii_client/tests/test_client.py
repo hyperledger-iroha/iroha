@@ -113,7 +113,7 @@ def _contract_operation_receipt(
         "abi_hash_hex": "33" * 32,
         "tx_hash_hex": None,
         "entrypoint": entrypoint,
-        "entrypoint_hash_hex": "55" * 32,
+        "entrypoint_hash_hex": None,
         "gas_limit": gas_limit,
         "gas_used": None,
         "fee_payment": fee_payment or _sponsor_fee_payment(gas_limit),
@@ -140,8 +140,8 @@ def _contract_call_draft(
     ),
     fee_payment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    scaffold_b64 = base64.b64encode(b"\x01\x02\x03").decode("ascii")
-    signing_message = bytearray(hashlib.blake2b(b"payload", digest_size=32).digest())
+    transaction_payload = b"\x01\x02\x03"
+    signing_message = bytearray(hashlib.blake2b(transaction_payload, digest_size=32).digest())
     signing_message[-1] |= 1
     return {
         "ok": True,
@@ -155,9 +155,8 @@ def _contract_call_draft(
         "pipeline_status": None,
         "entrypoint": entrypoint,
         "transaction_ttl_ms": 60_000,
-        "entrypoint_hash_hex": "55" * 32,
-        "transaction_scaffold_b64": scaffold_b64,
-        "signed_transaction_b64": scaffold_b64,
+        "entrypoint_hash_hex": None,
+        "transaction_payload_b64": base64.b64encode(transaction_payload).decode("ascii"),
         "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
         "operation_receipt": _contract_operation_receipt(
             entrypoint=entrypoint,
@@ -404,6 +403,14 @@ def _native_amx_participant_application_payload(
         "application_block_hash": _canonical_hash(0x79),
         "state": state,
     }
+
+
+def _set_native_amx_application_without_block(
+    row: Dict[str, Any], state: str
+) -> None:
+    row["state"] = state
+    row.pop("application_block_height")
+    row.pop("application_block_hash")
 
 
 def _autonomous_lane_execution_payload() -> Dict[str, Any]:
@@ -1630,7 +1637,6 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
             timestamp_ms=1,
             nonce="nonce",
         )
-
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
     with pytest.raises(ValueError, match="surrounding whitespace"):
@@ -2337,13 +2343,13 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     assert result.entrypoint == "ping"
     assert result.creation_time_ms == 42
     assert result.transaction_ttl_ms == 60_000
-    assert result.entrypoint_hash_hex == "55" * 32
+    assert result.entrypoint_hash_hex is None
     assert isinstance(result.operation_receipt, ContractOperationReceipt)
     assert result.operation_receipt.gas_limit == 5000
     assert result.operation_receipt.payload_digest_hex == "66" * 32
     assert result.submitted is False
     assert result.pipeline_status is None
-    assert result.transaction_scaffold_b64 == result.signed_transaction_b64
+    assert result.transaction_payload_b64 == base64.b64encode(b"\x01\x02\x03").decode("ascii")
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert payload == {
         "authority": CANONICAL_OWNER,
@@ -2486,6 +2492,7 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
     session = RecordingSession()
     instruction = b"\x01\x02\x03\x04"
     proposal_id = "aa" * 32
+    draft = _app_api_transaction_draft()
     session.queue(
         StubResponse(
             payload={
@@ -2497,12 +2504,12 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
                 "tx_hash_hex": None,
                 "executed_tx_hash_hex": None,
                 "creation_time_ms": 123,
-                "signing_message_b64": "AQID",
+                "transaction_payload_b64": draft["transaction_payload_b64"],
+                "signing_message_b64": draft["signing_message_b64"],
             },
         )
     )
     client = ToriiClient("http://node.test", session=session)
-
     result = client.propose_multisig(
         multisig_account_alias="cbdc@banka",
         signer_account_id=CANONICAL_OWNER,
@@ -2510,13 +2517,13 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         creation_time_ms=123,
         fee_payment=_sponsor_fee_payment(),
     )
-
     assert isinstance(result, MultisigResponse)
     assert result.ok is True
     assert result.resolved_multisig_account_id == CANONICAL_OWNER
     assert result.submitted is False
     assert result.instructions_hash == proposal_id
-    assert result.signing_message_b64 == "AQID"
+    assert result.transaction_payload_b64 == draft["transaction_payload_b64"]
+    assert result.signing_message_b64 == draft["signing_message_b64"]
     call = session.calls[0]
     assert call["method"] == "POST"
     assert call["url"] == "http://node.test/v1/multisig/propose"
@@ -2534,7 +2541,7 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
 def test_multisig_instruction_b64_validates_inputs() -> None:
     assert ToriiClient.multisig_instruction_b64(b"\x01\x02") == "AQI="
     assert ToriiClient.multisig_instruction_b64("AQI=") == "AQI="
-    with pytest.raises(RuntimeError, match="valid base64"):
+    with pytest.raises((RuntimeError, ValueError), match="valid base64|exact standard-base64"):
         ToriiClient.multisig_instruction_b64("not base64")
     with pytest.raises(RuntimeError, match="must not be empty"):
         ToriiClient.multisig_instruction_b64(b"")
@@ -2694,31 +2701,32 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             payload={
                 "ok": True,
                 "resolved_multisig_account_id": CANONICAL_OWNER,
+                **_app_api_transaction_draft(),
                 "signing_message_b64": "not base64",
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
-    with pytest.raises(RuntimeError, match="valid base64"):
+    with pytest.raises((RuntimeError, ValueError), match="valid base64|exact standard-base64"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
             fee_payment=_authority_fee_payment(),
         )
-
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
                 "ok": True,
                 "resolved_multisig_account_id": CANONICAL_OWNER,
+                **_app_api_transaction_draft(),
                 "signing_message_b64": "",
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
-    with pytest.raises(RuntimeError, match="empty bytes"):
+    with pytest.raises((RuntimeError, ValueError), match="empty bytes|non-empty"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
@@ -4070,20 +4078,31 @@ def test_get_sumeragi_diagnostics_parses_ordered_native_application_evidence() -
     assert applications[0].state == "durably_applied"
 
 
-def test_get_sumeragi_diagnostics_accepts_explicit_native_application_conflict() -> None:
+@pytest.mark.parametrize(
+    ("state", "has_application_block"),
+    [
+        pytest.param("certified_pending_carrier", False, id="certified"),
+        pytest.param("committed_evidence_pending", True, id="committed"),
+        pytest.param("durably_applied", True, id="durably-applied"),
+        pytest.param("conflict", False, id="conflict"),
+    ],
+)
+def test_get_sumeragi_diagnostics_accepts_native_application_state_geometry(
+    state: str, has_application_block: bool
+) -> None:
     payload = _sumeragi_diagnostics_payload()
-    application = _native_amx_participant_application_payload(state="conflict")
-    del application["application_block_height"]
-    del application["application_block_hash"]
+    application = _native_amx_participant_application_payload(state=state)
+    if not has_application_block:
+        _set_native_amx_application_without_block(application, state)
     payload["native_amx_participant_applications"] = [application]
 
     parsed = _get_sumeragi_diagnostics(
         payload
     ).native_amx_participant_applications[0]
 
-    assert parsed.state == "conflict"
-    assert parsed.application_block_height is None
-    assert parsed.application_block_hash is None
+    assert parsed.state == state
+    assert (parsed.application_block_height is not None) is has_application_block
+    assert (parsed.application_block_hash is not None) is has_application_block
 
 
 @pytest.mark.parametrize(
@@ -4120,6 +4139,30 @@ def test_get_sumeragi_diagnostics_accepts_explicit_native_application_conflict()
             lambda row: row.pop("application_block_hash"),
             "application block height and hash must appear together",
             id="unpaired-application-block",
+        ),
+        pytest.param(
+            lambda row: row.update(state="certified_pending_carrier"),
+            "state and application block identity disagree",
+            id="certified-with-application-block",
+        ),
+        pytest.param(
+            lambda row: row.update(state="conflict"),
+            "state and application block identity disagree",
+            id="conflict-with-application-block",
+        ),
+        pytest.param(
+            lambda row: _set_native_amx_application_without_block(
+                row, "committed_evidence_pending"
+            ),
+            "state and application block identity disagree",
+            id="committed-without-application-block",
+        ),
+        pytest.param(
+            lambda row: _set_native_amx_application_without_block(
+                row, "durably_applied"
+            ),
+            "state and application block identity disagree",
+            id="durably-applied-without-application-block",
         ),
         pytest.param(
             lambda row: row.update(source_count="2"),

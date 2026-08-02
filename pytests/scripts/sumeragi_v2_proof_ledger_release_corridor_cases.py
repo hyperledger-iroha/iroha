@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal() -> None:
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
         "708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 418
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 419
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 472
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 473
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "d395aec773c5d0482cc1f4af970267424243f9362d1e1153c9ea7887db885fa7"
+        "9614482245a240ce1ea69b4e4f044514da1fd0029011b3ce5b0c639ceee0f6e3"
     )
 
     receipt_spec = importlib.util.spec_from_file_location(
@@ -24,9 +24,12 @@ def test_release_inventory_constants_match_current_source_seal() -> None:
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 813
-    assert receipt_module._G_UNIT_TEST_COUNT == 418
+    assert receipt_module._G_UNIT_TEST_COUNT == 472
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 813
-    assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 418
+    assert (
+        sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
+        == 472
+    )
 
 
 def test_release_corridor_rejects_network_skips_and_zero_test_filters(
@@ -379,6 +382,27 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "V2LaneWorkAdapter::new_with_output_guard_and_transport",
     ):
         assert runner_platform_gate < run_inner.index(side_effect)
+    recovered_context = run_inner.index("let recovered = recover_active_height_with_plan(")
+    recovered_parts = run_inner.index("    ) = recovered.into_parts();", recovered_context)
+    lifecycle_generation_claim = run_inner.index(
+        ".claim_autonomous_lifecycle_process_generation("
+    )
+    first_lane_service = run_inner.index(
+        "V2LaneWorkAdapter::new_with_output_guard_and_transport("
+    )
+    assert recovered_parts < lifecycle_generation_claim < first_lane_service
+    membership_gate = run_inner.index(
+        "local_validator_index(verified_context.context(), &local_peer, config.role)?;"
+    )
+    assert recovered_parts < membership_gate < lifecycle_generation_claim
+    lifecycle_claim = run_inner[
+        run_inner.rfind("let lifecycle_chain_id", 0, lifecycle_generation_claim) :
+        run_inner.index("    };", lifecycle_generation_claim) + len("    };")
+    ]
+    assert "verified_context.context().chain_id" in lifecycle_claim
+    assert "&local_peer" in lifecycle_claim
+    assert "if initial_local_validator.is_some()" in lifecycle_claim
+    assert "else {\n        None\n    }" in lifecycle_claim
     lane_constructor_start = lane_work_source.index(
         "    pub(crate) fn new_with_output_guard_and_transport("
     )
@@ -393,6 +417,26 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "NativeAmxSigningGuard::open",
     ):
         assert lane_platform_gate < lane_constructor.index(side_effect)
+    lane_constructor_end = lane_constructor.index(
+        "    pub(crate) fn activate_after_lane_drain_queue_install("
+    )
+    carrier_silent_constructor = lane_constructor[:lane_constructor_end]
+    assert "adapter.hydrate_canonical_lane_artifacts()?;" not in carrier_silent_constructor
+    assert "adapter.drive_lane_sessions();" not in carrier_silent_constructor
+    activation = lane_constructor[lane_constructor_end:]
+    hydration = activation.index("self.hydrate_canonical_lane_artifacts()?;")
+    queue_revalidation = activation.index(
+        "self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;"
+    )
+    drive = activation.index("self.drive_lane_sessions();")
+    assert hydration < queue_revalidation < drive
+    queue_install = run_inner.index(
+        "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;"
+    )
+    lane_activation = run_inner.index(
+        "lane_work.activate_after_lane_drain_queue_install(&queue)?;"
+    )
+    assert queue_install < lane_activation
     assert "local_validator.is_some()," in run_inner
     assert "(NodeRole::Observer, _) => Ok(None)" in runner_source
     assert (
@@ -2072,8 +2116,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 137 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 137 tests to be runnable" in harness_source
+    assert "expected exactly 140 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 140 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)
@@ -2145,8 +2189,8 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
     current_names = (
         "native_amx_manifest_v1_",
         "native_amx_receipt_v1_",
-        "native_amx_evidence_prune_intent_v1.norito",
-        "native_amx_evidence_prune_intent_v1.norito.tmp",
+        "native_amx_evidence_prune_intent_v2.norito",
+        "native_amx_evidence_prune_intent_v2.norito.tmp",
         "native_amx_participant_receipts.latest_v2.norito",
         "native_amx_participant_receipts.latest_v2.norito.tmp",
     )
@@ -2155,6 +2199,8 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
         assert name in kura_source
 
     obsolete_dense_names = (
+        "native_amx_evidence_prune_intent_v1.norito",
+        "native_amx_evidence_prune_intent_v1.norito.tmp",
         "native_amx_participant_receipts.latest_v1.norito",
         "native_amx_participant_receipts.latest_v1.norito.tmp",
         "native_amx_participant_receipts.norito",
@@ -2523,6 +2569,21 @@ def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None
     assert worst_case_service_budget <= maximum_view <= 2_147_483_647
 
 
+def test_workspace_excluded_harness_pins_complete_unit_inventory() -> None:
+    source = (
+        ROOT_DIR / "scripts/formal/run_sumeragi_v2_harness.sh"
+    ).read_text(encoding="utf-8")
+    unit_branch = source.index("--unit)")
+    unit_inventory = source.index("unit_test_list=", unit_branch)
+    ignored_inventory = source.index("unit_ignored_test_list=", unit_inventory)
+    unit_run = source.index("--lib -- --test-threads=1", ignored_inventory)
+
+    assert unit_branch < unit_inventory < ignored_inventory < unit_run
+    assert "if ((${#listed_unit_tests[@]} != 140)); then" in source
+    assert "expected exactly 140 Sumeragi v2 reducer unit tests" in source
+    assert "reducer unit gate requires all 140 tests to be runnable" in source
+
+
 def test_workspace_excluded_harness_names_every_required_fast_simulation() -> None:
     source = (
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_harness.sh"
@@ -2608,6 +2669,12 @@ def test_readiness_gate_source_seal_rejects_ci_matrix_drift(
             Path("crates/iroha_sumeragi_core/tests/model_trace_replay.rs"),
             "if action == ModelAction::DeliverQc {",
             "if false {",
+            None,
+        ),
+        (
+            Path("scripts/formal/run_sumeragi_v2_harness.sh"),
+            "if ((${#listed_unit_tests[@]} != 140)); then",
+            "if false; then",
             None,
         ),
         (

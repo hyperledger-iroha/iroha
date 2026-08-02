@@ -861,7 +861,7 @@ public final class HttpClientTransport implements IrohaClient {
    * Prepares an unsigned contract-call transaction for local signing.
    *
    * <p>Private signing material is never accepted by or sent to Torii. Sign the returned
-   * transaction scaffold locally and submit the resulting signed transaction through {@link
+   * canonical transaction payload locally and submit the resulting signed transaction through {@link
    * #submitTransaction(SignedTransaction)}.
    */
   public CompletableFuture<ContractCallResponse> prepareContractCall(
@@ -2546,16 +2546,19 @@ public final class HttpClientTransport implements IrohaClient {
         || receipt.txHashHex() != null) {
       throw new IllegalStateException("contract call draft receipt is inconsistent");
     }
-    if (response.transactionScaffoldB64() == null
-        || !response.transactionScaffoldB64().equals(response.signedTransactionB64())) {
+    if (response.transactionPayloadB64() == null) {
       throw new IllegalStateException(
-          "contract call draft must contain one exact transaction scaffold");
+          "contract call draft must contain one exact canonical transaction payload");
     }
     if (response.signingMessageB64() == null) {
       throw new IllegalStateException("contract call draft must contain a signing message");
     }
     if (Base64.getDecoder().decode(response.signingMessageB64()).length != 32) {
       throw new IllegalStateException("contract call draft signing message must be 32 bytes");
+    }
+    if (response.entrypointHashHex() != null || receipt.entrypointHashHex() != null) {
+      throw new IllegalStateException(
+          "contract call draft must not claim a final entrypoint hash");
     }
     final Object expectedAddress = request.get("contract_address");
     if (expectedAddress != null

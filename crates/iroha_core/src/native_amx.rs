@@ -1462,12 +1462,25 @@ impl NativeAmxSigningGuard {
         Ok(())
     }
 
-    /// Durably authorize the exact full body before BLS signature creation.
+    /// Durably authorize an authenticated full-plan request before BLS signature creation.
     ///
     /// Exact replay at the current view is idempotent. A changed source session,
     /// a conflicting body for one key, or a stale view is refused.
     /// Unsafe journal and I/O failures permanently poison this guard instance.
     pub(crate) fn record(
+        &self,
+        request: &NativeAmxAttestationRequestV2,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        request.validate_plan_binding().map_err(|error| {
+            NativeAmxSigningGuardError::InvalidInput(format!(
+                "unauthenticated Native AMX attestation request: {error}"
+            ))
+        })?;
+        let body = &request.body;
+        self.record_validated_body(body)
+    }
+
+    fn record_validated_body(
         &self,
         body: &NativeAmxAttestationBodyV2,
     ) -> Result<(), NativeAmxSigningGuardError> {
@@ -1480,6 +1493,14 @@ impl NativeAmxSigningGuard {
             inner.poisoned = Some(message.clone());
         }
         result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_body_for_test(
+        &self,
+        body: &NativeAmxAttestationBodyV2,
+    ) -> Result<(), NativeAmxSigningGuardError> {
+        self.record_validated_body(body)
     }
 
     #[cfg(test)]
@@ -3594,29 +3615,39 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn signing_guard_rejects_legacy_signer_journal_instead_of_ignoring_it() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let body = body(NativeAmxPhase::Prepare);
-        let (_keypair, signer) = signing_guard_signer(0x6F);
-        let owner_uid = native_amx_effective_user_id(root.path()).expect("effective uid");
-        let signer_digest =
-            native_amx_signer_directory_digest(root.path(), &signer).expect("signer digest");
-        let legacy_root = root.path().join("native-amx-v2-signing-guard-v3");
-        native_amx_ensure_secure_directory(&legacy_root, owner_uid)
-            .expect("create secure legacy root");
-        native_amx_ensure_secure_directory(&legacy_root.join(signer_digest.to_string()), owner_uid)
+        for (index, legacy_name) in NATIVE_AMX_LEGACY_SIGNING_GUARD_DIRECTORIES
+            .iter()
+            .enumerate()
+        {
+            let root = tempfile::tempdir().expect("temp dir");
+            let body = body(NativeAmxPhase::Prepare);
+            let seed = 0x6F_u8.saturating_add(u8::try_from(index).expect("legacy index fits u8"));
+            let (_keypair, signer) = signing_guard_signer(seed);
+            let owner_uid = native_amx_effective_user_id(root.path()).expect("effective uid");
+            let signer_digest =
+                native_amx_signer_directory_digest(root.path(), &signer).expect("signer digest");
+            let legacy_root = root.path().join(*legacy_name);
+            native_amx_ensure_secure_directory(&legacy_root, owner_uid)
+                .expect("create secure legacy root");
+            native_amx_ensure_secure_directory(
+                &legacy_root.join(signer_digest.to_string()),
+                owner_uid,
+            )
             .expect("create secure legacy signer journal");
 
-        assert!(matches!(
-            open_signing_guard(root.path(), &body, signer, 8),
-            Err(NativeAmxSigningGuardError::UnsafeJournal(message))
-                if message.contains("authenticated recovery")
-        ));
-        assert!(
-            !root
-                .path()
-                .join(NATIVE_AMX_SIGNING_GUARD_DIRECTORY)
-                .exists()
-        );
+            assert!(matches!(
+                open_signing_guard(root.path(), &body, signer, 8),
+                Err(NativeAmxSigningGuardError::UnsafeJournal(message))
+                    if message.contains("authenticated recovery")
+            ));
+            assert!(
+                !root
+                    .path()
+                    .join(NATIVE_AMX_SIGNING_GUARD_DIRECTORY)
+                    .exists(),
+                "legacy directory {legacy_name} must fail before V4 journal creation"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -3627,143 +3658,33 @@ mod tests {
         let body = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard.record(&body).expect("record first body");
-        guard.record(&body).expect("exact replay is idempotent");
+        guard
+            .record_body_for_test(&body)
+            .expect("record first body");
+        guard
+            .record_body_for_test(&body)
+            .expect("exact replay is idempotent");
 
         let mut conflict = body;
         conflict.coordinator_proposal_hash = Hash::new(b"conflicting coordinator proposal");
         assert_eq!(
-            guard.record(&conflict),
+            guard.record_body_for_test(&conflict),
             Err(NativeAmxSigningGuardError::Equivocation)
         );
         drop(guard);
 
         let restarted =
             open_signing_guard(root.path(), &body, signer, 8).expect("restart signing guard");
-        restarted.record(&body).expect("restart exact replay");
-        assert_eq!(
-            restarted.record(&conflict),
-            Err(NativeAmxSigningGuardError::Equivocation)
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_durably_binds_full_source_session_and_participant_incarnation() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x6E);
-        let base = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &base, signer.clone(), 32).expect("open signing guard");
-        guard.record(&base).expect("record source-session claim");
-        drop(guard);
-
-        let mut drifts = Vec::new();
-
-        let mut entrypoint = base;
-        entrypoint.phase = NativeAmxPhase::Commit;
-        entrypoint.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::new(b"source-entrypoint-drift"),
-        );
-        drifts.push(entrypoint);
-
-        let mut global_view = base;
-        global_view.phase = NativeAmxPhase::Commit;
-        global_view.round.view = global_view.round.view.saturating_add(1);
-        drifts.push(global_view);
-
-        let mut coordinator_route = base;
-        coordinator_route.phase = NativeAmxPhase::Commit;
-        coordinator_route.coordinator_lane_id = LaneId::new(9);
-        drifts.push(coordinator_route);
-
-        let mut coordinator_incarnation = base;
-        coordinator_incarnation.phase = NativeAmxPhase::Commit;
-        coordinator_incarnation.coordinator_lane_incarnation =
-            Hash::new(b"coordinator-incarnation-drift");
-        drifts.push(coordinator_incarnation);
-
-        let mut planned_height = base;
-        planned_height.phase = NativeAmxPhase::Commit;
-        planned_height.planned_coordinator_block_height = planned_height
-            .planned_coordinator_block_height
-            .saturating_add(1);
-        drifts.push(planned_height);
-
-        let mut coordinator_view = base;
-        coordinator_view.phase = NativeAmxPhase::Commit;
-        coordinator_view.coordinator_lane_block_view = coordinator_view
-            .coordinator_lane_block_view
-            .saturating_add(1);
-        drifts.push(coordinator_view);
-
-        let mut coordinator_proposal = base;
-        coordinator_proposal.phase = NativeAmxPhase::Commit;
-        coordinator_proposal.coordinator_proposal_hash = Hash::new(b"coordinator-proposal-drift");
-        drifts.push(coordinator_proposal);
-
-        let mut participant_incarnation = base;
-        participant_incarnation.phase = NativeAmxPhase::Commit;
-        participant_incarnation.participant_lane_incarnation =
-            Hash::new(b"participant-incarnation-drift");
-        drifts.push(participant_incarnation);
-
-        for drift in drifts {
-            let restarted = open_signing_guard(root.path(), &base, signer.clone(), 32)
-                .expect("restart signing guard");
-            assert_eq!(
-                restarted.record(&drift),
-                Err(NativeAmxSigningGuardError::PlanEquivocation)
-            );
-        }
-
-        let mut second_participant = base;
-        second_participant.participant_lane_id = LaneId::new(3);
-        second_participant.participant_dataspace_id = DataSpaceId::new(9);
-        second_participant.participant_lane_incarnation =
-            Hash::new(b"second-planned-participant-incarnation");
-        second_participant.participant_proposal_hash =
-            Hash::new(b"second-planned-participant-proposal");
-        second_participant.participant_settlement_commitment = second_participant
-            .computed_grouped_participant_settlement_commitment(&[second_participant.source_id])
-            .expect("single-source test fixture settlement is valid");
-        let restarted =
-            open_signing_guard(root.path(), &base, signer, 32).expect("restart signing guard");
         restarted
-            .record(&second_participant)
-            .expect("same source may bind another planned participant route");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_durably_rejects_same_source_plan_equivocation_across_views() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0x72);
-        let body = body(NativeAmxPhase::Prepare);
-        let guard =
-            open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard.record(&body).expect("record source-plan claim");
-
-        let mut conflicting_plan = body;
-        conflicting_plan.round.view += 1;
-        conflicting_plan.coordinator_lane_block_view += 1;
-        conflicting_plan.plan_digest = Hash::new(b"conflicting durable native AMX plan");
+            .record_body_for_test(&body)
+            .expect("restart exact replay");
         assert_eq!(
-            guard.record(&conflicting_plan),
-            Err(NativeAmxSigningGuardError::PlanEquivocation)
-        );
-        drop(guard);
-
-        conflicting_plan.round.view += 1;
-        conflicting_plan.coordinator_lane_block_view += 1;
-        let restarted =
-            open_signing_guard(root.path(), &body, signer, 8).expect("restart signing guard");
-        assert_eq!(
-            restarted.record(&conflicting_plan),
-            Err(NativeAmxSigningGuardError::PlanEquivocation)
+            restarted.record_body_for_test(&conflict),
+            Err(NativeAmxSigningGuardError::Equivocation)
         );
     }
 
+    include!("native_amx/signing_guard_boundary_tests.rs");
     #[cfg(unix)]
     #[test]
     fn signing_guard_durably_rejects_participant_slot_aba_across_sources_and_views() {
@@ -3772,15 +3693,28 @@ mod tests {
         let first = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &first, signer.clone(), 8).expect("open signing guard");
-        guard.record(&first).expect("record first slot claim");
+        guard
+            .record_body_for_test(&first)
+            .expect("record first slot claim");
 
         let mut conflicting_proposal = first;
         conflicting_proposal.round.view += 1;
         conflicting_proposal.participant_proposal_hash = Hash::new(b"slot-conflicting proposal");
         assert_eq!(
-            guard.record(&conflicting_proposal),
+            guard.record_body_for_test(&conflicting_proposal),
             Err(NativeAmxSigningGuardError::SlotEquivocation)
         );
+        assert_eq!(guard.record_count_for_test(), 1);
+
+        let mut conflicting_settlement = first;
+        conflicting_settlement.round.view += 1;
+        conflicting_settlement.participant_settlement_commitment =
+            Hash::new(b"slot-conflicting settlement only");
+        assert_eq!(
+            guard.record_body_for_test(&conflicting_settlement),
+            Err(NativeAmxSigningGuardError::SlotEquivocation)
+        );
+        assert_eq!(guard.record_count_for_test(), 1);
 
         let mut conflicting = first;
         conflicting.round.view += 1;
@@ -3792,18 +3726,25 @@ mod tests {
             .computed_grouped_participant_settlement_commitment(&[conflicting.source_id])
             .expect("single-source test fixture settlement is valid");
         assert_eq!(
-            guard.record(&conflicting),
+            guard.record_body_for_test(&conflicting),
             Err(NativeAmxSigningGuardError::SlotEquivocation)
         );
+        assert_eq!(guard.record_count_for_test(), 1);
         drop(guard);
 
         conflicting.round.view += 1;
         let restarted =
             open_signing_guard(root.path(), &first, signer, 8).expect("restart signing guard");
         assert_eq!(
-            restarted.record(&conflicting),
+            restarted.record_body_for_test(&conflicting_settlement),
             Err(NativeAmxSigningGuardError::SlotEquivocation)
         );
+        assert_eq!(restarted.record_count_for_test(), 1);
+        assert_eq!(
+            restarted.record_body_for_test(&conflicting),
+            Err(NativeAmxSigningGuardError::SlotEquivocation)
+        );
+        assert_eq!(restarted.record_count_for_test(), 1);
     }
 
     #[cfg(unix)]
@@ -3814,7 +3755,7 @@ mod tests {
         let base = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        guard.record(&base).expect("record base view");
+        guard.record_body_for_test(&base).expect("record base view");
         let mut high = base;
         high.source_id = [0xA1; Hash::LENGTH];
         high.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
@@ -3822,7 +3763,9 @@ mod tests {
         );
         high.round.view += 2;
         high.coordinator_lane_block_view += 2;
-        guard.record(&high).expect("advance durable view");
+        guard
+            .record_body_for_test(&high)
+            .expect("advance durable view");
         drop(guard);
 
         assert!(matches!(
@@ -3849,6 +3792,18 @@ mod tests {
             ),
             Err(NativeAmxSigningGuardError::ContextMismatch)
         ));
+        assert!(matches!(
+            NativeAmxSigningGuard::open(
+                root.path(),
+                base.authority_context_height,
+                base.round.context_id,
+                base.epoch,
+                Hash::new(b"same-height-chain-drift"),
+                signer.clone(),
+                signing_guard_limits(8),
+            ),
+            Err(NativeAmxSigningGuardError::ContextMismatch)
+        ));
 
         let restarted = open_signing_guard(root.path(), &base, signer.clone(), 8)
             .expect("restart exact context");
@@ -3860,7 +3815,7 @@ mod tests {
         stale.round.view += 1;
         stale.coordinator_lane_block_view += 1;
         assert_eq!(
-            restarted.record(&stale),
+            restarted.record_body_for_test(&stale),
             Err(NativeAmxSigningGuardError::StaleView {
                 attempted_view: base.round.view + 1,
                 highest_view: base.round.view + 2,
@@ -3887,7 +3842,7 @@ mod tests {
         next.authority_context_height += 1;
         next.planned_coordinator_block_height += 1;
         next_guard
-            .record(&next)
+            .record_body_for_test(&next)
             .expect("view high-water resets at next height");
         drop(next_guard);
 
@@ -3910,7 +3865,9 @@ mod tests {
         let body = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard.record(&body).expect("record anchored body");
+        guard
+            .record_body_for_test(&body)
+            .expect("record anchored body");
         let path = signing_record_paths(&guard)
             .into_iter()
             .next()
@@ -3933,7 +3890,9 @@ mod tests {
             let first = body(NativeAmxPhase::Prepare);
             let guard =
                 open_signing_guard(root.path(), &first, signer, 8).expect("open signing guard");
-            guard.record(&first).expect("record anchored body");
+            guard
+                .record_body_for_test(&first)
+                .expect("record anchored body");
             let deleted_path = if delete_anchor {
                 NativeAmxSigningGuard::anchor_path(&guard.directory)
             } else {
@@ -3950,11 +3909,11 @@ mod tests {
                 Hash::prehashed([0xD1; Hash::LENGTH]),
             );
             assert!(matches!(
-                guard.record(&second),
+                guard.record_body_for_test(&second),
                 Err(NativeAmxSigningGuardError::UnsafeJournal(_))
             ));
             assert!(matches!(
-                guard.record(&second),
+                guard.record_body_for_test(&second),
                 Err(NativeAmxSigningGuardError::Poisoned(_))
             ));
         }
@@ -3969,7 +3928,9 @@ mod tests {
             let first = body(NativeAmxPhase::Prepare);
             let guard =
                 open_signing_guard(root.path(), &first, signer, 8).expect("open signing guard");
-            guard.record(&first).expect("record anchored body");
+            guard
+                .record_body_for_test(&first)
+                .expect("record anchored body");
             let replaced_path = if replace_anchor {
                 NativeAmxSigningGuard::anchor_path(&guard.directory)
             } else {
@@ -3993,7 +3954,7 @@ mod tests {
                 Hash::prehashed([0xD2; Hash::LENGTH]),
             );
             assert!(matches!(
-                guard.record(&second),
+                guard.record_body_for_test(&second),
                 Err(NativeAmxSigningGuardError::UnsafeJournal(_))
             ));
         }
@@ -4001,19 +3962,48 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn signing_guard_rejects_anchor_deletion_when_records_remain() {
+    fn signing_guard_rejects_anchor_deletion_or_wrong_v4_anchor_version() {
         let root = tempfile::tempdir().expect("temp dir");
         let (_keypair, signer) = signing_guard_signer(0x83);
         let body = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard.record(&body).expect("record anchored body");
+        guard
+            .record_body_for_test(&body)
+            .expect("record anchored body");
         let anchor_path = NativeAmxSigningGuard::anchor_path(&guard.directory);
         drop(guard);
         fs::remove_file(anchor_path).expect("delete chain anchor");
 
         assert!(matches!(
             open_signing_guard(root.path(), &body, signer, 8),
+            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
+        ));
+
+        let version_root = tempfile::tempdir().expect("wrong-version temp dir");
+        let (_keypair, version_signer) = signing_guard_signer(0x93);
+        let version_guard =
+            open_signing_guard(version_root.path(), &body, version_signer.clone(), 8)
+                .expect("open wrong-version fixture guard");
+        version_guard
+            .record_body_for_test(&body)
+            .expect("record wrong-version fixture body");
+        let version_anchor_path = NativeAmxSigningGuard::anchor_path(&version_guard.directory);
+        let version_anchor_bytes =
+            fs::read(&version_anchor_path).expect("read canonical V4 anchor");
+        let mut wrong_version_anchor =
+            norito::decode_canonical::<NativeAmxSigningAnchorV2>(&version_anchor_bytes)
+                .expect("decode canonical V4 anchor");
+        wrong_version_anchor.version = NATIVE_AMX_SIGNING_GUARD_VERSION.saturating_sub(1);
+        drop(version_guard);
+        fs::write(
+            &version_anchor_path,
+            norito::encode_canonical(&wrong_version_anchor)
+                .expect("encode wrong-version V4 anchor"),
+        )
+        .expect("replace anchor with wrong-version bytes");
+        assert!(matches!(
+            open_signing_guard(version_root.path(), &body, version_signer, 8),
             Err(NativeAmxSigningGuardError::UnsafeJournal(_))
         ));
     }
@@ -4026,7 +4016,9 @@ mod tests {
         let body = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard.record(&body).expect("record anchored body");
+        guard
+            .record_body_for_test(&body)
+            .expect("record anchored body");
         let path = signing_record_paths(&guard)
             .into_iter()
             .next()
@@ -4044,13 +4036,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn signing_guard_rejects_changed_noncanonical_and_hardlinked_records() {
+    fn signing_guard_rejects_wrong_version_noncanonical_and_hardlinked_records() {
         let root = tempfile::tempdir().expect("temp dir");
         let (_keypair, signer) = signing_guard_signer(0x76);
         let body = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard.record(&body).expect("record anchored body");
+        guard
+            .record_body_for_test(&body)
+            .expect("record anchored body");
         let path = signing_record_paths(&guard)
             .into_iter()
             .next()
@@ -4059,6 +4053,20 @@ mod tests {
         let bytes = fs::read(&path).expect("read record");
         let record =
             norito::decode_from_bytes::<NativeAmxSigningRecordV2>(&bytes).expect("decode record");
+        let mut wrong_version_record = record.clone();
+        wrong_version_record.version = NATIVE_AMX_SIGNING_GUARD_VERSION.saturating_sub(1);
+        fs::write(
+            &path,
+            norito::encode_canonical(&wrong_version_record)
+                .expect("encode wrong-version V4 record"),
+        )
+        .expect("replace with wrong-version V4 record");
+        assert!(matches!(
+            open_signing_guard(root.path(), &body, signer.clone(), 8),
+            Err(NativeAmxSigningGuardError::UnsafeJournal(_))
+        ));
+
+        fs::write(&path, &bytes).expect("restore canonical V4 record");
         fs::write(&path, record.encode()).expect("replace with bare Norito");
         assert!(matches!(
             open_signing_guard(root.path(), &body, signer.clone(), 8),
@@ -4082,7 +4090,9 @@ mod tests {
         let base = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        guard.record(&base).expect("record anchored base");
+        guard
+            .record_body_for_test(&base)
+            .expect("record anchored base");
         let anchor = guard.inner.lock().anchor.clone();
         let mut tail_body = base;
         tail_body.source_id = [0xB1; Hash::LENGTH];
@@ -4117,7 +4127,9 @@ mod tests {
         let base = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        guard.record(&base).expect("record anchored body");
+        guard
+            .record_body_for_test(&base)
+            .expect("record anchored body");
         let committed_anchor = guard.inner.lock().anchor.clone();
         let temp_path = NativeAmxSigningGuard::anchor_temp_path(&guard.directory);
         write_secure_new(
@@ -4131,7 +4143,7 @@ mod tests {
         assert!(!temp_path.exists());
         assert_eq!(restarted.inner.lock().anchor, committed_anchor);
         restarted
-            .record(&base)
+            .record_body_for_test(&base)
             .expect("committed head remains replayable");
     }
 
@@ -4143,7 +4155,9 @@ mod tests {
         let base = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &base, signer.clone(), 8).expect("open signing guard");
-        guard.record(&base).expect("record old-height body");
+        guard
+            .record_body_for_test(&base)
+            .expect("record old-height body");
         let old_record = signing_record_paths(&guard)
             .into_iter()
             .next()
@@ -4180,7 +4194,9 @@ mod tests {
         let restarted = open_signing_guard(root.path(), &next, signer, 8)
             .expect("finish stale-record cleanup after anchor publication crash");
         assert!(!old_record.exists());
-        restarted.record(&next).expect("sign at recovered height");
+        restarted
+            .record_body_for_test(&next)
+            .expect("sign at recovered height");
     }
 
     #[cfg(unix)]
@@ -4230,11 +4246,11 @@ mod tests {
         fs::remove_file(&guard.lock_path).expect("delete retained lock path");
 
         assert!(matches!(
-            guard.record(&body),
+            guard.record_body_for_test(&body),
             Err(NativeAmxSigningGuardError::UnsafeJournal(_))
         ));
         assert!(matches!(
-            guard.record(&body),
+            guard.record_body_for_test(&body),
             Err(NativeAmxSigningGuardError::Poisoned(_))
         ));
     }
@@ -4265,11 +4281,11 @@ mod tests {
             }
 
             assert!(matches!(
-                guard.record(&body),
+                guard.record_body_for_test(&body),
                 Err(NativeAmxSigningGuardError::UnsafeJournal(_))
             ));
             assert!(matches!(
-                guard.record(&body),
+                guard.record_body_for_test(&body),
                 Err(NativeAmxSigningGuardError::Poisoned(_))
             ));
         }
@@ -4289,25 +4305,27 @@ mod tests {
                 b"foreign-signing-guard-context",
             )));
         assert_eq!(
-            guard.record(&foreign_context),
+            guard.record_body_for_test(&foreign_context),
             Err(NativeAmxSigningGuardError::ContextMismatch)
         );
 
         let mut zero_source = body;
         zero_source.source_id = [0; Hash::LENGTH];
         assert!(matches!(
-            guard.record(&zero_source),
+            guard.record_body_for_test(&zero_source),
             Err(NativeAmxSigningGuardError::InvalidInput(_))
         ));
 
         let mut zero_planned_height = body;
         zero_planned_height.planned_coordinator_block_height = 0;
         assert!(matches!(
-            guard.record(&zero_planned_height),
+            guard.record_body_for_test(&zero_planned_height),
             Err(NativeAmxSigningGuardError::InvalidInput(_))
         ));
 
-        guard.record(&body).expect("record baseline body");
+        guard
+            .record_body_for_test(&body)
+            .expect("record baseline body");
 
         let mut entrypoint_drift = body;
         entrypoint_drift.phase = NativeAmxPhase::Commit;
@@ -4316,14 +4334,14 @@ mod tests {
                 b"conflicting-signing-guard-entrypoint",
             ));
         assert_eq!(
-            guard.record(&entrypoint_drift),
+            guard.record_body_for_test(&entrypoint_drift),
             Err(NativeAmxSigningGuardError::PlanEquivocation)
         );
 
         let mut mismatched_view = body;
         mismatched_view.coordinator_lane_block_view += 1;
         assert_eq!(
-            guard.record(&mismatched_view),
+            guard.record_body_for_test(&mismatched_view),
             Err(NativeAmxSigningGuardError::Equivocation)
         );
     }
@@ -4338,7 +4356,7 @@ mod tests {
         let body = body(NativeAmxPhase::Prepare);
         let guard =
             open_signing_guard(root.path(), &body, signer.clone(), 8).expect("open signing guard");
-        guard.record(&body).expect("record body");
+        guard.record_body_for_test(&body).expect("record body");
         let record_path = signing_record_paths(&guard)
             .into_iter()
             .next()
@@ -4402,14 +4420,16 @@ mod tests {
         let first = body(NativeAmxPhase::Prepare);
         let guard = open_signing_guard(root.path(), &first, signer.clone(), 1)
             .expect("open one-record guard");
-        guard.record(&first).expect("record within capacity");
+        guard
+            .record_body_for_test(&first)
+            .expect("record within capacity");
         let mut second = first;
         second.source_id = [0xCE; Hash::LENGTH];
         second.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
             Hash::prehashed([0xCE; Hash::LENGTH]),
         );
         assert_eq!(
-            guard.record(&second),
+            guard.record_body_for_test(&second),
             Err(NativeAmxSigningGuardError::Capacity)
         );
         drop(guard);
@@ -4434,13 +4454,17 @@ mod tests {
         let body = body(NativeAmxPhase::Prepare);
         let first = open_signing_guard(root.path(), &body, first_signer.clone(), 8)
             .expect("open first signer");
-        first.record(&body).expect("record first signer body");
+        first
+            .record_body_for_test(&body)
+            .expect("record first signer body");
         let first_directory = first.directory.clone();
         drop(first);
 
         let second =
             open_signing_guard(root.path(), &body, second_signer, 8).expect("open rotated signer");
-        second.record(&body).expect("record rotated signer body");
+        second
+            .record_body_for_test(&body)
+            .expect("record rotated signer body");
         assert_ne!(first_directory, second.directory);
         drop(second);
 
@@ -4449,7 +4473,7 @@ mod tests {
         let mut conflict = body;
         conflict.coordinator_proposal_hash = Hash::new(b"first signer conflict");
         assert_eq!(
-            first_restarted.record(&conflict),
+            first_restarted.record_body_for_test(&conflict),
             Err(NativeAmxSigningGuardError::Equivocation)
         );
     }
@@ -4463,7 +4487,9 @@ mod tests {
         let body = body(NativeAmxPhase::Prepare);
         let first = open_signing_guard(root.path(), &body, first_signer.clone(), 8)
             .expect("open first signer");
-        first.record(&body).expect("record first signer body");
+        first
+            .record_body_for_test(&body)
+            .expect("record first signer body");
         let first_record = signing_record_paths(&first)
             .into_iter()
             .next()
@@ -4473,7 +4499,9 @@ mod tests {
 
         let second = open_signing_guard(root.path(), &body, second_signer, 8)
             .expect("rotated signer remains isolated");
-        second.record(&body).expect("record rotated signer body");
+        second
+            .record_body_for_test(&body)
+            .expect("record rotated signer body");
         drop(second);
         assert!(matches!(
             open_signing_guard(root.path(), &body, first_signer, 8),
@@ -4488,7 +4516,7 @@ mod tests {
         let (_keypair, signer) = signing_guard_signer(0x7D);
         let body = body(NativeAmxPhase::Prepare);
         let guard = open_signing_guard(root.path(), &body, signer, 8).expect("open signing guard");
-        guard.record(&body).expect("record body");
+        guard.record_body_for_test(&body).expect("record body");
         assert_eq!(
             fs::symlink_metadata(&guard.directory)
                 .expect("directory metadata")
@@ -4514,7 +4542,7 @@ mod tests {
         let (_keypair, signer) = signing_guard_signer(0x8A);
         let body = body(NativeAmxPhase::Prepare);
         let guard = open_signing_guard(root.path(), &body, signer, 8).expect("open signing guard");
-        guard.record(&body).expect("record body");
+        guard.record_body_for_test(&body).expect("record body");
         assert_eq!(
             native_amx_effective_user_id(root.path()).expect("probe effective UID"),
             guard.owner_uid

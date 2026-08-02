@@ -28,6 +28,16 @@ offline workspace compile attempt, and a final report-by-report reconciliation.
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
 
+The OpenAPI default generator and canonical CI dependency bootstrap are now
+executable, and `.cargo/config.toml` is bound into the exact source-input tree.
+The two detached replays now use the tracked Cargo-lock provisioner, receive an
+exact verified copy of the pinned installed Node dependency graph, and clean up
+safely under Bash 3.2 even when preflight rejects the checkout.
+Closure still requires a clean double regeneration, synchronized manifests and
+version maps, an explicit generated-client versus hand-maintained-SDK policy,
+the external Ed25519 HSM envelope, and a production gate run with
+`OPENAPI_REQUIRE_SIGNED=1` and the approved operator allowlist.
+
 ## SoraFS V1 Governance DAG deployment closure
 
 The standard outbound request path and exact inbound receiver now have sealed
@@ -38,13 +48,27 @@ service-only broker catalog: slots 8 and 10 for IPNS, slots 8, 9, and 10 for
 signed HTTP, and never producer signer slot 7. Canonical build, deterministic
 release-bundle, and generic OCI inventories now include
 `sorafs_governance_dag`; this closes source discoverability and package
-inventory only.
+inventory only. The shared fixed broker endpoint now accepts exact canonical
+non-empty client subsets and confines every session to its selected bindings,
+so the daemon and standalone service can share one qualified deployment
+catalog without exposing producer-only roles.
+The sanitized projection now has a bounded, explicitly versioned canonical
+Norito export/load handoff that carries only the exact public catalog and
+roundtrips all specialized configuration families byte-identically. This
+removes any need to pass the daemon's complete configuration to a deployment
+broker. The shared executable shell now owns the catalog-only CLI, secure
+bounded file loading, redacted errors, readiness/lifecycle bridge, and
+SIGINT/SIGTERM shutdown. It does not supply a concrete deployment registry,
+vendor-linked binary, credentials, vendor clients, or provider implementations.
+The supported V1 packaging model is a thin statically linked deployment binary;
+a generic binary would require a separately approved and versioned
+authenticated provider-plugin/IPC ABI.
 
 Remaining work is deployment-owned: install the receiver in both Kubo/head
-ingress administrations, package and supervise a deployment-owned broker
-executable with genuine HSM/authentication/sealed-CAS backends, and qualify two
-instances through CAS failover, signer rotation, archive recovery, rollback,
-public-mirror, corruption, outage, and disaster-recovery rehearsals.
+ingress administrations, link and supervise a concrete deployment registry and
+broker executable with genuine HSM/authentication/sealed-CAS backends, and
+qualify two instances through CAS failover, signer rotation, archive recovery,
+rollback, public-mirror, corruption, outage, and disaster-recovery rehearsals.
 Clean-source five-target artifacts, binary smokes, SBOM/provenance, L1
 qualification, and L2 promotion evidence remain open. None of those external
 proofs may be replaced by an in-tree test provider, package inventory, or local
@@ -178,8 +202,11 @@ The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
 [`specs/sumeragi_v2_multilane_closure_ledger.md`](./specs/sumeragi_v2_multilane_closure_ledger.md).
 The former autonomous `execution_batch.is_none()` exclusion and its in-scope
-TODO are gone; no remaining lane/autoscale/merge/Native multilane TODO was
-found. This is source implementation closure, not release completion.
+TODO are gone. One explicitly classified in-scope marker remains at the
+carrier-silent Queue-install/startup-activation seam for the still-open
+`Crash`/`Recover` lifecycle-cursor reconciliation; the closure ledger does not
+claim that cursor is already implemented. This is source implementation
+closure for the other mapped rows, not release completion.
 The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
@@ -198,34 +225,42 @@ reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
 The static release inventory now matches `813/813` production tests across 39
-modules and `418/418` focused `G-UNIT` entries. Its canonical 419-line TSV has
+modules and `472/472` focused `G-UNIT` entries. Its canonical 473-line TSV has
 SHA-256
-`d395aec773c5d0482cc1f4af970267424243f9362d1e1153c9ea7887db885fa7`.
-The 215-entry core group additionally source-seals grouped Native prevote
-budget rejection before Kura/WSV mutation, exact durable QueuePlan obligation
-authentication and route accumulation, registry corruption checks,
-ApplyCarrier authorization, and the retirement transition/lifecycle-fence
-lock order. This is source inventory consistency, not execution evidence.
-Schema 5 machine-maps 30 conceptual multilane rows to 73 exact mutation
+`9614482245a240ce1ea69b4e4f044514da1fd0029011b3ce5b0c639ceee0f6e3`.
+The 266-entry core group additionally source-seals grouped Native prevote
+budget rejection before Kura/WSV mutation, historical source-bundle
+authentication, crash-safe latest-index and prune-V2 recovery, cross-route
+manifest-barrier isolation, durable Native signing-boundary drift rejection,
+atomic grouped reservation commit, exact
+QueuePlan obligation authentication, ApplyCarrier authorization, and canonical
+historical autonomous recovery into exactly-once merge application. This is
+source inventory consistency, not execution evidence.
+Schema 5 machine-maps 30 conceptual multilane rows to 99 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending source check;
 the final pre-self-documentation source manifest is
 `01754c06f060330a30cddd03c48203a55909832dfcb8475aee3f5b95651a4d5c`.
 The proof-ledger release-inventory subset passes `54/54`, the aggregate
-multilane model/source contract suite passes `100/100`, and the static
+multilane model/source contract suite passes `171/171` under pinned Python 3.12
+with strict warnings, and the static
 Apalache-runner contract passes all 14 fail-closed controls. No current TLC or
-Apalache engine run is claimed.
+Apalache engine run is claimed. The newly bound non-retireable lane transport
+is intentionally fail-closed at applied-height handoff; concrete production
+trace extraction plus drain/restart/liveness evidence remain mandatory.
 
-The Rust-owned protocol-4 grouped fixture contains 52 negative controls and
+The Rust-owned protocol-4 grouped fixture contains 54 negative controls and
 hashes to
-`0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`;
+`fcbfa3f23d26b0f5e0eefba37e9bfd98919fc73b94458cdd40cccc6fd7643a28`;
+its suite-source manifest hashes to
+`4d47c737e694213be7bc715e365524b6a11027e99df6ece96f471fdbda678f3f`;
 the synchronized 48-line wire TSV hashes to
 `f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
-Direct OpenAPI `7/7`, Python `58/58`, JavaScript grouped `56/56`, and the
-dedicated no-skip JavaScript status/diagnostics source inventory `44/44` checks
-pass. Rust, Swift, Kotlin, Java,
-and one archived aggregate source/distribution replay remain open under
-`G-SDK`.
+The current grouped harness inventories OpenAPI `7`, Python `60`, JavaScript
+`58`, Swift `3`, Kotlin `6`, and Java `5` tests. Previously recorded direct
+OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
+fixture and do not attest it; one archived aggregate source/distribution replay
+remains open under `G-SDK`.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -262,21 +297,22 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 418 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 472 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
-  `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 52 negative controls,
+  `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 54 negative controls,
   fixture SHA-256
-  `0fb9bf6a490f4974e65a5a03985bfe75321e3de1f54be064c3b088ccffc061d1`,
+  `fcbfa3f23d26b0f5e0eefba37e9bfd98919fc73b94458cdd40cccc6fd7643a28`,
+  suite-source manifest SHA-256
+  `4d47c737e694213be7bc715e365524b6a11027e99df6ece96f471fdbda678f3f`,
   and wire-TSV SHA-256
   `f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
-  Current direct results are OpenAPI `7/7`, Python `58/58`, JavaScript grouped
-  `56/56`, and the dedicated no-skip JavaScript status/diagnostics source
-  inventory `44/44`. Those results are not an
-  archived all-surface replay; Rust, Swift, Kotlin, Java, and the aggregate
-  source/distribution harness remain required.
+  The current harness inventories OpenAPI `7`, Python `60`, JavaScript `58`,
+  Swift `3`, Kotlin `6`, and Java `5` tests. The predecessor fixture's direct
+  subset results are not an archived all-surface replay and do not attest this
+  corpus; the aggregate source/distribution harness remains required.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
@@ -341,10 +377,39 @@ repository under `specs/` and `fixtures/`. Public and localized mirrors belong
 to the optional sibling `iroha-docs` repository; they are not hashed release
 inputs or static-contract scan targets here.
 Repository conformance and production promotion are separate: the current
-production aggregate remains blocked with zero recognized lane summaries and
-no trusted foundational envelope. Promotion requires one reviewed production
-deployment, all 17 fresh lane summaries, the ordered nine-prerequisite signed
-envelope, deterministic aggregate replay, and retained rollback capability.
+production aggregate remains `status=blocked`, `summary_file_count=0`, and
+`recognized_summary_count=0`, with no trusted foundational envelope.
+Repository conformance and synthetic fixture aggregates are not promotion
+evidence. L1 requires the live four-voting-validator, multi-provider,
+dual-gateway, dual-Governance-DAG deployment, resilience/load/24-hour soak
+evidence, and exactly 17 fresh payload-free summaries under one deployment
+context. L2 requires the externally HSM-signed ordered `SFM-1`, `SF-1`,
+`SF-2`, `SF-2c`, `SF-3`, `SF-4`, `SF-5b`, `SF-6`, and `SF-8a` envelope.
+Promotion is allowed only when both deterministic runs emit `status=ready`,
+`summary_file_count=17`, `recognized_summary_count=17`, every lane is valid,
+no critical/high vulnerability remains, and rollback is usable.
+Gateway-compliance trust policy now rejects any catalog-approval and regional-
+acknowledgement role reuse by signer identifier or Ed25519 key before provider
+or checkpoint access. Deployment closure still requires the audited feed and
+ACME adapters, independently administered gateways, atomic promotion/LKG
+rollback, live canonical 451 probes, and resilience evidence.
+The reference-validator packager has no smoke bypass: advert and closed-bundle
+fixture smokes are unconditional archive members with manifest-bound digests;
+each must decode as the exact expected successful `ValidationOutcomeV1`, and
+the retired `--skip-smoke` spelling fails as an unknown argument. The local
+gate is verified by 33 packager, six strict-capture, and 154
+release-automation tests. Five-target builds, installation, rollback/yank,
+SBOM/provenance, and external signing evidence remain open.
+The shared runtime boundary now enforces one canonical WebAuthn RP/origin
+policy and exact secret-free catalog relationships and configured bounds. The
+provider-ingest launcher also completes a state-free qualification preflight
+before opening any archive, consensus, node-handle, or outbox state. The exact
+opaque-preflight consumption/revalidation and main daemon startup-order tests
+are green; remaining L0 execution includes clean workspace gates and final
+artifact provenance. Seven focused Rust `EscrowId` hard-cut
+regressions and the aggregate production-readiness regression suite passed all
+459 tests in two complete runs. Neither local result substitutes for native
+qualification or genuine L1/L2 evidence.
 PDP, PoR, and PoTR production failure handoff uses the exact-chain durable
 native transaction forwarder, and storage work is gated by the finalized
 native task cursor, revision, lease owner, generation, and expiry. The
@@ -369,13 +434,18 @@ Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
 the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
 `.dll`, activates its selected virtual environment, covers the
 cancel-asset-lock, reference-validation, and provider-ingest suites, and rejects
-JUnit skips. Its static workflow-file contract is green at 9/9. The closed
+JUnit skips. The complete pinned-Python-3.12 fixture/workflow contract is green
+at 36/36. The closed
 reference inventory currently binds 82 payload artifacts, 32 exact
 `ValidationOutcomeV1` files, and 38 negative payload vectors; all eight
-appeal-finance `CancelAssetLock` files are mandatory. Available native outputs
-are stale or mixed and no native-dependent SDK suite is qualified. Clean native
-rebuilds, unskipped fixture replay, and source-bound provenance across all five
-release targets remain open. Kotlin/JVM and mirrored Java Android now require
+appeal-finance `CancelAssetLock` files are mandatory. The current non-native
+hard-cut slice passes 85 focused Python tests, seven static guards, 36
+fixture-workflow trigger tests, and 39 native-artifact contract tests; managed
+Kotlin/JVM, mirrored Java Android, and C#
+parity is green. Available native outputs are stale or mixed and no
+native-dependent SDK suite is qualified. Clean native rebuilds, unskipped
+fixture replay, and source-bound provenance across all five release targets
+remain open. Kotlin/JVM and mirrored Java Android now require
 both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 1 before
 making any native signer call; the Android artifact gate requires both
 revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
@@ -393,6 +463,10 @@ Kotlin/JVM contract-manifest and SCCP protocol-V4 source drift is closed at
 51-test Android module now exercises the mandatory fresh transaction
 compatibility probe. The remaining Kotlin/JVM and Java core failures are
 explicit stale-ABI-21 native failures; rebuild and rerun them before `G-FINAL`.
+Seven focused Rust `EscrowId` hard-cut regressions are green across lowercase
+checksum parsing, canonical JSON/Norito/schema handling, noncanonical query
+rejection, and typed public-selector roundtrip. The clean ABI-21 native rebuild
+and qualification remain required before the wire/SDK cut can be closed.
 
 The SoraFS monitoring source slice is green under checksum-verified
 `promtool` 3.13.1: all 30 alert files pass rule validation, all 26 alert unit
@@ -424,6 +498,12 @@ observation or resubmission, including after restart. The durable policy floor
 rejects revision rollback, same-revision digest equivocation, identity
 substitution, and reuse after revocation unless a strict canonical successor is
 observed.
+Before any supervisor, archive, Sumeragi, node-handle, or completion-outbox
+state is created, startup now performs a state-free exact qualification of the
+source pool, signer resolver, signer, and sealed checkpoint provider, retaining
+the exact provider in an opaque token for revalidation during assembly. Four
+focused preflight tests and the exact opaque-token consumption/revalidation
+and main daemon startup-order regressions pass.
 Remaining gaps are concrete governance-advert/stream-grant/pinned-HTTPS child
 transports, deployment-owned source qualification pins, a concrete
 governance-aware HSM/KMS completion signer that enforces the now-configured
@@ -431,8 +511,8 @@ public handle/revision/policy/algorithm/key binding atomically through
 rotation/revocation, and a sealed-CAS retention coordinator for the implemented
 daemon-owned Kura-authenticated provider-indexed archive and its explicit
 content-addressed compaction fence.
-Focused/workspace validation and reviewed four-peer restart/
-duplicate-submission evidence remain open under
+The remaining focused tests, full workspace validation, and reviewed four-peer
+restart/duplicate-submission evidence remain open under
 `V1-BLOCK-PROVIDER-INGEST-RUNTIME-01`.
 
 PoTR finalization no longer authorizes a provider from Torii's immutable
@@ -544,9 +624,12 @@ independently config-qualified idempotent boundary, and checkpoints exact
 receipts or bounded dead letters; standard `irohad` and Torii expose the
 all-or-nothing injection path. Moderation remains open for deployment-owned
 messaging, settlement, downstream publication, HSM/KMS/WebAuthn, and
-transparency providers, cross-replica operation/checkpoint fencing, signed
-terminal compaction/archive, a transparency-published monotonic head that gives
-first-contact clients freshness, and four-peer evidence.
+transparency providers, genuine immutable archive/checkpoint attestation,
+cross-replica operation/checkpoint fencing, and exercise of the shipped signed
+terminal archive through rotation, restart, publication readback, incremental
+and full-history audit, and failover. A transparency-published monotonic head
+that gives first-contact clients freshness and four-peer evidence also remain
+open.
 Its ballot lifecycle is already chain-authoritative and rebuildable from
 finalized events. Taira and Minamoto mutation remains separately authorized
 cutover work.

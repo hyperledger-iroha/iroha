@@ -973,10 +973,11 @@ class HttpClientTransportTest {
         }
     }
 
-
     @Test
     fun prepareContractCallPostsSecretFreeSelectorPayloadAndParsesDraft() {
-        val signingMessageB64 = Base64.getEncoder().encodeToString(ByteArray(32) { 7 })
+        val transactionPayload = sampleTransaction(7).encodedPayload()
+        val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
+        val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -990,9 +991,7 @@ class HttpClientTransportTest {
                   "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                   "entrypoint": "contribute",
                   "transaction_ttl_ms": 60000,
-                  "entrypoint_hash_hex": "${"77".repeat(32)}",
-                  "transaction_scaffold_b64": "AQID",
-                  "signed_transaction_b64": "AQID",
+                  "transaction_payload_b64": "$transactionPayloadB64",
                   "signing_message_b64": "$signingMessageB64",
                   "operation_receipt": {
                     "operation_kind": "contract_call",
@@ -1004,7 +1003,6 @@ class HttpClientTransportTest {
                     "code_hash_hex": "${"44".repeat(32)}",
                     "abi_hash_hex": "${"55".repeat(32)}",
                     "entrypoint": "contribute",
-                    "entrypoint_hash_hex": "${"77".repeat(32)}",
                     "gas_limit": 5000,
                     "gas_used": 17,
                     "fee_payment": {
@@ -1020,7 +1018,6 @@ class HttpClientTransportTest {
             executor = executor,
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
         )
-
         val response = transport.prepareContractCall(
             authority = "alice",
             feePayment = testFeePayment(5_000L),
@@ -1034,14 +1031,13 @@ class HttpClientTransportTest {
         assertEquals("router", response.dataspace)
         assertEquals("contribute", response.entrypoint)
         assertEquals(60_000L, response.transactionTtlMs)
-        assertEquals("77".repeat(32), response.entrypointHashHex)
+        assertEquals(null, response.entrypointHashHex)
         assertNull(response.pipelineStatus)
         assertEquals("contract_call", response.operationReceipt.operationKind)
         assertEquals(5_000L, response.operationReceipt.gasLimit)
         assertEquals(5_000L, response.operationReceipt.feePayment?.gasLimit)
         assertEquals("88".repeat(32), response.operationReceipt.payloadDigestHex)
-        assertEquals("AQID", response.transactionScaffoldB64)
-        assertEquals("AQID", response.signedTransactionB64)
+        assertEquals(transactionPayloadB64, response.transactionPayloadB64)
         assertEquals(signingMessageB64, response.signingMessageB64)
 
         val request = executor.lastRequest
@@ -1108,6 +1104,9 @@ class HttpClientTransportTest {
         val instructionBytes = byteArrayOf(1, 2, 3, 4)
         val proposalId = "aa".repeat(32)
         val multisigAccountId = testMultisigAccountId()
+        val transactionPayload = sampleTransaction(8).encodedPayload()
+        val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
+        val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -1120,7 +1119,8 @@ class HttpClientTransportTest {
                   "tx_hash_hex": null,
                   "executed_tx_hash_hex": null,
                   "creation_time_ms": 123,
-                  "signing_message_b64": "AQID"
+                  "transaction_payload_b64": "$transactionPayloadB64",
+                  "signing_message_b64": "$signingMessageB64"
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
@@ -1128,7 +1128,6 @@ class HttpClientTransportTest {
             executor = executor,
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
         )
-
         val response = transport.proposeMultisig(
             MultisigProposeRequest(
                 feePayment = testFeePayment(),
@@ -1149,7 +1148,8 @@ class HttpClientTransportTest {
         assertEquals(multisigAccountId, response.resolvedMultisigAccountId)
         assertEquals(false, response.submitted)
         assertEquals(proposalId, response.instructionsHash)
-        assertEquals("AQID", response.signingMessageB64)
+        assertEquals(transactionPayloadB64, response.transactionPayloadB64)
+        assertEquals(signingMessageB64, response.signingMessageB64)
 
         val request = executor.lastRequest
         assertEquals("POST", request.method)

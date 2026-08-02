@@ -116,10 +116,10 @@ use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
     WriteModeHint,
     appeals::{
-        AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementError,
-        AppealDisbursementInput, AppealDisbursementPlan, AppealPricingConfig, AppealQuote,
-        AppealQuoteInput, AppealSettlementBreakdown, AppealSettlementConfig, AppealSettlementError,
-        AppealUrgency, AppealVerdict, parse_appeal_quantity_literal,
+        AppealClass, AppealClassConfig, AppealDisbursementError, AppealDisbursementInput,
+        AppealDisbursementPlan, AppealPricingConfig, AppealQuote, AppealQuoteInput,
+        AppealSettlementBreakdown, AppealSettlementConfig, AppealSettlementError, AppealUrgency,
+        AppealVerdict, parse_appeal_quantity_literal,
     },
     bindings::{
         config_from_json as orchestrator_config_from_json,
@@ -359,26 +359,11 @@ fn authority_payload_literal(
 }
 
 fn parse_appeal_verdict(value: &str) -> Result<AppealVerdict, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    let verdict = match normalized.as_str() {
-        "uphold" => AppealVerdict::Decision(AppealDecision::Uphold),
-        "overturn" => AppealVerdict::Decision(AppealDecision::Overturn),
-        "modify" => AppealVerdict::Decision(AppealDecision::Modify),
-        "withdrawn_before_panel" | "withdrawn-before-panel" | "withdrawn_pre" => {
-            AppealVerdict::WithdrawnBeforePanel
-        }
-        "withdrawn_after_panel" | "withdrawn-after-panel" | "withdrawn_post" => {
-            AppealVerdict::WithdrawnAfterPanel
-        }
-        "frivolous" => AppealVerdict::Frivolous,
-        "escalated" | "pending" => AppealVerdict::Escalated,
-        other => {
-            return Err(format!(
-                "unsupported `--outcome={other}` for `{CONTEXT_APPEAL_SETTLE}`; expected uphold|overturn|modify|withdrawn_before_panel|withdrawn_after_panel|frivolous|escalated"
-            ));
-        }
-    };
-    Ok(verdict)
+    value.parse::<AppealVerdict>().map_err(|_| {
+        format!(
+            "unsupported `--outcome={value}` for `{CONTEXT_APPEAL_SETTLE}`; expected uphold|overturn|modify|withdrawn_before_panel|withdrawn_after_panel|frivolous|escalated"
+        )
+    })
 }
 
 fn main() {
@@ -21937,6 +21922,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    include!("sorafs_cli/appeal_verdict_parser_tests.rs");
 
     fn sample_manifest() -> ManifestV1 {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();

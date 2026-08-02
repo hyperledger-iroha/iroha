@@ -926,11 +926,16 @@ QUANTITATIVE_FIXED_CORRIDOR_PROOF_DEPENDENCIES = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
     ): (
+        # The physical-cut refinement supersedes the narrower GST departure
+        # lemma: strong-type preservation plus both monotone high-watermarks
+        # prevent any pre-cut origin from being re-admitted.
         "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
-        "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
+        "AsyncBracketNextPreservesStrongTypeInvariant",
         "AsyncSharedSchedulerHighWatermarkIsMonotone",
+        "AsyncIngressPhysicalHighWatermarkIsMonotone",
         "AsyncCausalEpisodeLifecycleCutOwned",
         "AsyncCausalEpisodeFrozenPredecessorOrigins",
+        "AsyncCausalEpisodeTargetPhysicalCut",
         "AsyncAllVars",
     ),
     (
@@ -951,7 +956,6 @@ QUANTITATIVE_FIXED_CORRIDOR_PROOF_DEPENDENCIES = {
     ): (
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
         "AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget",
-        "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
         "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
         "AsyncCausalEpisodeLifecycleCutOwned",
         "AsyncCausalEpisodeExactCandidateOccurrenceBudget",

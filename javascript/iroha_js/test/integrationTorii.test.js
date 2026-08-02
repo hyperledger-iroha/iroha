@@ -2330,11 +2330,7 @@ test(
     }
     assert.equal(response.submitted, false);
     assert.equal(response.tx_hash_hex, null);
-    assert.equal(
-      response.transaction_scaffold_b64,
-      response.signed_transaction_b64,
-      "contract call preparation must return one exact scaffold",
-    );
+    assert.ok(response.transaction_payload_b64);
     assert.ok(response.signing_message_b64);
     assertHexString(response.code_hash_hex, "contract call response.code_hash_hex");
     assertHexString(response.abi_hash_hex, "contract call response.abi_hash_hex");

@@ -27,12 +27,196 @@ def _retired_sidecar_gate_ttl_source_errors(
     ]
 
 
+def _require_exact_output_startup_and_successor_rollover_seams(
+    lane_path: Path,
+    lane_ack_items: dict[str, RustItem | None],
+    runner_path: Path,
+    runner_ack_items: dict[str, RustItem | None],
+    errors: list[str],
+) -> None:
+    """Check exact startup activation and successor rollover ownership seams."""
+
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get(
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+        ),
+        "adapter.hydrate_canonical_lane_artifacts()?;",
+        "the production constructor must remain carrier-silent before exact Queue installation",
+        errors,
+        count=0,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get(
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+        ),
+        "adapter.drive_lane_sessions();",
+        "the production constructor must not drive a lane session before exact Queue installation",
+        errors,
+        count=0,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get(
+            "V2LaneWorkAdapter::activate_after_lane_drain_queue_install"
+        ),
+        """
+if !Arc::ptr_eq(installed_queue, queue) {
+    return Err(V2LaneWorkError::InvalidContext(
+        "lane-work startup activation names a different queue source".to_owned(),
+    ));
+}
+let installed_queue = Arc::clone(installed_queue);
+let output_guard = Arc::clone(&self.output_guard);
+let activation = output_guard
+    .begin_fail_stop_operation()
+    .ok_or(V2LaneWorkError::RestartRequired)?;
+self.hydrate_canonical_lane_artifacts()?;
+self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;
+self.startup_activation_complete = true;
+self.drive_lane_sessions();
+activation.complete();
+Ok(())
+""",
+        "one-shot startup activation must authenticate the installed Queue, fail-stop hydration, revalidate every local reservation owner, and only then drive lane sessions",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("run_inner"),
+        """
+let initial_local_validator =
+    local_validator_index(verified_context.context(), &local_peer, config.role)?;
+let lifecycle_chain_id = verified_context.context().chain_id.clone().into_inner();
+let _lifecycle_process_generation = if initial_local_validator.is_some() {
+    Some(
+        kura.claim_autonomous_lifecycle_process_generation(
+            Hash::new(lifecycle_chain_id.as_bytes()),
+            &local_peer,
+        )
+        .map_err(|error| {
+            V2RunnerError::Service(format!(
+                "failed to claim the durable autonomous lifecycle process generation: {error}"
+            ))
+        })?,
+    )
+} else {
+    None
+};
+""",
+        "runner startup must validate local membership before validators durably claim one process generation, while observers remain read-only",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("run_inner"),
+        """
+lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
+lane_work.activate_after_lane_drain_queue_install(&queue)?;
+""",
+        "runner startup must install the exact Queue before the one-shot carrier activation seam",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("RetainedMergeSidecars::rehydrate_for_successor"),
+        """
+if self.successor_context_id != successor.id()
+    || self.successor_context_hash != HashOf::new(successor)
+{
+    return Err(V2LaneWorkError::InvalidContext(
+        "retained merge-sidecar handoff names another successor context".to_owned(),
+    ));
+}
+let authority = DurableMergeSidecarRolloverAuthority {
+    _exact_output_handoff: self.exact_output_handoff,
+};
+self.transport
+    .rehydrate_with_exact_geometry_after_durable_handoff(
+        reply_source_capacity,
+        limits,
+        server_stream_capacity,
+        server_roster_digest,
+        now,
+        authority,
+    )
+""",
+        "retained sidecar ownership must bind the exact successor context and consume its durable output handoff before roster-aware rehydration",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::into_retained_merge_sidecars"),
+        """
+if self.has_pending_committed_output_handoff() {
+    return Err(V2LaneWorkError::InvalidContext(
+        "retained merge-sidecar handoff still owns committed lane output".to_owned(),
+    ));
+}
+if self.effect_count() != 0 {
+    return Err(V2LaneWorkError::InvalidContext(
+        "retained merge-sidecar handoff still owns undispatched lane output".to_owned(),
+    ));
+}
+successor
+    .validate()
+    .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
+""",
+        "lane rollover must prove all committed and queued output empty before validating the immediate successor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::into_retained_merge_sidecars"),
+        """
+if !exact_output_handoff
+    .is_bound_to_transport_owner(&self.exact_output_handoff_owner)
+{
+    return Err(V2LaneWorkError::InvalidContext(
+        "durable exact-output handoff belongs to another service/transport owner".to_owned(),
+    ));
+}
+if !exact_output_handoff.matches_predecessor_context(&self.context)
+    || !exact_output_handoff.matches_finality_artifact(artifact)
+{
+    return Err(V2LaneWorkError::InvalidContext(
+        "durable exact-output handoff belongs to another predecessor artifact".to_owned(),
+    ));
+}
+if !exact_output_handoff.authorizes_immediate_successor(successor) {
+    return Err(V2LaneWorkError::InvalidContext(
+        "durable exact-output handoff does not authorize the immediate successor".to_owned(),
+    ));
+}
+""",
+        "lane rollover must consume only its paired service receipt for the exact predecessor artifact and immediate successor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::into_retained_merge_sidecars"),
+        """
+let retained = RetainedMergeSidecars {
+    transport: self.merge_sidecars,
+    exact_output_handoff,
+    successor_context_id: successor.id(),
+    successor_context_hash: HashOf::new(successor),
+};
+handoff.complete();
+Ok(retained)
+""",
+        "lane rollover must bind retained transport ownership to the canonical successor before completing the fail-stop operation",
+        errors,
+    )
+
+
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "ac4f99ff9fc3fafa2e3118dffa92d5da55636ef9b9dde871ebddec0b44d00115"
+        "fc34157b31b4dbbc680de730a3a33c7fa68926a6e73e70c1993cd07e55501a24"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "1aa0d6490e6d2b8502f399c593be71c841d593ec79c251a6eebae86b6368a095"
+        "d117c4c9761cccd10d631e6256db1e9addfe156b5042bc7338a67486cbd15a4c"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "fd33217a5c50f5fa21c9a18f4eb70211a2321910a07d37a50008b3586c7fe800"
@@ -41,16 +225,16 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "6bff6e8e90983f8bd1657de5faaf59b5db9a57e99ba0f9e0be96e7de0d3e2b9f"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "e7c9837e28f4822d011c2e6493cc850e12545f57b65ce6b0d91edcd4cdcc81d5"
+        "d75634c29a3ded160a8e59e0d093127af4d78a86944caf00cadb3aeb217a616d"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "58b973b26448c283e606e1ce29f9ffd483ded33966811cc7819dba1116312baf"
+        "56b6e8f2a3583c5f39f101c633b8d8b9840ee1362247fa3e6e963724e4f1a42c"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "d8e18c481e7938340e15232864f00d1acf00e7fad0216aef94f9a1973427a0d7"
+        "51adf2ccf15b202bbfe8188a5d776a49159c1d5b7dba6136278cf51a1299efd6"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "8bdf90b12382c16438cacf1ccfb0023ed9ec2bdeb153f6a4d029de0b066f4e8d"
+        "f64417d810f330c9a2e70d76b14f6d61844f830a55ba936b98d376841b6bc573"
     ),
 }
 
@@ -62,11 +246,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/prune_commit_merge_support.rs",
     "kura/replica_advert_and_body_status.rs",
     "kura/retained_finality_replica_authority.rs",
-    "kura/autonomous_merge_bundle_support.rs",
-    "kura/autonomous_reservation_types.rs",
-    "kura/autonomous_reservation_inventory.rs",
-    "kura/autonomous_reservation_classifier.rs",
-    "kura/historical_autonomous_recovery.rs",
+    "kura/pipeline_and_lane_artifacts.rs",
 )
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
@@ -99,6 +279,13 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "kura/tests/12_sidecar_index_and_pruning.rs",
         "kura/tests/13_manifests_and_fsync.rs",
     ),
+    "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs": (
+        "autonomous_merge_bundle_support.rs",
+        "autonomous_reservation_types.rs",
+        "autonomous_reservation_inventory.rs",
+        "autonomous_reservation_classifier.rs",
+        "historical_autonomous_recovery.rs",
+    ),
     "crates/iroha_core/src/kura/lane_geometry.rs": (
         "lane_geometry_tests/00_support.rs",
         "lane_geometry/native_amx_retained_window_tests.rs",
@@ -117,6 +304,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "v2_worker/kura_replica_advert_refresh.rs",
         "tests/v2_worker_reply_route_cases.rs",
         "tests/v2_worker_backpressure_cases.rs",
+        "v2_worker/applied_height_handoff_tests.rs",
         "tests/v2_worker_serve_unsealed_cases.rs",
         "tests/v2_worker_serve_decision_restart_cases.rs",
     ),
@@ -141,13 +329,16 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
         "tests/v2_core_reducer_primitive_projection.rs",
+        "reducer/counterfeit_boundary_capability_test.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_core/tests.rs": (
         "tests/v2_core_view_zero_parent_binding.rs",
         "tests/empty_replay_resume_test.rs",
+        "tests/v2_core_terminal_transactionality.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_lane_work.rs": (
         "v2_lane_work/canonical_executed_block_application_repair.rs",
+        "tests/v2_lane_work_native_signing_guard.rs",
         "tests/v2_lane_work_observer_role.rs",
         "tests/v2_lane_work_native_body_recovery.rs",
         "tests/v2_lane_work_effect_queue.rs",
@@ -634,10 +825,10 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 418
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 419
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 472
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 473
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "d395aec773c5d0482cc1f4af970267424243f9362d1e1153c9ea7887db885fa7"
+    "9614482245a240ce1ea69b4e4f044514da1fd0029011b3ce5b0c639ceee0f6e3"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -1328,7 +1519,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "7e630c6be2466fe0980df81ea194e101b70e4abac9546a379ab9f24c8eb23861"
     ),
     "applied_height_reconstruction_covers": (
-        "acd0c53df363cdc5301f6619ec69ac0a37bd1ae83ff2d337303574ce2510f4b2"
+        "18eb55ebc89c2ae1ca981da5869fa407a204cdee85e3d77ae24926e0a091c952"
     ),
     "durable_exact_output_handoff_owner_pair": (
         "f848a53734e173e64122e3cf198d6e0adfea99909594e667c56a7e11ea271a84"
@@ -1337,7 +1528,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "019ae94e6c1ebdea5e6948361cf117d49003d4433cd9daa7c3a28f2e1e391741"
     ),
     "handoff_applied_height_output_to_durable_reconstruction": (
-        "2064071eca55b70e01a51bda015e5cda8561a35d2f0d9e09559ac23c01ae6f8d"
+        "7444ffcb40c52af925865f03520de3eac64f59d1c31ae6e549c5bf92e17aaf84"
     ),
 }
 
@@ -1579,7 +1770,8 @@ _PRODUCTION_MERGE_SIDECAR_BOUNDARY_TEST_SHA256 = {
 _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "5224fe67da91d648fef4cb803ffcd48e972fbd3b32dc85917773666adf39235e",
     "RetainedMergeSidecars::rehydrate_for_successor": "709b44e4cf845ffe76903ad4d7f61b9fa174ccc1f0a1a793d6733a37a23cd0a6",
-    "V2LaneWorkAdapter::new_with_output_guard_and_transport": "edbb3508e583943428c030cbd22188183f683c9bab025f3d30f1b6f9f19d9fa7",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport": "53fdbca7b7129a438f9a19c5ab13d8b4d28da1190ebe58cf435765fc5a97a64c",
+    "V2LaneWorkAdapter::activate_after_lane_drain_queue_install": "638503cfcc9963213cb6146d16d82ab270016e6f5da7bbbc8b2918aea9120cb2",
     "V2LaneWorkAdapter::into_retained_merge_sidecars": "96d1e194eda3660ccccf9b4e1860b26a4db8d9ee9fb2bad4f988e37c85627218",
     "V2LaneWorkAdapter::accept_relay_message": "8c307167fe5ea486fc509817d12c352fa8a831751e0e7fc1342b6d43b6ef00bf",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar": "8e348b518da26f91fff8840d1e5bf4016d783fef4720bc275baba90ebe14a0bd",
@@ -1594,14 +1786,15 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "8e684a41c6ed9799d6fdf7598d7accf8f175f38ff1388058568a6f8bc077c9ea",
     "V2LaneWorkAdapter::persist_anchored_sessions": "40f2ca1c93171337adae168019d2f28ca65acf838da2e9011f6e751ad775876f",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "6ea4db2fb530ea0ee56548f72c82a6df6370e3169ff1930e7a748f85d1ca3242",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "e0d11b53b20233bec2bde982e8e34ddfbb0558ac3561ebd31c927bee5523b942",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "478982ec7c7cec9990a70993011e34e0cf79f57fb903b3c7cbabc040052b1aba",
-    "V2LaneWorkAdapter::push_effect": "cc9f8f5b9469904d0ba6584db2ef13b8aa9ce2f6ed941b5b34e8b7eec3e7717e",
+    "V2LaneWorkAdapter::preflight_effect_insertion": "568289d7497ed37ca03cd91e1fc222bfa010109de640b5d3244672d0a9cf41b3",
+    "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",
-    "V2LaneWorkAdapter::schedule_retransmission_at": "541e8582db809b0bb449610cbf70d61f4dafb806b22add9642baabb557eeb994",
+    "V2LaneWorkAdapter::schedule_retransmission_at": "5f5ccf9a1f78a69d064ed99331a452571d0379497e28cd67daac836effbecd51",
     "V2LaneWorkAdapter::prune_finalized_merge_sidecars": "b8400dca9234242c7f6b8583ffabed34eb17fecc23cf5fd81799bec5cd692af7",
     "V2LaneWorkAdapter::sidecar_effect_slots": "13a99e0350b8d59489cc591573adcc2b1f3f775308e9b225f1672649235699e6",
     "V2LaneWorkAdapter::next_sidecar_effect_selection": "614006f927ec384764396c8742a3b05b5a70907dddd8bcf39ed2db0aba4d8975",
@@ -1614,7 +1807,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "3d8911e69d491268dabae08f5c6b996ede417dd8afbda670e80dfc1070ed2271",
+    "run_inner": "6e34da4ca1cd1f19ae1c18c4f8beeb2677db5fd6503ca85ba8b597cc9ffae5fa",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1800,7 +1993,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "140325f2b05a0c93744b2fbd483e485d95f17a0c8ce08ac1bf41808047e306f4"
     ),
     "try_recv_if_at_checked": (
-        "24f0b8b8678c7ca64f3f46b2d214553be166e6a2bb2d8ec21f3de8968a35e7ef"
+        "91464514e1d803d746fe2c9713d318082246fb88dd71881403a04b38f6a32884"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
@@ -1808,7 +2001,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "3d8911e69d491268dabae08f5c6b996ede417dd8afbda670e80dfc1070ed2271",
+    "run_inner": "6e34da4ca1cd1f19ae1c18c4f8beeb2677db5fd6503ca85ba8b597cc9ffae5fa",
     "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
@@ -1870,8 +2063,8 @@ _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
     "ProductionV2Services::has_pending_exact_output": "107becdd3b504739250f12867eecdb459362f907957797ea3a0e31a71e360768",
     "ProductionV2Services::drain_certified_merge_sidecar_chunk_admissions": "d065d7b2b625852ed7ecd8458997c763b8c6d4d1ef445275150c16a62f1badf6",
     "ProductionV2Services::close_certified_merge_sidecar_prefix": "fb6879c8c325aedc7c19f093a9e5b2cb1b8c25c7bd89c7da1f2694e923cde3a2",
-    "ProductionV2Services::can_retain_lane_work_effect": "e0bc2cb14070a0443f7fa5d44ca11d7e4d78106af0754bd181e86a8ffb0eeb3f",
-    "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction": "2064071eca55b70e01a51bda015e5cda8561a35d2f0d9e09559ac23c01ae6f8d",
+    "ProductionV2Services::can_retain_lane_work_effect": "a934ecbe56eb0118a5cabbce17c1815fc7346f611e4c83e36c85c918840fde4e",
+    "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction": "7444ffcb40c52af925865f03520de3eac64f59d1c31ae6e549c5bf92e17aaf84",
     "ProductionV2Services::seal_applied_height_output_handoff": "95138e27f7dbcfe7e84246edd8d14acb3677adec2e0b6ad0c80e2a65688a4a62",
     "ProductionV2Services::validate_applied_height_output_handoff_authority": "7e122f2997f6fa75a67033addc960c72e2dad0dd766588c2d667e056b9363bc3",
     "ProductionV2Services::finish_height": "2700da04492e8587a8934f3d037d05e8176746a4a52790a29b185560c20af360",
@@ -1982,19 +2175,19 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
     ),
     "ProductionV2Services::start": (
-        "2d10b4ff066780c14b2b94a0313850563a2b1eb4829c9f998936d570efc8de40"
+        "1ebacea10fedde3013ef2d6646e037c328f031a3c9e9c8b1ae1ce9946f87e039"
     ),
     "ProductionV2Services::exact_target_geometry": (
         "978520459f9dd3c5459478e222418ffed2924445c40a79722c307f97e6d28871"
     ),
     "ProductionV2Services::can_retain_lane_work_effect": (
-        "e0bc2cb14070a0443f7fa5d44ca11d7e4d78106af0754bd181e86a8ffb0eeb3f"
+        "a934ecbe56eb0118a5cabbce17c1815fc7346f611e4c83e36c85c918840fde4e"
     ),
 }
 
 _PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256 = {
     "durable_history_source_covers": (
-        "c33f30a9d2e34b9860f96ba156788f3a6289776da59a45eb7c2fa717b5b90299"
+        "fb4a530d7579ba3be2e168d43ee5cf10c25bfa5c52c19c5b6973665212499d38"
     ),
 }
 
@@ -2013,9 +2206,12 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
     "native_amx_message_body": (
         "90737e4116833fb086b7c1f3a7a04dbb34fc9157385103f3dc1be6e74c127eae"
     ),
-    "scope": "f86a8297b6cbfb9042d6fda08cab69dcc2ff2e8c64455982df70b249afbfcf64",
+    "scope": "d5ad6343749bdcf31860c9ce596a271a867868c4f6394f56520df3cd23cc7408",
     "validate_fanout": (
-        "26e909f5558df72e2f13643d356ae8788175375cb37dd4895cfa0b3f8d60a8d2"
+        "1879582b160ef218fc516bbb7f4880ea302e8b37f83ca4a3d1b0c8ed20cd198a"
+    ),
+    "validate_non_retireable_lane_transport_fanout": (
+        "6f57bc6fc5d7b127d67745f5d042e780aac18e9abce9f4d53c90a1c4ebe934d0"
     ),
     "claimed": "75dcecc8adae80ad5980fb812e4d13af3e7f432605c685985a6c2d0e27a67a10",
     "claimed_with_routes": (
@@ -2043,7 +2239,7 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
         "a318b9a3e2823381613bf87f911d1efd3721a62d9a6a35e4b2151396672363a5"
     ),
     "post_lane_block": (
-        "c71bddecf7e1a3891256eaf7ced7c37adb7fc196617b4f79a7f17c6fcd6ee902"
+        "1a4be6518deb1d756893951563f23f8017bd840779366054ce9b5a3329531389"
     ),
     "post_durable_lane_certificate_on_reply_routes": (
         "84b9fa1c26b45f636ad7fd2b605b3cb4398a74abb3f515ea9e05034ca7a9e429"
@@ -2061,10 +2257,10 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
         "99b0c80af2876f9b92cd9789605a7040d3e6dec0b4ab11f47edf292aeadf5f59"
     ),
     "post_block_message_while_guarded": (
-        "ff12cb7fcc62b94353055da1bab287edca685fdfb4558f8c91872c238ec75b23"
+        "5556a35937aa384b399482ceb30f45cfdbe212c59a10bf10aa9fc6f46e17f670"
     ),
     "post_block_message_on_reply_routes_while_guarded": (
-        "f3386e036a83ba81782e46c9eeb2fe948366907c9bbd510f42b646bf4f1ffaae"
+        "675aa09b492a61169caad3ab2b8de1d3fbbc22491de64d1d9b01f79291682f75"
     ),
     "broadcast_preencoded_to_voters_while_guarded": (
         "1c22c254ba300a86887affe725dd01e126563ac584f791e9da329fe67296bf4f"
@@ -2073,6 +2269,14 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
         "bbc43f18d7ee7cc95ecfabc70894ae1b82780edab21ebecb8a60445e68113a4d"
     ),
 }
+
+_EXACT_OUTPUT_ROLLOVER_CLAIM_IMPL_ITEMS = frozenset(
+    (
+        "scope",
+        "validate_fanout",
+        "validate_non_retireable_lane_transport_fanout",
+    )
+)
 
 # The lane authority is the only production witness allowed to supersede or
 # reconstruct lane-local output at global-height retirement.  Bind its exact
@@ -2133,10 +2337,10 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "3d8911e69d491268dabae08f5c6b996ede417dd8afbda670e80dfc1070ed2271"
+        "6e34da4ca1cd1f19ae1c18c4f8beeb2677db5fd6503ca85ba8b597cc9ffae5fa"
     ),
     "drain_v2_ingress": (
-        "ec5d2c9208f78350ab96b0fea82460a6d8225cd220d1d99901bbf866dfb7ad2b"
+        "773bf90bd4d5a0b4919405da48fadf8fddf096df4897da70ba2469b374148972"
     ),
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"
@@ -2170,7 +2374,7 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
         "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
     ),
     "user::Root::parse": (
-        "61526de01c92467504c7b92924b7fea8e13db44f81d385cd226ae644bfe11c7c"
+        "64f59ba7b0ea9ee29f8be04d322d7de69359cba795cefe60ad63f615fcb4866e"
     ),
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"
@@ -2193,19 +2397,19 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "e65283e5924e1dfe938cb69289a35067a01d3835027ba65587a32f515ed90032"
     ),
     "ingress::merge_downstream_with_exact_routes": (
-        "9937dd446dc210e96e72e558afad2736ce42036951fc761c432c3c53d510cea2"
+        "23e937626dd546ae52105bd4e17033d8785e19dfd6ecca7c0d21ebd840d80231"
     ),
     "ingress::same_semantic_request": (
         "b30874c2662dc448ae573d60fb9892310817975b35dde2bfe5d389d08ada7730"
     ),
     "ingress::matches_message": (
-        "6dab8ef36de2046cada66b6aef1a4db08e458e0d43fc3862f794002192c58398"
+        "258d127f5dabef91f22b0d7cca66637770fe3bd607331068ec6f09bd6567f43b"
     ),
     "ingress::matches_semantic_origin": (
         "222fb8e00e39a211f73c88d8c7a41b83a82897c7428f70339aa38e40f78da719"
     ),
     "ingress::process_local_projection_hash": (
-        "695a14164f614347818728fd5b67e421e881a5e2da02f513448ad7a54ab2a816"
+        "8730c337b15b74da9e79b8083d6a524343a32936b002ec90882b74e9fa08f39f"
     ),
     "ingress::matches_reply_routes": (
         "98580b7c9e69cc4c69cc32ec6212459e93fba573a335151fec476659d2772c2f"
@@ -2217,7 +2421,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "2be088efc3ff0460b06c0316f7b64062d864d22d8fce286a1474fd1e31af3c82"
     ),
     "ingress::validate_exact": (
-        "526d02c98338c0304ea246b5366e29951ed312a57e795c4a2db4433f06d1d66b"
+        "fe23c14b3e612c4e8461912100a22e38a31b9038b06a8948856a6bc3a16bbf58"
     ),
     "effects::accept_payload_chunk_with_ingress_ownership": (
         "04c48786b1db18841d32be400432570fcd268452506af9735c2dc5354a72e5db"
@@ -2241,13 +2445,13 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "95906877d32686cc23249747ff5e31f8552d5abb237277f96fd4091da1a92d77"
     ),
     "worker::route_payload_chunk": (
-        "cabbad53c21b8b42e361f14c99a045a327c20e473ebb06e189ba82925871eef4"
+        "ed0c01f2a93defb44b23ffa108c622bbdc4550588a859f44ac7313490f52c705"
     ),
     "worker::buffer_orphan_payload_chunk_inner": (
         "03c11a6a6438f3a0f7cf47cac8f5310b262fd684a9df7891ff906b7f2e0d7de8"
     ),
     "worker::replay_buffered_chunks": (
-        "55be3d8d05cc8924f303cac80b89e5d56b8b6496694a9e94f742d17fbcb7a80f"
+        "1259249ed54174dfcecffbacb6e2f70b3a5fbf31e59bd088f6160d3148648920"
     ),
     "worker::deliver_payload_chunk": (
         "f4341f1f806d10adab9e14b0c4b13c463fc7c6dae22bd7056863548d0912fb5b"
@@ -2773,6 +2977,134 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "a8816bf106a1a62a8b8c411f5964aeeef1ec14f86d14f2313b5cae353e1b359c"
     ),
 }
+
+# Exact semantic projections complement the complete item digests above. Keep
+# them outside the monolithic checker so the fail-closed source contract can
+# grow without increasing the checker exception budget.
+_PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES = {
+    "fair_ingress_evidence": """
+pub(crate) struct FairV2IngressOwnershipEvidence {
+    first: FairV2IngressOwnershipOccurrence,
+    latest: FairV2IngressOwnershipOccurrence,
+    runtime_physical_cut: Option<u128>,
+    leader_wire_token: Option<FairV2IngressLeaderWireToken>,
+    leader_wire_runtime_receipt: Option<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt>,
+    admission_count: u128,
+    occurrence_count: u128,
+    action_counts: [u128; FairV2IngressOwnershipAction::COUNT],
+    current_routes: Option<NetworkReplyRoutes>,
+    attempts: Vec<FairV2IngressReplyAttempt>,
+    attempts_hash: CryptoHash,
+}
+""",
+    "fair_ingress_merge": """
+let Some(attempts) = fair_v2_ingress_merge_attempt_cursors(
+    &self.attempts,
+    &candidate.attempts,
+    current_routes.as_ref(),
+) else {
+    return false;
+};
+let attempts_hash = fair_v2_ingress_attempt_cursor_hash(&attempts);
+let merged = Self {
+    first: self.first.clone(),
+    latest: candidate.latest,
+    leader_wire_token: self.leader_wire_token.clone(),
+    leader_wire_runtime_receipt: self.leader_wire_runtime_receipt.clone(),
+    runtime_physical_cut: self.runtime_physical_cut,
+    admission_count,
+    occurrence_count,
+    action_counts,
+    current_routes,
+    attempts,
+    attempts_hash,
+};
+if !merged.validate_exact() {
+    return false;
+}
+*self = merged;
+true
+""",
+    "applied_height_scope": """
+rollover_claim.validate_fanout(messages, peers)?;
+if matches!(
+    rollover_claim,
+    ExactOutputRolloverClaim::NonRetireableLaneTransport { .. }
+) {
+    return Err(
+        "non-retireable lane transport must drain before applied-height handoff".to_owned(),
+    );
+}
+let scope = rollover_claim.scope().ok_or_else(|| {
+    "Sumeragi v2 exact output has no typed applied-height rollover claim".to_owned()
+})?;
+if !scope.covers(artifact) {
+    return Err("Sumeragi v2 output claim belongs to another creation scope".to_owned());
+}
+""",
+    "durable_history_dispatch": """
+if matches!(
+    rollover_claim,
+    ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
+        | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
+        | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
+        | ExactOutputRolloverClaim::HistoricalAutonomousLaneCertification { .. }
+        | ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse { .. }
+) {
+    return durable_history_source_covers(
+        messages,
+        rollover_claim,
+        &artifact.height_context.chain_id,
+        artifact.height,
+        durable_history.ok_or_else(|| {
+            "Sumeragi v2 durable response lacks an independently readable history source"
+                .to_owned()
+        })?,
+    );
+}
+""",
+    "applied_height_handoff": """
+self.validate_applied_height_output_handoff_authority(receipt, artifact)?;
+let (retired, retired_kura_replica_advert_heights) = {
+    let mut pending = self.lock_pending_exact_output()?;
+    if self.exact_output_handoff_owner.is_sealed() {
+        return Err(
+            "Sumeragi v2 applied-height output handoff is already sealed".to_owned(),
+        );
+    }
+    let retired_kura_replica_advert_heights =
+        pending.pending_kura_replica_advert_heights()?;
+    let retired = pending.handoff_applied_height_to_durable_reconstruction(
+        artifact,
+        Some(durable_lane_authority),
+        Some(self.kura.as_ref()),
+    )?;
+    (retired, retired_kura_replica_advert_heights)
+};
+let scheduled_kura_replica_adverts = self
+    .kura_replica_advert_refresh
+    .schedule_retired_exact_output_heights(
+        retired_kura_replica_advert_heights,
+        Instant::now(),
+    )?;
+""",
+    "runner_service_owner": """
+Arc::clone(&output_guard),
+Arc::clone(&block_rx),
+Arc::clone(&kura_replica_advert_refresh),
+exact_output_service_owner,
+)
+.map_err(V2RunnerError::Service)?;
+""",
+    "historical_body_guard": """
+let served = serve_block_sync_while_guarded(
+    output_guard,
+    || {
+        block_sync_server
+            .serve_historical_body(kura, request, &sender, local_key)
+    },
+""",
+}
 _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
     "classify": (
         "4c5af83b512d633256649e19265a22e80ef9d2e5fde50507ec91c075642b98e6"
@@ -2792,9 +3124,9 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "d19623cdc7ad56922f91c7a9c0d2513199ecafa4e6ad26ea2717073d561b41eb"
     ),
     "try_push_at": (
-        "83c9e853b1bab4a43df359ead4dab381471dc1c503edc1c61e5bc1a39155947f"
+        "d4b857dad01abceaef61296d6b075589902ac449f9aa92f9197258a43b23fd2a"
     ),
     "try_recv_if_at_checked": (
-        "24f0b8b8678c7ca64f3f46b2d214553be166e6a2bb2d8ec21f3de8968a35e7ef"
+        "91464514e1d803d746fe2c9713d318082246fb88dd71881403a04b38f6a32884"
     ),
 }

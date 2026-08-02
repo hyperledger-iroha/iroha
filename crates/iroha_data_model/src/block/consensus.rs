@@ -4828,7 +4828,7 @@ pub struct SumeragiNativeAmxParticipantApplication {
     pub settlement_hash: HashOf<LaneBlockCommitment>,
     /// Number of ordered grouped transaction sources represented by the control.
     pub source_count: u64,
-    /// Canonical global carrier height, when one is durably identified.
+    /// Canonical global carrier height, present for committed or durable evidence only.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub application_block_height: Option<u64>,
@@ -4891,11 +4891,14 @@ impl SumeragiNativeAmxParticipantApplication {
         {
             return Err("Native AMX participant diagnostics application hash must be non-zero");
         }
-        if self.state == SumeragiNativeAmxParticipantApplicationState::DurablyApplied
-            && self.application_block_height.is_none()
-        {
+        let state_requires_application = matches!(
+            self.state,
+            SumeragiNativeAmxParticipantApplicationState::CommittedEvidencePending
+                | SumeragiNativeAmxParticipantApplicationState::DurablyApplied
+        );
+        if state_requires_application != self.application_block_height.is_some() {
             return Err(
-                "durably applied Native AMX participant diagnostics require an application block",
+                "Native AMX participant diagnostics state disagrees with its application block",
             );
         }
         Ok(())
@@ -6525,7 +6528,7 @@ mod tests {
 
     #[test]
     fn native_amx_receipt_negative_corpus_fails_closed() {
-        const EXPECTED_RECEIPT_CONTROLS: usize = 43;
+        const EXPECTED_RECEIPT_CONTROLS: usize = 45;
 
         let canonical = grouped_native_amx_fixture_document();
         let controls = canonical
@@ -6558,6 +6561,32 @@ mod tests {
                 .pointer("/golden/receipt_group")
                 .cloned()
                 .unwrap_or_else(|| panic!("control `{id}` retains the receipt group"));
+            if matches!(
+                id,
+                "coherent_duplicate_validator_set" | "coherent_over_quorum_requirement"
+            ) {
+                assert_eq!(
+                    mutated.pointer("/golden/expected_diagnostics/lane_settlement_commitments/0",),
+                    Some(&receipt_group),
+                    "coherent committee control `{id}` rebuilds the diagnostics projection"
+                );
+                validate_grouped_native_amx_application_evidence(&mutated).unwrap_or_else(
+                    |error| {
+                        panic!(
+                            "coherent committee control `{id}` preserves application evidence: {error}"
+                        )
+                    },
+                );
+                let commitment: LaneBlockCommitment =
+                    norito::json::from_value(receipt_group.clone()).unwrap_or_else(|error| {
+                        panic!("coherent committee control `{id}` remains decodable: {error}")
+                    });
+                assert!(
+                    commitment.validate_native_amx_receipts().is_err(),
+                    "coherent committee control `{id}` must fail only receipt validation"
+                );
+                continue;
+            }
             let rejected = norito::json::from_value::<LaneBlockCommitment>(receipt_group.clone())
                 .map_or(true, |commitment| {
                     commitment.validate_native_amx_receipts().is_err()
@@ -8274,38 +8303,7 @@ mod tests {
         assert_eq!(reconfig, dec);
     }
 
-    #[test]
-    fn rbc_init_roundtrip_codec() {
-        let init = sample_rbc_init();
-        let bytes = init.encode();
-        let dec = RbcInit::decode(&mut &bytes[..]).expect("decode rbc init");
-        assert_eq!(init, dec);
-    }
-
-    #[test]
-    fn rbc_chunk_roundtrip_codec() {
-        let chunk = sample_rbc_chunk();
-        let bytes = chunk.encode();
-        let dec = RbcChunk::decode(&mut &bytes[..]).expect("decode rbc chunk");
-        assert_eq!(chunk, dec);
-    }
-
-    #[test]
-    fn rbc_ready_roundtrip_codec() {
-        let ready = sample_rbc_ready();
-        let bytes = ready.encode();
-        let dec = RbcReady::decode(&mut &bytes[..]).expect("decode rbc ready");
-        assert_eq!(ready, dec);
-    }
-
-    #[test]
-    fn rbc_deliver_roundtrip_codec() {
-        let deliver = sample_rbc_deliver();
-        let bytes = deliver.encode();
-        let dec = RbcDeliver::decode(&mut &bytes[..]).expect("decode rbc deliver");
-        assert_eq!(deliver, dec);
-    }
-
+    include!("consensus/rbc_roundtrip_tail_tests.rs");
     include!("consensus/runtime_diagnostics_tests.rs");
     include!("consensus/npos_diagnostics_tests.rs");
 }

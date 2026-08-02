@@ -59,7 +59,7 @@ TLA_DECLARATION_TEMPLATE = (
 RUST_DECLARATION_TEMPLATES = {
     "fn": (
         r"(?m)^[ \t]*(?:pub(?:\([^)\n]*\))?[ \t]+)?"
-        r"(?:const[ \t]+)?(?:async[ \t]+)?fn[ \t]+{symbol}\b"
+        r"(?:const[ \t]+)?(?:async[ \t]+)?(?:proof[ \t]+)?fn[ \t]+{symbol}\b"
     ),
     "struct": (
         r"(?m)^[ \t]*(?:pub(?:\([^)\n]*\))?[ \t]+)?"
@@ -92,6 +92,8 @@ EXPECTED_CLOSURE_INVARIANTS = {
         "MLNativeTempPromotionAuthenticated",
         "MLNativeRetainedHistoryExact",
         "MLNativePruneOldestPrefix",
+        "MLNativePruneProtectedLatestExact",
+        "MLNativePruneExactObjectRemoval",
         "MLUnifiedStartupEvidenceRepairSafe",
     ),
     "SumeragiV2AutonomousReservationCarrier": (
@@ -99,6 +101,7 @@ EXPECTED_CLOSURE_INVARIANTS = {
         "MLReservationIdentityStable",
         "MLCertifiedBundleDurable",
         "MLMergeCandidateExactPrefix",
+        "MLCarrierCommitSurfaceExact",
         "MLCarrierExactlyOnce",
         "MLRestartOwnershipPartition",
         "MLRecoveredCarrierBodyAuthenticated",
@@ -151,6 +154,15 @@ try:
         INFLIGHT_LAYOUT_SOURCE_CHECKS,
         INFLIGHT_LAYOUT_TEST,
     )
+    from sumeragi_v2_multilane_queue_plan_contract import (
+        QUEUE_PLAN_STARTUP_REPLAY_BINDINGS,
+        QUEUE_PLAN_STARTUP_REPLAY_FORBIDDEN_SOURCE_CHECKS,
+        QUEUE_PLAN_STARTUP_REPLAY_MODULE,
+        QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS,
+        QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_FORBIDDEN_TOKENS,
+        QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_MARKER,
+        QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS,
+    )
 finally:
     sys.path.pop(0)
 
@@ -161,6 +173,29 @@ DIFFERENTIAL_RELEASE = "differential_release"
 RELEASE_INVARIANT_CLASSIFICATIONS = frozenset(
     (STATIC_RELEASE, DIFFERENTIAL_RELEASE)
 )
+NATIVE_SOURCE_CLAIM_MUTATION_CONFIGS = (
+    "multilane_native_source_claim_equivocation_bug.cfg",
+    "multilane_native_source_claim_source_id_drift_bug.cfg",
+    "multilane_native_source_claim_tx_entrypoint_hash_drift_bug.cfg",
+    "multilane_native_source_claim_plan_digest_drift_bug.cfg",
+    "multilane_native_source_claim_round_context_id_drift_bug.cfg",
+    "multilane_native_source_claim_round_height_drift_bug.cfg",
+    "multilane_native_source_claim_round_view_drift_bug.cfg",
+    "multilane_native_source_claim_epoch_drift_bug.cfg",
+    "multilane_native_source_claim_chain_id_hash_drift_bug.cfg",
+    "multilane_native_source_claim_authority_context_height_drift_bug.cfg",
+    "multilane_native_source_claim_coordinator_lane_id_drift_bug.cfg",
+    "multilane_native_source_claim_coordinator_dataspace_id_drift_bug.cfg",
+    "multilane_native_source_claim_coordinator_lane_incarnation_drift_bug.cfg",
+    "multilane_native_source_claim_planned_coordinator_block_height_drift_bug.cfg",
+    "multilane_native_source_claim_coordinator_lane_block_view_drift_bug.cfg",
+    "multilane_native_source_claim_coordinator_proposal_hash_drift_bug.cfg",
+    "multilane_native_source_claim_participant_lane_id_drift_bug.cfg",
+    "multilane_native_source_claim_participant_dataspace_id_drift_bug.cfg",
+    "multilane_native_source_claim_participant_lane_incarnation_drift_bug.cfg",
+    "multilane_native_source_claim_participant_membership_drift_bug.cfg",
+)
+REVIEWED_MULTILANE_MUTATION_CONFIG_COUNT = 99
 EXPECTED_CLOSURE_MUTATIONS = {
     "ML-MUT-NAT-01": (
         TLA_COUNTEREXAMPLE,
@@ -170,7 +205,7 @@ EXPECTED_CLOSURE_MUTATIONS = {
     "ML-MUT-NAT-02": (
         TLA_COUNTEREXAMPLE,
         "MLNativeSourceClaimInjective",
-        ("multilane_native_source_claim_equivocation_bug.cfg",),
+        NATIVE_SOURCE_CLAIM_MUTATION_CONFIGS,
     ),
     "ML-MUT-NAT-03": (
         TLA_COUNTEREXAMPLE,
@@ -210,12 +245,18 @@ EXPECTED_CLOSURE_MUTATIONS = {
             "multilane_native_missing_reverse_merge_carrier_bug.cfg",
             "multilane_native_orphan_merge_carrier_bug.cfg",
             "multilane_native_skip_post_cache_carrier_reconcile_bug.cfg",
+            "multilane_native_repair_historical_sibling_as_active_bug.cfg",
+            "multilane_native_prune_without_protected_latest_bug.cfg",
+            "multilane_native_prune_namespace_rebind_bug.cfg",
         ),
     ),
     "ML-MUT-NAT-07": (
         TLA_COUNTEREXAMPLE,
         "MLNativeLatestIndexExact",
-        ("multilane_native_ambiguous_latest_index_bug.cfg",),
+        (
+            "multilane_native_ambiguous_latest_index_bug.cfg",
+            "multilane_native_discard_authenticated_latest_temp_bug.cfg",
+        ),
     ),
     "ML-MUT-KURA-01": (
         TLA_COUNTEREXAMPLE,
@@ -267,6 +308,9 @@ EXPECTED_CLOSURE_MUTATIONS = {
             "multilane_autonomous_release_before_barrier_bug.cfg",
             "multilane_autonomous_ordinary_anchor_execution_bug.cfg",
             "multilane_autonomous_skip_canonical_reexecution_bug.cfg",
+            "multilane_autonomous_prevote_commit_surface_drift_bug.cfg",
+            "multilane_autonomous_event_prefix_drift_bug.cfg",
+            "multilane_autonomous_post_validation_event_surface_drift_bug.cfg",
         ),
     ),
     "ML-MUT-AUT-06": (
@@ -380,6 +424,7 @@ EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS = {
     "ML-MUT-API-03": (
         "ci/run_native_amx_v2_grouped_sdk_parity.sh",
         "fixtures/sumeragi_v2/native_amx_v2_grouped.json",
+        "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
     ),
     "ML-MUT-API-04": (
         "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
@@ -397,8 +442,33 @@ FORBIDDEN_PRODUCTION_TOKENS = {
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "plan_lane_reservation_ownership",
     ): ("merge_ledger_all_entries",),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "apply_lane_reservation_reconciliation_plan",
+    ): (
+        "queue.commit_lane_reservation_group(",
+        "commit_lane_reservation_group_with_authorization(",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "finalize_certified_merge_reservations",
+    ): (
+        "queue.commit_lane_reservation_group(&ordered_keys)",
+        "commit_lane_reservation_group_with_authorization(",
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "Queue::commit_lane_reservation",
+    ): (
+        "validator_count: 1",
+        "producer: 1",
+        "producer_selected_owner: 1",
+    ),
 }
 NATIVE_PREPUBLICATION_MODULE = "SumeragiV2NativeApplicationEvidence"
+KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE = (
+    "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+)
 NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_BINDINGS = (
     (
         "crates/iroha_core/src/block.rs",
@@ -527,19 +597,19 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/kura.rs",
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
         "enum",
         "NativeAmxParticipantApplicationPublicationMode",
         ("PreWsv", "PostWsvRepair"),
     ),
     (
-        "crates/iroha_core/src/kura.rs",
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
         "method",
         "NativeAmxParticipantApplicationPublicationMode::requires_post_apply_metadata",
         ("matches!(self, Self::PostWsvRepair)",),
     ),
     (
-        "crates/iroha_core/src/kura.rs",
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
         "method",
         "NativeAmxParticipantApplicationPublicationMode::permits_retention_cleanup",
         ("matches!(self, Self::PostWsvRepair)",),
@@ -575,8 +645,8 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "native_amx_evidence_namespace_for_entry",
             "permit_retention_cleanup",
             "require_native_amx_evidence_prune_intent_absent_locked",
+            "require_native_amx_latest_index_temp_absent_locked",
             "recover_native_amx_evidence_publication_temp_locked",
-            "discard_native_amx_latest_index_temp_locked",
             "publish_native_amx_evidence_file_locked",
             "NativeAmxEvidenceKind::Manifest",
             "STRICT_INIT_MAX_BLOCK_BYTES",
@@ -595,8 +665,8 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "native_amx_evidence_namespace_for_entry",
             "permit_retention_cleanup",
             "require_native_amx_evidence_prune_intent_absent_locked",
+            "require_native_amx_latest_index_temp_absent_locked",
             "recover_native_amx_evidence_publication_temp_locked",
-            "discard_native_amx_latest_index_temp_locked",
             "read_native_amx_participant_application_manifest_from_paths_locked",
             "publish_native_amx_evidence_file_locked",
             "NativeAmxEvidenceKind::Receipt",
@@ -658,6 +728,141 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         ),
     ),
     (
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+        "enum",
+        "NativeAmxLatestIndexTempReconciliation",
+        ("Absent", "RemovedIdentical", "Promoted"),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "native_amx_evidence_special_file_bytes_locked",
+        (
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE",
+            "NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE",
+            "NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE",
+            "regular_sidecar_metadata_for",
+            "empty or oversized payload",
+            "checked_add",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "native_amx_evidence_tracked_bytes_locked",
+        (
+            "inventory_native_amx_evidence_files_locked",
+            "let temporary_bytes = inventory",
+            ".temporaries",
+            ".values()",
+            ".try_fold(0_u64",
+            "native_amx_evidence_special_file_bytes_locked",
+            "manifest_stable_bytes",
+            "receipt_stable_bytes",
+            "Native AMX evidence byte accounting overflowed",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "native_amx_latest_index_temp_bytes_locked",
+        (
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE",
+            "read_bound_regular_file_bytes_locked",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES",
+            "latest-index temporary",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "require_native_amx_latest_index_temp_absent_locked",
+        (
+            "native_amx_latest_index_temp_bytes_locked",
+            "unresolved latest-index temporary",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "require_native_amx_latest_index_temp_recovery_unambiguous_locked",
+        (
+            "native_amx_latest_index_temp_bytes_locked",
+            "NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE",
+            "NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE",
+            "inventory_native_amx_evidence_files_locked",
+            "ambiguously overlaps evidence pruning",
+            "ambiguously overlaps evidence publication",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "reconcile_native_amx_latest_index_temp_locked",
+        (
+            "native_amx_latest_index_temp_bytes_locked",
+            "decode_native_amx_participant_receipt_latest_index_bytes_for_route",
+            "expected.filter(|_| expected_can_publish)",
+            "authenticated_complete.get(&temporary.lane_block_height)",
+            "if stable == temporary",
+            "open_bound_regular_file_with_exact_bytes_locked",
+            "verify_bound_open_regular_file_exact_bytes_locked",
+            "remove_bound_progress_file_if_matches",
+            "authenticated_complete.get(&stable.lane_block_height)",
+            "stable.lane_block_height >= temporary.lane_block_height",
+            "sync_native_amx_latest_index_recovery_temp",
+            "promote_bound_progress_temp(",
+            "promote_bound_progress_temp_noreplace(",
+            "sync_native_amx_evidence_namespace",
+            "failed exact durable read-back",
+            "NativeAmxLatestIndexTempReconciliation::Promoted",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "rebuild_native_amx_participant_receipt_latest_indexes_on_startup",
+        (
+            "native_amx_evidence_namespace_for_entry",
+            "native_amx_latest_index_temp_bytes_locked",
+            "require_native_amx_latest_index_temp_recovery_unambiguous_locked",
+            "complete_native_amx_evidence_prune_intent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "inventory_native_amx_evidence_files_locked",
+            "decode_native_amx_manifest_file_locked",
+            "decode_native_amx_receipt_file_locked",
+            "difference(&manifest_payload_heights)",
+            "difference(&receipt_payload_heights)",
+            "authenticated_complete",
+            "reconcile_native_amx_latest_index_temp_locked",
+            "NativeAmxLatestIndexTempReconciliation::Promoted",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "current.matches_receipt",
+            "current.matches_manifest",
+            "is not backed by its exact receipt or QC-authenticated manifest",
+            "persist_native_amx_participant_receipt_latest_index_from_reconstructed_inventory_locked",
+            "prune_native_amx_evidence_pairs_locked",
+            "progress_mutation_namespace_unchanged",
+            "update_disk_usage_delta",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "replace_bound_native_amx_latest_index_locked",
+        (
+            "path.parent() != Some(directory)",
+            "read_bound_regular_file_bytes_locked",
+            "require_native_amx_latest_index_temp_absent_locked",
+            "create_new_bound_progress_temp",
+            "sync_all",
+            "promote_bound_progress_temp",
+            "sync_native_amx_evidence_namespace",
+            "persisted != bytes",
+        ),
+    ),
+    (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "method",
         "V2ApplyService::validate_and_apply",
@@ -670,6 +875,8 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "State::native_amx_participant_frontier_markers",
             "token.authenticates_state_frontiers",
             "apply_without_execution_with_verified_v2_finality",
+            "certified_merge_queue_reservation_hashes(state_block.staged_merge_entry())",
+            "!staged_merge_queue_reservation_hashes.contains(transaction_hash)",
             "pending_autoscale_retirement_binding",
             "Box<dyn StateBlockCommitAuthorization>",
             "Box::new(checked_carrier_applications)",
@@ -742,6 +949,179 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
             "let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan",
             "if permit_cleanup {",
             "self.cleanup_native_amx_participant_application_evidence_under_publication_guard(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "replace_bound_native_amx_latest_index_locked",
+        (
+            "let _ = self.read_bound_regular_file_bytes_locked(",
+            "require_native_amx_latest_index_temp_absent_locked(namespace)",
+            "create_new_bound_progress_temp(namespace, &temp_path)",
+            ".write_all(bytes)",
+            ".sync_all()",
+            "promote_bound_progress_temp(namespace, &temp_path, path, &temporary)",
+            "sync_native_amx_evidence_namespace(namespace",
+            "let persisted = self",
+            "if persisted != bytes",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "rebuild_native_amx_participant_receipt_latest_indexes_on_startup",
+        (
+            "let latest_temp_present = self",
+            "require_native_amx_latest_index_temp_recovery_unambiguous_locked(",
+            "complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)",
+            "recover_native_amx_evidence_publication_temp_locked(",
+            "let inventory = self.inventory_native_amx_evidence_files_locked",
+            "let mut validated_manifests = BTreeMap::new()",
+            "let mut validated_receipts = BTreeMap::new()",
+            "validate_native_amx_retained_history_continuity(",
+            "let mut authenticated_complete = BTreeMap::new()",
+            "reconcile_native_amx_latest_index_temp_locked(",
+            "let current = self.decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "match (expected, current)",
+            "prune_native_amx_evidence_pairs_locked(&entry, &namespace)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "reconcile_native_amx_latest_index_temp_locked",
+        (
+            "let Some(temp_bytes) = self.native_amx_latest_index_temp_bytes_locked",
+            "let temporary = Self::decode_native_amx_participant_receipt_latest_index_bytes_for_route",
+            "let expected = expected.filter(|_| expected_can_publish)",
+            "authenticated_complete.get(&temporary.lane_block_height)",
+            "let stable_bytes = self.read_bound_regular_file_bytes_locked",
+            "if stable == temporary",
+            "remove_bound_progress_file_if_matches(",
+            "authenticated_complete.get(&stable.lane_block_height)",
+            "sync_native_amx_latest_index_recovery_temp(&temporary_file)",
+            "let promotion = if stable.is_some()",
+            "promotion.map_err",
+            "failed exact durable read-back",
+            "NativeAmxLatestIndexTempReconciliation::Promoted",
+        ),
+    ),
+)
+NATIVE_LATEST_TEMP_RECONCILIATION_FORBIDDEN_TOKENS = (
+    "discard_native_amx_latest_index_temp_locked",
+    "remove_bound_progress_temp_if_present",
+    "std::fs::remove_file",
+    ".write_all(",
+    ".set_len(",
+)
+NATIVE_EXACT_OBJECT_PRUNE_BINDINGS = (
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "open_bound_regular_file_with_exact_bytes_locked",
+        (
+            "regular_sidecar_metadata_for",
+            "len == 0 || len > max_bytes || len != expected_bytes.len()",
+            "open_bound_progress_file(namespace, path, &metadata)",
+            "verify_bound_open_regular_file_exact_bytes_locked",
+            "Ok((file, metadata))",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "verify_bound_open_regular_file_exact_bytes_locked",
+        (
+            "file.seek(SeekFrom::Start(0))",
+            ".take(u64::try_from(max_bytes)?.saturating_add(1))",
+            ".read_to_end(&mut readback)",
+            "let opened = file",
+            ".metadata()",
+            "regular_sidecar_metadata_for",
+            "readback != expected_bytes",
+            "sidecar_file_metadata_unchanged(&metadata.file, &opened)",
+            "stable_sidecar_metadata_unchanged(&metadata, &current)",
+            "progress_mutation_namespace_unchanged(namespace)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked",
+        (
+            "file.seek(SeekFrom::Start(0))",
+            ".take(u64::try_from(max_bytes)?.saturating_add(1))",
+            ".read_to_end(&mut readback)",
+            "let opened = file",
+            ".metadata()",
+            "regular_sidecar_metadata_for",
+            "readback != expected_bytes",
+            "metadata.canonical_path != current.canonical_path",
+            "sidecar_file_metadata_unchanged(&metadata.file, &opened)",
+            "sidecar_file_metadata_unchanged(&metadata.file, &current.file)",
+            "sidecar_directory_binding_unchanged",
+            "progress_mutation_namespace_unchanged(namespace)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "remove_bound_progress_file_if_matches",
+        (
+            "path.parent() != Some(immediate.expected_path.as_path())",
+            "let expected_metadata = expected.metadata()?",
+            "sidecar_file_metadata_unchanged",
+            "rustix::fs::statat",
+            "rustix::fs::AtFlags::SYMLINK_NOFOLLOW",
+            "rustix::fs::FileType::RegularFile",
+            "expected_metadata.nlink() != 1",
+            "entry.st_dev as u64 != expected_snapshot.file.dev()",
+            "entry.st_ino as u64 != expected_snapshot.file.ino()",
+            "entry.st_nlink as u64 != 1",
+            "rustix::fs::unlinkat",
+            "std::fs::symlink_metadata(path)?",
+            "current.file_type().is_symlink()",
+            "sidecar_is_single_link(&current)",
+            "std::fs::remove_file(path)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "complete_native_amx_evidence_prune_intent_locked",
+        (
+            "recover_native_amx_evidence_prune_intent_publication_locked",
+            "decode_native_amx_evidence_prune_intent_bytes",
+            "validate_native_amx_evidence_prune_intent_locked",
+            "Hash::new(&artifact_bytes)",
+            "open_bound_regular_file_with_exact_bytes_locked",
+            "verify_bound_open_regular_file_exact_bytes_locked",
+            "verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked",
+            "remove_bound_progress_file_if_matches",
+            "sync_native_amx_evidence_namespace",
+        ),
+    ),
+)
+NATIVE_EXACT_OBJECT_PRUNE_CALL_COUNTS = (
+    (
+        "complete_native_amx_evidence_prune_intent_locked",
+        (
+            ("open_bound_regular_file_with_exact_bytes_locked(", 2),
+            ("verify_bound_open_regular_file_exact_bytes_locked(", 1),
+            (
+                "verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(",
+                1,
+            ),
+            ("remove_bound_progress_file_if_matches(", 2),
+        ),
+    ),
+    (
+        "reconcile_native_amx_latest_index_temp_locked",
+        (
+            ("open_bound_regular_file_with_exact_bytes_locked(", 2),
+            ("verify_bound_open_regular_file_exact_bytes_locked(", 2),
+            ("remove_bound_progress_file_if_matches(", 1),
         ),
     ),
 )
@@ -1394,487 +1774,6 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
         ),
     ),
 )
-QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
-QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
-    (
-        "crates/iroha_core/src/queue/journal.rs",
-        "method",
-        "QueuePlanJournalReplay::into_verified_records",
-        (
-            "self.verify_snapshot_content()?",
-            "std::mem::take(&mut self.live_positions)",
-            "live.ownership_position",
-            "self.verify_snapshot_storage()?",
-            "record.claim_digest()",
-            "record.entrypoint_hash != entrypoint_hash",
-            "record.plan_digest() != live.plan_digest",
-            "claim_digest != live.claim_digest",
-            "verified.push(record)",
-            "Ok(verified)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue/journal.rs",
-        "method",
-        "QueuePlanJournal::remove_all_live_exact_atomic_strict_durable",
-        (
-            "remove_many_exact_atomic_strict_durable_inner(removals, true)?",
-            "Ok(())",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue/journal.rs",
-        "method",
-        "QueuePlanJournal::remove_many_exact_atomic_strict_durable_inner",
-        (
-            "self.ensure_healthy()?",
-            "removals.len() > self.limits.max_live_records",
-            "QueuePlanJournalFrameV4::RemoveBatch(requested.clone())",
-            "prepare_replay_with_removed_entrypoints(Some(&entrypoints))",
-            "if require_all_live",
-            "live_removals.len() != requested.len()",
-            "QueuePlanJournalExactRemoveResult::Removed",
-            "atomic live-removal batch contains an already-absent target",
-            "QueuePlanJournalFrameV4::RemoveBatch(live_removals.clone())",
-            "self.compact(true)?",
-            "if compacted != (outcomes.clone(), live_removals.clone())",
-            "self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)",
-            "self.sync_all_raw(SyncPhase::General)?",
-            "Ok(outcomes)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::ensure_plan_journal_replay_startup_shape_locked",
-        (
-            "self.txs.is_empty()",
-            "self.materialized_active_len() == 0",
-            "self.materialized_retained_bytes() == 0",
-            "self.tx_hashes.is_empty()",
-            "self.queued_count.load(Ordering::Acquire) == 0",
-            "self.routing_decisions.is_empty()",
-            "self.routing_plans.is_empty()",
-            "self.durable_plan_claims.is_empty()",
-            "self.tx_encoded_len.is_empty()",
-            "self.tx_gas_cost.is_empty()",
-            "self.tx_enqueued_at_ms.is_empty()",
-            "self.queued_tx_enqueued_at_ms.is_empty()",
-            "self.queued_age_ring.lock().is_empty()",
-            "self.removed_hashes.is_empty()",
-            "self.txs_per_user.is_empty()",
-            "fee_admission_reservations",
-            "self.expiry_ring.lock().is_empty()",
-            "self.expiry_ring_members.is_empty()",
-            "self.tx_gossip.is_empty()",
-            "self.tx_teu.is_empty()",
-            "lane_teu_pending",
-            "dataspace_teu_pending",
-            "only exact durable reservation FIFO identities may pre-exist",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::plan_journal_replay_reservation_shape_locked",
-        (
-            "store.durable_owned_hashes().collect::<HashSet<_>>()",
-            ".filter(|hash| !self.txs.contains_key(hash))",
-            "expected_missing_payload_hashes != store.missing_payload_hashes",
-            "missing_reservation_payload_count",
-            "store.missing_payload_hashes.len()",
-            "store.live_by_hash.values().chain(",
-            "completed_releases",
-            "record.validate()",
-            ".insert(hash, record.fifo_order)",
-            "multiple durable FIFO owners",
-            "durable_owned_hashes",
-            "durable_fifo_orders",
-            "missing_payload_hashes: store.missing_payload_hashes.clone()",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::prepare_plan_journal_replay_locked",
-        (
-            "self.ensure_plan_journal_replay_startup_shape_locked()?",
-            "self.plan_journal_replay_reservation_shape_locked()?",
-            "journal_hashes.len() != records.len()",
-            ".missing_payload_hashes",
-            ".difference(&journal_hashes)",
-            "commit_barrier_hashes.contains(hash)",
-            "state_view.transactions.get(hash).is_none()",
-            "let replay_observed_at = self.time_source.get_unix_time();",
-            "AcceptedTransaction::accept_entrypoint_at_time",
-            "accepted.hash_as_entrypoint() != entrypoint_hash",
-            "queue_plan_replay_reservation_owner",
-            "reservation_shape.durable_owned_hashes.contains(&hash)",
-            "reservation_owner.is_present()",
-            "reservation_owner.fifo_order()",
-            "state_view.transactions.get(&hash).is_some()",
-            "recorded_global_admission_identity",
-            "queue_plan_admission_registry_match",
-            "QueuePlanAdmissionRegistryMatch::Conflict",
-            "global_registry_match.is_none()",
-            "self.is_expired_at_with_enqueue_timestamp(",
-            "replay_observed_at",
-            "!has_durable_reservation_owner",
-            "resolve_routing_plan_for_queue_admission(",
-            "durable_plan_claim_context_revalidates_in_view",
-            "QueueAdmissionPreparationMode::AtomicJournalReplay",
-            "transaction_selection_durability_faulted()",
-            "self.active_len()",
-            "self.retained_bytes()",
-            "projected_active > self.capacity.get()",
-            "projected_retained > self.max_retained_bytes.get()",
-            "projected > self.capacity_per_user.get()",
-            ".reserve(admission.hash, reservation)",
-            "orphaned FIFO identity",
-            "reservation FIFO anchors disagree with authenticated journal order",
-            "anchors.len() != reservation_shape.durable_fifo_orders.len()",
-            "final_fifo.len() > self.tx_hashes.capacity()",
-            "terminal_removals",
-            "Ok(PreparedQueuePlanReplay {",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::apply_plan_journal_replay_locked",
-        (
-            "terminal_removals: _",
-            "*self.fee_admission_reservations.lock() = fee_reservations;",
-            "*self.next_fifo_ordinal.lock() = next_fifo_ordinal;",
-            "self.fifo_order_by_hash.insert(hash, fifo_order);",
-            "self.txs.insert(hash, Arc::clone(&tx_arc));",
-            "self.track_active_transaction();",
-            "self.routing_decisions.insert(hash, routing_decision);",
-            "self.routing_plans.insert(hash, routing_plan.clone());",
-            "self.durable_plan_claims.insert(hash, claim.clone());",
-            "self.track_expiry_hash(hash);",
-            "notifications.push(QueueAdmissionNotification {",
-            "self.apply_per_user_tx_count_increments(per_user_increments);",
-            "self.reconcile_missing_reservation_payloads_locked(&mut store);",
-            "self.replace_fifo_locked(&final_fifo);",
-            "(summary, notifications)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::replay_plan_journal",
-        (
-            "self.plan_journal_install_lock.lock()",
-            "self.lane_reservation_transition_lock.lock()",
-            "state.lock_lane_lifecycle_work_admission()",
-            "state.state_view_generation()",
-            "let state_view = state.view();",
-            "self.ensure_plan_journal_replay_startup_shape_locked()?",
-            "self.sync_nexus_routing_with_view(&state_view);",
-            "let mut journal_guard = self.plan_journal.lock();",
-            "let queue_guard = self.push_remove_lock.lock();",
-            "let records = journal.prepare_replay()?.into_verified_records()?;",
-            "let expected_record_claims = records",
-            "self.prepare_plan_journal_replay_locked(",
-            "let observed_record_claims = journal",
-            "if observed_record_claims != expected_record_claims",
-            "let terminal_removals = prepared.terminal_removals.clone();",
-            "remove_all_live_exact_atomic_strict_durable(&terminal_removals)",
-            "self.mark_plan_journal_durability_fault",
-            "self.apply_plan_journal_replay_locked(prepared)",
-            "self.publish_admission_notifications(&notifications);",
-            "self.publish_backpressure_state(self.active_len(), backpressure_telemetry);",
-            "status::set_tx_queue_pressure(self.pressure_snapshot());",
-            "Ok(summary)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::complete_lane_reservation_startup_reconciliation",
-        (
-            "self.lane_reservation_transition_lock.lock()",
-            "self.push_remove_lock.lock()",
-            "self.transaction_selection_durability_faulted()",
-            "!store.commit_barriers.is_empty()",
-            "!store.release_barriers.is_empty()",
-            "!store.completed_releases.is_empty()",
-            "!store.missing_payload_hashes.is_empty()",
-            "lane_reservation_reconciliation_pending",
-            ".store(false, Ordering::Release)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_apply.rs",
-        "fn",
-        "apply_lane_reservation_reconciliation_plan",
-        (
-            "historical_autonomous_install_is_durable",
-            "lane_reservation_reconciliation_snapshot",
-            "lane_reservation_commit_barriers",
-            "lane_reservation_release_barriers",
-            "commit_lane_reservation",
-            "retire_autonomous_lane_slot_and_release_reservations",
-            "release_lane_reservations_in_order",
-            "complete_lane_reservation_startup_reconciliation",
-        ),
-    ),
-    (
-        "crates/irohad/src/main.rs",
-        "method",
-        "Iroha::start_with_runtime_deps",
-        (
-            "install_lane_reservation_journal(",
-            "install_plan_journal(",
-            "replay_plan_journal(&state)",
-            "IrohaNetwork::start_with_crypto(",
-        ),
-    ),
-)
-QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
-    (
-        "crates/iroha_core/src/queue/journal.rs",
-        "method",
-        "QueuePlanJournalReplay::into_verified_records",
-        (
-            "self.verify_snapshot_content()?;",
-            "std::mem::take(&mut self.live_positions)",
-            "ordered.sort_unstable_by_key",
-            "for (entrypoint_hash, live) in ordered {",
-            "self.verify_snapshot_storage()?;",
-            "let claim_digest = record.claim_digest()",
-            "if record.entrypoint_hash != entrypoint_hash",
-            "verified.push(record);",
-            "self.verify_snapshot_content()?;",
-            "Ok(verified)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue/journal.rs",
-        "method",
-        "QueuePlanJournal::remove_many_exact_atomic_strict_durable_inner",
-        (
-            "let (outcomes, live_removals) =",
-            "if require_all_live",
-            "atomic live-removal batch contains an already-absent target",
-            "if live_removals.is_empty()",
-            "let encoded = encode_frame(",
-            "self.ensure_append_capacity(encoded.len())",
-            "self.compact(true)?;",
-            "let compacted =",
-            "if compacted != (outcomes.clone(), live_removals.clone())",
-            "self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)",
-            "self.sync_all_raw(SyncPhase::General)?;",
-            "Ok(outcomes)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::prepare_plan_journal_replay_locked",
-        (
-            "self.ensure_plan_journal_replay_startup_shape_locked()?;",
-            "self.plan_journal_replay_reservation_shape_locked()?;",
-            "let journal_hashes = records",
-            ".missing_payload_hashes",
-            ".difference(&journal_hashes)",
-            "let replay_observed_at = self.time_source.get_unix_time();",
-            "for record in records {",
-            "AcceptedTransaction::accept_entrypoint_at_time(",
-            "queue_plan_replay_reservation_owner(",
-            "let state_committed = state_view.transactions.get(&hash).is_some();",
-            "let global_registry_match =",
-            "self.is_expired_at_with_enqueue_timestamp(",
-            "resolve_routing_plan_for_queue_admission(",
-            "prepare_checked_for_enqueue(",
-            "if self.transaction_selection_durability_faulted()",
-            "let mut projected_active = self.active_len();",
-            "let mut fifo_orders =",
-            "let anchors = pending_admissions",
-            "Ok(PreparedQueuePlanReplay {",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::apply_plan_journal_replay_locked",
-        (
-            "*self.fee_admission_reservations.lock() = fee_reservations;",
-            "*self.next_fifo_ordinal.lock() = next_fifo_ordinal;",
-            "for replayed in admissions {",
-            "self.fifo_order_by_hash.insert(hash, fifo_order);",
-            "self.txs.insert(hash, Arc::clone(&tx_arc));",
-            "self.durable_plan_claims.insert(hash, claim.clone());",
-            "notifications.push(QueueAdmissionNotification {",
-            "self.apply_per_user_tx_count_increments(per_user_increments);",
-            "self.reconcile_missing_reservation_payloads_locked(&mut store);",
-            "self.replace_fifo_locked(&final_fifo);",
-            "(summary, notifications)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::replay_plan_journal",
-        (
-            "self.plan_journal_install_lock.lock()",
-            "self.lane_reservation_transition_lock.lock()",
-            "state.lock_lane_lifecycle_work_admission()",
-            "let state_view = state.view();",
-            "self.ensure_plan_journal_replay_startup_shape_locked()?;",
-            "self.sync_nexus_routing_with_view(&state_view);",
-            "let mut journal_guard = self.plan_journal.lock();",
-            "let queue_guard = self.push_remove_lock.lock();",
-            "let records = journal.prepare_replay()?.into_verified_records()?;",
-            "let expected_record_claims = records",
-            "let prepared = self.prepare_plan_journal_replay_locked(",
-            "let observed_record_claims = journal",
-            ".prepare_replay()?",
-            ".into_verified_records()?",
-            "if observed_record_claims != expected_record_claims",
-            "let terminal_removals = prepared.terminal_removals.clone();",
-            "remove_all_live_exact_atomic_strict_durable(&terminal_removals)",
-            "self.apply_plan_journal_replay_locked(prepared)",
-            "self.publish_admission_notifications(&notifications);",
-            "Ok(summary)",
-        ),
-    ),
-    (
-        "crates/irohad/src/main.rs",
-        "method",
-        "Iroha::start_with_runtime_deps",
-        (
-            "install_lane_reservation_journal(",
-            "install_plan_journal(",
-            "replay_plan_journal(&state)",
-            "IrohaNetwork::start_with_crypto(",
-        ),
-    ),
-)
-QUEUE_PLAN_STARTUP_REPLAY_FORBIDDEN_SOURCE_CHECKS = (
-    (
-        "crates/iroha_core/src/queue.rs",
-        "method",
-        "Queue::apply_plan_journal_replay_locked",
-        (
-            "?",
-            "Result<",
-            "return Err(",
-            "expect(",
-            "unwrap(",
-            "panic!(",
-            "unreachable!(",
-        ),
-    ),
-)
-QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_MARKER = (
-    "let (summary, notifications) = self.apply_plan_journal_replay_locked(prepared);"
-)
-QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_FORBIDDEN_TOKENS = (
-    "?",
-    "return Err(",
-    ".map_err(",
-    "expect(",
-    "unwrap(",
-    "panic!(",
-    "unreachable!(",
-)
-QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
-    (
-        "crates/iroha_core/src/queue/journal.rs",
-        "exact_atomic_live_tombstone_batch_rejects_retry_before_append",
-        (
-            "remove_all_live_exact_atomic_strict_durable(",
-            "expect_err(",
-            "io::ErrorKind::InvalidData",
-            "the startup publication form must reject a mixed absent and live batch",
-            "the all-live precondition must reject a mixed batch before append",
-            "rejecting a mixed batch must retain its still-live member",
-            "the all-live precondition must reject before another frame is appended",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue/plan_journal_replay_tests.rs",
-        "materialized_replay_rejects_later_record_corruption_before_any_callback",
-        (
-            ".get_mut(&second_key)",
-            ".for_each_record(",
-            "expect_err(",
-            "callbacks, 0",
-            "a valid earlier record must remain private when a later record is corrupt",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup",
-        (
-            "expect_err(\"a current admission failure must abort startup\")",
-            "failed current admission",
-            "assert_eq!(replay_queue.active_len(), 0);",
-            "live_record_count()",
-            "without publishing or tombstoning a prefix",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "queue_plan_journal_replay_rejects_aggregate_per_user_overflow_without_prefix",
-        (
-            "capacity_per_user = nonzero!(1_usize)",
-            "aggregate per-user overflow must reject the complete replay",
-            "std::io::ErrorKind::PermissionDenied",
-            "assert_eq!(replay_queue.active_len(), 0);",
-            "live_record_count()",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue.rs",
-        "queue_plan_journal_replay_rejects_orphaned_startup_fifo_identity",
-        (
-            "fifo_order_by_hash.insert(orphan, fifo_order)",
-            "an unowned startup FIFO identity must fail closed",
-            "orphaned FIFO identity",
-            "Some(fifo_order)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue/lane_reservation_tests.rs",
-        "reservation_restart_fits_ordinary_fifo_around_middle_anchor",
-        (
-            "install_lane_reservation_journal(&reservation_path",
-            "replay_plan_journal(&state)",
-            "Some(u64::try_from(index)",
-            "release_lane_reservations_in_order(&[reserved_key])",
-            "restart replay must preserve A/B/C",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue/reservation_recovery_tests.rs",
-        "state_committed_live_reservation_replays_quarantined_until_explicit_proof_commit",
-        (
-            "authenticate and quarantine the sole payload source",
-            "tombstoned_committed: 0",
-            "assert!(queue.txs.contains_key(&hash));",
-            "assert_eq!(queue.queued_len(), 0);",
-            "missing_reservation_payload_count",
-            "live_record_count()",
-            "commit_lane_reservation_for_test(&key)",
-            "lane_reservation_commit_barriers().is_empty()",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/queue/reservation_recovery_tests.rs",
-        "expired_live_reservation_replays_payload_without_fifo_or_tombstone",
-        (
-            "transaction_time_to_live: Duration::from_millis(1)",
-            "time_handle.advance(Duration::from_millis(2));",
-            "materialize expired payload under its durable reservation owner",
-            "tombstoned_expired: 0",
-            "assert_eq!(queue.queued_len(), 0);",
-            "must not tombstone the sole payload source",
-        ),
-    ),
-)
 
 
 def _regular_file(path: Path, label: str, errors: list[str]) -> bool:
@@ -2164,9 +2063,10 @@ def _validate_closure_mutation_ledger(
             "conceptual closure mappings must cover every and only the model "
             "mutation configs"
         )
-    if len(model_configs) != 73:
+    if len(model_configs) != REVIEWED_MULTILANE_MUTATION_CONFIG_COUNT:
         errors.append(
-            f"reviewed multilane mutation inventory must contain 73 configs, "
+            "reviewed multilane mutation inventory must contain "
+            f"{REVIEWED_MULTILANE_MUTATION_CONFIG_COUNT} configs, "
             f"found {len(model_configs)}"
         )
 
@@ -2419,14 +2319,14 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   native-application-evidence \\
   "$NATIVE_MODULE" \\
   multilane_native_application_evidence_fixed.cfg \\
-  5 \\
+  8 \\
   "NativeEvidenceTypeInvariant, NativeStandaloneEvidenceInvariant, NativeEvidenceRetentionBoundInvariant, NativeNoClobberPublicationInvariant, NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLUnifiedStartupEvidenceRepairSafe, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact\"""",
         """run_positive \\
   autonomous-reservation-carrier \\
   "$AUTONOMOUS_MODULE" \\
   multilane_autonomous_reservation_carrier_fixed.cfg \\
   10 \\
-  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLStageEvidenceMonotonic\"""",
+  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierCommitSurfaceExact, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLStageEvidenceMonotonic\"""",
         """run_positive \\
   queue-plan-admission-registry \\
   "$QUEUE_PLAN_ADMISSION_MODULE" \\
@@ -2465,12 +2365,13 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_native_frontier_before_sidecars_bug.cfg",
         "multilane_native_hash_only_pruning_bug.cfg",
         "multilane_native_same_route_marker_bug.cfg",
-        "multilane_native_source_claim_equivocation_bug.cfg",
+        *NATIVE_SOURCE_CLAIM_MUTATION_CONFIGS,
         "multilane_native_noncontiguous_route_bug.cfg",
         "multilane_native_partial_group_application_bug.cfg",
         "multilane_native_forged_manifest_leaf_bug.cfg",
         "multilane_native_dropped_startup_repair_bug.cfg",
         "multilane_native_ambiguous_latest_index_bug.cfg",
+        "multilane_native_discard_authenticated_latest_temp_bug.cfg",
         "multilane_native_mutating_unified_startup_plan_bug.cfg",
         "multilane_native_uncoalesced_canonical_body_needs_bug.cfg",
         "multilane_native_partial_unified_startup_preflight_bug.cfg",
@@ -2478,6 +2379,9 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_native_missing_reverse_merge_carrier_bug.cfg",
         "multilane_native_orphan_merge_carrier_bug.cfg",
         "multilane_native_skip_post_cache_carrier_reconcile_bug.cfg",
+        "multilane_native_repair_historical_sibling_as_active_bug.cfg",
+        "multilane_native_prune_without_protected_latest_bug.cfg",
+        "multilane_native_prune_namespace_rebind_bug.cfg",
         "multilane_autonomous_carrier_drift_bug.cfg",
         "multilane_autonomous_duplicate_application_bug.cfg",
         "multilane_autonomous_release_after_apply_bug.cfg",
@@ -2488,6 +2392,9 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_autonomous_reserve_before_durable_bug.cfg",
         "multilane_autonomous_noncanonical_merge_prefix_bug.cfg",
         "multilane_autonomous_skip_canonical_reexecution_bug.cfg",
+        "multilane_autonomous_prevote_commit_surface_drift_bug.cfg",
+        "multilane_autonomous_event_prefix_drift_bug.cfg",
+        "multilane_autonomous_post_validation_event_surface_drift_bug.cfg",
         "multilane_autonomous_restart_drops_ownership_bug.cfg",
         "multilane_autonomous_unauthenticated_recovery_body_bug.cfg",
         "multilane_autonomous_mixed_signer_recovery_body_bug.cfg",
@@ -2660,7 +2567,7 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
             "`run_sumeragi_v2_multilane_apalache.sh`",
             "pinned Apalache 0.52.2",
             "| autoscale lifecycle | `multilane_autoscale_lifecycle_fixed.cfg` | 8 |",
-            "| Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |",
+            "| Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 8 |",
             "| autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |",
             "| QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |",
             "| Kura replica retention | `kura_replica_retention_fixed.cfg` | 8 |",
@@ -2695,6 +2602,7 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         TLC_MUTATION_RUNNER_RELATIVE,
         *FORMAL_WORKFLOW_RELATIVES,
         Path("scripts/formal/check_sumeragi_v2_multilane_models.py"),
+        Path("scripts/formal/sumeragi_v2_multilane_queue_plan_contract.py"),
         Path(
             "scripts/formal/"
             "sumeragi_v2_multilane_kura_retention_contract.py"
@@ -3455,6 +3363,31 @@ def _validate_native_prepublication_contract(
                 break
             cursor = position
 
+    latest_temp_reconciliation = binding_items.get(
+        (
+            "crates/iroha_core/src/kura.rs",
+            "fn",
+            "reconcile_native_amx_latest_index_temp_locked",
+        )
+    )
+    if latest_temp_reconciliation is not None:
+        for forbidden in NATIVE_LATEST_TEMP_RECONCILIATION_FORBIDDEN_TOKENS:
+            if forbidden in latest_temp_reconciliation:
+                errors.append(
+                    f"{root / 'crates/iroha_core/src/kura.rs'}: authenticated "
+                    "Native latest-index temporary reconciliation contains "
+                    f"forbidden destructive token {forbidden!r}"
+                )
+
+    kura_source = (root / "crates/iroha_core/src/kura.rs").read_text(
+        encoding="utf-8"
+    )
+    if "discard_native_amx_latest_index_temp_locked" in kura_source:
+        errors.append(
+            f"{root / 'crates/iroha_core/src/kura.rs'}: legacy unconditional "
+            "Native latest-index temporary discard must remain absent"
+        )
+
     kura_relative = "crates/iroha_core/src/kura.rs"
     persist_key = (
         kura_relative,
@@ -3502,7 +3435,9 @@ def _validate_native_prepublication_contract(
         ),
     }
     for symbol, expected in expected_mode_methods.items():
-        item = binding_items.get((kura_relative, "method", symbol))
+        item = binding_items.get(
+            (KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE, "method", symbol)
+        )
         if item is not None and " ".join(item.split()) != expected:
             errors.append(
                 f"{root / kura_relative}: {symbol} must authorize only "
@@ -3569,6 +3504,152 @@ def _validate_native_prepublication_contract(
             f"{root / kura_relative}: post-WSV Native repair must not use "
             "PreWsv publication mode"
         )
+
+
+def _validate_native_exact_object_prune_contract(
+    root: Path, models: Any, errors: list[str]
+) -> None:
+    """Bind Native pruning to the authenticated open object, not a path."""
+
+    if not isinstance(models, list):
+        return
+    native_models = [
+        model
+        for model in models
+        if isinstance(model, dict)
+        and model.get("module") == NATIVE_PREPUBLICATION_MODULE
+    ]
+    if len(native_models) != 1:
+        errors.append(
+            "Native exact-object prune source contract requires exactly one "
+            f"{NATIVE_PREPUBLICATION_MODULE} model"
+        )
+        return
+    production_symbols = native_models[0].get("production_symbols")
+    if not isinstance(production_symbols, list):
+        return
+
+    items: dict[str, str] = {}
+    for relative, kind, symbol, expected_tokens in (
+        NATIVE_EXACT_OBJECT_PRUNE_BINDINGS
+    ):
+        matches = [
+            binding
+            for binding in production_symbols
+            if isinstance(binding, dict)
+            and binding.get("path") == relative
+            and binding.get("kind") == kind
+            and binding.get("symbol") == symbol
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{NATIVE_PREPUBLICATION_MODULE}: reviewed exact-object "
+                f"prune binding {relative}!{symbol} must occur exactly once, "
+                f"found {len(matches)}"
+            )
+            continue
+        actual_tokens = matches[0].get("required_tokens")
+        if (
+            not isinstance(actual_tokens, list)
+            or tuple(actual_tokens) != expected_tokens
+        ):
+            errors.append(
+                f"{NATIVE_PREPUBLICATION_MODULE}: reviewed exact-object "
+                f"prune tokens changed for {relative}!{symbol}"
+            )
+
+        item = _rust_binding_item(
+            root,
+            relative,
+            kind,
+            symbol,
+            "Native exact-object prune production binding",
+            errors,
+        )
+        if item is None:
+            continue
+        items[symbol] = item
+        for token in expected_tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: Native exact-object prune item "
+                    f"{symbol} is missing source-bound token {token!r}"
+                )
+
+    kura_relative = "crates/iroha_core/src/kura.rs"
+    for symbol, expected_counts in NATIVE_EXACT_OBJECT_PRUNE_CALL_COUNTS:
+        item = items.get(symbol)
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                kura_relative,
+                "fn",
+                symbol,
+                "Native exact-object prune consumer binding",
+                errors,
+            )
+        if item is None:
+            continue
+        for token, expected_count in expected_counts:
+            count = item.count(token)
+            if count != expected_count:
+                errors.append(
+                    f"{root / kura_relative}: exact-object consumer {symbol} "
+                    f"must contain {token!r} exactly {expected_count} times, "
+                    f"found {count}"
+                )
+        for forbidden in (
+            "std::fs::remove_file(",
+            "rustix::fs::unlinkat(",
+            "remove_bound_progress_temp_if_present(",
+        ):
+            if forbidden in item:
+                errors.append(
+                    f"{root / kura_relative}: exact-object consumer {symbol} "
+                    f"contains forbidden path-destructive token {forbidden!r}"
+                )
+
+    exact_relations = {
+        "verify_bound_open_regular_file_exact_bytes_locked": (
+            "if readback != expected_bytes || "
+            "!Self::sidecar_file_metadata_unchanged(&metadata.file, &opened) "
+            "|| !Self::stable_sidecar_metadata_unchanged(&metadata, &current) "
+            "|| !Self::progress_mutation_namespace_unchanged(namespace) {",
+        ),
+        "verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked": (
+            "if readback != expected_bytes || metadata.canonical_path != "
+            "current.canonical_path || "
+            "!Self::sidecar_file_metadata_unchanged(&metadata.file, &opened) "
+            "|| !Self::sidecar_file_metadata_unchanged(&metadata.file, "
+            "&current.file) || !Self::sidecar_directory_binding_unchanged("
+            "&metadata.directory, &current.directory) || "
+            "!Self::progress_mutation_namespace_unchanged(namespace) {",
+        ),
+        "remove_bound_progress_file_if_matches": (
+            "if !Self::sidecar_file_metadata_unchanged("
+            "&expected_snapshot.file, &expected_metadata) {",
+            "if rustix::fs::FileType::from_raw_mode(entry.st_mode) != "
+            "rustix::fs::FileType::RegularFile || expected_metadata.nlink() "
+            "!= 1 || entry.st_dev as u64 != expected_snapshot.file.dev() || "
+            "entry.st_ino as u64 != expected_snapshot.file.ino() || "
+            "entry.st_nlink as u64 != 1 {",
+            "if current.file_type().is_symlink() || !current.is_file() || "
+            "!Self::sidecar_is_single_link(&current) || "
+            "!Self::sidecar_file_metadata_unchanged(&expected_snapshot.file, "
+            "&current) {",
+        ),
+    }
+    for symbol, required_relations in exact_relations.items():
+        item = items.get(symbol)
+        if item is None:
+            continue
+        normalized = " ".join(item.split())
+        for relation in required_relations:
+            if normalized.count(relation) != 1:
+                errors.append(
+                    f"{root / kura_relative}: exact-object metadata/namespace "
+                    f"relation drifted in {symbol}"
+                )
 
 
 def _validate_queue_plan_pending_membership_contract(
@@ -4585,6 +4666,7 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         root, models, errors
     )
     _validate_native_prepublication_contract(root, models, errors)
+    _validate_native_exact_object_prune_contract(root, models, errors)
     _validate_queue_plan_pending_membership_contract(root, models, errors)
     _validate_queue_plan_startup_replay_contract(root, models, errors)
     _validate_inflight_layout_contract(

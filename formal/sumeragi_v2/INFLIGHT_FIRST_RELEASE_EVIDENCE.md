@@ -166,12 +166,51 @@ checked `DirectReleased` token immediately before the journal `release_batch`
 append. These local slices are not a complete production trace-extraction
 theorem.
 
-The source-certificate contract authenticates that direct-release seam, but it
-still does not extract six named model actions: `FanoutFromProducer`,
-`ServeLateBody`, `Crash`, `Recover`, `RecoverReservationSnapshot`, and
-`RepairPostCarrierEvidence`. They remain explicit open obligations; the
-certificate must not treat their absence as stuttering or unreachable without
-a production proof.
+Post-carrier evidence repair now starts from the same authenticated autonomous
+source-bundle projection as `ApplyCarrier`. A move-only
+`PostCarrierEvidenceRepairAuthorization` binds the accepted post-WSV state to
+the exact merge-entry hash, canonical carrier height/hash, and complete ordered
+reservation group. The live apply path mints it only after
+`State::ensure_globally_committed_merge_entry_applied`; State journal replay
+does so only after `merge_execution_already_applied`; and unified startup repair
+does so only after its all-item State/Kura preflight. Kura revalidates the exact
+committed log/carrier or finalized reverse-carrier plan, consumes every checked
+stutter token before the first receipt or reverse-index publication, and has no
+ungated production receipt-repair entrypoint. The source-certificate contract
+binds all three seams to `RepairPostCarrierEvidence`.
+
+The source-certificate contract authenticates that direct-release seam plus
+`FanoutFromProducer` and `ServeLateBody`. Lane-committee producer publication
+consumes one Queue-fenced exact-slot token at each fresh effect insertion after
+exact Kura readback; periodic retransmission must reconstruct and match the
+same slot before using that shared gate. Operational cache copies to global
+validators outside the lane committee have no actor bit in this model and are
+not claimed as `FanoutFromProducer` actions. Autonomous late-body response
+publication consumes exact certified Kura evidence at its fresh insertion
+boundary. Exact queued duplicates are classified before either token is minted
+and remain stutters. Four named model actions remain open: `Crash`, `Recover`,
+`RecoverReservationSnapshot`, and `RehydrateLocalKuraCustody`. `Crash`,
+`Recover`, and local Kura custody rehydration remain unextracted.
+For `RecoverReservationSnapshot`, the source contract now binds the primitive
+V5 snapshot transition, exact owner/record/release normalization, ordered
+coverage root, post-open file-content revalidation, move-only Queue install and
+planning receipts, and the final publication gate. Its parametric Verus lemma
+only proves that a valid primitive snapshot replay is a stutter for any
+independently valid composed state; it neither fabricates nor recovers that
+composed state. The action therefore remains an explicit open obligation, and
+the certificate must not treat it as fully extracted, unreachable, or an
+unconditionally constructed composed stutter.
+
+`RehydrateLocalKuraCustody` is now a separate first-release action instead of
+being inferred from `Recover` or late-body service. Its shared Rust/Verus/TLA+
+kernel requires one non-crashed local validator with exact durable Kura payload
+ownership and missing volatile body custody. It adds only that actor's body,
+revives producer liveness only for the frozen producer, preserves READY
+authorization and every durable/economic fact, and rejects retired,
+post-application, or terminal work. The source contract includes positive,
+guard-omission, READY-tampering, and terminal-resurrection controls. No runtime
+startup consumer yet extracts or authorizes the action, so it remains in the
+open production-action inventory.
 
 The remaining exact blocker is a machine-checked extraction from every other
 Rust QueuePlan journal V4 and reservation journal V5 transition, Kura, recovery,

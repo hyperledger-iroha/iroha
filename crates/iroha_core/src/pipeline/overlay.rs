@@ -7058,15 +7058,17 @@ seiyaku ProtectedProvedOverlay {
                 .iter()
                 .map(|(path, value)| (path.clone(), value.clone()))
                 .collect::<Vec<_>>();
-            (marker_value, durable_state, state_transaction.last_tx_gas_used)
+            (
+                marker_value,
+                durable_state,
+                state_transaction.last_tx_gas_used,
+            )
         };
-        let executor_without_local_backend =
-            execute_with_current_local_verifier_config(&state);
+        let executor_without_local_backend = execute_with_current_local_verifier_config(&state);
 
         let prepared_without_local_backend: Vec<InstructionBox> =
             prepared.overlay.instructions().cloned().collect();
-        let prepared_without_local_backend_durable =
-            prepared.overlay.durable_state_overlay.clone();
+        let prepared_without_local_backend_durable = prepared.overlay.durable_state_overlay.clone();
         let prepared_without_local_backend_gas = prepared.overlay.ivm_gas_used;
         let prepared_without_local_backend_authorization =
             prepared.overlay.entrypoint_authorization.clone();
@@ -7100,8 +7102,7 @@ seiyaku ProtectedProvedOverlay {
             "local verifier enablement must not change proved replay instructions"
         );
         assert_eq!(
-            &locally_enabled_overlay.durable_state_overlay,
-            &overlay_built.durable_state_overlay,
+            &locally_enabled_overlay.durable_state_overlay, &overlay_built.durable_state_overlay,
             "local verifier enablement must not change proved durable-state replay"
         );
         assert_eq!(
@@ -7128,8 +7129,7 @@ seiyaku ProtectedProvedOverlay {
             "prepared proved durable-state replay must be independent of local verifier enablement"
         );
         assert_eq!(
-            locally_enabled_prepared.overlay.ivm_gas_used,
-            prepared_without_local_backend_gas,
+            locally_enabled_prepared.overlay.ivm_gas_used, prepared_without_local_backend_gas,
             "prepared proved replay gas must be independent of local verifier enablement"
         );
         assert_eq!(

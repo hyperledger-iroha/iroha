@@ -754,7 +754,7 @@ _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
         "1f09f47bc8c88ad5921908bf6e43a4298a2b8fdfbffea9a896ec74a314f32695"
     ),
     "v2_worker_backpressure_cases.rs": (
-        "a167531d17ab4973b16a9d52a9f42cd4cd86dc511a4160bd71238205c6f05afd"
+        "f7bbef433358a07a1b7e273bb57e0c07148a1741796f3a3d01dd00980b0f2b3a"
     ),
     "v2_worker_serve_unsealed_cases.rs": (
         "800c0bcd452d222e5f28522ecd60bee6cebe35956d8583a4dc8c6476e380adf0"
@@ -766,7 +766,7 @@ _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
 
 _WORKER_TEST_INCLUDE_TEST_COUNT = {
     "v2_worker_reply_route_cases.rs": 22,
-    "v2_worker_backpressure_cases.rs": 18,
+    "v2_worker_backpressure_cases.rs": 21,
     "v2_worker_serve_unsealed_cases.rs": 23,
     "v2_worker_serve_decision_restart_cases.rs": 11,
 }
@@ -874,7 +874,7 @@ _SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256 = {
         "ac57535058bc5dd4d724d1e6d56c0fe15e41424e7bbf578ba2eb99ae4111b8ac"
     ),
     "fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes": (
-        "d428ca8360f6fac1dae8e57e260980fe8fae39f0501adb255d03222a695c89c7"
+        "9800b454c24f5e09f459a2bd3f2c56d38b789bf4006bf5fe54114b0f26e06ebd"
     ),
     "restored_productive_retry_stays_behind_an_earlier_certified_request_carrier": (
         "6324de9c1046d2aa2e5dba47cba2c0ef34ef176e0e361a0003b3a49c0c4b7851"
@@ -1532,7 +1532,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256 = {
         "ba2262f2a0e0d55893f2a84d0720f401ba3a370efe6bf97bc38fe2c95d3ff695"
     ),
     "full_normal_deferred_lane_cannot_drop_absolute_timeout": (
-        "db11edaeae4b12ef18085718d49f792ee0d285f0bea71e1773174c6f5b6f4384"
+        "8d18abf6d0df4d314eb57f9f95d5f6c02eac0d0f320b0a0f5dd3747508da2a62"
     ),
 }
 _TIMEOUT_VOTE_VIEW_WINDOW_ITEM_SHA256 = {

@@ -116,6 +116,17 @@ def test_bare_cancel_asset_lock_v1_matches_the_exact_canonical_archive() -> None
     assert decode_cancel_asset_lock_v1(archive) == value
 
 
+def test_bare_cancel_asset_lock_v1_accepts_the_maximum_canonical_archive() -> None:
+    maximum_quantity = str((1 << 511) - 1)
+    archive = encode_cancel_asset_lock_v1(_ESCROW_ID, maximum_quantity)
+
+    assert len(archive) == 148
+    assert decode_cancel_asset_lock_v1(archive) == CancelAssetLockV1(
+        escrow_id=_ESCROW_ID,
+        expected_remaining_amount=maximum_quantity,
+    )
+
+
 def test_bare_cancel_asset_lock_v1_rejects_all_shared_negative_fixtures() -> None:
     for name in (
         "negative/cancel_asset_lock_legacy_missing_expected_v1.json",
@@ -260,6 +271,13 @@ def test_nested_escrow_id_and_true_trailing_bytes_are_independent_failures() -> 
     assert int.from_bytes(trailing[23:31], "little") == 46
     with pytest.raises(ValueError, match="trailing bytes"):
         decode_cancel_asset_lock_v1(trailing)
+
+
+def test_bare_cancel_asset_lock_v1_rejects_oversized_frames_before_decode() -> None:
+    oversized = _FIXTURES["cancel_asset_lock_v1.to"] + bytes(64)
+    assert len(oversized) == 149
+    with pytest.raises(ValueError, match="between 85 and 148 canonical bytes"):
+        decode_cancel_asset_lock_v1(oversized)
 
 
 def test_fixture_json_decoder_rejects_invalid_utf8() -> None:

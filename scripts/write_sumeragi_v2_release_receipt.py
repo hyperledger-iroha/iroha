@@ -207,7 +207,7 @@ _APALACHE_REFINEMENT_RESULTS = (
         "native-application-evidence",
         "SumeragiV2NativeApplicationEvidence",
         "multilane_native_application_evidence_fixed.cfg",
-        "5",
+        "8",
     ),
     (
         "autonomous-reservation-carrier",
@@ -364,20 +364,20 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 813
-_G_UNIT_TEST_COUNT = 418
+_G_UNIT_TEST_COUNT = 472
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        215,
+        266,
         "lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        140,
+        143,
         "lib",
     ),
     (
@@ -613,11 +613,11 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 52
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 54
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 58),
-    ("javascript", 56),
+    ("python", 60),
+    ("javascript", 58),
     ("swift", 3),
     ("kotlin", 6),
     ("java", 5),

@@ -3020,7 +3020,9 @@ public final class HttpClientTransportTests {
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
         "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
-    final String signingMessageB64 = Base64.getEncoder().encodeToString(new byte[32]);
+    final byte[] transactionPayload = transactionWithPayload((byte) 0x07).encodedPayload();
+    final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
@@ -3040,11 +3042,7 @@ public final class HttpClientTransportTests {
                     + "\","
                     + "\"entrypoint\":\"contribute\","
                     + "\"transaction_ttl_ms\":60000,"
-                    + "\"entrypoint_hash_hex\":\""
-                    + "77".repeat(32)
-                    + "\","
-                    + "\"transaction_scaffold_b64\":\"AQID\","
-                    + "\"signed_transaction_b64\":\"AQID\","
+                    + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
                     + "\"signing_message_b64\":\""
                     + signingMessageB64
                     + "\","
@@ -3064,9 +3062,6 @@ public final class HttpClientTransportTests {
                     + "55".repeat(32)
                     + "\","
                     + "\"entrypoint\":\"contribute\","
-                    + "\"entrypoint_hash_hex\":\""
-                    + "77".repeat(32)
-                    + "\","
                     + "\"gas_limit\":5000,\"gas_used\":17,"
                     + "\"fee_payment\":{\"payer\":\"authority\","
                     + "\"value\":{\"charge_limits\":[],\"gas_limit\":5000}},"
@@ -3100,8 +3095,7 @@ public final class HttpClientTransportTests {
     assert "contribute".equals(response.entrypoint()) : "Entrypoint mismatch";
     assert Long.valueOf(60_000L).equals(response.transactionTtlMs())
         : "transaction_ttl_ms mismatch";
-    assert "77".repeat(32).equals(response.entrypointHashHex())
-        : "entrypoint_hash_hex mismatch";
+    assert response.entrypointHashHex() == null : "draft entrypoint hash must be absent";
     assert response.pipelineStatus() == null : "draft must not include pipeline status";
     assert "contract_call".equals(response.operationReceipt().operationKind())
         : "operation kind mismatch";
@@ -3109,9 +3103,7 @@ public final class HttpClientTransportTests {
         : "operation gas limit mismatch";
     assert "88".repeat(32).equals(response.operationReceipt().payloadDigestHex())
         : "payload digest mismatch";
-    assert "AQID".equals(response.transactionScaffoldB64())
-        : "transaction_scaffold_b64 mismatch";
-    assert "AQID".equals(response.signedTransactionB64()) : "signed_transaction_b64 mismatch";
+    assert transactionPayloadB64.equals(response.transactionPayloadB64()) : "transaction_payload_b64 mismatch";
     assert signingMessageB64.equals(response.signingMessageB64())
         : "signing_message_b64 mismatch";
 
@@ -3193,6 +3185,9 @@ public final class HttpClientTransportTests {
     final byte[] instructionBytes = new byte[] {1, 2, 3, 4};
     final String proposalId = "aa".repeat(32);
     final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
+    final byte[] transactionPayload = transactionWithPayload((byte) 0x08).encodedPayload();
+    final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
@@ -3211,7 +3206,10 @@ public final class HttpClientTransportTests {
                     + "\"tx_hash_hex\":null,"
                     + "\"executed_tx_hash_hex\":null,"
                     + "\"creation_time_ms\":123,"
-                    + "\"signing_message_b64\":\"AQID\"}")
+                    + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
+                    + "\"signing_message_b64\":\""
+                    + signingMessageB64
+                    + "\"}")
                 .getBytes(StandardCharsets.UTF_8),
             "ok");
     final HttpClientTransport transport =
@@ -3242,7 +3240,9 @@ public final class HttpClientTransportTests {
         : "resolved multisig account mismatch";
     assert Boolean.FALSE.equals(response.submitted()) : "submitted mismatch";
     assert proposalId.equals(response.instructionsHash()) : "instructions_hash mismatch";
-    assert "AQID".equals(response.signingMessageB64()) : "signing_message_b64 mismatch";
+    assert transactionPayloadB64.equals(response.transactionPayloadB64()) : "transaction_payload_b64 mismatch";
+    assert signingMessageB64.equals(response.signingMessageB64())
+        : "signing_message_b64 mismatch";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Multisig request must be captured";

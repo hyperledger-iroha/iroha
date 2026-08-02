@@ -58,12 +58,46 @@ class SumeragiDiagnosticsModelsTest {
     }
 
     @Test
-    fun `native participant row rejects incomplete carrier and oversized group`() {
+    fun `native participant row enforces carrier state geometry and group bound`() {
         assertFailsWith<IllegalArgumentException> {
             application(3).copy(applicationBlockHash = null)
         }
         assertFailsWith<IllegalArgumentException> {
             application(3).copy(sourceCount = 4_097)
+        }
+
+        val geometryError =
+            "Native AMX participant state and application block identity disagree"
+        for (state in listOf(
+            SumeragiNativeAmxParticipantApplicationState.CERTIFIED_PENDING_CARRIER,
+            SumeragiNativeAmxParticipantApplicationState.CONFLICT,
+        )) {
+            assertEquals(
+                state,
+                application(3).copy(
+                    applicationBlockHeight = null,
+                    applicationBlockHash = null,
+                    state = state,
+                ).state,
+            )
+            val error = assertFailsWith<IllegalArgumentException> {
+                application(3).copy(state = state)
+            }
+            assertEquals(geometryError, error.message)
+        }
+        for (state in listOf(
+            SumeragiNativeAmxParticipantApplicationState.COMMITTED_EVIDENCE_PENDING,
+            SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED,
+        )) {
+            assertEquals(state, application(3).copy(state = state).state)
+            val error = assertFailsWith<IllegalArgumentException> {
+                application(3).copy(
+                    applicationBlockHeight = null,
+                    applicationBlockHash = null,
+                    state = state,
+                )
+            }
+            assertEquals(geometryError, error.message)
         }
     }
 

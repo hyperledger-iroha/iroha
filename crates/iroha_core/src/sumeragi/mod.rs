@@ -53,8 +53,8 @@ use crate::{
 
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
-// The valid v2 timeout-vote envelope is bounded by a 128-entry signer vector
-// and two individually bounded BLS signatures. Keep this conservative wire
+// The valid v2 timeout-vote envelope is bounded by a 128-entry signer vector and two
+// individually bounded BLS signatures. Keep this conservative wire
 // ceiling aligned with the formal ingress refinement and the maximal fixture
 // below; the production byte reserve is intentionally much larger.
 const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
@@ -641,6 +641,7 @@ pub use v2_core::{
 };
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
+pub(crate) mod v2_lifecycle_recovery;
 pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;
 pub use v2_recovery::{

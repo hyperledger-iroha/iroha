@@ -580,12 +580,13 @@ export interface MultisigContractCallApprovePayload {
 export interface MultisigContractCallResponse {
   ok: boolean;
   resolved_multisig_account_id: string;
-  submitted: boolean | null;
+  submitted: boolean;
   proposal_id: string | null;
   instructions_hash: string | null;
   tx_hash_hex: string | null;
   executed_tx_hash_hex: string | null;
   creation_time_ms: number | null;
+  transaction_payload_b64: string | null;
   signing_message_b64: string | null;
 }
 
@@ -3322,30 +3323,23 @@ export type SorafsValidationOutcome =
 export interface SorafsOrderbookValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsAppealFinanceValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsPdpPayloadValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsPdpPairValidationOptions {
   commitmentLabel?: string;
-  commitment_label?: string;
   challengeLabel?: string;
-  challenge_label?: string;
   proofLabel?: string;
-  proof_label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export type SorafsReferenceBytesInput =
@@ -3354,57 +3348,36 @@ export type SorafsReferenceBytesInput =
   | Buffer;
 
 export interface SorafsGovernanceDagBlockInput {
-  payload?: SorafsReferenceBytesInput;
-  bytes?: SorafsReferenceBytesInput;
-  noritoBytes?: SorafsReferenceBytesInput;
-  norito_bytes?: SorafsReferenceBytesInput;
+  bytes: SorafsReferenceBytesInput;
   label?: string;
 }
 
 export interface SorafsFixtureBundlePayloadInput {
   kind: SorafsFixtureBundlePayloadKind;
-  bytes?: SorafsReferenceBytesInput;
-  payload?: SorafsReferenceBytesInput;
-  noritoBytes?: SorafsReferenceBytesInput;
-  norito_bytes?: SorafsReferenceBytesInput;
+  bytes: SorafsReferenceBytesInput;
   label?: string;
 }
 
 export interface SorafsFixtureBundleValidationOptions {
   nowUnix?: number | bigint;
-  now_unix?: number | bigint;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
-export type SorafsGovernanceLogNodeValidationOptions = {
+export interface SorafsGovernanceLogNodeValidationOptions {
   label?: string;
+  expectedNodeCid: SorafsReferenceBytesInput;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
-} & (
-  | {
-      expectedNodeCid: SorafsReferenceBytesInput;
-      expected_node_cid?: never;
-    }
-  | {
-      expectedNodeCid?: never;
-      expected_node_cid: SorafsReferenceBytesInput;
-    }
-);
+}
 
 export interface SorafsGovernanceDagBlockValidationOptions {
   label?: string;
   expectedBlockCid?: SorafsReferenceBytesInput;
-  expected_block_cid?: SorafsReferenceBytesInput;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsGovernanceDagHeadValidationOptions {
   headLabel?: string;
-  head_label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export function decodeReplicationOrder(
@@ -8092,8 +8065,7 @@ export interface ContractCallResponse {
   entrypoint_hash_hex: string | null;
   pipeline_status?: ToriiPipelineTransactionStatus | null;
   entrypoint: string | null;
-  transaction_scaffold_b64: string | null;
-  signed_transaction_b64: string | null;
+  transaction_payload_b64: string | null;
   signing_message_b64: string | null;
   operation_receipt: ContractOperationReceipt;
 }

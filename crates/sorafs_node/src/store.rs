@@ -5509,6 +5509,17 @@ impl PayloadSource for ManifestPayload<'_> {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
         read_into_manifest(self.manifest, offset, buf)
     }
+
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
+        let actual = self.manifest.content_length;
+        if actual != expected_len {
+            return Err(ChunkStoreError::LengthMismatch {
+                expected: expected_len,
+                actual,
+            });
+        }
+        Ok(())
+    }
 }
 
 fn read_into_manifest(
@@ -6097,6 +6108,8 @@ mod tests {
         );
     }
 
+    include!("store_manifest_payload_integrity_tests.rs");
+
     #[test]
     fn startup_rolls_back_uncommitted_gc_move() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6520,46 +6533,6 @@ mod tests {
             assert!(backend.manifest(&manifest_id).is_none());
             assert!(!backend.manifests_dir.join(manifest_id).exists());
             assert_staging_empty(&backend);
-        }
-    }
-
-    #[test]
-    fn staged_car_reconstruction_rejects_short_trailing_and_corrupt_chunks() {
-        let payload = b"bounded staged CAR reconstruction";
-        let plan = single_file_plan(payload).expect("plan");
-        assert_eq!(plan.chunks.len(), 1, "fixture must use one chunk");
-        let manifest = test_manifest(payload, &plan, 0x93);
-        let planned = &plan.chunks[0];
-        let records = vec![StoredChunkRecord {
-            file_name: "chunk_00000.bin".to_owned(),
-            offset: planned.offset,
-            length: planned.length,
-            digest: planned.digest,
-            role: None,
-        }];
-
-        for (label, staged_bytes) in [
-            ("short", payload[..payload.len() - 1].to_vec()),
-            ("trailing", [payload.as_slice(), &[0xA5]].concat()),
-            ("corrupt", {
-                let mut corrupt = payload.to_vec();
-                corrupt[0] ^= 0x80;
-                corrupt
-            }),
-        ] {
-            let temp_dir = tempfile::tempdir().expect("create temp dir");
-            let chunks_dir = temp_dir.path().join("chunks");
-            fs::create_dir(&chunks_dir).expect("create staged chunk directory");
-            fs::write(chunks_dir.join("chunk_00000.bin"), staged_bytes)
-                .expect("write staged chunk");
-
-            let error = verify_staged_manifest_car_archive(&manifest, &plan, &records, &chunks_dir)
-                .expect_err("invalid staged chunk must fail closed");
-
-            assert!(
-                matches!(&error, StorageError::CarArchiveReconstruction { .. }),
-                "{label} staged chunk produced unexpected error: {error}"
-            );
         }
     }
 

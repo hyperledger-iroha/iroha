@@ -50,6 +50,7 @@ INFLIGHT_LAYOUT_REQUIRED_ACTIONS = (
     "Recover",
     "RecoverReservationSnapshot",
     "ReleaseReservationDirect",
+    "RehydrateLocalKuraCustody",
     "LaneCommit",
     "ApplyCarrier",
     "PersistReservationCommitted",
@@ -93,7 +94,22 @@ INFLIGHT_COMPOSED_TLA_ALIGNMENT_TOKENS = (
     "  \\/ \\E source \\in Validators, target \\in Validators:\n"
     "       ServeLateBody(source, target)",
     "  \\/ RecoverReservationSnapshot\n"
-    "  \\/ ReleaseReservationDirect",
+    "  \\/ ReleaseReservationDirect\n"
+    "  \\/ \\E p \\in Validators: RehydrateLocalKuraCustody(p)",
+    "RehydrateLocalKuraCustody(p) ==\n"
+    "  /\\ p \\in Validators\n"
+    "  /\\ p \\notin session.crashed\n"
+    "  /\\ p \\in carrier.kuraActive\n"
+    "  /\\ p \\notin session.bodies\n"
+    "  /\\ ~release.kuraRetired\n"
+    "  /\\ ~decision.wsvCommitted\n"
+    "  /\\ decision.releaseOwner = \"None\"\n"
+    "  /\\ queue.reservation\n"
+    "       \\notin {\"CommitForgotten\", \"ReleaseForgotten\", \"DirectReleased\"}\n"
+    "  /\\ session' =\n"
+    "       [session EXCEPT\n"
+    "          !.bodies = @ \\union {p},\n"
+    "          !.producerAlive = IF p = Producer THEN TRUE ELSE @]",
     "queue.reservation = \"DirectReleased\" =>\n"
     "       release.fifoRestored",
 )
@@ -210,6 +226,18 @@ INFLIGHT_LAYOUT_FORBIDDEN_TOKENS = (
 INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "LaneReservationSnapshotReplaySeal",
+        ("Clone", "Copy", "Encode", "Decode"),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "struct",
+        "LaneReservationStartupReconciliationReceipt",
+        ("Clone", "Copy", "Encode", "Decode"),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
         "method",
         "CheckedReplayAuthorizationDomain::clone",
         (
@@ -246,21 +274,21 @@ INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/queue/reservation_journal.rs",
         "enum",
-        "LaneQueueReservationJournalFrameV5",
+        "LaneQueueReservationJournalFrameV6",
         ("Prune", "RetiredLaneWideRemoval"),
     ),
     (
         "crates/iroha_core/src/queue/reservation_journal.rs",
         "method",
         "IndexedReservationReplayState::transition_semantics",
-        ("LaneQueueReservationJournalFrameV5::Prune", "transition_prune"),
+        ("LaneQueueReservationJournalFrameV6::Prune", "transition_prune"),
     ),
     (
         "crates/iroha_core/src/queue/reservation_journal.rs",
         "method",
         "IndexedReservationReplayState::check_in_flight_transition",
         (
-            "LaneQueueReservationJournalFrameV5::Prune",
+            "LaneQueueReservationJournalFrameV6::Prune",
             "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
         ),
     ),
@@ -310,6 +338,76 @@ INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS = (
         "method",
         "Queue::fifo_with_released_reservations_locked",
         ("is_expired(",),
+    ),
+    (
+        "crates/iroha_core/src/block.rs",
+        "method",
+        "ValidBlock::autonomous_merge_carrier_has_da_effect",
+        ("da_proof_policies",),
+    ),
+    (
+        "crates/iroha_core/src/block.rs",
+        "method",
+        "ValidBlock::validate_staged_merge_execution_authorization",
+        ("block.da_proof_policies().is_some()",),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+        "method",
+        "V2CandidateAssembler::snapshot_routable_candidates",
+        (
+            "batch.application_block_header.creation_time()",
+            "lane.entrypoint_hashes.iter().copied()",
+            "transaction.creation_time()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+        "fn",
+        "record_ordinary_execution_carrier_exclusion",
+        (
+            "creation_time",
+            "entrypoint_hash",
+            "certified_entrypoints",
+            "report.work_deferred",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::prepare_certified_execution_carrier",
+        (
+            "pending_autonomous_anchor_payloads.clear",
+            "retire_autonomous_payload_batch",
+            "release_pending_autonomous_reservation_batches",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "LaneQueueCarrierCleanupGate::cleanup_state",
+        (
+            "validator_count",
+            "producer",
+            "producer_selected_owner",
+            "replicated_carrier_owners",
+            "payload_binding_a",
+            "binding_a",
+            "carrier.",
+            "session.",
+            "decision.",
+            "release.",
+            "history.ever_",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "finalize_certified_merge_reservations",
+        (
+            "queue.commit_lane_reservation_group(&ordered_keys)",
+            "commit_lane_reservation_group_with_authorization(",
+        ),
     ),
 )
 INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
@@ -443,13 +541,14 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
     (
         "crates/iroha_core/src/queue/reservation_journal.rs",
         "enum",
-        "LaneQueueReservationJournalFrameV5",
+        "LaneQueueReservationJournalFrameV6",
         (
             "Bootstrap {",
             "Snapshot {",
             "PutBatch(Vec<LaneQueueReservationRecordV5>)",
             "ReleaseBatch(Vec<LaneQueueReservationKeyV2>)",
             "Commit(LaneQueueReservationKeyV2)",
+            "PlanTombstoned(LaneQueueReservationKeyV2)",
             "ForgetCommit(LaneQueueReservationKeyV2)",
             "PrepareRelease(LaneQueueReservationReleaseBarrierV3)",
             "CompleteRelease(LaneQueueReservationReleaseCompletionV5)",
@@ -461,7 +560,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "fn",
         "bootstrap_frame",
         (
-            "RESERVATION_JOURNAL_OPERATION_SCHEMA_V5",
+            "RESERVATION_JOURNAL_OPERATION_SCHEMA_V6",
             "RESERVATION_JOURNAL_FRAME_FORMAT_VERSION",
             "RESERVATION_JOURNAL_BOOTSTRAP_DOMAIN",
             "RESERVATION_JOURNAL_FRAME_MAGIC",
@@ -493,6 +592,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         (
             "live: usize",
             "committed: usize",
+            "plan_tombstoned: usize",
             "release_barriers: usize",
             "completed_releases: usize",
             "ownership: usize",
@@ -502,6 +602,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "CheckedReplayStateShape {\n"
             "    live: usize,\n"
             "    committed: usize,\n"
+            "    plan_tombstoned: usize,\n"
             "    release_barriers: usize,\n"
             "    completed_releases: usize,\n"
             "    ownership: usize,\n"
@@ -518,6 +619,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         (
             "live: self.live.len()",
             "committed: self.committed.len()",
+            "plan_tombstoned: self.plan_tombstoned.len()",
             "release_barriers: self.release_barriers.len()",
             "completed_releases: self.completed_releases.len()",
             "ownership: self.ownership.len()",
@@ -527,6 +629,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "CheckedReplayStateShape {\n"
             "            live: self.live.len(),\n"
             "            committed: self.committed.len(),\n"
+            "            plan_tombstoned: self.plan_tombstoned.len(),\n"
             "            release_barriers: self.release_barriers.len(),\n"
             "            completed_releases: self.completed_releases.len(),\n"
             "            ownership: self.ownership.len(),\n"
@@ -553,6 +656,216 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "owner_transition_coverage_identity: Hash",
             "owner_transitions:",
             "Vec<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>>",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "LaneReservationSnapshotReplayReceipt",
+        (
+            "frame_digest: Hash",
+            "owner_transition_count: usize",
+            "owner_transition_coverage_identity: Hash",
+            "canonical_reconciliation_identity: Hash",
+            "replay_state_identity: Hash",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "LaneReservationSnapshotReplaySeal",
+        (
+            "transition: CheckedSnapshotReplayTransitionSeal",
+            "file_identity: JournalFileIdentity",
+            "file_revision: JournalFileRevision",
+            "known_len: u64",
+            "file_content_identity: Hash",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::from_replay",
+        (
+            "LaneQueueReservationJournalFrameV6::Snapshot {",
+            "prepare_checked_transition(&frame, maximum)?",
+            "state.apply_checked_transition(&frame, maximum, prepared)?",
+            "canonical_reconciliation_owners_from_state(&state)?",
+            "canonical_reconciliation_identity(",
+            "CheckedSnapshotReplayTransitionSeal {",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "fn",
+        "canonical_reconciliation_identity",
+        (
+            "SNAPSHOT_RECONCILIATION_EMPTY_DOMAIN",
+            "for owner in owners.values()",
+            "checked_owner_projection_digest(owner.ownership.refinement_projection())",
+            "owner.record_identity",
+            "SNAPSHOT_RECONCILIATION_STEP_DOMAIN",
+            "owners.len()",
+            "SNAPSHOT_RECONCILIATION_FINAL_DOMAIN",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "fn",
+        "transition_projection_coverage_identity",
+        (
+            "CHECKED_TRANSITION_COVERAGE_EMPTY_DOMAIN",
+            "checked_transition_projection_digest(transition)",
+            "CHECKED_TRANSITION_COVERAGE_STEP_DOMAIN",
+            ".checked_add(1)",
+            "CHECKED_TRANSITION_COVERAGE_FINAL_DOMAIN",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneReservationSnapshotReplayReceipt::binds_reconciliation_snapshot",
+        (
+            "canonical_reconciliation_owners_from_snapshot(snapshot)?",
+            "recover_snapshot_transition_projection(owner.ownership)",
+            "transition_projection_coverage_identity(projections)?",
+            "owners.len() == self.owner_transition_count",
+            "owner_transition_coverage_identity == self.owner_transition_coverage_identity",
+            "canonical_reconciliation_identity(&owners)?",
+            "self.canonical_reconciliation_identity",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::open_with_limits",
+        (
+            "IndexedReservationReplayState::from_replay(&replay, limits.max_owned_transactions)?",
+            "checked_file_content_identity(",
+            "LaneReservationSnapshotReplaySeal {",
+            "transition: transition_seal",
+            "file_content_identity",
+            "installation_seal",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::consume_snapshot_replay_seal",
+        (
+            "seal: LaneReservationSnapshotReplaySeal",
+            "transition.receipt.replay_state_identity",
+            ".authorizes(&transition.authorization_domain)",
+            "checked_file_content_identity(",
+            "current_content_identity != file_content_identity",
+            "replay_open_file(",
+            "replay != self.replay_state.replay()",
+            "checked_transition_frame_digest(&frame)? != transition.receipt.frame_digest",
+            "Ok(transition.receipt)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::install_lane_reservation_journal",
+        (
+            "LaneQueueReservationJournal::open_with_limits(path, limits)?",
+            "plan_durable_fifo_order_reconciliation_locked(&durable_fifo_records)?",
+            "journal.consume_snapshot_replay_seal(replay_seal)?",
+            "apply_durable_fifo_order_reconciliation_locked(fifo_plan)",
+            "remove_hashes_from_fifo_locked(&hashes)",
+            "*store = candidate_store",
+            "lane_reservation_snapshot_replay_receipt.lock()",
+            "*journal_guard = Some(journal)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "struct",
+        "LaneReservationStartupReconciliationReceipt",
+        (
+            "replay_receipt: LaneReservationSnapshotReplayReceipt",
+            "initial_snapshot: LaneQueueReservationReconciliationSnapshotV1",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::bind_lane_reservation_startup_reconciliation_receipt",
+        (
+            "lane_reservation_reconciliation_snapshot()?",
+            "lane_reservation_snapshot_replay_receipt()?",
+            "expected_snapshot.durable_owner_count()",
+            "replay_receipt.binds_reconciliation_snapshot(expected_snapshot)?",
+            "lane_reservation_reconciliation_pending",
+            "LaneReservationStartupReconciliationReceipt {",
+            "initial_snapshot: expected_snapshot.clone()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::revalidate_lane_reservation_startup_reconciliation_receipt",
+        (
+            "receipt.initial_snapshot != *expected_snapshot",
+            "receipt.replay_receipt != self.lane_reservation_snapshot_replay_receipt()?",
+            "receipt.plan_replay_receipt != self.queue_plan_startup_replay_receipt()?",
+            "if self.lane_reservation_reconciliation_snapshot()? != *expected_snapshot",
+            "self.revalidate_queue_plan_startup_replay_receipt(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::complete_lane_reservation_startup_reconciliation",
+        (
+            "receipt: LaneReservationStartupReconciliationReceipt",
+            "Some(&receipt.replay_receipt)",
+            "let expected_pending = !receipt.initial_snapshot.is_empty()",
+            "startup reconciliation receipt is stale at the final publication gate",
+            "store.commit_barriers",
+            "store.release_barriers",
+            "store.completed_releases",
+            "store.missing_payload_hashes",
+            "initial_snapshot\n                .ordered_records",
+            ".store(false, Ordering::Release)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "plan_lane_reservation_ownership",
+        (
+            "let snapshot = queue.lane_reservation_reconciliation_snapshot()?",
+            "bind_lane_reservation_startup_reconciliation_receipt(&snapshot)?",
+            "LaneReservationReconciliationPlan {",
+            "replay_receipt",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "apply_lane_reservation_reconciliation_plan",
+        (
+            "revalidate_lane_reservation_startup_reconciliation_receipt(",
+            "&replay_receipt",
+            "commit_lane_reservation_groups_with_authorization",
+            "release_lane_reservations_in_order",
+            "complete_lane_reservation_startup_reconciliation(replay_receipt)",
+        ),
+    ),
+    (
+        "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+        "fn",
+        "production_in_flight_reservation_snapshot_replay_refines_composed_stutter",
+        (
+            "primitive.action",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+            "production_in_flight_reservation_transition_kernel(primitive)",
+            "production_in_flight_first_release_state_kernel(composed)",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+            "before: composed",
+            "after: composed",
         ),
     ),
     (
@@ -951,6 +1264,42 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "                    && in_flight_first_release_state_equal_body!(before, after)",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
             "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY",
+            "(before.session.crashed & projection.actor) == 0u128",
+            "(before.carrier.kura_active & projection.actor) != 0u128",
+            "(before.session.bodies & projection.actor) == 0u128",
+            "!before.release.kura_retired",
+            "!before.decision.wsv_committed",
+            "before.decision.release_owner == 0u128",
+            "after.session.bodies == (before.session.bodies | projection.actor)",
+            "after.session.ready_authorized == before.session.ready_authorized",
+            "projection.actor == before.producer",
+            "// Startup rehydrates only process-local body custody from the\n"
+            "                // actor's exact durable Kura payload. It does not confer READY\n"
+            "                // authorization or alter any durable/economic fact.\n"
+            "                in_flight_first_release_single_validator_body!(projection.actor, validator_mask)\n"
+            "                    && projection.target == 0u128\n"
+            "                    && (before.session.crashed & projection.actor) == 0u128\n"
+            "                    && (before.carrier.kura_active & projection.actor) != 0u128\n"
+            "                    && (before.session.bodies & projection.actor) == 0u128\n"
+            "                    && !before.release.kura_retired",
+            "IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED\n"
+            "                        )\n"
+            "                    && after.session.bodies == (before.session.bodies | projection.actor)\n"
+            "                    && after.session.ready_authorized == before.session.ready_authorized\n"
+            "                    && after.session.crashed == before.session.crashed",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "fn",
+        "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
+        (
+            "after.session.bodies |= actor",
+            "if actor == before.producer",
+            "after.session.producer_alive = true",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY",
+            "check_derived_production_in_flight_first_release_transition",
         ),
     ),
     (
@@ -1068,17 +1417,40 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
     (
         "crates/iroha_core/src/kura.rs",
         "method",
-        "Kura::persist_producer_lane_executable_payload",
+        "Kura::persist_autonomous_lifecycle_bootstrap_with_authentication",
         (
-            "AutonomousLaneKuraActivationAuthorization",
-            "authorization.facts()",
-            "autonomous_lane_reservation_identity_hashes_for_proposal",
-            "lane_queue_reservation_group_binding_from_ordered_keys",
-            "canonical_lane_queue_reservation_group_identity_projection",
-            "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA",
-            "check_production_in_flight_first_release_transition(projection)",
-            "checked.into_projection()",
+            "autonomous_lifecycle_bootstrap_body_with_authentication",
+            "AutonomousLifecycleBootstrapV1::from_body",
+            "validate_autonomous_lifecycle_process_generation_claim",
+            "validate_autonomous_lifecycle_bootstrap_process_generation",
+            "durable_mutation_authorized",
+            "require_active_lane_artifact",
+            "AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PEAK_BYTES",
+            "kura_disk_usage_bytes",
+            "kura_total_disk_usage_bytes",
+            "write_atomic_synced_impl_with_prefix",
+            "update_disk_usage_delta",
+            "update_total_disk_usage_delta",
+            "read_regular_sidecar_bytes",
+            "decode_autonomous_lifecycle_bootstrap",
+            "autonomous_lifecycle_bootstrap_authority_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "Kura::complete_autonomous_lifecycle_bootstrap",
+        (
+            "AutonomousLifecycleBootstrapCompletionPermit { authority, fence }",
+            "refresh_autonomous_lifecycle_bootstrap_authority",
             "persist_lane_executable_payload",
+            "AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly",
+            "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
+            "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
+            "delete_completed_autonomous_lifecycle_bootstrap",
+            "read_autonomous_lifecycle_cursor",
+            "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
+            "drop(authorization)",
         ),
     ),
     (
@@ -1220,9 +1592,260 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "V2LaneWorkAdapter::drive_pending_autonomous_reservation_batch",
         (
             "authorize_lane_reservation_kura_activation",
-            "persist_producer_lane_executable_payload",
+            "check_production_in_flight_first_release_transition",
+            "autonomous_lifecycle_bootstrap_signing_preimage",
+            "persist_autonomous_lifecycle_bootstrap",
+            "authenticate_autonomous_lifecycle_bootstrap_recovery",
+            "complete_autonomous_lifecycle_bootstrap",
             "insert_autonomous_lane_payload",
+            "fanout_producer_lane_executable_payload",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/message.rs",
+        "method",
+        "BlockMessage::is_lane_local",
+        (
+            "Self::LaneBlockProposal",
+            "Self::LaneExecutablePayload",
+            "Self::LaneBlockNewViewVote",
+            "Self::LaneBlockNewViewCertificate",
+            "Self::LaneBlockVote",
+            "Self::LaneBlockQc",
+            "Self::LaneBlockCertificate",
+            "Self::LaneHistoricalRecoveryRequest",
+            "Self::LaneHistoricalRecoveryResponse",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+        "enum",
+        "ExactOutputRolloverClaim",
+        (
+            "NonRetireableLaneTransport",
+            "target: PeerId",
+            "message_hash: HashOf<BlockMessage>",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+        "method",
+        "ExactOutputRolloverClaim::scope",
+        ("Self::Exact | Self::NonRetireableLaneTransport { .. } => None",),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+        "method",
+        "ExactOutputRolloverClaim::validate_fanout",
+        (
+            "Self::NonRetireableLaneTransport",
+            "Self::validate_non_retireable_lane_transport_fanout(",
+            "*message_hash",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+        "method",
+        "ExactOutputRolloverClaim::validate_non_retireable_lane_transport_fanout",
+        (
             "BlockMessage::LaneExecutablePayload",
+            "BlockMessage::LaneBlockNewViewVote",
+            "BlockMessage::LaneBlockNewViewCertificate",
+            "peers != std::slice::from_ref(target)",
+            "HashOf::new(message) != message_hash",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "method",
+        "ProductionV2Services::current_lane_output_rollover_claim",
+        (
+            "BlockMessage::LaneExecutablePayload",
+            "BlockMessage::LaneBlockNewViewVote",
+            "BlockMessage::LaneBlockNewViewCertificate",
+            "ExactOutputRolloverClaim::NonRetireableLaneTransport",
+            "message_hash: HashOf::new(message)",
+            "lane_output_identity(message)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "fn",
+        "applied_height_reconstruction_covers",
+        (
+            "rollover_claim.validate_fanout(messages, peers)?",
+            "ExactOutputRolloverClaim::NonRetireableLaneTransport",
+            "non-retireable lane transport must drain before applied-height handoff",
+            "rollover_claim.scope()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "method",
+        "ProductionV2Services::post_block_message_while_guarded",
+        (
+            "message if message.is_lane_local()",
+            "self.current_lane_output_rollover_claim(message, &peer)?",
+            "enqueue_exact_fanout_while_guarded",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "method",
+        "ProductionV2Services::post_lane_block",
+        (
+            "begin_fail_stop_operation",
+            "message.is_lane_local()",
+            "post_block_message_while_guarded",
+            "ExactFanoutOwnership::SourceRetained",
+            "operation.complete()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/block.rs",
+        "method",
+        "ValidBlock::autonomous_merge_carrier_has_da_effect",
+        (
+            "block.da_commitments().is_some()",
+            "block.da_pin_intents().is_some()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/block.rs",
+        "method",
+        "ValidBlock::validate_staged_merge_execution_authorization",
+        (
+            "entry.execution_batch.is_some()",
+            "has_da_effect: Self::autonomous_merge_carrier_has_da_effect(block)",
+            "Self::validate_autonomous_merge_carrier_content(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+        "method",
+        "V2CandidateAssembler::snapshot_routable_candidates",
+        (
+            "entry.execution_batch.as_ref()",
+            "certified_execution_selected",
+            "record_ordinary_execution_carrier_exclusion(",
+            "continue;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+        "fn",
+        "record_ordinary_execution_carrier_exclusion",
+        (
+            "if !certified_execution_selected",
+            "report.carrier_excluded = report.carrier_excluded.saturating_add(1)",
+            "true",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+        "struct",
+        "CandidateScanReport",
+        ("pub(crate) carrier_excluded: usize",),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::prepare_certified_execution_carrier",
+        (
+            "context != &self.context || !candidates.is_empty()",
+            "self.refresh_merge_candidates(view)",
+            "self.planned_lane_proposals.clear()",
+            "self.planned_lane_proposals.insert(",
+            "Vec::new()",
+            "operation.complete()",
+            "Ok(PreparedCandidateWork::default())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::bind_locked_global_body_from_origin",
+        (
+            "let mut winning_unanchored = BTreeMap::new()",
+            "let losing_pending = self",
+            ".pending_autonomous_anchor_payloads",
+            ".retire_autonomous_payload_batch(&losing_pending)",
+            "self.pending_autonomous_anchor_payloads.clear()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "schedule_local_proposal",
+        (
+            "let certified_execution_carrier = attachments",
+            "let candidate = if certified_execution_carrier",
+            "CertifiedExecutionCarrierWorkProvider",
+            ".prepare_certified_execution_carrier(context, directive.tag().view(), &[])",
+            "else if proposal_state.heartbeat_only == Some(owner)",
+            "claim_certified_execution_proposal_turn(",
+            "candidate_work_requires_wait(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "candidate_attachments",
+        (
+            "let effects = if context.mode == wire::ConsensusMode::Npos",
+            "let npos_consensus_effects = (!effects.is_empty()).then_some(effects)",
+            "validate_candidate_records(",
+            "certified_merge_selection_for_npos(npos_consensus_effects.is_some())",
+            "select_pending_certified_merge_entry_for_round",
+            "npos_consensus_effects",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "certified_merge_selection_for_npos",
+        (
+            "PendingCertifiedMergeSelection::ControlOnly",
+            "PendingCertifiedMergeSelection::Any",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "candidate_work_requires_wait",
+        (
+            "!heartbeat_only && !certified_execution_carrier && selected == 0 && work_deferred > 0",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "claim_certified_execution_proposal_turn",
+        (
+            "if certified_execution_carrier",
+            "proposal_state.heartbeat_only = None",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state.rs",
+        "enum",
+        "PendingCertifiedMergeSelection",
+        ("Any", "ControlOnly"),
+    ),
+    (
+        "crates/iroha_core/src/state.rs",
+        "method",
+        "PendingCertifiedMergeSelection::allows_execution",
+        ("matches!(self, Self::Any)",),
+    ),
+    (
+        "crates/iroha_core/src/state.rs",
+        "method",
+        "State::select_pending_certified_merge_entry_for_round",
+        (
+            "selection: PendingCertifiedMergeSelection",
+            "!selection.allows_execution() && entry.execution_batch.is_some()",
+            "select_pending_certified_merge_entry_matching",
         ),
     ),
     (
@@ -1288,7 +1911,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/kura.rs",
+        "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
         "struct",
         "LaneBlockExecutionInputArtifact",
         (
@@ -1391,9 +2014,9 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/kura.rs",
-        "method",
-        "Kura::append_indexed_sidecar_with_pinned_height",
+        "crates/iroha_core/src/kura/indexed_sidecar_io.rs",
+        "fn",
+        "append_indexed_sidecar_with_pinned_height",
         (
             "data.write_all(payload)",
             "sync_indexed_sidecar_initial_data(",
@@ -1590,9 +2213,9 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/kura.rs",
-        "method",
-        "Kura::write_atomic_synced_impl",
+        "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs",
+        "fn",
+        "write_atomic_synced_impl_with_prefix",
         (
             "canonical_sidecar_directory(parent)",
             "tempfile::Builder::new()",
@@ -1836,6 +2459,170 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
             "finalize_lane_reservation_release_barrier_with_authorization(",
         ),
     ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "certified_merge_queue_reservation_hashes",
+        (
+            "BTreeSet::new()",
+            "crate::state::certified_merge_queue_reservations(entry)?",
+            "map(|(transaction_hash, _)| transaction_hash)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "method",
+        "V2ApplyService::validate_and_apply",
+        (
+            "apply_without_execution_with_verified_v2_finality",
+            "certified_merge_queue_reservation_hashes(",
+            "state_block.staged_merge_entry()",
+            "staged_merge_queue_reservation_hashes",
+            "self.queue.remove_committed_hashes(",
+            ".filter(|transaction_hash|",
+            "!staged_merge_queue_reservation_hashes.contains(transaction_hash)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "method",
+        "V2ApplyService::execute",
+        (
+            "store_v2_finality_artifact",
+            "persist_post_apply_metadata",
+            "repair_native_amx_participant_application_evidence",
+            "publish_committed_block_merge_entry",
+            "promote_kagemusha_topup_finality_sidecar",
+            "finalize_committed_block_merge_reservations",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "authenticated_autonomous_carrier_application_projections",
+        (
+            "Kura::decode_autonomous_lane_merge_bundle(",
+            "authenticated_bundle.certified.prepare_qc != lane.prepare_qc",
+            "authenticated_bundle.certified.commit_qc != lane.commit_qc",
+            "let ready_signers = bitmap_mask",
+            "let commit_signers =",
+            "let lane_commit_candidates = ready_signers & commit_signers",
+            "lane_queue_reservation_group_binding_from_ordered_keys(",
+            "AuthenticatedCarrierApplicationProjection {",
+            "checked.into_projection() != projection",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "struct",
+        "AutonomousLaneQueueCarrierCleanupAuthorization",
+        (
+            "reservation_group: LaneQueueReservationGroupBindingV1",
+            "checked_apply_carrier:",
+            "CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "method",
+        "AutonomousLaneQueueCarrierCleanupAuthorization::consume_for_queue",
+        (
+            "self.reservation_group != *expected_group",
+            "self.checked_apply_carrier.into_projection()",
+            "projection.action == IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER",
+            "projection.before.binding_a == binding_a",
+            "projection.after.binding_a == binding_a",
+            "zero_cleanup_prefixes(projection.before)",
+            "zero_cleanup_prefixes(projection.after)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "LaneQueueCarrierCleanupGate::from_authorization",
+        (
+            ".consume_for_queue(&expected_group)",
+            "applied_state: projection.after",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "LaneQueueCarrierCleanupGate::cleanup_state",
+        (
+            "let mut state = self.applied_state",
+            "state.queue.plan_state = plan_state",
+            "state.queue.reservation_state = reservation_state",
+            "state.history.reservation_committed_prefix = committed",
+            "state.history.queue_plan_tombstoned_prefix = tombstoned",
+            "state.history.reservation_commit_forgotten_prefix = forgotten",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::commit_lane_reservation_groups_with_authorization",
+        (
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "LaneQueueCarrierCleanupGate::from_authorization",
+            "PreparedLaneQueueCarrierCleanupGroup {",
+            "self.commit_prepared_lane_reservation_groups(prepared)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::commit_prepared_lane_reservation_groups",
+        (
+            "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
+            "let queue_guard = self.push_remove_lock.lock()",
+            "let store = self.lane_reservations.lock()",
+            "let mut seen_hashes = HashSet::new()",
+            "self.preflight_lane_reservation_group_locked(&store, &group.ordered_keys)?",
+            "begin_durability_transition_locked(",
+            "drop(store)",
+            "drop(queue_guard)",
+            "for group in groups",
+            "self.commit_lane_reservation(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::commit_lane_reservation",
+        (
+            "cleanup_gate.cleanup_state(",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED",
+            "journal.commit(*key)",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE",
+            "remove_plan_journal_for_reservation_commit(key)",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT",
+            "journal.forget_commit(*key)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "finalize_certified_merge_reservations",
+        (
+            "groups.len() != applications.len()",
+            "state.has_committed_transaction(*transaction_hash)",
+            "reservation_group != application.reservation_group",
+            ".queue_cleanup_authorization()",
+            "commit_lane_reservation_groups_with_authorization(authorized_groups)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "finalize_committed_block_merge_reservations",
+        (
+            "committed_block_merge_entry(kura, block)?",
+            "if reference.execution_batch_hash.is_none()",
+            "authenticated_autonomous_carrier_application_projections(",
+            "finalize_certified_merge_reservations(state, queue, &entry, applications)",
+        ),
+    ),
 )
 INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
     (
@@ -1845,6 +2632,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         (
             "live: usize",
             "committed: usize",
+            "plan_tombstoned: usize",
             "release_barriers: usize",
             "completed_releases: usize",
             "ownership: usize",
@@ -1860,6 +2648,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         (
             "live: self.live.len()",
             "committed: self.committed.len()",
+            "plan_tombstoned: self.plan_tombstoned.len()",
             "release_barriers: self.release_barriers.len()",
             "completed_releases: self.completed_releases.len()",
             "ownership: self.ownership.len()",
@@ -1884,6 +2673,95 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
             "owner_transition_count: usize",
             "owner_transition_coverage_identity: Hash",
             "owner_transitions:",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::from_replay",
+        (
+            "let frame = LaneQueueReservationJournalFrameV6::Snapshot {",
+            "let frame_digest = checked_transition_frame_digest(&frame)?",
+            "state.prepare_checked_transition(&frame, maximum)?",
+            "state.apply_checked_transition(&frame, maximum, prepared)?",
+            "canonical_reconciliation_owners_from_state(&state)?",
+            "canonical_reconciliation_identity(",
+            "CheckedSnapshotReplayTransitionSeal {",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneReservationSnapshotReplayReceipt::binds_reconciliation_snapshot",
+        (
+            "canonical_reconciliation_owners_from_snapshot(snapshot)?",
+            "recover_snapshot_transition_projection(owner.ownership)",
+            "transition_projection_coverage_identity(projections)?",
+            "owners.len() == self.owner_transition_count",
+            "owner_transition_coverage_identity == self.owner_transition_coverage_identity",
+            "canonical_reconciliation_identity(&owners)?",
+            "self.canonical_reconciliation_identity",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::consume_snapshot_replay_seal",
+        (
+            "let LaneReservationSnapshotReplaySeal {",
+            "transition.receipt.replay_state_identity",
+            ".authorizes(&transition.authorization_domain)",
+            "self.verify_cached_storage_unchanged()?",
+            "let current_content_identity = checked_file_content_identity(",
+            "if current_content_identity != file_content_identity",
+            "let replay = replay_open_file(",
+            "if replay != self.replay_state.replay()",
+            "checked_transition_frame_digest(&frame)? != transition.receipt.frame_digest",
+            "Ok(transition.receipt)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::install_lane_reservation_journal",
+        (
+            "LaneQueueReservationJournal::open_with_limits(path, limits)?",
+            "plan_durable_fifo_order_reconciliation_locked(&durable_fifo_records)?",
+            "let candidate_store = LaneQueueReservationStore {",
+            "journal.consume_snapshot_replay_seal(replay_seal)?",
+            "apply_durable_fifo_order_reconciliation_locked(fifo_plan)",
+            "remove_hashes_from_fifo_locked(&hashes)",
+            "*store = candidate_store",
+            "*self.lane_reservation_snapshot_replay_receipt.lock() = Some(replay_receipt)",
+            "*journal_guard = Some(journal)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::complete_lane_reservation_startup_reconciliation",
+        (
+            "self.transaction_selection_durability_faulted()",
+            "Some(&receipt.replay_receipt)",
+            "let expected_pending = !receipt.initial_snapshot.is_empty()",
+            "startup reconciliation receipt is stale at the final publication gate",
+            "let store = self.lane_reservations.lock()",
+            "store.commit_barriers",
+            "store.missing_payload_hashes",
+            "initial_snapshot\n                .ordered_records",
+            ".store(false, Ordering::Release)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "apply_lane_reservation_reconciliation_plan",
+        (
+            "revalidate_lane_reservation_startup_reconciliation_receipt(",
+            "commit_lane_reservation_groups_with_authorization",
+            "release_lane_reservations_in_order",
+            "let final_snapshot = queue.lane_reservation_reconciliation_snapshot()?",
+            "complete_lane_reservation_startup_reconciliation(replay_receipt)",
         ),
     ),
     (
@@ -1938,26 +2816,27 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         "method",
         "IndexedReservationReplayState::check_in_flight_transition",
         (
-            "LaneQueueReservationJournalFrameV5::Snapshot {",
+            "LaneQueueReservationJournalFrameV6::Snapshot {",
             "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
             "self.ownership.get(&hash).copied()",
             "candidate.ownership.get(&hash).copied()",
-            "LaneQueueReservationJournalFrameV5::PutBatch(records) => {",
+            "LaneQueueReservationJournalFrameV6::PutBatch(records) => {",
             "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
             "IN_FLIGHT_RESERVATION_ACTION_RESERVE",
-            "LaneQueueReservationJournalFrameV5::ReleaseBatch(keys) => {",
+            "LaneQueueReservationJournalFrameV6::ReleaseBatch(keys) => {",
             "let after = if before == Some(DurableReservationOwnership::Live(*key)) {",
             "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT",
-            "LaneQueueReservationJournalFrameV5::Commit(key) => {",
+            "LaneQueueReservationJournalFrameV6::Commit(key) => {",
             "IN_FLIGHT_RESERVATION_ACTION_COMMIT",
             "Some(DurableReservationOwnership::Committed(*key))",
-            "LaneQueueReservationJournalFrameV5::ForgetCommit(key) => {",
+            "LaneQueueReservationJournalFrameV6::PlanTombstoned(_) => Ok(()),",
+            "LaneQueueReservationJournalFrameV6::ForgetCommit(key) => {",
             "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
-            "LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {",
+            "LaneQueueReservationJournalFrameV6::PrepareRelease(barrier) => {",
             "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
-            "LaneQueueReservationJournalFrameV5::CompleteRelease(completion) => {",
+            "LaneQueueReservationJournalFrameV6::CompleteRelease(completion) => {",
             "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE",
-            "LaneQueueReservationJournalFrameV5::ForgetRelease(barrier) => {",
+            "LaneQueueReservationJournalFrameV6::ForgetRelease(barrier) => {",
             "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE",
         ),
     ),
@@ -2113,15 +2992,39 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/kura.rs",
         "method",
-        "Kura::persist_producer_lane_executable_payload",
+        "Kura::persist_autonomous_lifecycle_bootstrap_with_authentication",
         (
-            ".validate(expected_chain_id_hash, expected_epoch)",
-            "authorization.facts()",
-            "autonomous_lane_reservation_identity_hashes_for_proposal(",
-            "lane_queue_reservation_group_binding_from_ordered_keys(",
-            "check_production_in_flight_first_release_transition(projection)",
-            "checked.into_projection()",
+            "self.autonomous_lifecycle_bootstrap_body_with_authentication(",
+            "AutonomousLifecycleBootstrapV1::from_body(",
+            "self.validate_autonomous_lifecycle_process_generation_claim(",
+            "Self::validate_autonomous_lifecycle_bootstrap_process_generation(",
+            "self.durable_mutation_authorized()?;",
+            "self.require_active_lane_artifact(",
+            "let accounting_mutation = self.begin_total_disk_usage_mutation();",
+            "self.write_atomic_synced_impl_with_prefix(",
+            "self.update_disk_usage_delta(0, next_len);",
+            "self.update_total_disk_usage_delta(0, next_len);",
+            "accounting_mutation.finish();",
+            "let readback = self",
+            "self.autonomous_lifecycle_bootstrap_authority_locked(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "Kura::complete_autonomous_lifecycle_bootstrap",
+        (
+            "let AutonomousLifecycleBootstrapCompletionPermit { authority, fence } = permit;",
+            "self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;",
             "self.persist_lane_executable_payload(",
+            "AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly",
+            "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
+            "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
+            "self.delete_completed_autonomous_lifecycle_bootstrap(&authority)?;",
+            "self.read_autonomous_lifecycle_cursor(",
+            "match fence {",
+            "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization)",
+            "drop(authorization);",
         ),
     ),
     (
@@ -2177,9 +3080,13 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         "V2LaneWorkAdapter::drive_pending_autonomous_reservation_batch",
         (
             "authorize_lane_reservation_kura_activation(",
-            "persist_producer_lane_executable_payload(",
+            "check_production_in_flight_first_release_transition(",
+            ".autonomous_lifecycle_bootstrap_signing_preimage(",
+            ".persist_autonomous_lifecycle_bootstrap(",
+            ".authenticate_autonomous_lifecycle_bootstrap_recovery(",
+            ".complete_autonomous_lifecycle_bootstrap(",
             "insert_autonomous_lane_payload(",
-            "BlockMessage::LaneExecutablePayload(payload.clone())",
+            "fanout_producer_lane_executable_payload(",
         ),
     ),
     (
@@ -2342,9 +3249,9 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         ),
     ),
     (
-        "crates/iroha_core/src/kura.rs",
-        "method",
-        "Kura::write_atomic_synced_impl",
+        "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs",
+        "fn",
+        "write_atomic_synced_impl_with_prefix",
         (
             "self.durable_mutation_authorized()?;",
             "self.canonical_sidecar_directory(parent)?",
@@ -2477,8 +3384,128 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
             "finalize_lane_reservation_release_barrier_with_authorization(",
         ),
     ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "method",
+        "V2ApplyService::execute",
+        (
+            "store_v2_finality_artifact",
+            "persist_post_apply_metadata",
+            "repair_native_amx_participant_application_evidence",
+            "publish_committed_block_merge_entry",
+            "promote_kagemusha_topup_finality_sidecar",
+            "finalize_committed_block_merge_reservations",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::prepare_certified_execution_carrier",
+        (
+            "if context != &self.context || !candidates.is_empty()",
+            "let output_guard = Arc::clone(&self.output_guard)",
+            "output_guard.begin_fail_stop_operation()",
+            "self.refresh_merge_candidates(view)",
+            "self.planned_lane_proposals.clear()",
+            "self.planned_lane_proposals.insert(",
+            "operation.complete()",
+            "Ok(PreparedCandidateWork::default())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "candidate_attachments",
+        (
+            "let effects = if context.mode == wire::ConsensusMode::Npos",
+            "let npos_consensus_effects = (!effects.is_empty()).then_some(effects)",
+            "validate_candidate_records(",
+            "let merge_selection = certified_merge_selection_for_npos(",
+            "select_pending_certified_merge_entry_for_round(",
+            "let certified_merge_entry = selected_merge_entry",
+            "Ok(CandidateAttachments",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "schedule_local_proposal",
+        (
+            "let certified_execution_carrier = attachments",
+            "claim_certified_execution_proposal_turn(",
+            "let candidate = if certified_execution_carrier",
+            ".prepare_certified_execution_carrier(context, directive.tag().view(), &[])",
+            "work_provider: CertifiedExecutionCarrierWorkProvider",
+            "candidate_work_requires_wait(",
+            "lane_work.bind_local_candidate(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "method",
+        "V2LaneWorkAdapter::bind_locked_global_body_from_origin",
+        (
+            "let losing_pending = self",
+            ".retire_autonomous_payload_batch(&losing_pending)",
+            "self.pending_autonomous_anchor_payloads.clear()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::commit_lane_reservation",
+        (
+            "cleanup_gate.cleanup_state(",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED",
+            "journal.commit(*key)",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE",
+            "remove_plan_journal_for_reservation_commit(key)",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT",
+            "journal.forget_commit(*key)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "fn",
+        "finalize_certified_merge_reservations",
+        (
+            "groups.len() != applications.len()",
+            "for (transaction_hash, _) in groups.iter().flatten()",
+            "for (group, application) in groups.into_iter().zip(applications)",
+            "reservation_group != application.reservation_group",
+            ".queue_cleanup_authorization()",
+            "commit_lane_reservation_groups_with_authorization(authorized_groups)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::commit_prepared_lane_reservation_groups",
+        (
+            "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
+            "let queue_guard = self.push_remove_lock.lock()",
+            "let store = self.lane_reservations.lock()",
+            "for group in &groups",
+            "self.preflight_lane_reservation_group_locked(&store, &group.ordered_keys)?",
+            "begin_durability_transition_locked(",
+            "drop(store)",
+            "drop(queue_guard)",
+            "for group in groups",
+            "self.commit_lane_reservation(",
+        ),
+    ),
 )
 INFLIGHT_LAYOUT_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        (
+            "pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT: u8 = 26;",
+            "pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY: u8 = 27;",
+            "(IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY) => {\n"
+            "        27u8\n"
+            "    };",
+        ),
+    ),
     (
         "crates/iroha_core/src/lane_consensus.rs",
         (
@@ -2499,14 +3526,15 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
         "crates/iroha_core/src/queue/journal.rs",
         (
             "pub const QUEUE_PLAN_JOURNAL_VERSION: u16 = 4;",
-            "unsupported.version = QUEUE_PLAN_JOURNAL_VERSION + 1;",
+            "fn corrupt_initial_v4_version_and_length_guard_fail_without_rewrite()",
+            "wrong_version[version_offset] ^= 0x01;",
         ),
     ),
     (
         "crates/iroha_core/src/queue/reservation_journal.rs",
         (
             "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
-            "const RESERVATION_JOURNAL_OPERATION_SCHEMA_V5: &[u8] =",
+            "const RESERVATION_JOURNAL_OPERATION_SCHEMA_V6: &[u8] =",
             "fn retired_v5_lane_wide_removal_fails_closed_at_bootstrap_and_operation_decode()",
             "retired V5 operation tag must not decode as an ordered release",
             "legacy.fifo_order.version = "
@@ -2535,6 +3563,27 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
             "fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reordering()",
             "fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal()",
             "fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned()",
+            "fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed()",
+            "body rehydration must not recreate READY authorization",
+            "terminal FIFO ownership must prevent volatile custody resurrection",
+            "retired Kura custody must not be resurrected",
+        ),
+    ),
+    (
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py",
+        (
+            "def test_inflight_layout_contract_accepts_current_production(",
+            "def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(",
+            "def test_inflight_composed_contract_rejects_rehydrate_action_tag_drift(",
+            "def test_inflight_composed_contract_rejects_rehydrate_ready_tampering(",
+            "def test_inflight_composed_contract_rejects_terminal_rehydrate_resurrection(",
+        ),
+    ),
+    (
+        "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py",
+        (
+            "def test_inflight_composed_contract_rejects_tla_rehydrate_guard_omission(",
+            "def test_inflight_composed_contract_rejects_verus_rehydrate_tamper_proof_removal(",
         ),
     ),
     (
@@ -2587,7 +3636,12 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
             "pub reservation_commit_forgotten_prefix: u64",
             "pub closed spec fn production_in_flight_first_release_transition_kernel(",
             "pub proof fn production_in_flight_first_release_transition_refines_named_next(",
+            "pub proof fn production_in_flight_reservation_snapshot_replay_refines_composed_stutter(",
             "pub proof fn production_in_flight_first_release_snapshot_recovery_is_stutter(",
+            "pub proof fn production_in_flight_first_release_local_kura_rehydration_is_exact(",
+            "pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_missing_payload(",
+            "pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_volatile_drift(",
+            "pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_terminal_state(",
             "pub proof fn production_in_flight_first_release_terminal_owner_is_exclusive(",
             "terminal.canonical_wsv_owner ==> (",
         ),
@@ -2625,6 +3679,22 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
             '"inflight_first_release_fixed.cfg\\t18\\tNoError\\t"',
             '"result\\tinflight-first-release-refinement\\t"',
             '"is not exact source-bound NoError evidence"',
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01.rs",
+        (
+            "checked_apply_carrier_authorization_binds_exact_state_entry",
+            "validator_count: 4",
+            "derive fresh authenticated ApplyCarrier geometry",
+            "reconstruct authenticated ApplyCarrier geometry from canonical evidence",
+            "wrong cleanup reservation group",
+            "geometry drift must fail before Queue mutation",
+            "consume exact four-validator cleanup authorization",
+            "committed_merge_two_groups_preflight_queue_before_any_cleanup",
+            "later Queue identity conflict must reject the whole carrier cleanup",
+            "later-group rejection must not tombstone the first QueuePlan",
+            "control-only carrier has no Queue cleanup authority to consume",
         ),
     ),
 )

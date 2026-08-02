@@ -91,6 +91,146 @@ def test_worker_regression_include_invocation_cannot_move_or_disappear(
     ), errors
 
 
+@pytest.mark.parametrize(
+    "test_name",
+    (
+        "durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_drift",
+        "retained_replica_advert_source_survives_service_rollover_without_pending_ownership",
+        "retained_replica_advert_source_never_blocks_handoff_or_seal",
+    ),
+)
+def test_worker_backpressure_kura_regressions_are_in_the_exact_inventory(
+    tmp_path: Path,
+    test_name: str,
+) -> None:
+    """Every new Kura rollover regression remains hash- and count-sealed."""
+
+    module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/tests/v2_worker_backpressure_cases.rs"
+    )
+    mutate_source_once(
+        path,
+        f"fn {test_name}(",
+        "fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output(",
+    )
+
+    errors = module._worker_test_include_source_fidelity_errors(tmp_path)
+
+    assert any(
+        "must match exact reviewed SHA-256" in error for error in errors
+    ), errors
+    assert any(
+        "must contain exactly 21 uniquely named test functions" in error
+        and "found 21 functions and 20 names" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "description"),
+    (
+        (
+            "try_push_at",
+            "advert.verify_keeper_signature().is_err()",
+            "false",
+            "atomic Serve ingress ordinal admission",
+        ),
+        (
+            "try_recv_if_at_checked",
+            "ownership.freeze_runtime_physical_cut(runtime_physical_cut)",
+            "ownership.freeze_runtime_physical_cut(0)",
+            "durable physical-carrier ingress arbitration",
+        ),
+    ),
+)
+def test_current_fair_ingress_hash_seals_reject_new_path_mutations(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    description: str,
+) -> None:
+    """Kura authentication and immutable runtime cuts remain exact."""
+
+    module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        item_name,
+        (("impl", "FairV2Ingress"),),
+        old,
+        new,
+    )
+
+    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        description in error
+        and "must match the exact reviewed token digest" in error
+        for error in errors
+    ), errors
+
+
+def test_current_serve_ordinal_regression_hash_rejects_gate_aliasing(
+    tmp_path: Path,
+) -> None:
+    """The ordinal-only regression cannot become a certified-request gate test."""
+
+    module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
+    name = "fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes"
+    mutate_rust_item_source(
+        module,
+        path,
+        name,
+        "let message = v2_certified_body_response(7, 0, 64);",
+        "let message = v2_certified_body_request(&validator);",
+    )
+
+    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        name in error and "must match the exact reviewed token digest" in error
+        for error in errors
+    ), errors
+
+
+def test_current_timeout_capacity_regression_hash_rejects_aliased_fillers(
+    tmp_path: Path,
+) -> None:
+    """The saturated timeout fixture must retain distinct admission owners."""
+
+    module = load_checker()
+    path = copy_timeout_vote_window_fixture(tmp_path, module)
+    name = "full_normal_deferred_lane_cannot_drop_absolute_timeout"
+    mutate_rust_item_source(
+        module,
+        path,
+        name,
+        "for _ in 1..MAX_DEFERRED_INPUTS {",
+        "for _ in 0..MAX_DEFERRED_INPUTS {",
+    )
+
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        name in error and "must match the exact reviewed token digest" in error
+        for error in errors
+    ), errors
+
+
 _SERVE_TERMINAL_WORKER_CONTEXT = (("impl", "V2IoCommandQueue"),)
 _SERVE_TERMINAL_EFFECT_CONTEXT = (
     (

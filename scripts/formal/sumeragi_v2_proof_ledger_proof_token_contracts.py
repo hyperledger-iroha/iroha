@@ -3511,13 +3511,13 @@ EXACT_TARGET_NEUTRAL_FORBIDDEN_TOKENS = (
 # duplicating thousands of lines of normalized TLA+ text in this component.
 # Critical rank/fairness/dependency seams are additionally checked
 # structurally by ``check_exact_target_neutral_contract``.
-EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_COUNT = 116
+EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_COUNT = 130
 EXACT_TARGET_NEUTRAL_OPERATOR_CONTRACT_SHA256 = (
-    "c1f339fe65db1ea0dd9cb3bd771bc04f05987084ef7235743c7838be2d074c4f"
+    "cd7db5290e241081ff3c8230fc43222d15e25483856bf12e8b101a2c1720de4d"
 )
-EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_COUNT = 59
+EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_COUNT = 66
 EXACT_TARGET_NEUTRAL_THEOREM_CONTRACT_SHA256 = (
-    "dc113a6bd8ae4f4ad8c6a631ebd6cec0b54dd36486e38c3147bf064775b4b0c6"
+    "ab32a513c28b63dcaf940d0b4986406a78488aed0d2189aae5e9491e3f7bdaa9"
 )
 
 EXACT_TARGET_NEUTRAL_RETIRED_SYMBOLS = (
@@ -3559,7 +3559,11 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets",
         "ExactDecisionTargetNeutralMaterializedEpisodeIdentitiesDoNotResurrect",
         "ExactDecisionTargetNeutralFrozenSnapshotCarriersArePrimeInvariant",
+        "AsyncOrdinaryIngressTicketExcludesLaterLocalWork",
+        "AsyncSelectedOrdinaryPhysicalCarrierDefinesIngressScheduler",
         "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+        "AsyncCandidateProducerContinuationPostCutIngressCannotBlockRunnerTurn",
+        "AsyncCandidateProducerContinuationFrozenOwnerPrecedesPostCutReplay",
         "AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain",
         "AsyncServeTombstonedIdentityCannotRequeueAtGst",
     ),
@@ -3587,29 +3591,59 @@ EXACT_TARGET_NEUTRAL_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionTargetNeutralFrozenPhysicalCutsRemainPastOrCurrent",
         "AsyncNextProjectsMonotoneProducerJournal",
     ),
+    "ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix": (
+        "CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
+    ),
+    "ExactDecisionTargetNeutralFrozenOrdinaryIngressCandidatesCannotReplenish": (
+        "ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
+        "LaterAcceptedOrdinaryCarrierCannotOvertakeFrozenCarrier",
+        "AsyncIngressPhysicalHighWatermarkIsMonotone",
+    ),
+    "ExactDecisionTargetNeutralDormantLocalReplayReplacementConsumesFrozenCausalCharge": (
+        "AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck",
+        "AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor",
+        "AsyncCandidateProducerSemanticHandoffRetirementRequiresAck",
+        "ExactDecisionTargetNeutralPostCutContinuationCannotEnterFrozenPrefix",
+    ),
+    "ExactDecisionTargetNeutralExactLocalReplayReplacesFrozenCharge": (
+        "AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation",
+        "AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier",
+        "AsyncCandidateCausalSuccessorInheritsContinuationPhysicalOwnership",
+    ),
     "ExactDecisionTargetNeutralExactOccurrenceStructuralStepIsDescentOrFrame": (
         "ExactDecisionTargetNeutralFrozenPastCutOriginsCannotReplenish",
         "ExactDecisionTargetNeutralFrozenPastCutServeCannotReplenish",
         "ExactDecisionTargetNeutralFrozenPastCutCandidateServiceConsumesExactOccurrence",
-        "AsyncCausalEpisodeExactCandidateOccurrenceBudget",
-        "AsyncCausalEpisodeServeWorkBudget",
+        "ExactDecisionTargetNeutralExactCandidateOccurrenceBudgetForSnapshot",
+        "ExactDecisionTargetNeutralServeWorkBudgetForSnapshot",
+        "ExactDecisionTargetNeutralServeReachDebtForSnapshot",
         "AsyncCausalEpisodeStructuralRankOrdering",
     ),
     "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame": (
         "CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight",
-        "CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst",
         "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
         "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
         "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
+        "CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
         "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
         "ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesCannotReplenish",
+        "ExactDecisionTargetNeutralFrozenOrdinaryIngressCandidatesCannotReplenish",
+        "ExactDecisionTargetNeutralDormantLocalReplayReplacementConsumesFrozenCausalCharge",
         "ExactDecisionTargetNeutralActionInertDormantHasZeroProoflessCharge",
         "ExactDecisionTargetNeutralPostCutLeaderWireAdmissionCannotEnterFrozenPrefix",
+        "ExactDecisionTargetNeutralPostCutOrdinaryAdmissionCannotEnterFrozenPrefix",
+        "ExactDecisionTargetNeutralPostCutCausalRootCannotEnterFrozenPrefix",
+        "ExactDecisionTargetNeutralPostCutContinuationCannotEnterFrozenPrefix",
+        "ExactDecisionTargetNeutralPostCutServeCannotEnterFrozenPrefix",
         "ExactDecisionTargetNeutralDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
         "CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage",
-        "CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge",
+        "CandidateProducerContinuationPreCutOrdinaryIngressConsumesBarrierStage",
+        "ExactDecisionTargetNeutralExactLocalReplayReplacesFrozenCharge",
+        "AsyncCandidateCausalSuccessorInheritsContinuationPhysicalOwnership",
         "ExactDecisionTargetNeutralLeaderWireStageBudgetForSnapshot",
         "ExactDecisionTargetNeutralChargeableLeaderWireCandidatesForSnapshot",
+        "ExactDecisionTargetNeutralChargeableOrdinaryIngressCandidatesForSnapshot",
+        "ExactDecisionTargetNeutralFrozenContinuationRecordsForSnapshot",
     ),
     "ExactDecisionTargetNeutralComposedCausalEpisodeStepIsDescentOrFrame": (
         "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",

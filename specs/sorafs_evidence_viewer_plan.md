@@ -335,11 +335,12 @@ events to `/v1/evidence/log/{session_id_hex}`.
 
 ## Remaining Production Blockers
 
-- Package and operate a deployment-owned executable around the in-tree
-  `serve_runtime_provider_broker_v1` injected server-library boundary. No
-  checked-in broker-server executable calls it, and no credential loader,
-  HSM/KMS/sealed-store implementation, or vendor backend is packaged. Its
-  bounded canonical client/server protocol covers all seven viewer slots
+- Link and operate a deployment-owned concrete registry and vendor executable
+  through `RuntimeProviderBrokerExecutableV1`. The shared shell supplies the
+  catalog-only CLI, secure bounded loader, readiness/lifecycle bridge, signal
+  shutdown, and redacted failures, but no checked-in registry supplies a
+  credential loader, HSM/KMS/sealed-store implementation, or vendor backend.
+  Its bounded canonical client/server protocol covers all seven viewer slots
   (22–26, 47, and 53), including exact public qualification metadata,
   replay-safe operation identities, ambiguity typing, signed readback, and
   authoritative CAS/archive/transparency-head verification.

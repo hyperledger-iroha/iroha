@@ -4932,7 +4932,7 @@ pub(crate) async fn handle_post_sorafs_transparency_source_entry(
             "sorafs transparency source ingest API is not enabled on this node",
         );
     }
-    let source_kind = match normalize_transparency_source_kind(&source_kind) {
+    let source_kind = match parse_transparency_source_kind(&source_kind) {
         Ok(source_kind) => source_kind,
         Err(response) => return response,
     };
@@ -5081,31 +5081,24 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_du
     (StatusCode::OK, JsonBody(body)).into_response()
 }
 
-fn normalize_transparency_source_kind(raw: &str) -> Result<&'static str, Response> {
-    let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "gar" | "gar-receipt" | "gar-enforcement-receipt" => {
-            Ok(TRANSPARENCY_SOURCE_KIND_GAR_ENFORCEMENT_RECEIPT)
-        }
-        "moderation-ballot"
-        | "moderation-ballot-governance"
-        | "moderation-ballot-governance-event" => {
-            Ok(TRANSPARENCY_SOURCE_KIND_MODERATION_BALLOT_GOVERNANCE_EVENT)
-        }
-        "appeal-finance-report" => Ok(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT),
-        "appeal-finance-settlement" | "appeal-finance-settlement-receipt" => {
-            Ok(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_SETTLEMENT_RECEIPT)
-        }
-        "legal-hold" | "legal-hold-notice" => Ok(TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE),
-        "redaction" | "redaction-notice" => Ok(TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE),
-        "evidence-access" | "evidence-access-summary" | "evidence-viewer-access" => {
-            Ok(TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY)
-        }
-        _ => Err(json_error(
+fn parse_transparency_source_kind(raw: &str) -> Result<&'static str, Response> {
+    [
+        TRANSPARENCY_SOURCE_KIND_GAR_ENFORCEMENT_RECEIPT,
+        TRANSPARENCY_SOURCE_KIND_MODERATION_BALLOT_GOVERNANCE_EVENT,
+        TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT,
+        TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_SETTLEMENT_RECEIPT,
+        TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE,
+        TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE,
+        TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY,
+    ]
+    .into_iter()
+    .find(|canonical| raw == *canonical)
+    .ok_or_else(|| {
+        json_error(
             StatusCode::BAD_REQUEST,
             "unsupported SoraFS transparency source kind",
-        )),
-    }
+        )
+    })
 }
 
 fn transparency_source_entry_from_body(
@@ -36045,67 +36038,7 @@ mod advert_tests {
             .with_state(state)
     }
 
-    #[derive(Debug)]
-    struct StaticReputationCommittedReaderV1 {
-        projection: ReputationCommittedReadProjectionV1,
-        retained_snapshots: Vec<ReputationSnapshotV1>,
-    }
-
-    impl ReputationCommittedReadApiV1 for StaticReputationCommittedReaderV1 {
-        fn committed_read_projection(
-            &self,
-        ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
-            Ok(self.projection.clone())
-        }
-
-        fn committed_snapshot_by_id(
-            &self,
-            snapshot_id: [u8; 16],
-        ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError> {
-            Ok(self
-                .retained_snapshots
-                .iter()
-                .find(|snapshot| snapshot.snapshot_id == snapshot_id)
-                .cloned())
-        }
-    }
-
-    #[derive(Debug)]
-    struct FailingReputationCommittedReaderV1;
-
-    impl ReputationCommittedReadApiV1 for FailingReputationCommittedReaderV1 {
-        fn committed_read_projection(
-            &self,
-        ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
-            Err(ReputationRuntimeError::InvalidRuntimePolicy)
-        }
-    }
-
-    fn attach_reputation_committed_projection(
-        app: &mut SharedAppState,
-        projection: ReputationCommittedReadProjectionV1,
-    ) {
-        let retained_snapshots = projection
-            .latest
-            .iter()
-            .map(|committed| committed.signed_result.snapshot.clone())
-            .collect();
-        attach_reputation_committed_history(app, projection, retained_snapshots);
-    }
-
-    fn attach_reputation_committed_history(
-        app: &mut SharedAppState,
-        projection: ReputationCommittedReadProjectionV1,
-        retained_snapshots: Vec<ReputationSnapshotV1>,
-    ) {
-        Arc::get_mut(app)
-            .expect("unique app state")
-            .sorafs_reputation_committed_reader =
-            Some(Arc::new(StaticReputationCommittedReaderV1 {
-                projection,
-                retained_snapshots,
-            }));
-    }
+    include!("api/reputation_committed_reader_test_support.rs");
 
     fn committed_reputation_projection_fixture(
         envelope: SignedReputationSnapshotV1,
@@ -39099,6 +39032,8 @@ mod advert_tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
+
+    include!("api/transparency_source_kind_tests.rs");
 
     #[tokio::test]
     async fn transparency_source_entry_endpoint_records_appeal_finance_report() {
@@ -45703,107 +45638,7 @@ mod advert_tests {
 
     include!("api/admission_format_tests.rs");
 
-    #[test]
-    fn snapshot_to_json_renders_counts() {
-        let declaration = RegistryDeclaration {
-            provider_id_hex: "aa".into(),
-            committed_capacity_gib: 10,
-            registered_epoch: 1,
-            valid_from_epoch: 2,
-            valid_until_epoch: 3,
-            declaration_json: json_object(vec![json_entry("version", 1u64)]),
-            metadata_json: Value::Object(Map::new()),
-        };
-        let ledger = RegistryFeeLedgerEntry {
-            provider_id_hex: "aa".into(),
-            total_declared_gib: 100,
-            total_utilised_gib: 80,
-            storage_fee: 30_u64.into(),
-            egress_fee: 12_u64.into(),
-            accrued_fee: 42_u64.into(),
-            expected_settlement: 84_u64.into(),
-            penalty_slashed: Quantity::zero(),
-            penalty_events: 0,
-            last_updated_epoch: 4,
-        };
-        let credit = RegistryCreditLedgerEntry {
-            provider_id_hex: "aa".into(),
-            available_credit: 1_000_u64.into(),
-            bonded: 500_u64.into(),
-            required_bond: 400_u64.into(),
-            expected_settlement: 300_u64.into(),
-            onboarding_epoch: 1,
-            last_settlement_epoch: 2,
-            low_balance_since_epoch: None,
-            slashed: Quantity::zero(),
-            under_delivery_strikes: 0,
-            last_penalty_epoch: None,
-            metadata_json: Value::Object(Map::new()),
-        };
-        let snapshot = CapacitySnapshot {
-            declaration_count: 1,
-            fee_ledger_count: 1,
-            credit_ledger_count: 1,
-            dispute_count: 0,
-            declarations: vec![declaration],
-            fee_ledger: vec![ledger],
-            credit_ledger: vec![credit],
-            disputes: Vec::new(),
-        };
-        let json = snapshot_to_json(snapshot, DEFAULT_LIST_LIMIT).expect("serialize snapshot");
-        let map = json.as_object().expect("json object");
-        assert_eq!(
-            map.get("declaration_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(map.get("ledger_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            map.get("credit_ledger_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(map.get("dispute_count").and_then(Value::as_u64), Some(0));
-        assert_eq!(
-            map.get("returned_declaration_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("returned_ledger_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("returned_credit_ledger_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("returned_dispute_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            map.get("limit").and_then(Value::as_u64),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(
-            map.get("truncated_declarations").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            map.get("truncated_fee_ledger").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            map.get("truncated_credit_ledger").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            map.get("truncated_disputes").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(!map.contains_key("local_usage"));
-        assert!(map.get("disputes").is_some());
-        assert!(map.get("credit_ledger").is_some());
-    }
+    include!("api/capacity_snapshot_rendering_tests.rs");
 
     #[test]
     fn capacity_state_limit_bounds_snapshot_arrays() {

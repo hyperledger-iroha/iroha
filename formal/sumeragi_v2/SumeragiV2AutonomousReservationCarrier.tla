@@ -30,7 +30,15 @@ and release-barrier APIs, Kura autonomous slot claims, full merge-candidate
 signing authorization, `StateBlock::stage_certified_merge_entry`, and
 `State::validate_merge_execution_batch`, including its route/incarnation-first
 canonical order key, plus startup reservation reconciliation through bounded
-Kura indexes. The observer-only diagnostic rank is source-bound to
+Kura indexes. The carrier surface also abstracts the move-only authorization's
+exact encoded autonomous external-event prefix and the separately bound full
+deterministic carrier event surface. Pre-vote validation must retain the exact
+autonomous prefix while binding the carrier suffix; final application must
+compare that complete surface before adding the ordinary Applied block event,
+drain the live buffer, and reconstruct the certified write-set root from only
+the retained autonomous bytes at metadata mint and State commit. The
+observer-only diagnostic rank is
+source-bound to
 `State::autonomous_lane_execution_diagnostics_inner`, the exact durable Queue
 ownership/barrier observer, `AutonomousLaneDiagnosticEvidence::finish`, the
 Torii queue-aware projection, and data-model validation. It may only report an
@@ -58,7 +66,9 @@ ReservationModes ==
    "ReleaseAfterApplication", "ReleaseBeforeBarrier", "AbaRelease",
    "DigestOnlyAuthorization", "OrdinaryAnchorExecution",
    "ReserveBeforeDurable", "NonCanonicalMergePrefix",
-   "SkipCanonicalReexecution", "RestartDropsOwnership",
+   "SkipCanonicalReexecution", "PreVoteCommitSurfaceDrift",
+   "AutonomousEventPrefixDrift", "PostValidationEventSurfaceDrift",
+   "RestartDropsOwnership",
    "VolatileStageDiagnostics", "UnauthenticatedRecoveryBody",
    "MixedSignerRecoveryBody", "InflatedRecoveryWireLength",
    "HistoricalContextDrift",
@@ -66,8 +76,13 @@ ReservationModes ==
 
 ReservationStages ==
   {"Queued", "Reserved", "Anchored", "Certified", "CandidateDurable",
-   "CandidateAuthorized", "ReleasePending", "Released", "Applied",
-   "Forgotten"}
+   "CandidateAuthorized", "PreVoteAuthorized", "CarrierFinalized",
+   "ReleasePending", "Released", "Applied", "Forgotten"}
+
+CarrierCommitSurfaces ==
+  {"None", "Pristine", "PostBlockPreVote", "FinalizedCarrier",
+   "InvalidPostBlockPreVote", "InvalidAutonomousEventPrefix",
+   "InvalidPublicationEventSurface"}
 
 ClaimStates == {"None", "Active", "ReleasePending", "Released", "Committed"}
 
@@ -156,7 +171,9 @@ VARIABLES
   \* @type: Bool;
   diagnosticIdentityExact,
   \* @type: Bool;
-  diagnosticsAuthorizeState
+  diagnosticsAuthorizeState,
+  \* @type: Str;
+  carrierCommitSurface
 
 carrierVars ==
   <<stage, reservationIdentity, carrierIdentity, incarnation, claimState,
@@ -164,7 +181,8 @@ carrierVars ==
     executionCount, controlOnlyAnchor, candidateBodyDurable,
     candidateAuthorized, slotRetired, releaseBarrier, releaseCompletion,
     released, releaseAfterApply, recreated, staleRelease,
-    reservationDurable, mergeCandidateExact, canonicalReexecuted>>
+    reservationDurable, mergeCandidateExact, canonicalReexecuted,
+    carrierCommitSurface>>
 
 diagnosticVars ==
   <<durableStageRank, diagnosticStageRank, diagnosticIdentityExact,
@@ -184,7 +202,7 @@ vars ==
     recoveryStage, queueGateOpen, recoverySignerStable,
     recoveryWireLengthExact,
     durableStageRank, diagnosticStageRank, diagnosticIdentityExact,
-    diagnosticsAuthorizeState>>
+    diagnosticsAuthorizeState, carrierCommitSurface>>
 
 Init ==
   /\ ReservationConfiguration
@@ -220,6 +238,7 @@ Init ==
   /\ diagnosticStageRank = 0
   /\ diagnosticIdentityExact = TRUE
   /\ diagnosticsAuthorizeState = FALSE
+  /\ carrierCommitSurface = "None"
 
 ReserveFifoTransaction ==
   /\ stage = "Queued"
@@ -253,7 +272,7 @@ ReserveFifoTransaction ==
   /\ canonicalReexecuted' = FALSE
   /\ durableStageRank' =
        IF Mode = "ReserveBeforeDurable" THEN 0 ELSE 1
-  /\ UNCHANGED <<executionCount, recreated>>
+  /\ UNCHANGED <<executionCount, recreated, carrierCommitSurface>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
@@ -274,7 +293,7 @@ AnchorAutonomousControl ==
                  slotRetired, releaseBarrier, releaseCompletion, released,
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
@@ -294,7 +313,7 @@ CertifyAutonomousBundle ==
                  candidateAuthorized, slotRetired, releaseBarrier,
                  releaseCompletion, released, releaseAfterApply, recreated,
                  staleRelease, reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
@@ -310,7 +329,7 @@ PersistFullMergeCandidate ==
                  candidateAuthorized, slotRetired, releaseBarrier,
                  releaseCompletion, released, releaseAfterApply, recreated,
                  staleRelease, reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
@@ -326,6 +345,7 @@ AuthorizeExactMergeCandidate ==
   /\ mergeOwns' = TRUE
   /\ candidateAuthorized' = TRUE
   /\ mergeCandidateExact' = (Mode # "NonCanonicalMergePrefix")
+  /\ carrierCommitSurface' = "Pristine"
   /\ durableStageRank' =
        IF candidateBodyDurable THEN 6 ELSE durableStageRank
   /\ UNCHANGED <<reservationIdentity, carrierIdentity, incarnation,
@@ -337,17 +357,76 @@ AuthorizeExactMergeCandidate ==
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
-ApplyCanonicalCarrier ==
+\* `Pristine` abstracts an empty block-hash overlay and no staged canonical
+\* transaction-height row. Post-block/pre-vote validation must then observe no
+\* pending block hash, exactly one empty row at the carrier height, the exact
+\* encoded autonomous external-event prefix retained by the move-only commit
+\* authorization, and one separately bound complete deterministic carrier
+\* event surface.
+ValidatePostBlockPreVoteCarrierSurface ==
   /\ stage = "CandidateAuthorized"
   /\ mergeOwns
   /\ candidateAuthorized
+  /\ carrierCommitSurface = "Pristine"
+  /\ stage' = "PreVoteAuthorized"
+  /\ carrierCommitSurface' =
+       CASE Mode = "PreVoteCommitSurfaceDrift"
+              -> "InvalidPostBlockPreVote"
+         [] Mode = "AutonomousEventPrefixDrift"
+              -> "InvalidAutonomousEventPrefix"
+         [] OTHER -> "PostBlockPreVote"
+  /\ UNCHANGED <<reservationIdentity, carrierIdentity, incarnation,
+                 claimState, queueOwns, laneOwns, mergeOwns, releaseOwns,
+                 committedOwner, executionCount, controlOnlyAnchor,
+                 candidateBodyDurable, candidateAuthorized, slotRetired,
+                 releaseBarrier, releaseCompletion, released,
+                 releaseAfterApply, recreated, staleRelease,
+                 reservationDurable, mergeCandidateExact,
+                 canonicalReexecuted>>
+  /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
+
+\* Final application replaces the absent hash with the exact singleton
+\* finalized carrier hash while retaining the exact empty transaction row. It
+\* first byte-compares the complete deterministic carrier event surface bound
+\* before voting, then drains the live event buffer after appending the
+\* ordinary Applied block event; metadata mint and State commit reconstruct the
+\* certified write-set root from retained autonomous-prefix bytes.
+FinalizeCarrierCommitSurface ==
+  /\ stage = "PreVoteAuthorized"
+  /\ mergeOwns
+  /\ candidateAuthorized
+  /\ carrierCommitSurface \in
+       {"PostBlockPreVote", "InvalidPostBlockPreVote",
+        "InvalidAutonomousEventPrefix"}
+  /\ stage' = "CarrierFinalized"
+  /\ carrierCommitSurface' =
+       IF Mode = "PostValidationEventSurfaceDrift"
+       THEN "InvalidPublicationEventSurface"
+       ELSE "FinalizedCarrier"
+  /\ UNCHANGED <<reservationIdentity, carrierIdentity, incarnation,
+                 claimState, queueOwns, laneOwns, mergeOwns, releaseOwns,
+                 committedOwner, executionCount, controlOnlyAnchor,
+                 candidateBodyDurable, candidateAuthorized, slotRetired,
+                 releaseBarrier, releaseCompletion, released,
+                 releaseAfterApply, recreated, staleRelease,
+                 reservationDurable, mergeCandidateExact,
+                 canonicalReexecuted>>
+  /\ UNCHANGED diagnosticVars
+  /\ UNCHANGED recoveryVars
+
+ApplyCanonicalCarrier ==
+  /\ stage = "CarrierFinalized"
+  /\ mergeOwns
+  /\ candidateAuthorized
   /\ carrierIdentity = reservationIdentity
+  /\ carrierCommitSurface = "FinalizedCarrier"
   /\ executionCount' = executionCount + 1
   /\ claimState' = "Committed"
   /\ canonicalReexecuted' = (Mode # "SkipCanonicalReexecution")
   /\ durableStageRank' = 8
   /\ IF Mode = "DuplicateApplication"
-     THEN /\ stage' = "CandidateAuthorized"
+     THEN /\ stage' = "CarrierFinalized"
           /\ mergeOwns' = TRUE
           /\ committedOwner' = FALSE
      ELSE /\ stage' = "Applied"
@@ -358,7 +437,8 @@ ApplyCanonicalCarrier ==
                  candidateBodyDurable, candidateAuthorized, slotRetired,
                  releaseBarrier, releaseCompletion, released,
                  releaseAfterApply, recreated, staleRelease,
-                 reservationDurable, mergeCandidateExact>>
+                 reservationDurable, mergeCandidateExact,
+                 carrierCommitSurface>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
@@ -376,7 +456,7 @@ ForgetCommittedReservation ==
                  candidateAuthorized, slotRetired, releaseBarrier,
                  releaseCompletion, released, releaseAfterApply, recreated,
                  staleRelease, reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
   /\ UNCHANGED recoveryVars
 
@@ -397,7 +477,7 @@ BeginLosingSlotRetirement ==
                  controlOnlyAnchor, releaseBarrier, releaseCompletion,
                  released, releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
 
@@ -413,7 +493,7 @@ PrepareQueueReleaseBarrier ==
                  candidateBodyDurable, candidateAuthorized, slotRetired,
                  releaseCompletion, released, releaseAfterApply, recreated,
                  staleRelease, reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
 
@@ -431,7 +511,7 @@ PublishReleasedClaim ==
                  releaseBarrier, releaseCompletion, released,
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
 
@@ -450,7 +530,7 @@ CompleteQueueRelease ==
                  candidateAuthorized, slotRetired, releaseBarrier,
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
 
@@ -487,7 +567,8 @@ ReserveRecreatedIncarnation ==
   /\ durableStageRank' = 1
   /\ diagnosticStageRank' = 0
   /\ diagnosticsAuthorizeState' = FALSE
-  /\ UNCHANGED <<executionCount, releaseBarrier, releaseCompletion>>
+  /\ UNCHANGED <<executionCount, releaseBarrier, releaseCompletion,
+                 carrierCommitSurface>>
   /\ UNCHANGED recoveryVars
 
 ReplayStaleReleaseMutation ==
@@ -510,7 +591,7 @@ ReplayStaleReleaseMutation ==
                  candidateAuthorized, slotRetired, releaseBarrier,
                  releaseCompletion, releaseAfterApply, recreated>>
   /\ UNCHANGED <<reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
 
@@ -530,7 +611,7 @@ ReleaseCommittedMutation ==
                  candidateAuthorized, slotRetired, releaseBarrier,
                  releaseCompletion, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
 
@@ -538,7 +619,8 @@ RestartDropsOwnershipMutation ==
   /\ Mode = "RestartDropsOwnership"
   /\ stage \in
        {"Reserved", "Anchored", "Certified", "CandidateDurable",
-        "CandidateAuthorized", "Applied"}
+        "CandidateAuthorized", "PreVoteAuthorized", "CarrierFinalized",
+        "Applied"}
   /\ (queueOwns \/ laneOwns \/ mergeOwns \/ releaseOwns \/ committedOwner)
   /\ queueOwns' = FALSE
   /\ laneOwns' = FALSE
@@ -551,7 +633,7 @@ RestartDropsOwnershipMutation ==
                  releaseBarrier, releaseCompletion, released,
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED diagnosticVars
   /\ UNCHANGED recoveryVars
 
@@ -665,7 +747,7 @@ CertifyInstalledHistoricalAutonomousBundle ==
                  releaseBarrier, releaseCompletion, released,
                  releaseAfterApply, recreated, staleRelease,
                  reservationDurable, mergeCandidateExact,
-                 canonicalReexecuted>>
+                 canonicalReexecuted, carrierCommitSurface>>
   /\ UNCHANGED <<queueGateOpen, recoverySignerStable>>
   /\ UNCHANGED <<diagnosticStageRank, diagnosticsAuthorizeState>>
 
@@ -699,6 +781,8 @@ Next ==
   \/ CertifyAutonomousBundle
   \/ PersistFullMergeCandidate
   \/ AuthorizeExactMergeCandidate
+  \/ ValidatePostBlockPreVoteCarrierSurface
+  \/ FinalizeCarrierCommitSurface
   \/ ApplyCanonicalCarrier
   \/ ForgetCommittedReservation
   \/ BeginLosingSlotRetirement
@@ -752,6 +836,7 @@ ReservationCarrierTypeInvariant ==
   /\ durableStageRank \in 0..9
   /\ diagnosticStageRank \in 0..9
   /\ diagnosticsAuthorizeState \in BOOLEAN
+  /\ carrierCommitSurface \in CarrierCommitSurfaces
 
 SingleOwnershipInvariant ==
   BoolNat(queueOwns) + BoolNat(laneOwns) + BoolNat(mergeOwns)
@@ -760,7 +845,8 @@ SingleOwnershipInvariant ==
 ExactCarrierIdentityInvariant ==
   stage \in
     {"Reserved", "Anchored", "Certified", "CandidateDurable",
-     "CandidateAuthorized", "Applied", "Forgotten"} =>
+     "CandidateAuthorized", "PreVoteAuthorized", "CarrierFinalized",
+     "Applied", "Forgotten"} =>
     /\ reservationIdentity \in
          {ExactReservationIdentity, RecreatedReservationIdentity}
     /\ carrierIdentity = reservationIdentity
@@ -768,13 +854,15 @@ ExactCarrierIdentityInvariant ==
 ControlOnlyAnchorInvariant ==
   stage \in
     {"Anchored", "Certified", "CandidateDurable", "CandidateAuthorized",
-     "Applied", "Forgotten"} =>
+     "PreVoteAuthorized", "CarrierFinalized", "Applied", "Forgotten"} =>
     controlOnlyAnchor
 
 CandidateAuthorizationInvariant ==
   candidateAuthorized =>
     /\ candidateBodyDurable
-    /\ stage \in {"CandidateAuthorized", "Applied", "Forgotten"}
+    /\ stage \in
+         {"CandidateAuthorized", "PreVoteAuthorized", "CarrierFinalized",
+          "Applied", "Forgotten"}
 
 ReleaseOrderingInvariant ==
   claimState = "Released" /\ releaseOwns =>
@@ -824,9 +912,30 @@ MLMergeCandidateExactPrefix ==
     /\ carrierIdentity = reservationIdentity
     /\ incarnation \in {IncarnationA, IncarnationB}
 
+\* The three values abstract the exact production carrier predicates:
+\* Pristine has no pending block hash or staged transaction row;
+\* PostBlockPreVote has no pending hash, one exact empty row at the carrier
+\* height, the retained exact autonomous event prefix, and one bound complete
+\* deterministic carrier event surface. FinalizedCarrier has that row plus the
+\* exact singleton carrier hash, an unchanged bound publication surface before
+\* drain, an empty live event buffer after drain, and a certified write-set root
+\* reconstructed from the retained autonomous-prefix bytes.
+MLCarrierCommitSurfaceExact ==
+  /\ (stage \in
+        {"Queued", "Reserved", "Anchored", "Certified", "CandidateDurable",
+         "ReleasePending", "Released"} =>
+        carrierCommitSurface = "None")
+  /\ (stage = "CandidateAuthorized" =>
+        carrierCommitSurface = "Pristine")
+  /\ (stage = "PreVoteAuthorized" =>
+        carrierCommitSurface = "PostBlockPreVote")
+  /\ (stage \in {"CarrierFinalized", "Applied", "Forgotten"} =>
+        carrierCommitSurface = "FinalizedCarrier")
+
 MLCarrierExactlyOnce ==
   /\ MLReservationSingleOwner
   /\ ControlOnlyAnchorInvariant
+  /\ MLCarrierCommitSurfaceExact
   /\ ReleaseOrderingInvariant
   /\ QueueReleaseCompletionInvariant
   /\ AtMostOnceApplicationInvariant
@@ -911,6 +1020,7 @@ AutonomousReservationCarrierSafetyInvariant ==
   /\ MLReservationIdentityStable
   /\ MLCertifiedBundleDurable
   /\ MLMergeCandidateExactPrefix
+  /\ MLCarrierCommitSurfaceExact
   /\ MLCarrierExactlyOnce
   /\ MLRestartOwnershipPartition
   /\ MLRecoveredCarrierBodyAuthenticated

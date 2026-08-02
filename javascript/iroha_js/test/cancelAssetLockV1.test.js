@@ -111,6 +111,18 @@ test("bare CancelAssetLock V1 codec byte-matches and decodes the canonical fixtu
   assert.deepEqual(decodeCancelAssetLockV1(canonicalArchive), canonicalJson);
 });
 
+test("bare CancelAssetLock V1 accepts the maximum canonical archive", () => {
+  const maximumQuantity = ((1n << 511n) - 1n).toString();
+  const value = {
+    escrow_id: canonicalEscrowId,
+    expected_remaining_amount: maximumQuantity,
+  };
+  const archive = encodeCancelAssetLockV1(value);
+
+  assert.equal(archive.length, 148);
+  assert.deepEqual(decodeCancelAssetLockV1(archive), value);
+});
+
 test("bare CancelAssetLock V1 rejects all shared negative fixtures", () => {
   for (const name of [
     "negative/cancel_asset_lock_legacy_missing_expected_v1.json",
@@ -283,6 +295,20 @@ test("nested EscrowId and true trailing payload bytes are independent failures",
   assert.equal(trailing.length, 86);
   assert.equal(new DataView(trailing.buffer).getBigUint64(23, true), 46n);
   assert.throws(() => decodeCancelAssetLockV1(trailing), /trailing bytes/u);
+});
+
+test("bare CancelAssetLock V1 rejects oversized frames before decode", () => {
+  const oversized = Uint8Array.from(
+    Buffer.concat([
+      fixtureBytes.get("cancel_asset_lock_v1.to"),
+      Buffer.alloc(64),
+    ]),
+  );
+  assert.equal(oversized.length, 149);
+  assert.throws(
+    () => decodeCancelAssetLockV1(oversized),
+    /between 85 and 148 canonical bytes/u,
+  );
 });
 
 test("fixture JSON decoding is fatal for malformed UTF-8", () => {

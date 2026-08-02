@@ -19,9 +19,8 @@ use iroha_crypto::Signature;
 use iroha_data_model::{
     DomainId,
     asset::AssetDefinitionId,
-    transaction::{FeePaymentIntent, SignedTransaction},
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
-use iroha_version::codec::DecodeVersioned as _;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -803,10 +802,18 @@ async fn contracts_call_enqueues_transaction() {
     );
     assert!(
         draft_json
-            .get("signed_transaction_b64")
+            .get("transaction_payload_b64")
             .and_then(json::Value::as_str)
             .is_some(),
-        "expected contract call draft scaffold when private_key is omitted"
+        "expected canonical unsigned contract-call payload when signing material is omitted"
+    );
+    assert!(draft_json.get("transaction_scaffold_b64").is_none());
+    assert!(draft_json.get("signed_transaction_b64").is_none());
+    assert!(
+        draft_json.get("entrypoint_hash_hex").is_none()
+            || draft_json
+                .get("entrypoint_hash_hex")
+                .is_some_and(json::Value::is_null)
     );
     assert_eq!(
         draft_json
@@ -834,25 +841,28 @@ async fn contracts_call_enqueues_transaction() {
     );
     assert!(!draft_receipt.contains_key("private_key"));
     assert!(!draft_receipt.contains_key("payload"));
-    let transaction_scaffold_b64 = draft_json
-        .get("transaction_scaffold_b64")
+    let transaction_payload_b64 = draft_json
+        .get("transaction_payload_b64")
         .and_then(json::Value::as_str)
-        .expect("transaction_scaffold_b64 present");
-    let transaction_scaffold_bytes = base64::engine::general_purpose::STANDARD
-        .decode(transaction_scaffold_b64)
-        .expect("decode transaction scaffold");
-    let transaction_scaffold = SignedTransaction::decode_all_versioned(&transaction_scaffold_bytes)
-        .expect("decode exact versioned transaction scaffold");
+        .expect("transaction_payload_b64 present");
+    let transaction_payload_bytes = base64::engine::general_purpose::STANDARD
+        .decode(transaction_payload_b64)
+        .expect("decode transaction payload");
     assert_eq!(
-        transaction_scaffold.time_to_live(),
+        base64::engine::general_purpose::STANDARD.encode(&transaction_payload_bytes),
+        transaction_payload_b64,
+        "draft payload must use canonical padded base64"
+    );
+    let transaction_builder = TransactionBuilder::decode_payload(&transaction_payload_bytes)
+        .expect("strictly decode exact canonical transaction payload");
+    assert_eq!(
+        transaction_builder.payload().time_to_live(),
         Some(Duration::from_millis(transaction_ttl_ms))
     );
     assert_eq!(
-        draft_json
-            .get("signed_transaction_b64")
-            .and_then(json::Value::as_str)
-            .expect("signed_transaction_b64 present"),
-        transaction_scaffold_b64
+        transaction_builder.encode_payload(),
+        transaction_payload_bytes,
+        "draft payload must round-trip byte-for-byte"
     );
     let signing_message_b64 = draft_json
         .get("signing_message_b64")
@@ -865,6 +875,16 @@ async fn contracts_call_enqueues_transaction() {
     let signing_message = base64::engine::general_purpose::STANDARD
         .decode(signing_message_b64)
         .expect("decode signing message");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&signing_message),
+        signing_message_b64,
+        "signing message must use canonical padded base64"
+    );
+    assert_eq!(
+        signing_message,
+        transaction_builder.payload_hash_bytes(),
+        "signing message must be the exact unsigned payload hash"
+    );
     let detached_signature =
         Signature::try_new(&creds.private_key.0, &signing_message).expect("sign detached call");
     let detached_submit_body = iroha_torii::json_object(vec![
@@ -919,6 +939,15 @@ async fn contracts_call_enqueues_transaction() {
         .and_then(json::Value::as_str)
         .expect("detached submit tx hash present");
     assert_eq!(detached_submit_hash.len(), 64);
+    for field in ["transaction_payload_b64", "signing_message_b64"] {
+        assert!(
+            detached_submit_json.get(field).is_none()
+                || detached_submit_json
+                    .get(field)
+                    .is_some_and(json::Value::is_null),
+            "submitted response must not contain unsigned draft field {field}"
+        );
+    }
     let detached_receipt = detached_submit_json
         .get("operation_receipt")
         .and_then(json::Value::as_object)

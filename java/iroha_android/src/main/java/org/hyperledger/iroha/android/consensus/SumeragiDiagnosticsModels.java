@@ -299,10 +299,12 @@ public final class SumeragiDiagnosticsModels {
             applicationBlockHeight.signum() > 0, "application block height must be positive");
       }
       require(state != null, "state must not be null");
+      final boolean requiresApplicationBlock =
+          state == NativeAmxParticipantApplicationState.COMMITTED_EVIDENCE_PENDING
+              || state == NativeAmxParticipantApplicationState.DURABLY_APPLIED;
       require(
-          state != NativeAmxParticipantApplicationState.DURABLY_APPLIED
-              || applicationBlockHeight != null,
-          "durably applied Native AMX evidence requires an application block");
+          (applicationBlockHeight != null) == requiresApplicationBlock,
+          "Native AMX participant state and application block identity disagree");
 
       requireCanonicalNonzeroHash(laneIncarnation, "laneIncarnation");
       if (predecessorDescriptorHash != null) {

@@ -12,7 +12,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import org.hyperledger.iroha.android.client.JsonNumbers;
 import org.hyperledger.iroha.android.client.JsonParser;
@@ -184,88 +183,6 @@ public final class KagemushaRecursiveSpendProver {
 
   private KagemushaRecursiveSpendProver() {}
 
-  private static <T> T transferChangeOpeningOwnership(
-      final NoteOpening changeOpening,
-      final Function<NoteOpening, T> transfer) {
-    NoteOpening locallyOwned = changeOpening;
-    try {
-      final T result = Objects.requireNonNull(transfer, "transfer").apply(locallyOwned);
-      locallyOwned = null;
-      return result;
-    } finally {
-      if (locallyOwned != null) locallyOwned.destroy();
-    }
-  }
-
-  /** Null-safe zeroization shared by secret-bearing native request builders. */
-  static final class SecretArchiveWiper {
-    private SecretArchiveWiper() {}
-
-    interface DigestCopyObserver {
-      void copied(byte[] copy);
-    }
-
-    interface OpeningDigestAction<T> {
-      T run(byte[] spendKey, byte[] rho, byte[] diversifier);
-    }
-
-    static void wipe(final byte[] archive) {
-      if (archive != null) Arrays.fill(archive, (byte) 0);
-    }
-
-    static void wipeAll(final byte[][] archives) {
-      if (archives == null) return;
-      for (final byte[] archive : archives) wipe(archive);
-    }
-
-    static <T> T withOpeningDigests(
-        final byte[] spendKey,
-        final String spendKeyName,
-        final byte[] rho,
-        final String rhoName,
-        final byte[] diversifier,
-        final String diversifierName,
-        final OpeningDigestAction<T> action) {
-      return withOpeningDigests(
-          spendKey,
-          spendKeyName,
-          rho,
-          rhoName,
-          diversifier,
-          diversifierName,
-          copy -> {},
-          action);
-    }
-
-    static <T> T withOpeningDigests(
-        final byte[] spendKey,
-        final String spendKeyName,
-        final byte[] rho,
-        final String rhoName,
-        final byte[] diversifier,
-        final String diversifierName,
-        final DigestCopyObserver observer,
-        final OpeningDigestAction<T> action) {
-      byte[] spendKeyCopy = null;
-      byte[] rhoCopy = null;
-      byte[] diversifierCopy = null;
-      try {
-        spendKeyCopy = requireDigest(spendKey, spendKeyName);
-        Objects.requireNonNull(observer, "observer").copied(spendKeyCopy);
-        rhoCopy = requireDigest(rho, rhoName);
-        observer.copied(rhoCopy);
-        diversifierCopy = requireDigest(diversifier, diversifierName);
-        observer.copied(diversifierCopy);
-        return Objects.requireNonNull(action, "action")
-            .run(spendKeyCopy, rhoCopy, diversifierCopy);
-      } finally {
-        wipe(diversifierCopy);
-        wipe(rhoCopy);
-        wipe(spendKeyCopy);
-      }
-    }
-  }
-
   static void requireCanonicalV4ArtifactRoleInventory(final List<ArtifactRoleV4> roles) {
     Objects.requireNonNull(roles, "roles");
     final ArtifactRoleV4[] canonical = ArtifactRoleV4.values();
@@ -384,7 +301,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static AppendRequestV4 decodeAppendRequestV4(
       final byte[] archive, final NoteOpening changeOpening) {
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         changeOpening, opening -> new AppendRequestV4(archive, opening));
   }
 
@@ -469,7 +386,7 @@ public final class KagemushaRecursiveSpendProver {
       final NoteOpening opening,
       final TopUpProvenanceV4 topUpProvenance,
       final long blockHeight) {
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         opening,
         ownedOpening -> restoreSpendableBranchV4Owned(
             bundle,
@@ -527,7 +444,7 @@ public final class KagemushaRecursiveSpendProver {
       final InitResultV4 result,
       final NoteOpening opening,
       final long blockHeight) {
-    return transferChangeOpeningOwnership(opening, ownedOpening -> {
+    return SecretArchiveWiper.transferChangeOpeningOwnership(opening, ownedOpening -> {
       if (blockHeight <= 0) {
         throw new IllegalArgumentException("blockHeight must be positive");
       }
@@ -548,7 +465,7 @@ public final class KagemushaRecursiveSpendProver {
       final PeerPayment payment,
       final NoteOpening opening,
       final long blockHeight) {
-    return transferChangeOpeningOwnership(opening, ownedOpening -> {
+    return SecretArchiveWiper.transferChangeOpeningOwnership(opening, ownedOpening -> {
       if (blockHeight <= 0) {
         throw new IllegalArgumentException("blockHeight must be positive");
       }
@@ -576,7 +493,7 @@ public final class KagemushaRecursiveSpendProver {
     if (opening == null) {
       throw new IllegalStateException("split result has no local change opening");
     }
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         opening,
         ownedOpening -> {
           final SplitProjection projection = projectSplitResultV4(requiredResult);
@@ -602,7 +519,7 @@ public final class KagemushaRecursiveSpendProver {
     if (opening == null) {
       throw new IllegalStateException("redeem result has no local change opening");
     }
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         opening,
         ownedOpening -> {
           final RedeemBuildProjection projection = projectRedeemBuildResultV4(requiredResult);
@@ -618,7 +535,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static RedeemRequestV4 decodeRedeemRequestV4(
       final byte[] archive, final NoteOpening changeOpening) {
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         changeOpening, opening -> new RedeemRequestV4(archive, opening));
   }
 
@@ -628,7 +545,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static SplitResultV4 decodeSplitResultV4(
       final byte[] archive, final NoteOpening changeOpening) {
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         changeOpening, opening -> new SplitResultV4(archive, opening));
   }
 
@@ -638,7 +555,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static RedeemBuildResultV4 decodeRedeemBuildResultV4(
       final byte[] archive, final NoteOpening changeOpening) {
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         changeOpening, opening -> new RedeemBuildResultV4(archive, opening));
   }
 
@@ -1432,7 +1349,7 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] transferVerifierCommitment,
       final byte[] operationId,
       final long blockHeight) {
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         changeOpening,
         ownedChangeOpening -> buildAppendRequestV4Owned(
             inputs,
@@ -1675,7 +1592,7 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] unshieldVerifierCommitment,
       final byte[] operationId,
       final long blockHeight) {
-    return transferChangeOpeningOwnership(
+    return SecretArchiveWiper.transferChangeOpeningOwnership(
         changeOpening,
         ownedChangeOpening -> buildRedeemRequestV4Owned(
             input,
@@ -1847,7 +1764,7 @@ public final class KagemushaRecursiveSpendProver {
                 borrowed,
                 requiredRecipient.noritoEncoded(),
                 verifiedAtMilliseconds));
-        return transferChangeOpeningOwnership(
+        return SecretArchiveWiper.transferChangeOpeningOwnership(
             requiredRequest.takeChangeOpening(),
             changeOpening -> new SplitResultV4(resultArchive, changeOpening));
       } catch (final ProofWorkerBusyException failure) {
@@ -1882,7 +1799,7 @@ public final class KagemushaRecursiveSpendProver {
         secretArchive = borrowed;
         final byte[] resultArchive = callNativeLifecycle(
             "build redeem", () -> nativeBuildRedeemV4(borrowed));
-        return transferChangeOpeningOwnership(
+        return SecretArchiveWiper.transferChangeOpeningOwnership(
             requiredRequest.takeChangeOpening(),
             changeOpening -> new RedeemBuildResultV4(resultArchive, changeOpening));
       } catch (final ProofWorkerBusyException failure) {
@@ -2523,37 +2440,6 @@ public final class KagemushaRecursiveSpendProver {
     @Override
     public void close() {
       destroy();
-    }
-  }
-
-  private static final class ChangeOpeningOwner implements AutoCloseable {
-    private NoteOpening opening;
-    private boolean transferred;
-    private boolean closed;
-
-    private ChangeOpeningOwner(final NoteOpening opening) {
-      this.opening = opening;
-    }
-
-    private synchronized NoteOpening take() {
-      if (closed) throw new IllegalStateException("change-opening owner has been closed");
-      if (transferred) {
-        throw new IllegalStateException("change opening has already been transferred");
-      }
-      transferred = true;
-      final NoteOpening ownedOpening = opening;
-      opening = null;
-      return ownedOpening;
-    }
-
-    @Override
-    public synchronized void close() {
-      if (closed) return;
-      if (opening != null) {
-        opening.destroy();
-        opening = null;
-      }
-      closed = true;
     }
   }
 
@@ -3234,7 +3120,7 @@ public final class KagemushaRecursiveSpendProver {
 
   /** Local secret-bearing append input. Native code consumes and wipes its openings. */
   public static final class AppendRequestV4 extends CanonicalArchive implements AutoCloseable {
-    private final ChangeOpeningOwner changeOpeningOwner;
+    private final SecretArchiveWiper.ChangeOpeningOwner changeOpeningOwner;
 
     private AppendRequestV4(final byte[] archive, final NoteOpening changeOpening) {
       super(
@@ -3242,7 +3128,7 @@ public final class KagemushaRecursiveSpendProver {
           "KagemushaRecursiveSpendAppendLocalRequestV4",
           "appendRequest",
           MAX_LOCAL_REQUEST_ARCHIVE_BYTES);
-      this.changeOpeningOwner = new ChangeOpeningOwner(changeOpening);
+      this.changeOpeningOwner = new SecretArchiveWiper.ChangeOpeningOwner(changeOpening);
     }
 
     synchronized NoteOpening takeChangeOpening() {
@@ -3269,7 +3155,7 @@ public final class KagemushaRecursiveSpendProver {
 
   /** Local secret-bearing redemption input. Native code consumes and wipes its openings. */
   public static final class RedeemRequestV4 extends CanonicalArchive implements AutoCloseable {
-    private final ChangeOpeningOwner changeOpeningOwner;
+    private final SecretArchiveWiper.ChangeOpeningOwner changeOpeningOwner;
 
     private RedeemRequestV4(final byte[] archive, final NoteOpening changeOpening) {
       super(
@@ -3277,7 +3163,7 @@ public final class KagemushaRecursiveSpendProver {
           "KagemushaRecursiveSpendRedeemLocalRequestV4",
           "redeemRequest",
           MAX_LOCAL_REQUEST_ARCHIVE_BYTES);
-      this.changeOpeningOwner = new ChangeOpeningOwner(changeOpening);
+      this.changeOpeningOwner = new SecretArchiveWiper.ChangeOpeningOwner(changeOpening);
     }
 
     synchronized NoteOpening takeChangeOpening() {
@@ -3303,7 +3189,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static final class SplitResultV4 extends CanonicalArchive implements AutoCloseable {
-    private final ChangeOpeningOwner changeOpeningOwner;
+    private final SecretArchiveWiper.ChangeOpeningOwner changeOpeningOwner;
 
     private SplitResultV4(final byte[] archive, final NoteOpening changeOpening) {
       super(
@@ -3311,7 +3197,7 @@ public final class KagemushaRecursiveSpendProver {
           "KagemushaRecursiveSpendSplitResultV4",
           "splitResult",
           MAX_LOCAL_RESULT_ARCHIVE_BYTES);
-      this.changeOpeningOwner = new ChangeOpeningOwner(changeOpening);
+      this.changeOpeningOwner = new SecretArchiveWiper.ChangeOpeningOwner(changeOpening);
     }
 
     synchronized NoteOpening takeChangeOpening() {
@@ -3337,7 +3223,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static final class RedeemBuildResultV4 extends CanonicalArchive implements AutoCloseable {
-    private final ChangeOpeningOwner changeOpeningOwner;
+    private final SecretArchiveWiper.ChangeOpeningOwner changeOpeningOwner;
 
     private RedeemBuildResultV4(final byte[] archive, final NoteOpening changeOpening) {
       super(
@@ -3345,7 +3231,7 @@ public final class KagemushaRecursiveSpendProver {
           "KagemushaRecursiveSpendRedeemBuildResultV4",
           "redeemBuildResult",
           MAX_LOCAL_RESULT_ARCHIVE_BYTES);
-      this.changeOpeningOwner = new ChangeOpeningOwner(changeOpening);
+      this.changeOpeningOwner = new SecretArchiveWiper.ChangeOpeningOwner(changeOpening);
     }
 
     synchronized NoteOpening takeChangeOpening() {

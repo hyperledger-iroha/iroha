@@ -42,6 +42,23 @@ APPEAL_FINANCE_FIXTURE_PATHS = (
     "negative/cancel_asset_lock_zero_expected_v1.to",
 )
 
+APPEAL_FINANCE_SHARED_FIXTURE_TRIGGER_PATHS = {
+    f"fixtures/sorafs_manifest/appeal_finance/{relative}"
+    for relative in APPEAL_FINANCE_FIXTURE_PATHS
+}
+
+APPEAL_FINANCE_VALIDATION_PROFILE_TRIGGER_PATHS = {
+    (
+        "fixtures/sorafs_manifest/reference_sdk/"
+        "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+    ),
+    (
+        "fixtures/sorafs_manifest/reference_sdk/"
+        "appeal_finance_cancel_asset_lock_zero_expected_negative_"
+        "validation_outcome_v1.json"
+    ),
+}
+
 SDK_FIXTURE_READERS = {
     "IrohaSwift/Tests/IrohaSwiftTests/CancelAssetLockV1Tests.swift": (
         "testAppealFinanceReferenceFixturesAreByteExactAndFailClosed",
@@ -279,6 +296,39 @@ def test_native_sdk_workflows_cover_appeal_finance_and_escrow_sources(
     assert NATIVE_ESCROW_TRIGGER_PATHS <= paths
     assert "scripts/check_sorafs_reference_sdk_fixtures.py" in paths
     assert "scripts/tests/check_sorafs_fixture_workflow_contract_test.py" in paths
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    [
+        "mobile_sdk_artifacts.yml",
+        "pr_csharp.yml",
+        "sorafs-orchestrator-sdk.yml",
+    ],
+)
+def test_native_sdk_workflows_cover_every_shared_appeal_finance_fixture(
+    workflow_name: str,
+) -> None:
+    """Each mandatory payload and outcome must independently rerun SDK parity."""
+
+    required = (
+        APPEAL_FINANCE_SHARED_FIXTURE_TRIGGER_PATHS
+        | APPEAL_FINANCE_VALIDATION_PROFILE_TRIGGER_PATHS
+    )
+    missing_files = sorted(
+        path for path in required if not (REPO_ROOT / path).is_file()
+    )
+    assert not missing_files, (
+        f"appeal-finance workflow inventory names missing files: {missing_files}"
+    )
+
+    filters = pull_request_paths(workflow_name)
+    uncovered = sorted(
+        path for path in required if not workflow_filter_covers(path, filters)
+    )
+    assert not uncovered, (
+        f"{workflow_name} omits appeal-finance fixture triggers: {uncovered}"
+    )
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,15 @@ enum ExactOutputRolloverClaim {
     Exact,
     GlobalV2(ExactOutputCreationScope),
     Lane(ExactOutputCreationScope),
+    /// Authenticated lane payload/NewView traffic with exact live ownership.
+    ///
+    /// These messages are admissible lane transport, but they have no
+    /// independent applied-height reconstruction authority. They must leave
+    /// the exact-output corridor before height handoff can complete.
+    NonRetireableLaneTransport {
+        target: PeerId,
+        message_hash: HashOf<BlockMessage>,
+    },
     DurableCommitCertificateResponse {
         scope: ExactOutputCreationScope,
         target: PeerId,
@@ -112,7 +121,7 @@ fn native_amx_message_body(
 impl ExactOutputRolloverClaim {
     fn scope(&self) -> Option<ExactOutputCreationScope> {
         match self {
-            Self::Exact => None,
+            Self::Exact | Self::NonRetireableLaneTransport { .. } => None,
             Self::GlobalV2(scope) | Self::Lane(scope) => Some(*scope),
             Self::DurableCommitCertificateResponse { scope, .. }
             | Self::DurableCertifiedBodyResponse { scope, .. }
@@ -128,6 +137,32 @@ impl ExactOutputRolloverClaim {
             | Self::CertifiedSidecarControl { scope, .. }
             | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
         }
+    }
+
+    fn validate_non_retireable_lane_transport_fanout(
+        messages: &[NetworkMessage],
+        peers: &[PeerId],
+        target: &PeerId,
+        message_hash: HashOf<BlockMessage>,
+    ) -> Result<(), String> {
+        let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
+            return Err(
+                "non-retireable lane transport claim requires one exact message".to_owned(),
+            );
+        };
+        let message = envelope.as_message();
+        if peers != std::slice::from_ref(target)
+            || !matches!(
+                message,
+                BlockMessage::LaneExecutablePayload(_)
+                    | BlockMessage::LaneBlockNewViewVote(_)
+                    | BlockMessage::LaneBlockNewViewCertificate(_)
+            )
+            || HashOf::new(message) != message_hash
+        {
+            return Err("non-retireable lane transport claim changed identity".to_owned());
+        }
+        Ok(())
     }
 
     fn validate_fanout(&self, messages: &[NetworkMessage], peers: &[PeerId]) -> Result<(), String> {
@@ -165,6 +200,15 @@ impl ExactOutputRolloverClaim {
                     Err("lane rollover claim covers a different output kind".to_owned())
                 }
             }
+            Self::NonRetireableLaneTransport {
+                target,
+                message_hash,
+            } => Self::validate_non_retireable_lane_transport_fanout(
+                messages,
+                peers,
+                target,
+                *message_hash,
+            ),
             Self::DurableCommitCertificateResponse {
                 target,
                 responder,

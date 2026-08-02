@@ -2189,10 +2189,61 @@ required_multilane_core_focus_tests=(
   state::tests::autonomous_execution_commit_rejects_stale_authorized_base
   state::tests::autonomous_execution_commit_rejects_post_stage_wsv_drift
   state::tests::autonomous_execution_commit_rejects_post_stage_runtime_surface_drift
+  state::tests::autonomous_execution_commit_rejects_post_publication_event_surface_drift
   state::tests::autonomous_execution_defers_expired_axt_replay_pruning
   state::tests::autonomous_execution_rejects_post_stage_axt_replay_drift
   state::tests::autonomous_execution_stage_rejects_preexisting_axt_replay_overlay
+  state::tests::finalized_merge_execution_commit_surface_borrows_exact_carrier_hash
   state::tests::autonomous_execution_pre_vote_rejects_due_start_of_block_effect
+  state::tests::autonomous_execution_pre_vote_requires_exact_empty_carrier_membership
+  state::tests::autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height
+  state::tests::autonomous_execution_pre_vote_rejects_non_empty_carrier_membership
+  state::tests::autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash
+  state::tests::autonomous_execution_finality_rejects_unbound_event_surface_drift
+  block::tests::historical_native_amx_source_bundle_authenticates_every_evidence_layer
+  block::tests::historical_native_amx_validation_uses_frozen_merge_routes_across_participant_drift
+  kura::tests::native_amx_all_manifest_barrier_does_not_promote_another_routes_receipt_temp
+  kura::tests::native_amx_latest_index_startup_reconciles_exact_temporary_matrix
+  kura::tests::native_amx_latest_index_temporary_failures_retain_exact_forensics
+  kura::tests::native_amx_latest_index_temporary_recovery_crash_boundaries_converge
+  kura::tests::native_amx_latest_index_temporary_rejects_links_without_touching_targets
+  kura::tests::native_amx_latest_index_temporary_rejects_recovery_journal_overlap_before_mutation
+  kura::tests::native_amx_latest_index_temporary_rejects_same_byte_swap_before_promotion
+  kura::tests::native_amx_prune_exact_object_removal_rejects_same_byte_path_swaps
+  kura::tests::native_amx_prune_exact_object_removal_rejects_same_length_in_place_rewrites
+  kura::tests::native_amx_prune_identical_stable_and_temporary_converge_idempotently
+  kura::tests::native_amx_prune_intent_v2_rejects_b1_after_b2_recreation
+  kura::tests::native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation
+  kura::tests::native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join
+  kura::tests::native_amx_prune_intent_v2_temporary_cannot_delete_all_pointerless_pairs
+  kura::tests::native_amx_prune_protected_checkpoint_or_commit_semantic_drift_fails_before_unlink
+  kura::tests::native_amx_prune_rejects_legacy_and_unexpected_special_names_without_downgrade
+  kura::tests::native_amx_prune_rejects_legacy_name_before_consuming_valid_v2_intent
+  kura::tests::native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinking
+  kura::tests::native_amx_prune_special_files_reject_symlinks_and_hardlinks_on_both_paths
+  kura::tests::native_amx_prune_stable_and_temporary_conflict_preserves_both_and_all_evidence
+  kura::tests::native_amx_prune_two_pair_partial_unlinks_recover_every_prefix_idempotently
+  kura::tests::native_amx_startup_repair_does_not_require_retired_sibling_storage
+  kura::tests::native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent
+  kura::tests::native_amx_startup_repair_preflights_all_targets_then_skips_advanced_sibling
+  native_amx::tests::signing_guard_durably_rejects_same_source_plan_only_equivocation_after_restart
+  native_amx::tests::signing_guard_rejects_anchor_deletion_or_wrong_v4_anchor_version
+  native_amx::tests::signing_guard_rejects_wrong_version_noncanonical_and_hardlinked_records
+  native_amx::tests::signing_guard_restart_rejects_duplicate_record_sequence
+  native_amx::tests::signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails
+  native_amx::tests::signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors
+  queue::tests::committing_reservation_owned_transaction_does_not_create_fifo_tombstone
+  queue::tests::reservation_group_commit_preflights_later_identity_before_any_prefix_mutation
+  queue::tests::reservation_group_commit_stages_complete_commit_prefix_before_tombstones
+  state::tests::historical_native_amx_recovery_and_diagnostics_share_the_frozen_source_boundary
+  state::tests::pending_native_diagnostic_entry_rejects_forged_merge_qc_and_lane_bindings
+  sumeragi::v2_lane_work::tests::native_amx_context_guard_rejects_replayed_round_epoch_and_future_view
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rechecks_state_after_durable_record_before_signature
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rechecks_view_routes_predecessors_and_authority
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rejects_delayed_participant_after_same_id_recreation
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rejects_plan_valid_participant_predecessor_drift
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rejects_plan_valid_stale_coordinator_incarnation
+  sumeragi::v2_apply::tests::historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application
 )
 required_multilane_queue_journal_focus_tests=(
   queue::journal::tests::queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context
@@ -2250,6 +2301,9 @@ required_multilane_queue_journal_focus_tests=(
   queue::reservation_journal::tests::prepared_checked_transition_binds_exact_ordered_owner_token_coverage
   queue::reservation_journal::tests::checked_transition_result_identity_and_candidate_application_are_atomic
   queue::reservation_journal::tests::checked_transition_generation_overflow_is_rejected_without_mutation
+  queue::reservation_journal::tests::snapshot_replay_seal_covers_empty_and_live_owner_replays
+  queue::reservation_journal::tests::snapshot_replay_seal_rejects_changed_journal_before_publication
+  queue::reservation_journal::tests::snapshot_replay_receipt_rejects_same_count_owner_identity_drift
   queue::tests::queue_plan_admission_context_binds_legacy_topology_and_contiguous_generation
   queue::tests::queue_plan_journal_replays_matching_plan_after_restart
   queue::tests::strict_durable_claim_rejects_stale_context_before_ownership_and_binds_exact_record
@@ -2413,7 +2467,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=418
+readonly expected_multilane_focus_test_count=472
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2584,7 +2638,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 418-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 472-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2692,8 +2746,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 419 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 418 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 473 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 472 focused tests" >&2
     exit 1
   fi
 fi
@@ -2748,7 +2802,7 @@ done
 # The source-binding checker derives this same ordered corpus from the formal
 # ledger. Keep an independent fixed release count and terminal contract marker
 # so the runner and ledger cannot silently agree to drop a mutation together.
-readonly expected_multilane_formal_mutation_count=73
+readonly expected_multilane_formal_mutation_count=99
 observed_multilane_formal_mutation_count="$(
   grep -Ec '^run_mutant [a-z0-9-]+ ' \
     scripts/formal/run_sumeragi_v2_multilane_mutations.sh
@@ -2759,9 +2813,9 @@ if ((observed_multilane_formal_mutation_count
   exit 1
 fi
 if ! grep -Fqx -- \
-  'echo "[tlc] all 73 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
+  'echo "[tlc] all 99 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
   scripts/formal/run_sumeragi_v2_multilane_mutations.sh; then
-  echo "multilane mutation runner lacks the exact 73-mutation completion contract" >&2
+  echo "multilane mutation runner lacks the exact 99-mutation completion contract" >&2
   exit 1
 fi
 
@@ -3099,8 +3153,8 @@ if [[ "$profile" == "--release" ]]; then
   )
   native_amx_grouped_parity_test_counts=(
     7
+    60
     58
-    56
     3
     6
     5
@@ -3611,7 +3665,7 @@ publish_corridor_completion() {
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
       "$native_amx_grouped_suite_source_manifest_sha256" \
-    native_amx_grouped_negative_control_count 52 \
+    native_amx_grouped_negative_control_count 54 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"
@@ -3930,4 +3984,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 418/418 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 472/472 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

@@ -14,6 +14,12 @@ CANCEL_ASSET_LOCK_WIRE_ID_V1: Final[str] = "iroha_data_model::isi::escrow::Cance
 
 _FRAME_HEADER_BYTES: Final[int] = 40
 _COMPACT_LENGTH_FLAG: Final[int] = 0x02
+# A transparent 32-byte EscrowId plus one positive signed-512-bit Quantity
+# yields an unpadded canonical archive in this exact range. Enforce it before
+# CRC work so an oversized attacker-controlled frame cannot make this fixed
+# schema perform an unbounded payload scan.
+_MIN_CANONICAL_ARCHIVE_BYTES: Final[int] = 85
+_MAX_CANONICAL_ARCHIVE_BYTES: Final[int] = 148
 _U64_MASK: Final[int] = (1 << 64) - 1
 _CRC64_POLY: Final[int] = 0xC96C_5795_D787_0F42
 _SCHEMA_HASH: Final[bytes] = hashlib.sha256(
@@ -253,6 +259,12 @@ def decode_cancel_asset_lock_v1(archive: bytes) -> CancelAssetLockV1:
     encoded = archive
     if len(encoded) < _FRAME_HEADER_BYTES:
         raise ValueError("CancelAssetLockV1 archive is shorter than its Norito header")
+    if not _MIN_CANONICAL_ARCHIVE_BYTES <= len(encoded) <= _MAX_CANONICAL_ARCHIVE_BYTES:
+        raise ValueError(
+            "CancelAssetLockV1 archive must contain between "
+            f"{_MIN_CANONICAL_ARCHIVE_BYTES} and "
+            f"{_MAX_CANONICAL_ARCHIVE_BYTES} canonical bytes"
+        )
     if encoded[:6] != b"NRT0\x00\x00":
         raise ValueError("CancelAssetLockV1 archive has invalid Norito magic or version")
     if encoded[6:22] != _SCHEMA_HASH:

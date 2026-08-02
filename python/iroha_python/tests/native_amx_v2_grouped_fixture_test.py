@@ -9,6 +9,7 @@ from typing import Any, get_type_hints
 
 import pytest
 
+import iroha_python.client as iroha_python_client
 from iroha_python import (
     SumeragiDiagnosticsSnapshot,
     SumeragiLaneSettlementCommitment,
@@ -255,6 +256,8 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
     assert fixture["fixture_version"] == 1
     assert fixture["rust_owner"] == "iroha_data_model::block::consensus"
     assert {
+        "coherent_duplicate_validator_set",
+        "coherent_over_quorum_requirement",
         "execution_commitment_merge_carrier_wrong_version",
         "execution_commitment_missing_merge_carrier_field",
     } <= {control["id"] for control in fixture["negative_controls"]}
@@ -367,7 +370,9 @@ def test_native_amx_source_and_entrypoint_domains_are_distinct_public_types() ->
     _fixture()["negative_controls"],
     ids=lambda control: control["id"],
 )
-def test_grouped_native_amx_v2_negative_corpus(control: dict[str, Any]) -> None:
+def test_grouped_native_amx_v2_negative_corpus(
+    control: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     fixture = _fixture()
     assert control["expectation"] == "reject"
     for mutation in control["mutations"]:
@@ -388,3 +393,34 @@ def test_grouped_native_amx_v2_negative_corpus(control: dict[str, Any]) -> None:
         CanonicalSumeragiDiagnosticsStatus.from_payload(diagnostics)
     with pytest.raises((RuntimeError, TypeError, ValueError)):
         SumeragiDiagnosticsSnapshot.from_payload(diagnostics)
+
+    if control["id"] == "short_aggregate_signature":
+        # ML-MUT-API-03 deliberately weakens one real SDK check. The Rust-owned
+        # control must then cross the Python accept boundary, proving that the
+        # corpus detects this exact 96-byte signature-length regression.
+        strict_byte_vector = iroha_python_client._strict_byte_vector
+
+        def weakened_ml_mut_api_03_byte_vector(
+            value: Any, length: int, context: str
+        ) -> tuple[int, ...]:
+            if (
+                context == "native AMX v2 attestation QC bls_aggregate_signature"
+                and length == 96
+            ):
+                length = 95
+            return strict_byte_vector(value, length, context)
+
+        monkeypatch.setattr(
+            iroha_python_client,
+            "_strict_byte_vector",
+            weakened_ml_mut_api_03_byte_vector,
+        )
+        weakened = SumeragiLaneSettlementCommitment.from_payload(mutated_group)
+        assert (
+            len(
+                weakened.native_amx_receipts[0]
+                .legs[0]
+                .prepare_qc.bls_aggregate_signature
+            )
+            == 95
+        )

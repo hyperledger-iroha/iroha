@@ -125,6 +125,8 @@ public final class NativeAmxV2GroupedFixtureTests {
                 "coherent_stale_descriptor_hash",
                 "coherent_stale_proposal_hash",
                 "coherent_stale_settlement_hash",
+                "coherent_duplicate_validator_set",
+                "coherent_over_quorum_requirement",
                 "non_canonical_validator_peer_id",
                 "execution_commitment_merge_carrier_wrong_version",
                 "execution_commitment_missing_merge_carrier_field")));

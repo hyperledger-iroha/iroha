@@ -215,10 +215,11 @@ data class SumeragiNativeAmxParticipantApplication(
             requireU64(it, "applicationBlockHeight")
             require(it.signum() > 0) { "application block height must be positive" }
         }
-        if (state == SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED) {
-            require(applicationBlockHeight != null) {
-                "durably applied Native AMX evidence requires an application block"
-            }
+        val requiresApplicationBlock =
+            state == SumeragiNativeAmxParticipantApplicationState.COMMITTED_EVIDENCE_PENDING ||
+                state == SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED
+        require((applicationBlockHeight != null) == requiresApplicationBlock) {
+            "Native AMX participant state and application block identity disagree"
         }
 
         requireCanonicalNonzeroHash(laneIncarnation, "laneIncarnation")

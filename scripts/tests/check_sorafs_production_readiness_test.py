@@ -8,6 +8,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -27,6 +28,7 @@ from sorafs_resilience_test_support import (  # noqa: E402
     resilience_binding as build_resilience_binding,
     resilience_summary as build_resilience_summary,
 )
+from sorafs_rollout_runner_test_support import TopologyBoundChecker  # noqa: E402
 
 NOW_UNIX = 1_800_800_000
 GENERATED_AT = NOW_UNIX - 120
@@ -1413,8 +1415,23 @@ def load_lane_fixture_module(gate_name: str):
     fixture_module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader  # pragma: no cover - defensive
     sys.modules[spec.name] = fixture_module
-    spec.loader.exec_module(fixture_module)
+    try:
+        spec.loader.exec_module(fixture_module)
+    except BaseException:
+        unload_lane_fixture_module(fixture_module)
+        raise
     return fixture_module
+
+
+def unload_lane_fixture_module(fixture_module: ModuleType) -> None:
+    """Close fixture-owned resources and remove its dynamic module entry."""
+
+    checker = getattr(fixture_module, "CHECKER", None)
+    try:
+        if isinstance(checker, TopologyBoundChecker):
+            checker.close()
+    finally:
+        sys.modules.pop(fixture_module.__name__, None)
 
 
 def normalize_fixture_evidence_context(
@@ -1433,6 +1450,17 @@ def write_complete_lane_fixture_summary(
     root: Path,
 ) -> tuple[dict, int]:
     fixture_module = load_lane_fixture_module(gate_name)
+    try:
+        return _write_complete_lane_fixture_summary(gate_name, root, fixture_module)
+    finally:
+        unload_lane_fixture_module(fixture_module)
+
+
+def _write_complete_lane_fixture_summary(
+    gate_name: str,
+    root: Path,
+    fixture_module: ModuleType,
+) -> tuple[dict, int]:
     if gate_name == "reference_sdk_release":
         # The source validator has its own end-to-end corpus. Dynamic imports
         # do not activate the lane module's pytest autouse fixture, so install
@@ -1525,7 +1553,54 @@ def write_complete_lane_fixture_summary(
         "NOW_UNIX",
         getattr(fixture_module, "NOW", NOW_UNIX),
     )
-    return json.loads(summary.read_text(encoding="utf-8")), now_unix
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    return payload, now_unix
+
+
+def test_topology_bound_checker_closes_fixture_directory() -> None:
+    observed_arguments: list[list[str] | None] = []
+    checker = TopologyBoundChecker(
+        lambda arguments: observed_arguments.append(arguments) or 0,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+        name="aggregate-close-test",
+    )
+    topology_directory = checker.topology_path.parent
+    assert topology_directory.is_dir()
+    assert checker([]) == 0
+    assert observed_arguments == [
+        ["--topology-qualification-summary", str(checker.topology_path)]
+    ]
+
+    checker.close()
+    assert not topology_directory.exists()
+    checker.close()
+
+
+def test_lane_fixture_module_is_unloaded_after_summary_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_module = load_lane_fixture_module("orderbook")
+    checker = fixture_module.CHECKER
+    topology_directory = checker.topology_path.parent
+    module_name = fixture_module.__name__
+
+    def fail_to_write_evidence(_evidence_root: Path) -> None:
+        raise RuntimeError("injected evidence failure")
+
+    fixture_module.write_complete_evidence = fail_to_write_evidence
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "load_lane_fixture_module",
+        lambda _gate_name: fixture_module,
+    )
+
+    with pytest.raises(RuntimeError, match="injected evidence failure"):
+        write_complete_lane_fixture_summary("orderbook", tmp_path)
+
+    assert not topology_directory.exists()
+    assert module_name not in sys.modules
 
 
 def lane_summary_deployment_context(payload: dict) -> tuple[str, str]:

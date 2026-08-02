@@ -6,7 +6,12 @@ import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 
 import {computeOpenApiBlake3Hex} from '../lib/openapi-manifest-v2.mjs';
-import {defaultRepoRoot, parseArgs, syncOpenApi} from '../sync-openapi.mjs';
+import {
+  defaultRepoRoot,
+  openApiGeneratorCargoArgs,
+  parseArgs,
+  syncOpenApi,
+} from '../sync-openapi.mjs';
 import {attachOpenApiManifestSignature} from './helpers/openapi-signing.mjs';
 
 function releaseSpec(marker) {
@@ -28,6 +33,24 @@ function releaseSpec(marker) {
 
 test('default repository root contains the Cargo workspace', async () => {
   await access(join(defaultRepoRoot, 'Cargo.toml'));
+});
+
+test('default generator enables the xtask binary feature', () => {
+  assert.deepEqual(openApiGeneratorCargoArgs('/tmp/torii.json'), [
+    'run',
+    '--locked',
+    '--offline',
+    '-p',
+    'xtask',
+    '--features',
+    'dev-tools',
+    '--bin',
+    'xtask',
+    '--',
+    'openapi',
+    '--output',
+    '/tmp/torii.json',
+  ]);
 });
 
 test('parseArgs handles version, latest, and mirrors', () => {

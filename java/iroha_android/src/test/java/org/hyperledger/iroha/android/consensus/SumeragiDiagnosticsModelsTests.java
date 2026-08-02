@@ -244,7 +244,7 @@ public final class SumeragiDiagnosticsModelsTests {
   }
 
   @Test
-  public void rowRejectsIncompleteCarrierAndOversizedGroup() {
+  public void rowEnforcesCarrierStateGeometryAndGroupBound() {
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -261,6 +261,33 @@ public final class SumeragiDiagnosticsModelsTests {
                 2,
                 null,
                 BigInteger.valueOf(15L)));
+
+    final String geometryError =
+        "Native AMX participant state and application block identity disagree";
+    for (final NativeAmxParticipantApplicationState state :
+        Arrays.asList(
+            NativeAmxParticipantApplicationState.CERTIFIED_PENDING_CARRIER,
+            NativeAmxParticipantApplicationState.CONFLICT)) {
+      assertEquals(state, application(3, 2, null, null, state).state());
+      final IllegalArgumentException error =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> application(3, 2, hash(0x77), BigInteger.valueOf(15L), state));
+      assertEquals(geometryError, error.getMessage());
+    }
+    for (final NativeAmxParticipantApplicationState state :
+        Arrays.asList(
+            NativeAmxParticipantApplicationState.COMMITTED_EVIDENCE_PENDING,
+            NativeAmxParticipantApplicationState.DURABLY_APPLIED)) {
+      assertEquals(
+          state,
+          application(3, 2, hash(0x77), BigInteger.valueOf(15L), state).state());
+      final IllegalArgumentException error =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> application(3, 2, null, null, state));
+      assertEquals(geometryError, error.getMessage());
+    }
   }
 
   @Test
@@ -550,13 +577,33 @@ public final class SumeragiDiagnosticsModelsTests {
       final BigInteger applicationBlockHeight) {
     return application(
         laneId,
+        sourceCount,
+        applicationBlockHash,
+        applicationBlockHeight,
+        NativeAmxParticipantApplicationState.DURABLY_APPLIED);
+  }
+
+  private static NativeAmxParticipantApplication application(
+      final long laneId,
+      final long sourceCount,
+      final String applicationBlockHash,
+      final BigInteger applicationBlockHeight,
+      final NativeAmxParticipantApplicationState state) {
+    return new NativeAmxParticipantApplication(
+        laneId,
         BigInteger.valueOf(8L),
+        hash(0x51 + (int) laneId),
         BigInteger.valueOf(8L),
         BigInteger.ONE,
         BigInteger.valueOf(7L),
+        hash(0x61),
+        hash(0x71),
+        hash(0x73),
+        hash(0x75),
         sourceCount,
+        applicationBlockHeight,
         applicationBlockHash,
-        applicationBlockHeight);
+        state);
   }
 
   private static NativeAmxParticipantApplication application(

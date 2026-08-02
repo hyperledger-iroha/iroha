@@ -137,6 +137,63 @@ run_mutant native-same-route-marker "$NATIVE_MODULE" \
 run_mutant native-source-claim-equivocation "$NATIVE_MODULE" \
   multilane_native_source_claim_equivocation_bug.cfg \
   MLNativeSourceClaimInjective
+run_mutant native-source-claim-source-id-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_source_id_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-entrypoint-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_tx_entrypoint_hash_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-plan-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_plan_digest_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-round-context-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_round_context_id_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-round-height-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_round_height_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-round-view-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_round_view_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-epoch-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_epoch_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-chain-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_chain_id_hash_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-authority-height-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_authority_context_height_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-coordinator-lane-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_coordinator_lane_id_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-coordinator-dataspace-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_coordinator_dataspace_id_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-coordinator-incarnation-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_coordinator_lane_incarnation_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-coordinator-height-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_planned_coordinator_block_height_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-coordinator-view-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_coordinator_lane_block_view_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-coordinator-proposal-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_coordinator_proposal_hash_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-participant-lane-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_participant_lane_id_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-participant-dataspace-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_participant_dataspace_id_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-participant-incarnation-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_participant_lane_incarnation_drift_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-source-claim-participant-membership-drift "$NATIVE_MODULE" \
+  multilane_native_source_claim_participant_membership_drift_bug.cfg \
+  MLNativeSourceClaimInjective
 run_mutant native-noncontiguous-route "$NATIVE_MODULE" \
   multilane_native_noncontiguous_route_bug.cfg \
   MLNativeContiguousActiveRoute
@@ -151,6 +208,9 @@ run_mutant native-dropped-startup-repair "$NATIVE_MODULE" \
   MLNativeDurabilityPrecedesFrontier
 run_mutant native-ambiguous-latest-index "$NATIVE_MODULE" \
   multilane_native_ambiguous_latest_index_bug.cfg \
+  MLNativeLatestIndexExact
+run_mutant native-discard-authenticated-latest-temp "$NATIVE_MODULE" \
+  multilane_native_discard_authenticated_latest_temp_bug.cfg \
   MLNativeLatestIndexExact
 run_mutant native-shared-evidence-budget "$NATIVE_MODULE" \
   multilane_native_shared_evidence_budget_bug.cfg \
@@ -200,6 +260,15 @@ run_mutant native-orphan-merge-carrier "$NATIVE_MODULE" \
 run_mutant native-skip-post-cache-carrier-reconcile "$NATIVE_MODULE" \
   multilane_native_skip_post_cache_carrier_reconcile_bug.cfg \
   MLUnifiedStartupEvidenceRepairSafe
+run_mutant native-repair-historical-sibling-as-active "$NATIVE_MODULE" \
+  multilane_native_repair_historical_sibling_as_active_bug.cfg \
+  MLUnifiedStartupEvidenceRepairSafe
+run_mutant native-prune-without-protected-latest "$NATIVE_MODULE" \
+  multilane_native_prune_without_protected_latest_bug.cfg \
+  MLNativePruneProtectedLatestExact
+run_mutant native-prune-namespace-rebind "$NATIVE_MODULE" \
+  multilane_native_prune_namespace_rebind_bug.cfg \
+  MLNativePruneExactObjectRemoval
 
 readonly AUTONOMOUS_MODULE="SumeragiV2AutonomousReservationCarrier.tla"
 run_mutant autonomous-carrier-drift "$AUTONOMOUS_MODULE" \
@@ -231,6 +300,15 @@ run_mutant autonomous-noncanonical-merge-prefix "$AUTONOMOUS_MODULE" \
 run_mutant autonomous-skip-canonical-reexecution "$AUTONOMOUS_MODULE" \
   multilane_autonomous_skip_canonical_reexecution_bug.cfg \
   MLCarrierExactlyOnce
+run_mutant autonomous-prevote-commit-surface-drift "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_prevote_commit_surface_drift_bug.cfg \
+  MLCarrierCommitSurfaceExact
+run_mutant autonomous-event-prefix-drift "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_event_prefix_drift_bug.cfg \
+  MLCarrierCommitSurfaceExact
+run_mutant autonomous-post-validation-event-surface-drift "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_post_validation_event_surface_drift_bug.cfg \
+  MLCarrierCommitSurfaceExact
 run_mutant autonomous-restart-drops-ownership "$AUTONOMOUS_MODULE" \
   multilane_autonomous_restart_drops_ownership_bug.cfg \
   MLReservationSingleOwner
@@ -325,4 +403,4 @@ run_mutant kura-replica-refresh-cursor-skip "$KURA_RETENTION_MODULE" \
 run_mutant kura-replica-skip-final-prestage-recheck "$KURA_RETENTION_MODULE" \
   kura_replica_skip_final_prestage_recheck_bug.cfg KRFinalPreStageRecheck
 
-echo "[tlc] all 73 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"
+echo "[tlc] all 99 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"

@@ -39,20 +39,21 @@ pub mod sorafs_reputation_runtime;
 pub mod sorafs_reserve_transparency_runtime;
 /// Qualified stream-token gateway admission and durable callback reconciliation.
 mod sorafs_stream_token_gateway_runtime;
-
 pub use runtime_provider_broker::{
     RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
-    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerLauncherErrorV1,
-    RuntimeProviderBrokerLifecycleV1, RuntimeProviderBrokerServerErrorV1,
-    StockGovernanceDagServiceRuntimeProviderRegistryV1, serve_runtime_provider_broker_v1,
+    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
+    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
+    RuntimeProviderBrokerLauncherErrorV1, RuntimeProviderBrokerLifecycleV1,
+    RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
 };
 pub use runtime_provider_registry::{
     IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
-    IrohaRuntimeProviderRegistryErrorV1, IrohaRuntimeProviderRegistryV1,
-    IrohaRuntimeProviderSlotV1,
+    IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
+    IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1,
+    RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1,
 };
-
 #[cfg(target_os = "windows")]
 use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
 use std::{
@@ -8328,6 +8329,97 @@ impl Iroha {
             ],
         )
         .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
+        let sorafs_provider_ingest_preflight = match config
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_ref()
+        {
+            Some(provider_ingest_config) => {
+                let provider_id = config
+                    .torii
+                    .sorafs_storage
+                    .provider_id
+                    .ok_or_else(|| {
+                        Report::new(StartError::StartTorii).attach(
+                            "enabled SoraFS provider-ingest runtime requires the exact configured storage provider identity",
+                        )
+                    })?;
+                let authenticated_source = runtime_deps
+                    .sorafs_provider_ingest_authenticated_source
+                    .clone()
+                    .ok_or_else(|| {
+                        Report::new(StartError::StartTorii).attach(
+                            "enabled SoraFS provider-ingest runtime requires an injected authenticated governed source-fetch adapter",
+                        )
+                    })?;
+                let signer_resolver = runtime_deps
+                    .sorafs_provider_ingest_signer_resolver
+                    .clone()
+                    .ok_or_else(|| {
+                        Report::new(StartError::StartTorii).attach(
+                            "enabled SoraFS provider-ingest runtime requires an injected governance-aware HSM/KMS signer resolver",
+                        )
+                    })?;
+                let checkpoint_runtime = runtime_deps
+                    .sorafs_provider_ingest_checkpoint_runtime
+                    .clone()
+                    .ok_or_else(|| {
+                        Report::new(StartError::StartTorii).attach(
+                            "enabled SoraFS provider-ingest runtime requires an injected sealed monotonic checkpoint provider",
+                        )
+                    })?;
+                if provider_ingest_config
+                    .finalized_archive
+                    .retention_authority
+                    .is_some()
+                    != runtime_deps
+                        .sorafs_provider_ingest_retention_authority
+                        .is_some()
+                {
+                    return Err(Report::new(StartError::StartTorii).attach(
+                        "SoraFS provider-ingest finalized-archive retention requires exact configured/injected sealed authority presence",
+                    ));
+                }
+                Some(
+                    sorafs_provider_ingest_runtime::preflight_runtime_adapters(
+                        provider_ingest_config,
+                        provider_id,
+                        sorafs_provider_ingest_runtime::ProviderIngestRuntimeAdaptersV1::new(
+                            authenticated_source,
+                            signer_resolver,
+                        ),
+                        checkpoint_runtime,
+                    )
+                    .await
+                    .map_err(|error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed state-free SoraFS provider-ingest runtime adapter preflight: {error:#}"
+                        ))
+                    })?,
+                )
+            }
+            None => {
+                if runtime_deps
+                    .sorafs_provider_ingest_authenticated_source
+                    .is_some()
+                    || runtime_deps
+                        .sorafs_provider_ingest_signer_resolver
+                        .is_some()
+                    || runtime_deps
+                        .sorafs_provider_ingest_checkpoint_runtime
+                        .is_some()
+                    || runtime_deps
+                        .sorafs_provider_ingest_retention_authority
+                        .is_some()
+                {
+                    return Err(Report::new(StartError::StartTorii).attach(
+                        "disabled SoraFS provider-ingest runtime rejects unexpected runtime providers",
+                    ));
+                }
+                None
+            }
+        };
         let mut supervisor = Supervisor::new();
         let startup_trace_started_at = Instant::now();
         log_startup_trace("irohad.start.enter", startup_trace_started_at);
@@ -10008,49 +10100,11 @@ impl Iroha {
             config.torii.sorafs_storage.hedging_billing_runtime.clone();
         let sorafs_provider_ingest_config =
             config.torii.sorafs_storage.provider_ingest_runtime.clone();
-        let sorafs_provider_ingest_authenticated_source = runtime_deps
-            .sorafs_provider_ingest_authenticated_source
-            .clone();
-        let sorafs_provider_ingest_signer_resolver =
-            runtime_deps.sorafs_provider_ingest_signer_resolver.clone();
-        let sorafs_provider_ingest_checkpoint_runtime = runtime_deps
-            .sorafs_provider_ingest_checkpoint_runtime
-            .clone();
-        let sorafs_provider_ingest_retention_authority = runtime_deps
-            .sorafs_provider_ingest_retention_authority
-            .clone();
+        let sorafs_provider_ingest_checkpoint_runtime = sorafs_provider_ingest_preflight
+            .as_ref()
+            .map(|preflight| preflight.checkpoint_runtime());
         let sorafs_por_finalized_replay_archive =
             runtime_deps.sorafs_por_finalized_replay_archive.clone();
-        match sorafs_provider_ingest_config.as_ref() {
-            Some(config) => {
-                if sorafs_provider_ingest_authenticated_source.is_none()
-                    || sorafs_provider_ingest_signer_resolver.is_none()
-                    || sorafs_provider_ingest_checkpoint_runtime.is_none()
-                {
-                    return Err(Report::new(StartError::StartTorii).attach(
-                        "enabled SoraFS provider-ingest runtime requires injected authenticated source, governed signer resolver, and sealed monotonic checkpoint providers",
-                    ));
-                }
-                if config.finalized_archive.retention_authority.is_some()
-                    != sorafs_provider_ingest_retention_authority.is_some()
-                {
-                    return Err(Report::new(StartError::StartTorii).attach(
-                        "SoraFS provider-ingest finalized-archive retention requires exact configured/injected sealed authority presence",
-                    ));
-                }
-            }
-            None => {
-                if sorafs_provider_ingest_authenticated_source.is_some()
-                    || sorafs_provider_ingest_signer_resolver.is_some()
-                    || sorafs_provider_ingest_checkpoint_runtime.is_some()
-                    || sorafs_provider_ingest_retention_authority.is_some()
-                {
-                    return Err(Report::new(StartError::StartTorii).attach(
-                        "disabled SoraFS provider-ingest runtime rejects unexpected runtime providers",
-                    ));
-                }
-            }
-        }
         let sorafs_gateway_compliance_feed_transport = runtime_deps
             .sorafs_gateway_compliance_feed_transport
             .clone();
@@ -10186,18 +10240,11 @@ impl Iroha {
         let sorafs_provider_ingest_runtime = if let Some(provider_ingest_config) =
             sorafs_provider_ingest_config
         {
-            let authenticated_source =
-                    sorafs_provider_ingest_authenticated_source.ok_or_else(|| {
-                        Report::new(StartError::StartTorii).attach(
-                            "enabled SoraFS provider-ingest runtime requires an injected authenticated governed source-fetch adapter",
-                        )
-                    })?;
-            let signer_resolver =
-                    sorafs_provider_ingest_signer_resolver.ok_or_else(|| {
-                        Report::new(StartError::StartTorii).attach(
-                            "enabled SoraFS provider-ingest runtime requires an injected governance-aware HSM/KMS signer resolver",
-                        )
-                    })?;
+            let preflight = sorafs_provider_ingest_preflight.ok_or_else(|| {
+                Report::new(StartError::StartTorii).attach(
+                    "enabled SoraFS provider-ingest runtime has no state-free qualified adapter token",
+                )
+            })?;
             let (handle, child) = sorafs_provider_ingest_runtime::start(
                 provider_ingest_config,
                 sorafs_provider_ingest_runtime::ProviderIngestRuntimeStartArgsV1::new(
@@ -10215,10 +10262,7 @@ impl Iroha {
                             })?,
                     ),
                 ),
-                sorafs_provider_ingest_runtime::ProviderIngestRuntimeAdaptersV1::new(
-                    authenticated_source,
-                    signer_resolver,
-                ),
+                preflight,
                 supervisor.shutdown_signal(),
             )
             .await
@@ -16680,6 +16724,9 @@ mod tests {
     #[test]
     fn provider_ingest_archive_is_qualified_and_installed_before_runtime_startup() {
         let source = include_str!("main.rs");
+        let adapter_preflight = source
+            .find("let sorafs_provider_ingest_preflight = match")
+            .expect("provider-ingest state-free adapter preflight");
         let preparation = source
             .find("prepare_provider_ingest_finalized_archive_v1")
             .expect("provider-ingest archive preparation");
@@ -16687,8 +16734,20 @@ mod tests {
             .find("let (sumeragi, child) = SumeragiStartArgs")
             .expect("Sumeragi startup");
         assert!(
-            preparation < sumeragi_start,
-            "provider-ingest archive qualification must fail closed before consensus starts"
+            adapter_preflight < preparation && preparation < sumeragi_start,
+            "external adapter preflight and archive qualification must fail closed before consensus starts"
+        );
+        let node_state_open = source
+            .find(
+                "let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps",
+            )
+            .expect("embedded SoraFS durable-state startup");
+        let checkpoint_injection = source
+            .find("with_provider_ingest_checkpoint_runtime")
+            .expect("provider-ingest checkpoint injection");
+        assert!(
+            adapter_preflight < checkpoint_injection && checkpoint_injection < node_state_open,
+            "provider-ingest external adapters must be qualified before the checkpoint provider can reach NodeHandle or initialize the outbox"
         );
         let provider_runtime_start = source
             .find("let sorafs_provider_ingest_runtime = if let Some")
@@ -16706,6 +16765,10 @@ mod tests {
         assert!(
             runtime_wiring.contains("sorafs_provider_ingest_finalized_query"),
             "provider ingest must consume the archive-only finalized query"
+        );
+        assert!(
+            runtime_wiring.contains("sorafs_provider_ingest_preflight"),
+            "provider ingest must consume the opaque state-free preflight token"
         );
     }
 

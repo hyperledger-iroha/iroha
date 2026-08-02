@@ -88,7 +88,7 @@ test("validatePdpCommitmentChallenge accepts bound fixtures", () => {
   const outcome = validatePdpCommitmentChallenge(commitment, challenge, {
     commitmentLabel: "commitment.to",
     challengeLabel: "challenge.to",
-    generated_at: 1_700_001_002,
+    generatedAtUnix: 1_700_001_002,
   });
 
   assert.equal(outcome.status, "Ok");
@@ -103,8 +103,8 @@ test("validatePdpCommitmentChallenge accepts bound fixtures", () => {
 test("validatePdpChallengeProof accepts bound fixtures", () => {
   const { challenge, proof } = pdpFixtures();
   const outcome = validatePdpChallengeProof(challenge, proof, {
-    challenge_label: "challenge.to",
-    proof_label: "proof.to",
+    challengeLabel: "challenge.to",
+    proofLabel: "proof.to",
     generatedAtUnix: 1_700_001_003,
   });
 
@@ -114,6 +114,25 @@ test("validatePdpChallengeProof accepts bound fixtures", () => {
     outcome.inputs.map((input) => input.kind),
     ["pdp_challenge", "pdp_proof"],
   );
+});
+
+test("PDP validators reject noncanonical option aliases before native dispatch", () => {
+  const bytes = Buffer.alloc(1);
+  const cases = [
+    () => validatePdpPayload("commitment", bytes, { generated_at: 1 }),
+    () =>
+      validatePdpCommitmentChallenge(bytes, bytes, {
+        commitment_label: "commitment.to",
+      }),
+    () =>
+      validatePdpChallengeProof(bytes, bytes, {
+        challenge_label: "challenge.to",
+      }),
+    () => validatePdpBundle(bytes, bytes, bytes, { proof_label: "proof.to" }),
+  ];
+  for (const invoke of cases) {
+    assert.throws(invoke, /unsupported fields/i);
+  }
 });
 
 test("validatePdpBundle accepts the canonical commitment challenge proof set", () => {

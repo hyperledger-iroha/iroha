@@ -138,6 +138,13 @@ test("validateOrderbookPayload rejects unsafe generated timestamps", () => {
       }),
     /safe integer/i,
   );
+  assert.throws(
+    () =>
+      validateOrderbookPayload("order-request", Buffer.alloc(8), {
+        generated_at: 1,
+      }),
+    /unsupported fields/i,
+  );
 });
 
 test("signOrderbookPayload deterministically reproduces signed fixtures", () => {

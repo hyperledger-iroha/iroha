@@ -9854,6 +9854,7 @@ const OPENAPI_CARGO_LOCK_EXPECTED_BYTES: u64 = 315_213;
 const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX: &str =
     "c52a098b84fe27deda651868a87cf0670250a38a999ddf299a1061b2f37fa528";
 const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
+    ".cargo/config.toml",
     ".github/workflows/openapi.yml",
     "Cargo.lock",
     "Cargo.toml",
@@ -11967,7 +11968,7 @@ mod openapi_tests {
     fn openapi_generator_input_closure_matches_the_cross_language_fixture() {
         assert_eq!(
             openapi_generator_input_closure_sha256(b"tree-fixture-v1\0", b"lock-fixture-v1\n"),
-            "6f93a76e9e1490ce1ff577bbd6d0c32760f0a9656920e122000608cc6bbc0e41"
+            "f8eaf5cc575ab4dfe79b6809693ea9ebb4b0336d93e9bd51160caaa776923d70"
         );
     }
 

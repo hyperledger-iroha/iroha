@@ -39,9 +39,13 @@ use super::{
     AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES, AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
     AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX, AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
     AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE, AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE,
-    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1, AutonomousLaneMergeBundleV1,
-    BlockStore, BlockStoreCommitMarker, BoundProgressDirectory, BoundProgressNamespace,
-    BoundProgressPair, BoundProgressRecoveryFailure, CERTIFIED_LANE_BLOCKS_DATA_FILE,
+    AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+    AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES, AutonomousLaneBlockArtifact,
+    AutonomousLaneBlockLatestAttemptV1, AutonomousLaneMergeBundleV1,
+    AutonomousLifecycleBootstrapRecoveryStage, AutonomousLifecycleBootstrapV1,
+    AutonomousLifecycleCursorPhaseV2, AutonomousLifecycleCursorV2, BlockStore,
+    BlockStoreCommitMarker, BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
+    BoundProgressRecoveryFailure, CERTIFIED_LANE_BLOCKS_DATA_FILE,
     CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME, DATA_FILE_NAME, Error, HASHES_FILE_NAME,
     HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
     HistoricalAutonomousLaneRecoveryRecordV1, INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE,
@@ -4947,6 +4951,9 @@ impl Kura {
             .iter()
             .map(|(lane_id, entry)| (*lane_id, entry.clone()))
             .collect::<Vec<_>>();
+        let lifecycle_process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
         let aggregate_work_item_limit = lane_retirement_aggregate_work_item_limit(
             entries.len(),
             self.roster_sidecar_retention().get(),
@@ -5217,6 +5224,92 @@ impl Kura {
                         path,
                     ));
                 }
+                if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane retirement scan found an unresolved lifecycle-bootstrap temporary",
+                        ),
+                        path,
+                    ));
+                }
+                if Self::autonomous_lifecycle_bootstrap_coordinates(name).is_some() {
+                    let bytes = self
+                        .read_regular_sidecar_bytes(
+                            &path,
+                            &lane_artifacts,
+                            AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                        )?
+                        .ok_or_else(|| {
+                            Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "lane retirement lifecycle bootstrap disappeared during validation",
+                                ),
+                                path.clone(),
+                            )
+                        })?;
+                    let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
+                    let process_generation =
+                        lifecycle_process_generation.as_ref().ok_or_else(|| {
+                            Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "lane retirement lifecycle bootstrap lacks its Kura-root process generation",
+                                ),
+                                path.clone(),
+                            )
+                        })?;
+                    Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                        process_generation,
+                        &bootstrap,
+                    )
+                    .map_err(|message| {
+                        Error::IO(
+                            std::io::Error::new(ErrorKind::InvalidData, message),
+                            path.clone(),
+                        )
+                    })?;
+                    let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+                    let (active_incarnation, activation_height) =
+                        self.active_lane_incarnation_marker(&entry)?;
+                    if descriptor.lane_id != storage_lane_id
+                        || descriptor.dataspace_id != entry.dataspace_id
+                        || descriptor.lane_incarnation != active_incarnation
+                        || descriptor.proposal_height <= activation_height
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane retirement lifecycle bootstrap targets a stale route or incarnation",
+                            ),
+                            path,
+                        ));
+                    }
+                    if retiring.contains(&LaneRetirementIdentity {
+                        lane_id: descriptor.lane_id,
+                        dataspace_id: descriptor.dataspace_id,
+                        lane_incarnation: descriptor.lane_incarnation,
+                    }) {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::WouldBlock,
+                                "lane retirement is blocked by an unfinished lifecycle bootstrap",
+                            ),
+                            path,
+                        ));
+                    }
+                    continue;
+                }
+                if name.starts_with("autonomous_lifecycle_bootstrap") {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane retirement scan found a malformed or legacy lifecycle bootstrap",
+                        ),
+                        path,
+                    ));
+                }
                 if matches!(
                     name,
                     LANE_ARTIFACTS_DATA_FILE
@@ -5274,6 +5367,7 @@ impl Kura {
                     ));
                 }
                 if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
+                    || Self::autonomous_lifecycle_cursor_coordinates(name).is_some()
                     || Self::autonomous_two_height_coordinates(
                         name,
                         AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
@@ -5391,6 +5485,7 @@ impl Kura {
                 activation_height,
                 Some(&entry),
                 MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
+                storage_route_is_retiring,
             )?;
             count_work_items(&mut work_items_seen, autonomous_attempts.len())?;
             for (lane_block_height, (artifact, current, retired)) in autonomous_attempts {
@@ -8904,6 +8999,7 @@ impl Kura {
                 continue;
             }
             if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
+                || Self::autonomous_lifecycle_cursor_coordinates(name).is_some()
                 || Self::autonomous_two_height_coordinates(
                     name,
                     AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
@@ -8973,6 +9069,7 @@ impl Kura {
             binding.activation_height,
             None,
             MAX_GEOMETRY_ARCHIVE_ENTRIES,
+            true,
         )?;
 
         let mut certified_bound =
@@ -9923,8 +10020,12 @@ impl Kura {
         activation_height: u64,
         active_entry: Option<&LaneConfigEntry>,
         entry_limit: usize,
+        require_terminal_lifecycle: bool,
     ) -> Result<BTreeMap<u64, (AutonomousLaneBlockArtifact, LaneBlockProposalV1, bool)>> {
         let entry_limit = entry_limit.min(MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES);
+        let lifecycle_process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
         let mut attempts = BTreeMap::<
             u64,
             Vec<(
@@ -9938,6 +10039,9 @@ impl Kura {
         let mut view_identities = BTreeSet::new();
         let mut height_pointers = BTreeMap::new();
         let mut route_pointer = None;
+        let mut lifecycle_cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV2>::new();
+        let mut lifecycle_bootstraps =
+            BTreeMap::<(u64, u64), (PathBuf, AutonomousLifecycleBootstrapV1)>::new();
         let entries = match fs::read_dir(lane_artifacts) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(BTreeMap::new()),
@@ -9957,6 +10061,15 @@ impl Kura {
                     path.clone(),
                 )
             })?;
+            if name.starts_with(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX) {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "autonomous attempt namespace contains a bootstrap atomic temporary",
+                    ),
+                    path,
+                ));
+            }
             if !name.starts_with("autonomous_") {
                 continue;
             }
@@ -10093,6 +10206,125 @@ impl Kura {
                 }
                 continue;
             }
+            if let Some((lane_block_height, proposal_height)) =
+                Self::autonomous_lifecycle_bootstrap_coordinates(&name)
+            {
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        lane_artifacts,
+                        AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle bootstrap disappeared during geometry validation",
+                        )
+                    })?;
+                let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&path, &bytes)?;
+                let process_generation = lifecycle_process_generation.as_ref().ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle bootstrap exists without a Kura-root process generation",
+                        ),
+                        path.clone(),
+                    )
+                })?;
+                Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                    process_generation,
+                    &bootstrap,
+                )
+                .map_err(|message| {
+                    Error::IO(
+                        std::io::Error::new(ErrorKind::InvalidData, message),
+                        path.clone(),
+                    )
+                })?;
+                let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+                if descriptor.lane_id != lane_id
+                    || descriptor.lane_incarnation != expected_incarnation
+                    || descriptor.proposal_height <= activation_height
+                    || descriptor.lane_block_height != lane_block_height
+                    || descriptor.proposal_height != proposal_height
+                    || expected_dataspace_id
+                        .is_some_and(|dataspace_id| descriptor.dataspace_id != dataspace_id)
+                {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle bootstrap has a stale, duplicate, or namespace-conflicting identity",
+                        ),
+                        path,
+                    ));
+                }
+                if active_entry.is_none() {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "autonomous lifecycle bootstrap must never be present in an archive",
+                    ));
+                }
+                if require_terminal_lifecycle {
+                    return Err(self.geometry_error(
+                        ErrorKind::WouldBlock,
+                        "lane retirement is blocked by an unfinished lifecycle bootstrap",
+                    ));
+                }
+                if lifecycle_bootstraps
+                    .insert(
+                        (lane_block_height, proposal_height),
+                        (path.clone(), bootstrap),
+                    )
+                    .is_some()
+                {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle bootstrap has a duplicate identity",
+                        ),
+                        path,
+                    ));
+                }
+                continue;
+            }
+            if let Some((lane_block_height, proposal_height)) =
+                Self::autonomous_lifecycle_cursor_coordinates(&name)
+            {
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        lane_artifacts,
+                        AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        self.geometry_error(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle cursor disappeared during geometry validation",
+                        )
+                    })?;
+                let cursor = Self::decode_autonomous_lifecycle_cursor(&path, &bytes)?;
+                let binding = cursor.binding();
+                if binding.lane_id != lane_id
+                    || binding.lane_incarnation != expected_incarnation
+                    || binding.proposal_height <= activation_height
+                    || binding.lane_block_height != lane_block_height
+                    || binding.proposal_height != proposal_height
+                    || expected_dataspace_id
+                        .is_some_and(|dataspace_id| binding.dataspace_id != dataspace_id)
+                    || lifecycle_cursors
+                        .insert((lane_block_height, proposal_height), cursor)
+                        .is_some()
+                {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "autonomous lifecycle cursor has a stale, duplicate, or namespace-conflicting identity",
+                        ),
+                        path,
+                    ));
+                }
+                continue;
+            }
             if let Some(identity) = Self::autonomous_two_height_coordinates(
                 &name,
                 AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
@@ -10178,8 +10410,141 @@ impl Kura {
                 "autonomous attempt namespace contains an orphan view state",
             ));
         }
+        let lifecycle_identities = lifecycle_cursors.keys().copied().collect::<BTreeSet<_>>();
+        if !lifecycle_identities.is_subset(&attempt_identities) {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "autonomous attempt namespace contains an orphan lifecycle cursor",
+            ));
+        }
+        let mut payload_only_bootstrap_identities = BTreeSet::new();
+        for (identity, (path, bootstrap)) in &lifecycle_bootstraps {
+            let process_generation = lifecycle_process_generation.as_ref().ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "autonomous lifecycle bootstrap exists without a Kura-root process generation",
+                    ),
+                    path.clone(),
+                )
+            })?;
+            Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+                process_generation,
+                bootstrap,
+            )
+            .map_err(|message| {
+                Error::IO(
+                    std::io::Error::new(ErrorKind::InvalidData, message),
+                    path.clone(),
+                )
+            })?;
+            let active_entry = active_entry.expect(
+                "an autonomous lifecycle bootstrap was rejected above without an active entry",
+            );
+            let stage =
+                self.classify_autonomous_lifecycle_bootstrap_locked(active_entry, bootstrap)?;
+            let payload_present = attempts.get(&identity.0).is_some_and(|attempts_at_height| {
+                attempts_at_height.iter().any(|(pointer, artifact, _, _)| {
+                    pointer.proposal_height == identity.1
+                        && artifact.executable_payload == bootstrap.body.executable_payload
+                })
+            });
+            let cursor = lifecycle_cursors.get(identity);
+            let stage_matches = match stage {
+                AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly => {
+                    !payload_present && cursor.is_none()
+                }
+                AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable => {
+                    payload_only_bootstrap_identities.insert(*identity);
+                    payload_present && cursor.is_none()
+                }
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable => {
+                    payload_present && cursor == Some(&bootstrap.body.prepared_activate)
+                }
+                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable => {
+                    payload_present && cursor == Some(&bootstrap.body.live_activate)
+                }
+            };
+            if !stage_matches {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "autonomous lifecycle bootstrap crash boundary conflicts with geometry inventory",
+                    ),
+                    path.clone(),
+                ));
+            }
+        }
+        if attempt_identities.iter().any(|identity| {
+            !lifecycle_cursors.contains_key(identity)
+                && !payload_only_bootstrap_identities.contains(identity)
+        }) {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "autonomous payload attempt lacks its exact lifecycle cursor or signed payload-durable bootstrap",
+            ));
+        }
+        // Every initial Prepared cursor requires its exact signed bootstrap authority.
+        for (lane_block_height, attempts_at_height) in &attempts {
+            for (pointer, artifact, _, _) in attempts_at_height {
+                let identity = (*lane_block_height, pointer.proposal_height);
+                let Some(cursor) = lifecycle_cursors.get(&identity) else {
+                    continue;
+                };
+                cursor
+                    .validate_for_payload(&artifact.executable_payload)
+                    .map_err(|message| {
+                        self.geometry_error_owned(
+                            ErrorKind::InvalidData,
+                            format!("autonomous lifecycle cursor is invalid: {message}"),
+                        )
+                    })?;
+                let process_generation =
+                    lifecycle_process_generation.as_ref().ok_or_else(|| {
+                        self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "autonomous lifecycle cursor exists without a Kura-root process generation",
+                    )
+                    })?;
+                Self::validate_autonomous_lifecycle_cursor_process_generation(
+                    process_generation,
+                    cursor,
+                )
+                .map_err(|message| {
+                    self.geometry_error_owned(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "autonomous lifecycle cursor process generation is invalid: {message}"
+                        ),
+                    )
+                })?;
+                if cursor.sequence() == 1
+                    && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV2::Prepared
+                    && !lifecycle_bootstraps.contains_key(&identity)
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "initial Prepared lifecycle cursor is orphaned from its signed bootstrap",
+                    ));
+                }
+                if require_terminal_lifecycle
+                    && !matches!(
+                        cursor.phase(),
+                        AutonomousLifecycleCursorPhaseV2::Terminal { .. }
+                    )
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::WouldBlock,
+                        "lane retirement requires every autonomous lifecycle cursor to be terminal",
+                    ));
+                }
+            }
+        }
         if attempts.is_empty() {
-            if !height_pointers.is_empty() || route_pointer.is_some() {
+            if !height_pointers.is_empty()
+                || route_pointer.is_some()
+                || !lifecycle_cursors.is_empty()
+            {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
                     "autonomous pointer exists without an immutable payload attempt",
@@ -12850,981 +13215,7 @@ fn bootstrap_require_lane_marker(
     Ok(())
 }
 
-fn lane_geometry_journal_structure_error(
-    store_root: &Path,
-    kind: ErrorKind,
-    message: &'static str,
-) -> Error {
-    Error::IO(
-        std::io::Error::new(kind, message),
-        store_root.join(JOURNAL_FILE_NAME),
-    )
-}
-
-fn validate_lane_geometry_phase_frontier(
-    store_root: &Path,
-    journal: &LaneGeometryJournal,
-) -> Result<()> {
-    let mut saw_uncertain_boundary = false;
-    let mut saw_rolled_back = false;
-    for record in &journal.records {
-        match record.phase {
-            LaneGeometryPhase::CatalogPublished => {
-                if saw_uncertain_boundary || saw_rolled_back {
-                    return Err(lane_geometry_journal_structure_error(
-                        store_root,
-                        ErrorKind::InvalidData,
-                        "lane geometry journal phases do not form a durable applied frontier",
-                    ));
-                }
-            }
-            LaneGeometryPhase::Intent | LaneGeometryPhase::FilesApplied => {
-                if saw_uncertain_boundary || saw_rolled_back {
-                    return Err(lane_geometry_journal_structure_error(
-                        store_root,
-                        ErrorKind::InvalidData,
-                        "lane geometry journal has more than one uncertain transition boundary",
-                    ));
-                }
-                saw_uncertain_boundary = true;
-            }
-            LaneGeometryPhase::RolledBack => {
-                saw_rolled_back = true;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_lane_geometry_journal_structure(
-    store_root: &Path,
-    journal: &LaneGeometryJournal,
-) -> Result<()> {
-    if journal.version != JOURNAL_VERSION
-        || journal.records.len() > MAX_GEOMETRY_TRANSITIONS
-        || journal.pending_archive_gc.len() > MAX_GEOMETRY_TRANSITIONS
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry journal has an unsupported version or too many transitions",
-        ));
-    }
-    if journal.configured_primary_binding.is_some() && journal.configured_catalog_hash.is_none() {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "configured primary geometry binding has no configured-catalog baseline",
-        ));
-    }
-    if let Some(primary) = journal.configured_primary_binding.as_ref() {
-        if primary.lane_id != LaneId::SINGLE || primary.activation_height != 0 {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "configured primary geometry binding is not lane zero at activation zero",
-            ));
-        }
-        validate_geometry_binding_structure(store_root, primary)?;
-    }
-    if let Some(checkpoint) = journal.checkpoint.as_ref() {
-        validate_lane_geometry_checkpoint_structure(store_root, checkpoint)?;
-        if journal.records.first().is_some_and(|record| {
-            record.previous_catalog != checkpoint.catalog
-                || record.previous_lineage_root != checkpoint.lineage_root
-        }) {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal retained history does not start at its checkpoint catalog",
-            ));
-        }
-        if let (Some(checkpoint), Some(first)) =
-            (journal.checkpoint.as_ref(), journal.records.first())
-            && (checkpoint
-                .transition_sequence
-                .is_some_and(|sequence| first.transition_sequence <= sequence)
-                || first.transition_height <= checkpoint.snapshot_height)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "retained lane geometry history does not advance beyond its checkpoint cursor",
-            ));
-        }
-    } else if !journal.pending_archive_gc.is_empty() {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry journal has pending archive GC without a durable checkpoint",
-        ));
-    }
-    validate_pending_lane_geometry_gc_structure(store_root, journal)?;
-    validate_lane_geometry_phase_frontier(store_root, journal)?;
-
-    let mut transition_ids = BTreeSet::new();
-    let mut retained_paths = BTreeSet::new();
-    if journal.records.windows(2).any(|pair| {
-        pair[0].transition_sequence >= pair[1].transition_sequence
-            || pair[0].transition_height > pair[1].transition_height
-    }) {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry journal transition cursor is not monotonic",
-        ));
-    }
-    for (record_index, record) in journal.records.iter().enumerate() {
-        if record.transition_id
-            != geometry_transition_id(
-                record.transition_sequence,
-                record.transition_height,
-                record.previous_catalog,
-                record.previous_lineage_root,
-                record.updated_catalog,
-                record.updated_lineage_root,
-            )
-            || record.previous_catalog == record.updated_catalog
-                && record.previous_lineage_root == record.updated_lineage_root
-            || lineage_root_is_zero(record.previous_lineage_root)
-            || lineage_root_is_zero(record.updated_lineage_root)
-            || !transition_ids.insert(record.transition_id)
-            || record.operations.len() > MAX_GEOMETRY_BINDINGS.saturating_mul(2)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal contains an invalid or duplicate transition",
-            ));
-        }
-        for bindings in [&record.previous_bindings, &record.updated_bindings] {
-            validate_geometry_binding_set_structure(store_root, bindings)?;
-        }
-        if geometry_catalog_fingerprint(&record.previous_bindings) != record.previous_catalog
-            || geometry_catalog_fingerprint(&record.updated_bindings) != record.updated_catalog
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal catalog fingerprint does not match its bindings",
-            ));
-        }
-        if record_index > 0
-            && (journal.records[record_index - 1].updated_catalog != record.previous_catalog
-                || journal.records[record_index - 1].updated_lineage_root
-                    != record.previous_lineage_root)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal transition chain is not contiguous",
-            ));
-        }
-
-        let transition_hex = hex::encode(record.transition_id.as_ref());
-        let previous_by_lane = record
-            .previous_bindings
-            .iter()
-            .map(|binding| (binding.lane_id, binding))
-            .collect::<BTreeMap<_, _>>();
-        let updated_by_lane = record
-            .updated_bindings
-            .iter()
-            .map(|binding| (binding.lane_id, binding))
-            .collect::<BTreeMap<_, _>>();
-        if record
-            .operations
-            .windows(2)
-            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal operations are duplicated or unsorted",
-            ));
-        }
-
-        let mut lane_ids = BTreeSet::new();
-        for operation in &record.operations {
-            if !lane_ids.insert(operation.lane_id)
-                || operation
-                    .previous
-                    .as_ref()
-                    .is_some_and(|binding| binding.lane_id != operation.lane_id)
-                || operation
-                    .updated
-                    .as_ref()
-                    .is_some_and(|binding| binding.lane_id != operation.lane_id)
-            {
-                return Err(lane_geometry_journal_structure_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "lane geometry journal contains duplicate or mismatched lane operations",
-                ));
-            }
-            let expected_root = format!(
-                "retired/lane_geometry/{transition_hex}/lane_{:010}",
-                operation.lane_id.as_u32()
-            );
-            let expected_paths = [
-                format!("{expected_root}/previous_blocks"),
-                format!("{expected_root}/previous_merge.log"),
-                format!("{expected_root}/unpublished_blocks"),
-                format!("{expected_root}/unpublished_merge.log"),
-            ];
-            let actual_paths = [
-                &operation.archived_blocks_path,
-                &operation.archived_merge_path,
-                &operation.unpublished_blocks_path,
-                &operation.unpublished_merge_path,
-            ];
-            if actual_paths
-                .iter()
-                .zip(expected_paths.iter())
-                .any(|(actual, expected)| *actual != expected)
-                || actual_paths
-                    .iter()
-                    .any(|path| !retained_paths.insert((*path).clone()))
-            {
-                return Err(lane_geometry_journal_structure_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "lane geometry journal contains forged or colliding archive paths",
-                ));
-            }
-            for (path, directory) in actual_paths.iter().zip([true, false, true, false]) {
-                validate_geometry_journal_relative_path(store_root, path, directory)?;
-            }
-            for binding in operation.previous.iter().chain(operation.updated.iter()) {
-                validate_geometry_binding_structure(store_root, binding)?;
-            }
-            if operation.previous.as_ref() != previous_by_lane.get(&operation.lane_id).copied()
-                || operation.updated.as_ref() != updated_by_lane.get(&operation.lane_id).copied()
-            {
-                return Err(lane_geometry_journal_structure_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "lane geometry operation does not match its authenticated catalog bindings",
-                ));
-            }
-            let shape_is_valid = match operation.kind {
-                LaneGeometryOperationKind::Create => {
-                    operation.previous.is_none() && operation.updated.is_some()
-                }
-                LaneGeometryOperationKind::Retire => {
-                    operation.previous.is_some() && operation.updated.is_none()
-                }
-                LaneGeometryOperationKind::Replace => operation
-                    .previous
-                    .as_ref()
-                    .zip(operation.updated.as_ref())
-                    .is_some_and(|(previous, updated)| {
-                        previous.incarnation != updated.incarnation
-                            || previous.activation_height != updated.activation_height
-                    }),
-                LaneGeometryOperationKind::Relabel => operation
-                    .previous
-                    .as_ref()
-                    .zip(operation.updated.as_ref())
-                    .is_some_and(|(previous, updated)| {
-                        previous.incarnation == updated.incarnation
-                            && previous.activation_height == updated.activation_height
-                            && (previous.blocks_path != updated.blocks_path
-                                || previous.merge_path != updated.merge_path)
-                    }),
-            };
-            if !shape_is_valid {
-                return Err(lane_geometry_journal_structure_error(
-                    store_root,
-                    ErrorKind::InvalidData,
-                    "lane geometry journal contains an invalid operation shape",
-                ));
-            }
-        }
-
-        let expected_changed_lanes = previous_by_lane
-            .keys()
-            .chain(updated_by_lane.keys())
-            .copied()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter(|lane_id| {
-                previous_by_lane.get(lane_id).copied() != updated_by_lane.get(lane_id).copied()
-            })
-            .count();
-        if record.operations.len() != expected_changed_lanes {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal omits or invents a catalog binding operation",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_lane_geometry_checkpoint_structure(
-    store_root: &Path,
-    checkpoint: &LaneGeometrySnapshotCheckpoint,
-) -> Result<()> {
-    validate_geometry_binding_set_structure(store_root, &checkpoint.bindings)?;
-    validate_geometry_merge_release_structure(
-        store_root,
-        &checkpoint.merge_releases,
-        checkpoint.snapshot_height,
-    )?;
-    if checkpoint.version != CHECKPOINT_VERSION
-        || checkpoint
-            .snapshot_state_hash
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
-        || checkpoint.catalog != geometry_catalog_fingerprint(&checkpoint.bindings)
-        || lineage_root_is_zero(checkpoint.lineage_root)
-        || checkpoint.commitment != geometry_checkpoint_commitment(checkpoint)
-        || checkpoint.snapshot_height == 0
-        || checkpoint.snapshot_block_hash.is_none()
-        || checkpoint
-            .snapshot_block_hash
-            .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
-        || checkpoint
-            .bindings
-            .iter()
-            .any(|binding| binding.activation_height > checkpoint.snapshot_height)
-        || checkpoint
-            .transition_height
-            .is_some_and(|height| height > checkpoint.snapshot_height)
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry checkpoint commitment, catalog, height, block hash, or activation is invalid",
-        ));
-    }
-    match (
-        checkpoint.transition_sequence,
-        checkpoint.transition_height,
-        checkpoint.transition_previous_catalog,
-        checkpoint.transition_previous_lineage_root,
-        checkpoint.transition_id,
-    ) {
-        (None, None, None, None, None) => Ok(()),
-        (
-            Some(sequence),
-            Some(height),
-            Some(previous_catalog),
-            Some(previous_lineage_root),
-            Some(transition_id),
-        ) if !lineage_root_is_zero(previous_lineage_root)
-            && transition_id
-                == geometry_transition_id(
-                    sequence,
-                    height,
-                    previous_catalog,
-                    previous_lineage_root,
-                    checkpoint.catalog,
-                    checkpoint.lineage_root,
-                ) =>
-        {
-            Ok(())
-        }
-        _ => Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry checkpoint transition binding is invalid",
-        )),
-    }
-}
-
-fn validate_geometry_merge_release_structure(
-    store_root: &Path,
-    releases: &[LaneGeometryMergeRelease],
-    snapshot_height: u64,
-) -> Result<()> {
-    if releases.len() > MAX_GEOMETRY_MERGE_RELEASES
-        || releases.windows(2).any(|pair| pair[0] >= pair[1])
-        || releases.iter().any(|release| {
-            release.lane_block_height == 0
-                || release.application_block_height == 0
-                || release.application_block_height > snapshot_height
-                || release
-                    .lane_incarnation
-                    .as_ref()
-                    .iter()
-                    .all(|byte| *byte == 0)
-        })
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "geometry checkpoint merge releases are invalid, duplicated, unsorted, or oversized",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_pending_lane_geometry_gc_structure(
-    store_root: &Path,
-    journal: &LaneGeometryJournal,
-) -> Result<()> {
-    if journal.pending_archive_gc.is_empty() {
-        if journal
-            .checkpoint
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.pending_archive_gc_root.is_some())
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry checkpoint commits a missing pending archive GC set",
-            ));
-        }
-        return Ok(());
-    }
-    let checkpoint = journal.checkpoint.as_ref().ok_or_else(|| {
-        lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "pending lane geometry GC has no checkpoint",
-        )
-    })?;
-    let retained_ids = journal
-        .records
-        .iter()
-        .map(|record| record.transition_id)
-        .collect::<BTreeSet<_>>();
-    let mut pending_ids = BTreeSet::new();
-    for (index, pending) in journal.pending_archive_gc.iter().enumerate() {
-        let intent = &pending.intent;
-        let standalone = LaneGeometryJournal {
-            version: JOURNAL_VERSION,
-            configured_catalog_hash: None,
-            configured_primary_binding: None,
-            checkpoint: None,
-            pending_archive_gc: Vec::new(),
-            records: vec![intent.clone()],
-        };
-        validate_lane_geometry_journal_structure(store_root, &standalone)?;
-        if intent.phase != LaneGeometryPhase::CatalogPublished
-            || !pending_ids.insert(intent.transition_id)
-            || retained_ids.contains(&intent.transition_id)
-            || index > 0
-                && (journal.pending_archive_gc[index - 1].intent.updated_catalog
-                    != intent.previous_catalog
-                    || journal.pending_archive_gc[index - 1]
-                        .intent
-                        .updated_lineage_root
-                        != intent.previous_lineage_root
-                    || journal.pending_archive_gc[index - 1]
-                        .intent
-                        .transition_sequence
-                        >= intent.transition_sequence
-                    || journal.pending_archive_gc[index - 1]
-                        .intent
-                        .transition_height
-                        > intent.transition_height)
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry journal has forged or non-contiguous pending archive GC",
-            ));
-        }
-    }
-    if checkpoint.pending_archive_gc_root
-        != Some(geometry_pending_archive_gc_root(
-            &journal.pending_archive_gc,
-        ))
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry checkpoint does not bind its exact pending archive GC set",
-        ));
-    }
-    let last = journal
-        .pending_archive_gc
-        .last()
-        .expect("non-empty pending archive GC");
-    if last.intent.updated_catalog != checkpoint.catalog
-        || last.intent.updated_lineage_root != checkpoint.lineage_root
-        || checkpoint.transition_sequence != Some(last.intent.transition_sequence)
-        || checkpoint.transition_height != Some(last.intent.transition_height)
-        || checkpoint.transition_previous_catalog != Some(last.intent.previous_catalog)
-        || checkpoint.transition_previous_lineage_root != Some(last.intent.previous_lineage_root)
-        || checkpoint.transition_id != Some(last.intent.transition_id)
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry pending archive GC does not terminate at its checkpoint",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_geometry_binding_structure(
-    store_root: &Path,
-    binding: &LaneGeometryBinding,
-) -> Result<()> {
-    if binding.incarnation.as_ref().iter().all(|byte| *byte == 0) {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry journal contains a zero incarnation",
-        ));
-    }
-    validate_geometry_journal_relative_path(store_root, &binding.blocks_path, true)?;
-    validate_geometry_journal_relative_path(store_root, &binding.merge_path, false)
-}
-
-fn validate_geometry_binding_set_structure(
-    store_root: &Path,
-    bindings: &[LaneGeometryBinding],
-) -> Result<()> {
-    if bindings.is_empty()
-        || bindings.len() > MAX_GEOMETRY_BINDINGS
-        || bindings
-            .windows(2)
-            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
-    {
-        return Err(lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "lane geometry catalog bindings are empty, duplicated, or unsorted",
-        ));
-    }
-    let mut incarnations = BTreeSet::new();
-    let mut paths = BTreeSet::new();
-    for binding in bindings {
-        validate_geometry_binding_structure(store_root, binding)?;
-        if !incarnations.insert(binding.incarnation)
-            || !paths.insert(binding.blocks_path.clone())
-            || !paths.insert(binding.merge_path.clone())
-        {
-            return Err(lane_geometry_journal_structure_error(
-                store_root,
-                ErrorKind::InvalidData,
-                "lane geometry catalog contains duplicate incarnations or storage paths",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_geometry_journal_relative_path(
-    store_root: &Path,
-    relative: &str,
-    directory: bool,
-) -> Result<()> {
-    let relative = Path::new(relative);
-    validate_relative_path(relative)?;
-    let root_metadata = fs::symlink_metadata(store_root)
-        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
-    if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
-        return Err(configured_catalog_preflight_error(
-            store_root,
-            ErrorKind::InvalidData,
-            "Kura geometry store root must remain a non-symlink directory",
-        ));
-    }
-
-    let components = relative.components().collect::<Vec<_>>();
-    let mut cursor = store_root.to_path_buf();
-    for (index, component) in components.iter().enumerate() {
-        cursor.push(component.as_os_str());
-        let is_target = index + 1 == components.len();
-        match fs::symlink_metadata(&cursor) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "lane geometry journal path traverses or targets a symlink",
-                    ),
-                    cursor,
-                ));
-            }
-            Ok(metadata) if !is_target && !metadata.file_type().is_dir() => {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "lane geometry journal path traverses a non-directory",
-                    ),
-                    cursor,
-                ));
-            }
-            Ok(metadata)
-                if is_target
-                    && ((directory && !metadata.file_type().is_dir())
-                        || (!directory && !metadata.file_type().is_file())) =>
-            {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "lane geometry journal path target has the wrong file type",
-                    ),
-                    cursor,
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == ErrorKind::NotFound => break,
-            Err(error) => return Err(Error::IO(error, cursor)),
-        }
-    }
-    Ok(())
-}
-
-fn native_amx_receipt_targets_retirement(
-    receipt: &iroha_data_model::block::consensus::NativeAmxReceipt,
-    retiring: &BTreeSet<LaneRetirementIdentity>,
-) -> std::result::Result<bool, &'static str> {
-    let mut targets_retirement = false;
-    for identity in retiring {
-        targets_retirement |=
-            crate::native_amx::native_amx_receipt_requires_separate_participant_application_for(
-                receipt,
-                identity.lane_id,
-                identity.dataspace_id,
-                identity.lane_incarnation,
-            )?;
-    }
-    Ok(targets_retirement)
-}
-
-fn lane_payload_targets_retirement(
-    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-    retiring: &BTreeSet<LaneRetirementIdentity>,
-) -> bool {
-    let descriptor = &payload.origin_proposal.descriptor;
-    if retiring.contains(&LaneRetirementIdentity {
-        lane_id: descriptor.lane_id,
-        dataspace_id: descriptor.dataspace_id,
-        lane_incarnation: descriptor.lane_incarnation,
-    }) {
-        return true;
-    }
-    if payload.routing_plans.len() != payload.native_amx_receipts.len() {
-        return true;
-    }
-    payload
-        .routing_plans
-        .iter()
-        .zip(&payload.native_amx_receipts)
-        .any(|(plan, receipt)| {
-            let (crate::queue::RoutingPlan::NativeAmx(plan), Some(receipt)) = (plan, receipt)
-            else {
-                return !matches!(
-                    (plan, receipt),
-                    (crate::queue::RoutingPlan::Single(_), None)
-                );
-            };
-            if receipt.plan_digest != plan.plan_digest
-                || receipt.legs.len() != plan.participants.len()
-                || receipt
-                    .legs
-                    .iter()
-                    .zip(&plan.participants)
-                    .any(|(leg, planned)| {
-                        leg.lane_id != planned.route.lane_id
-                            || leg.dataspace_id != planned.route.dataspace_id
-                    })
-            {
-                return true;
-            }
-            native_amx_receipt_targets_retirement(receipt, retiring).unwrap_or(true)
-        })
-}
-
-fn lane_proposal_coordinator_targets_retirement(
-    proposal: &LaneBlockProposalV1,
-    retiring: &BTreeSet<LaneRetirementIdentity>,
-) -> bool {
-    let descriptor = &proposal.descriptor;
-    retiring.contains(&LaneRetirementIdentity {
-        lane_id: descriptor.lane_id,
-        dataspace_id: descriptor.dataspace_id,
-        lane_incarnation: descriptor.lane_incarnation,
-    })
-}
-
-fn routing_plan_from_execution_context(
-    context: &ExternalExecutionContext,
-) -> Option<crate::queue::RoutingPlan> {
-    let coordinator = context.routing_plan_legs.first()?;
-    if coordinator.role != ExternalExecutionRouteRole::Coordinator
-        || coordinator.lane_id != context.lane_id
-        || coordinator.dataspace_id != context.dataspace_id
-    {
-        return None;
-    }
-    let coordinator =
-        crate::queue::RoutingDecision::new(coordinator.lane_id, coordinator.dataspace_id);
-    let plan = if context.routing_plan_legs.len() == 1 {
-        crate::queue::RoutingPlan::single(coordinator)
-    } else {
-        let participants = context
-            .routing_plan_legs
-            .iter()
-            .skip(1)
-            .map(|leg| {
-                (leg.role == ExternalExecutionRouteRole::Participant).then_some(
-                    crate::queue::RouteLeg::new(
-                        crate::queue::RoutingDecision::new(leg.lane_id, leg.dataspace_id),
-                        crate::queue::RouteLegRole::Participant,
-                    ),
-                )
-            })
-            .collect::<Option<Vec<_>>>()?;
-        crate::queue::RoutingPlan::native_amx(coordinator, participants)
-    };
-    (plan.digest() == context.routing_plan_digest
-        && crate::queue::execution_context_legs_for_routing_plan(&plan)
-            == context.routing_plan_legs)
-        .then_some(plan)
-}
-
-fn geometry_catalog_fingerprint(bindings: &[LaneGeometryBinding]) -> Hash {
-    let encoded = bindings.to_vec().encode();
-    Hash::new_from_chunks(&[CATALOG_DOMAIN, encoded.as_slice()])
-}
-
-#[cfg(test)]
-fn unscoped_lineage_root(bindings: &[LaneGeometryBinding]) -> Hash {
-    let catalog = geometry_catalog_fingerprint(bindings);
-    Hash::new_from_chunks(&[UNSCOPED_LINEAGE_DOMAIN, catalog.as_ref()])
-}
-
-fn lineage_root_is_zero(root: Hash) -> bool {
-    root.as_ref().iter().all(|byte| *byte == 0)
-}
-
-fn geometry_transition_id(
-    transition_sequence: u64,
-    transition_height: u64,
-    previous_catalog: Hash,
-    previous_lineage_root: Hash,
-    updated_catalog: Hash,
-    updated_lineage_root: Hash,
-) -> Hash {
-    Hash::new_from_chunks(&[
-        TRANSITION_DOMAIN,
-        &transition_sequence.to_le_bytes(),
-        &transition_height.to_le_bytes(),
-        previous_catalog.as_ref(),
-        previous_lineage_root.as_ref(),
-        updated_catalog.as_ref(),
-        updated_lineage_root.as_ref(),
-    ])
-}
-
-fn geometry_checkpoint_commitment(checkpoint: &LaneGeometrySnapshotCheckpoint) -> Hash {
-    let mut payload = Vec::new();
-    payload.push(checkpoint.version);
-    payload.extend_from_slice(&checkpoint.snapshot_height.to_le_bytes());
-    match checkpoint.snapshot_block_hash {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    payload.extend_from_slice(checkpoint.snapshot_state_hash.as_ref());
-    payload.extend_from_slice(checkpoint.catalog.as_ref());
-    payload.extend_from_slice(checkpoint.lineage_root.as_ref());
-    match checkpoint.transition_sequence {
-        Some(sequence) => {
-            payload.push(1);
-            payload.extend_from_slice(&sequence.to_le_bytes());
-        }
-        None => payload.push(0),
-    }
-    match checkpoint.transition_height {
-        Some(height) => {
-            payload.push(1);
-            payload.extend_from_slice(&height.to_le_bytes());
-        }
-        None => payload.push(0),
-    }
-    match checkpoint.transition_previous_catalog {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    match checkpoint.transition_previous_lineage_root {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    match checkpoint.transition_id {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    payload.extend_from_slice(&checkpoint.bindings.clone().encode());
-    payload.extend_from_slice(&checkpoint.merge_releases.clone().encode());
-    match checkpoint.pending_archive_gc_root {
-        Some(hash) => {
-            payload.push(1);
-            payload.extend_from_slice(hash.as_ref());
-        }
-        None => payload.push(0),
-    }
-    Hash::new_from_chunks(&[CHECKPOINT_DOMAIN, payload.as_slice()])
-}
-
-fn geometry_pending_archive_gc_root(pending: &[LaneGeometryPendingArchiveGc]) -> Hash {
-    Hash::new_from_chunks(&[PENDING_GC_DOMAIN, pending.to_vec().encode().as_slice()])
-}
-
-fn geometry_merge_marker_set_root(markers: &[(StatePath, Vec<u8>)]) -> Hash {
-    Hash::new_from_chunks(&[
-        MERGE_RELEASE_MARKERS_DOMAIN,
-        markers.to_vec().encode().as_slice(),
-    ])
-}
-
-fn lane_geometry_snapshot_checkpoint(
-    snapshot_height: u64,
-    snapshot_block_hash: Option<HashOf<BlockHeader>>,
-    snapshot_state_hash: Hash,
-    bindings: Vec<LaneGeometryBinding>,
-    lineage_root: Hash,
-    transition_sequence: Option<u64>,
-    transition_height: Option<u64>,
-    transition_previous_catalog: Option<Hash>,
-    transition_previous_lineage_root: Option<Hash>,
-    transition_id: Option<Hash>,
-    merge_releases: Vec<LaneGeometryMergeRelease>,
-    pending_archive_gc_root: Option<Hash>,
-) -> LaneGeometrySnapshotCheckpoint {
-    let mut checkpoint = LaneGeometrySnapshotCheckpoint {
-        version: CHECKPOINT_VERSION,
-        snapshot_height,
-        snapshot_block_hash,
-        snapshot_state_hash,
-        catalog: geometry_catalog_fingerprint(&bindings),
-        lineage_root,
-        transition_sequence,
-        transition_height,
-        transition_previous_catalog,
-        transition_previous_lineage_root,
-        transition_id,
-        bindings,
-        merge_releases,
-        pending_archive_gc_root,
-        commitment: Hash::prehashed([0; Hash::LENGTH]),
-    };
-    checkpoint.commitment = geometry_checkpoint_commitment(&checkpoint);
-    checkpoint
-}
-
-fn validate_relative_path(path: &Path) -> Result<()> {
-    if path.as_os_str().is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "lane geometry journal contains an unsafe relative path",
-            ),
-            path.to_path_buf(),
-        ));
-    }
-    Ok(())
-}
-
-fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-
-        GeometryFileIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::{os::windows::fs::MetadataExt, sync::atomic::Ordering};
-
-        let volume_serial_number = metadata.volume_serial_number();
-        let file_index = metadata.file_index();
-        let unsupported_nonce = if volume_serial_number.is_some() && file_index.is_some() {
-            0
-        } else {
-            // Some Windows filesystems do not expose stable volume/file IDs. A fresh nonce makes
-            // every subsequent comparison fail closed instead of treating all paths as equal.
-            UNSUPPORTED_GEOMETRY_IDENTITY_NONCE.fetch_add(1, Ordering::Relaxed)
-        };
-        GeometryFileIdentity {
-            volume_serial_number,
-            file_index,
-            unsupported_nonce,
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        use std::sync::atomic::Ordering;
-
-        let _ = metadata;
-        GeometryFileIdentity {
-            unsupported_nonce: UNSUPPORTED_GEOMETRY_IDENTITY_NONCE.fetch_add(1, Ordering::Relaxed),
-        }
-    }
-}
-
-fn checked_geometry_file_identity(
-    metadata: &fs::Metadata,
-    path: &Path,
-) -> Result<GeometryFileIdentity> {
-    let identity = geometry_file_identity(metadata);
-    #[cfg(windows)]
-    if identity.unsupported_nonce != 0 {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::Unsupported,
-                "Windows filesystem did not expose a stable volume and file identity",
-            ),
-            path.to_path_buf(),
-        ));
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = identity;
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::Unsupported,
-                "lane geometry requires stable filesystem object identities",
-            ),
-            path.to_path_buf(),
-        ));
-    }
-    #[cfg(any(unix, windows))]
-    {
-        let _ = path;
-        Ok(identity)
-    }
-}
-
-fn decode_exact<T: Decode>(bytes: &[u8]) -> std::result::Result<T, norito::core::Error> {
-    let mut input = bytes;
-    let value = T::decode(&mut input)?;
-    if !input.is_empty() {
-        return Err(norito::core::Error::Message(
-            "trailing bytes in lane geometry sidecar".to_owned(),
-        ));
-    }
-    Ok(value)
-}
+include!("lane_geometry/catalog_validation.rs");
 
 #[cfg(test)]
 mod tests {

@@ -228,6 +228,29 @@ fn native_amx_participant_diagnostics_reject_bounds_order_and_geometry() {
         malformed.validate(),
         Err("Native AMX participant diagnostics application height and hash must appear together")
     );
+    malformed = native_amx_participant_application(3, 8);
+    malformed.state = SumeragiNativeAmxParticipantApplicationState::CertifiedPendingCarrier;
+    assert_eq!(
+        malformed.validate(),
+        Err("Native AMX participant diagnostics state disagrees with its application block")
+    );
+    malformed.state = SumeragiNativeAmxParticipantApplicationState::Conflict;
+    assert_eq!(
+        malformed.validate(),
+        Err("Native AMX participant diagnostics state disagrees with its application block")
+    );
+    malformed.application_block_height = None;
+    malformed.application_block_hash = None;
+    malformed.state = SumeragiNativeAmxParticipantApplicationState::CommittedEvidencePending;
+    assert_eq!(
+        malformed.validate(),
+        Err("Native AMX participant diagnostics state disagrees with its application block")
+    );
+    malformed.state = SumeragiNativeAmxParticipantApplicationState::DurablyApplied;
+    assert_eq!(
+        malformed.validate(),
+        Err("Native AMX participant diagnostics state disagrees with its application block")
+    );
 }
 
 #[test]

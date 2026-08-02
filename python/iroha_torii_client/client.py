@@ -6306,8 +6306,7 @@ class ContractCallResponse:
     entrypoint: Optional[str]
     transaction_ttl_ms: Optional[int]
     entrypoint_hash_hex: Optional[str]
-    transaction_scaffold_b64: Optional[str]
-    signed_transaction_b64: Optional[str]
+    transaction_payload_b64: Optional[str]
     signing_message_b64: Optional[str]
     operation_receipt: ContractOperationReceipt
 
@@ -6318,12 +6317,13 @@ class MultisigResponse:
 
     ok: bool
     resolved_multisig_account_id: str
-    submitted: Optional[bool]
+    submitted: bool
     proposal_id: Optional[str]
     instructions_hash: Optional[str]
     tx_hash_hex: Optional[str]
     executed_tx_hash_hex: Optional[str]
     creation_time_ms: Optional[int]
+    transaction_payload_b64: Optional[str]
     signing_message_b64: Optional[str]
 
 
@@ -10477,9 +10477,13 @@ class _SumeragiDiagnosticsParser:
             state = record.get("state")
             if not isinstance(state, str) or state not in states:
                 raise RuntimeError(f"{context}.state has an unknown variant")
-            if state == "durably_applied" and application_height is None:
+            requires_application_block = state in {
+                "committed_evidence_pending",
+                "durably_applied",
+            }
+            if (application_height is not None) != requires_application_block:
                 raise RuntimeError(
-                    f"{context} durably applied evidence requires an application block"
+                    f"{context} state and application block identity disagree"
                 )
             result.append(
                 SumeragiNativeAmxParticipantApplication(
@@ -15922,6 +15926,31 @@ class ToriiClient:
         return ToriiClient._normalize_required_base64_payload(value, context)
 
     @staticmethod
+    def _normalize_optional_exact_base64_payload(value: Any, context: str) -> Optional[str]:
+        return None if value is None else ToriiClient._normalize_required_exact_base64_payload(value, context)
+
+    @staticmethod
+    def _normalize_transaction_response_pair(
+        payload_value: Any, signing_value: Any, *, submitted: bool,
+        transaction_hash: Optional[str], context: str,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        payload = ToriiClient._normalize_optional_exact_base64_payload(payload_value, f"{context}.transaction_payload_b64")
+        signing = ToriiClient._normalize_optional_exact_base64_payload(signing_value, f"{context}.signing_message_b64")
+
+        if submitted:
+            if transaction_hash is None or payload is not None or signing is not None:
+                raise RuntimeError(f"{context} submitted response must contain only the final transaction hash")
+            return None, None
+        if transaction_hash is not None or payload is None or signing is None:
+            raise RuntimeError(f"{context} unsigned response must contain exactly one payload and signing-message pair")
+        expected = bytearray(hashlib.blake2b(base64.b64decode(payload), digest_size=32).digest())
+        expected[-1] |= 1
+        signing_bytes = base64.b64decode(signing)
+        if len(signing_bytes) != 32 or not secrets.compare_digest(signing_bytes, expected):
+            raise RuntimeError(f"{context}.signing_message_b64 must be the exact TransactionPayload hash")
+        return payload, signing
+
+    @staticmethod
     def _normalize_subscription_status(value: Any, context: str) -> str:
         if not isinstance(value, str):
             raise TypeError(f"{context} must be a string")
@@ -18514,8 +18543,7 @@ class ToriiClient:
             "tx_hash_hex",
             "pipeline_status",
             "entrypoint_hash_hex",
-            "transaction_scaffold_b64",
-            "signed_transaction_b64",
+            "transaction_payload_b64",
             "signing_message_b64",
             "entrypoint",
             "operation_receipt",
@@ -18594,29 +18622,11 @@ class ToriiClient:
                 context=f"{context}.transaction_ttl_ms",
             ),
             entrypoint_hash_hex=entrypoint_hash_hex,
-            transaction_scaffold_b64=(
-                None
-                if record.get("transaction_scaffold_b64") is None
-                else ToriiClient._normalize_required_exact_base64_payload(
-                    record.get("transaction_scaffold_b64"),
-                    f"{context}.transaction_scaffold_b64",
-                )
+            transaction_payload_b64=ToriiClient._normalize_optional_exact_base64_payload(
+                record.get("transaction_payload_b64"), f"{context}.transaction_payload_b64"
             ),
-            signed_transaction_b64=(
-                None
-                if record.get("signed_transaction_b64") is None
-                else ToriiClient._normalize_required_exact_base64_payload(
-                    record.get("signed_transaction_b64"),
-                    f"{context}.signed_transaction_b64",
-                )
-            ),
-            signing_message_b64=(
-                None
-                if record.get("signing_message_b64") is None
-                else ToriiClient._normalize_required_exact_base64_payload(
-                    record.get("signing_message_b64"),
-                    f"{context}.signing_message_b64",
-                )
+            signing_message_b64=ToriiClient._normalize_optional_exact_base64_payload(
+                record.get("signing_message_b64"), f"{context}.signing_message_b64"
             ),
             operation_receipt=operation_receipt,
         )
@@ -18636,31 +18646,24 @@ class ToriiClient:
             raise RuntimeError(
                 "contract call response must be a successful unsubmitted draft"
             )
-        if response.tx_hash_hex is not None or response.pipeline_status is not None:
+        if response.entrypoint_hash_hex is not None or response.pipeline_status is not None:
             raise RuntimeError(
                 "contract call draft must not contain transaction submission state"
             )
-        scaffold = response.transaction_scaffold_b64
-        if scaffold is None or scaffold != response.signed_transaction_b64:
-            raise RuntimeError(
-                "contract call draft must contain one exact transaction scaffold"
-            )
-        if response.signing_message_b64 is None:
-            raise RuntimeError("contract call draft must contain a signing message")
-        signing_message = base64.b64decode(
+        ToriiClient._normalize_transaction_response_pair(
+            response.transaction_payload_b64,
             response.signing_message_b64,
-            validate=True,
+            submitted=response.submitted,
+            transaction_hash=response.tx_hash_hex,
+            context="contract call draft",
         )
-        if len(signing_message) != 32:
-            raise RuntimeError(
-                "contract call draft signing_message_b64 must decode to 32 bytes"
-            )
         if (
             response.entrypoint != entrypoint
             or receipt.operation_kind != "contract_call"
             or receipt.status != "pending_signature"
             or receipt.entrypoint != entrypoint
             or receipt.tx_hash_hex is not None
+            or receipt.entrypoint_hash_hex is not None
         ):
             raise RuntimeError(
                 "contract call draft is not bound to the requested entrypoint"
@@ -18768,52 +18771,53 @@ class ToriiClient:
         context: str,
     ) -> MultisigResponse:
         record = ToriiClient._ensure_mapping(payload, context)
-        submitted_value = record.get("submitted")
-        if submitted_value is None:
-            submitted = None
-        elif isinstance(submitted_value, bool):
-            submitted = submitted_value
-        else:
-            raise TypeError(f"{context}.submitted must be a boolean")
+        if record.get("ok") is not True:
+            raise RuntimeError(f"{context}.ok must be true")
+        for retired in ("transaction_scaffold_b64", "signed_transaction_b64"):
+            if retired in record:
+                raise RuntimeError(f"{context} contains retired field `{retired}`")
+        resolved_multisig_account_id = ToriiClient._require_exact_i105_account_id(
+            record.get("resolved_multisig_account_id"),
+            f"{context}.resolved_multisig_account_id",
+        )
 
         def optional_hash(field: str) -> Optional[str]:
             raw = record.get(field)
-            if raw is None:
-                return None
-            return ToriiClient._normalize_hex_string(
-                raw,
-                context=f"{context}.{field}",
-                expected_length=64,
+            return None if raw is None else ToriiClient._normalize_hex_string(
+                raw, context=f"{context}.{field}", expected_length=64
             )
 
         creation_raw = record.get("creation_time_ms")
-        creation_time_ms = None
-        if creation_raw is not None:
-            creation_time_ms = ToriiClient._coerce_unsigned(
-                creation_raw,
-                f"{context}.creation_time_ms",
-            )
-        if record.get("ok") is not True:
-            raise RuntimeError(f"{context}.ok must be true")
+        creation_time_ms = None if creation_raw is None else ToriiClient._coerce_unsigned(
+            creation_raw, f"{context}.creation_time_ms"
+        )
+        instructions_hash = optional_hash("instructions_hash")
+        tx_hash_hex = optional_hash("tx_hash_hex")
+        executed_tx_hash_hex = optional_hash("executed_tx_hash_hex")
+        submitted = record.get("submitted")
+        if not isinstance(submitted, bool):
+            raise TypeError(f"{context}.submitted must be a boolean")
+        transaction_payload_b64, signing_message_b64 = ToriiClient._normalize_transaction_response_pair(
+            record.get("transaction_payload_b64"),
+            record.get("signing_message_b64"),
+            submitted=submitted,
+            transaction_hash=tx_hash_hex,
+            context=context,
+        )
         return MultisigResponse(
             ok=True,
-            resolved_multisig_account_id=ToriiClient._require_exact_i105_account_id(
-                record.get("resolved_multisig_account_id"),
-                f"{context}.resolved_multisig_account_id",
-            ),
+            resolved_multisig_account_id=resolved_multisig_account_id,
             submitted=submitted,
             proposal_id=ToriiClient._coerce_optional_string(
                 record.get("proposal_id"),
                 context=f"{context}.proposal_id",
             ),
-            instructions_hash=optional_hash("instructions_hash"),
-            tx_hash_hex=optional_hash("tx_hash_hex"),
-            executed_tx_hash_hex=optional_hash("executed_tx_hash_hex"),
+            instructions_hash=instructions_hash,
+            tx_hash_hex=tx_hash_hex,
+            executed_tx_hash_hex=executed_tx_hash_hex,
             creation_time_ms=creation_time_ms,
-            signing_message_b64=ToriiClient._normalize_optional_base64_payload(
-                record.get("signing_message_b64"),
-                context=f"{context}.signing_message_b64",
-            ),
+            transaction_payload_b64=transaction_payload_b64,
+            signing_message_b64=signing_message_b64,
         )
 
     @staticmethod

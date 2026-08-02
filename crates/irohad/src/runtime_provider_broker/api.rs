@@ -1459,11 +1459,16 @@ impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
 
 impl std::error::Error for RuntimeProviderBrokerServerErrorV1 {}
 
-/// Serve the exact catalog on the platform-fixed service-UID-owned endpoint.
+/// Serve the exact qualified catalog on the platform-fixed
+/// service-UID-owned endpoint.
 ///
 /// This is the packaged launcher boundary for deployment-owned broker
 /// executables. It blocks in the authenticated accept loop and never loads
 /// credentials, private keys, environment overrides, or test backends.
+/// Each client authenticates a canonical non-empty subset of this catalog and
+/// is confined to that exact subset for the lifetime of its session. This lets
+/// the stock daemon and packaged standalone services share one supervised
+/// broker without weakening binding or operation isolation.
 ///
 /// # Errors
 ///
@@ -1510,21 +1515,21 @@ pub fn serve_runtime_provider_broker_v1(
 /// and can precede entry into the trait method by a small in-process interval.
 /// No operation is admitted after the shutdown transition.
 ///
-/// Startup binds an unpredictable staging name in a pinned parent directory,
-/// establishes the socket identity guard before permission changes, then
-/// atomically promotes that entry to the canonical name without replacement.
-/// Portable Linux/macOS pathname APIs do not provide an atomic
-/// “unlink-if-device-and-inode-match” operation. Cleanup resolves and unlinks
-/// relative to the pinned directory descriptor, checks the socket identity
-/// immediately before that unlink, and reports substitution instead of
-/// knowingly removing a different entry. These pathname APIs still leave
-/// check/use intervals around mode changes and cleanup, so the service-owned
-/// runtime directory must exclude untrusted same-UID pathname mutators. If the
-/// broker cannot establish the staging entry's identity immediately after a
-/// successful bind, it closes the listener, reports
-/// [`RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed`], and leaves
-/// that unpredictable staging entry for operator inspection rather than
-/// unlinking an unproven replacement.
+/// Startup acquires a mode-`0600`, single-link instance file with an exclusive
+/// nonblocking lock that remains held for the complete serving lifetime. A
+/// conforming active broker therefore prevents a second process from touching
+/// its endpoint, while a crash releases the lock. After acquiring it, startup
+/// recovers a socket only when the validated lock marker pre-dates this
+/// process; a newly created marker plus an existing endpoint is rejected and
+/// the new marker is removed. Recovery accepts only the exact service UID,
+/// mode, single-link count, and stable device/inode identity. It then binds an
+/// unpredictable staging name in the pinned parent directory and atomically
+/// promotes it to the canonical name without replacement. Stale recovery and
+/// orderly cleanup atomically move the candidate to an OS-random quarantine
+/// name with no replacement, verify the moved identity, and unlink only that
+/// quarantine entry. A mismatch is preserved or restored and fails closed.
+/// The service-owned runtime directory must still exclude untrusted same-UID
+/// pathname mutators.
 ///
 /// # Errors
 ///

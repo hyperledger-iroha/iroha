@@ -89,15 +89,39 @@ adapter remains requalified at Torii construction and around every operation.
 
 The source tree provides `RuntimeProviderBrokerDeploymentV1` as the standard
 deployment assembly around the injected `serve_runtime_provider_broker_v1`
-server boundary. Its `RuntimeProviderBrokerBackendRegistryV1` receives only the
-sanitized non-empty public catalog, and the assembled launch has redacted
-diagnostics and performs exact live server qualification before readiness. No
-checked-in executable supplies a vendor registry, HSM, KMS, sealed store,
-credential loader, or production backend. Deployments using the stock client
-must therefore build and supervise a separately owned broker executable that
-injects every requested backend through this assembly. Client wiring or an
-empty/dummy broker alone is not production-adapter or deployment
-qualification.
+server boundary. `RuntimeProviderBrokerExecutableV1` adds the common process
+shell: a one-argument `RuntimeProviderBrokerExecutableArgsV1` CLI, secure
+bounded canonical-catalog loading, redacted failures, supervisor-owned
+readiness/lifecycle hooks, and SIGINT/SIGTERM shutdown. Its
+`RuntimeProviderBrokerBackendRegistryV1` receives only the sanitized non-empty
+public catalog, and the assembled launch performs exact live server
+qualification before readiness.
+The server accepts canonical non-empty client subsets of that catalog so the
+stock daemon and packaged standalone services can share the fixed endpoint;
+the handshake still requires every binding byte-for-byte, and a session cannot
+invoke a provider outside its authenticated subset. Deployment launchers can
+handoff that projection without sharing `actual::Config` by calling
+`IrohaRuntimeProviderBindingsV1::export_canonical_v1`; the broker side loads it
+with `load_canonical_v1`, or uses
+`load_runtime_provider_broker_catalog_file_v1` for the process shell's secure
+absolute-path handoff. The explicitly versioned canonical Norito artifact is
+bounded, non-empty, strictly ordered, and contains only the chain identity plus
+public handles, identities, revisions, bounds, and policy digests already held
+by the sanitized projection. The common CLI has no socket override, plugin,
+private-key, credential, or test-provider argument; Linux and macOS use the
+platform-fixed authenticated endpoint, while Windows and other platforms fail
+before catalog filesystem access because V1 has no equivalent authenticated
+transport.
+
+No checked-in binary or registry supplies vendor HSM, KMS, WebAuthn, sealed
+store, network, or immutable-query implementations. Under the current static
+injection architecture, a deployment must link its reviewed concrete registry
+into a thin owned binary that parses `RuntimeProviderBrokerExecutableArgsV1`
+and calls `RuntimeProviderBrokerExecutableV1`; credentials remain inside those
+provider objects. A generic in-tree binary would first require an explicitly
+approved and versioned authenticated provider-plugin/IPC ABI, which V1 does not
+define. Client wiring, the common executable shell, or an empty/dummy registry
+alone is not production-adapter or deployment qualification.
 
 Registry resolution itself validates the sanitized binding catalog and rejects
 missing or unrequested dependency objects. It cannot independently attest to a

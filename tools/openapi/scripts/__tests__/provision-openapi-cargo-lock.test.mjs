@@ -488,6 +488,12 @@ test('OpenAPI workflow provisions before both release gates and stays clean', as
     ).length,
     2,
   );
+  assert.equal(
+    Array.from(
+      workflow.matchAll(/npm ci --ignore-scripts --no-audit --no-fund/g),
+    ).length,
+    2,
+  );
   assert.match(workflow, /provision-openapi-cargo-lock\.test\.mjs/);
 
   const metadataStart = workflow.indexOf('  metadata:');
@@ -500,6 +506,10 @@ test('OpenAPI workflow provisions before both release gates and stays clean', as
   );
   assert.ok(
     canonical.indexOf('provision-openapi-cargo-lock.mjs') <
+      canonical.indexOf('bash ci/check_openapi_spec.sh'),
+  );
+  assert.ok(
+    canonical.indexOf('npm ci --ignore-scripts --no-audit --no-fund') <
       canonical.indexOf('bash ci/check_openapi_spec.sh'),
   );
 });

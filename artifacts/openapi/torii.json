@@ -1087,14 +1087,6 @@
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "placeholder_entrypoint_hash_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "placeholder_transaction_hash_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
           "status": {
             "enum": [
               "pending_signature",
@@ -1242,19 +1234,14 @@
           "pipeline_status": {
             "$ref": "#/components/schemas/PipelineTransactionStatusResponse"
           },
-          "placeholder_entrypoint_hash_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "placeholder_transaction_hash_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
           "receipt": {
             "$ref": "#/components/schemas/AssetTransferReceipt"
           },
-          "signing_payload": {
-            "$ref": "#/components/schemas/AssetTransferSigningPayload"
+          "signing_message_b64": {
+            "description": "Canonical padded base64 for the exact 32-byte HashOf<TransactionPayload>.",
+            "maxLength": 44,
+            "minLength": 44,
+            "type": "string"
           },
           "submitted": {
             "description": "True when the final signed transaction was accepted or was already known.",
@@ -1264,8 +1251,8 @@
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "transaction_scaffold_base64": {
-            "description": "Canonical padded base64 for a versioned SignedTransaction scaffold.",
+          "transaction_payload_b64": {
+            "description": "Canonical padded base64 for the exact unsigned Norito TransactionPayload.",
             "type": "string"
           }
         },
@@ -1274,28 +1261,6 @@
           "submitted",
           "intent",
           "receipt"
-        ],
-        "type": "object"
-      },
-      "AssetTransferSigningPayload": {
-        "additionalProperties": false,
-        "properties": {
-          "algorithm": {
-            "enum": [
-              "ed25519"
-            ],
-            "type": "string"
-          },
-          "payload_base64": {
-            "description": "Canonical padded base64 for the exact 32-byte payload signing hash.",
-            "maxLength": 44,
-            "minLength": 44,
-            "type": "string"
-          }
-        },
-        "required": [
-          "payload_base64",
-          "algorithm"
         ],
         "type": "object"
       },
@@ -6086,6 +6051,16 @@
           "resolved_multisig_account_id": {
             "type": "string"
           },
+          "transaction_payload_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "signing_message_b64": {
             "oneOf": [
               {
@@ -6097,14 +6072,7 @@
             ]
           },
           "submitted": {
-            "oneOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "boolean"
           },
           "target_instructions_hash": {
             "type": "string"
@@ -6135,6 +6103,7 @@
           "tx_hash_hex",
           "executed_tx_hash_hex",
           "creation_time_ms",
+          "transaction_payload_b64",
           "signing_message_b64"
         ],
         "type": "object"
@@ -6246,6 +6215,9 @@
           "resolved_multisig_account_id": {
             "type": "string"
           },
+          "transaction_payload_b64": {
+            "type": "string"
+          },
           "signing_message_b64": {
             "type": "string"
           },
@@ -6258,7 +6230,8 @@
         },
         "required": [
           "ok",
-          "resolved_multisig_account_id"
+          "resolved_multisig_account_id",
+          "submitted"
         ],
         "type": "object"
       },
@@ -6687,6 +6660,16 @@
           "resolved_multisig_account_id": {
             "type": "string"
           },
+          "transaction_payload_b64": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "signing_message_b64": {
             "oneOf": [
               {
@@ -6698,14 +6681,7 @@
             ]
           },
           "submitted": {
-            "oneOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "boolean"
           },
           "tx_hash_hex": {
             "oneOf": [
@@ -6727,6 +6703,7 @@
           "tx_hash_hex",
           "executed_tx_hash_hex",
           "creation_time_ms",
+          "transaction_payload_b64",
           "signing_message_b64"
         ],
         "type": "object"
@@ -26343,7 +26320,7 @@
     },
     "/v1/assets/transfer": {
       "post": {
-        "description": "Prepare a strictly bound, versioned detached-signature scaffold with a typed fee_payment intent when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Retired fee_sponsor, gas_asset_id, and metadata gas_limit overrides are rejected. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
+        "description": "Prepare canonical unsigned TransactionPayload bytes plus their exact signing message with a typed fee_payment intent when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Retired fee_sponsor, gas_asset_id, and metadata gas_limit overrides are rejected. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
         "requestBody": {
           "content": {
             "application/json": {

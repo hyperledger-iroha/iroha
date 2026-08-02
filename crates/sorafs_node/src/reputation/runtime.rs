@@ -6749,29 +6749,16 @@ pub trait ReputationCommittedReadApiV1: Send + Sync + fmt::Debug {
     fn committed_snapshot_by_id(
         &self,
         snapshot_id: [u8; 16],
-    ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError> {
-        Ok(self
-            .committed_read_projection()?
-            .latest
-            .filter(|committed| committed.signed_result.snapshot.snapshot_id == snapshot_id)
-            .map(|committed| committed.signed_result.snapshot))
-    }
+    ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError>;
 
     /// Return the retained committed events strictly after `sequence`.
     ///
-    /// Implementations should override this method when they can clone the
-    /// small event suffix without cloning the full provider projection.
+    /// Implementations must query the retained committed-event archive rather
+    /// than deriving a suffix from a substituted or process-local projection.
     fn committed_events_after(
         &self,
         sequence: u64,
-    ) -> Result<Vec<ReputationSnapshotEventV1>, ReputationRuntimeError> {
-        Ok(self
-            .committed_read_projection()?
-            .events
-            .into_iter()
-            .filter(|event| event.sequence > sequence)
-            .collect())
-    }
+    ) -> Result<Vec<ReputationSnapshotEventV1>, ReputationRuntimeError>;
 }
 
 /// Activation state of the durable native-outcome admission runtime.

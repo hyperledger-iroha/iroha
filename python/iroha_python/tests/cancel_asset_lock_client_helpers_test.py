@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 from decimal import Decimal
 from typing import Any, cast
@@ -85,6 +86,31 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
     draft_encoded = [instruction.to_json() for instruction in draft.instructions]
     assert len(draft_encoded) == 4
     assert [Instruction.from_json(payload).to_json() for payload in draft_encoded] == draft_encoded
+
+
+def test_cancel_asset_lock_instruction_builder_has_exact_two_argument_runtime_shape() -> None:
+    signature = inspect.signature(Instruction.cancel_asset_lock)
+    assert [
+        (parameter.name, parameter.kind, parameter.default)
+        for parameter in signature.parameters.values()
+    ] == [
+        (
+            "escrow_id",
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.empty,
+        ),
+        (
+            "expected_remaining_amount",
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.empty,
+        ),
+    ]
+
+    builder = cast(Any, Instruction.cancel_asset_lock)
+    with pytest.raises(TypeError):
+        builder("lock-sdk-runtime-shape")
+    with pytest.raises(TypeError):
+        builder("lock-sdk-runtime-shape", "1", "retired-third-argument")
 
 
 def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> None:

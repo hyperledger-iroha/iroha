@@ -1,5 +1,2344 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
+    {
+        "id": "queue_plan_selection_and_reservation_fsync",
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "reserve_transactions_for_lane_bounded",
+        "model_actions": (
+            "SelectQueuePlanV4Conjunction",
+            "FsyncReservationV5",
+        ),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5",
+        ),
+        "checked_transition_count": 2,
+        "additional_tokens": (
+            "AutonomousLaneReservationSelectionAuthorization",
+            "MAX_MERGE_EXECUTION_ENTRYPOINTS",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "put_batch",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/lane_planner.rs",
+            "impl": "AutonomousLaneReservationSlotPlan",
+            "symbol": "selection_authorization",
+            "required_tokens": (
+                "validator_set",
+                "author",
+                "checked_shl",
+                "reservation_scope",
+            ),
+        },
+    },
+    {
+        "id": "reservation_cleanup_prefixes",
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "commit_lane_reservation",
+        "model_actions": (
+            "PersistReservationCommitted",
+            "PersistPlanTombstone",
+            "ForgetReservationCommit",
+        ),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT",
+        ),
+        "checked_transition_count": 3,
+        "additional_tokens": (
+            "forget_commit",
+            "remove_plan_journal_for_reservation_commit",
+            "canonical_lane_queue_reservation_group_identity_projection",
+        ),
+        "commit_sink": {
+            "path": "crates/iroha_core/src/queue.rs",
+            "impl": "Queue",
+            "symbol": "commit_lane_reservation_group_prefix",
+            "required_tokens": (
+                "lane_queue_reservation_group_binding_from_ordered_keys",
+                "begin_durability_transition_locked",
+                "commit_lane_reservation",
+            ),
+        },
+    },
+    {
+        "id": "pre_kura_direct_reservation_release",
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "release_pre_kura_autonomous_reservation_batch",
+        "model_actions": ("ReleaseReservationDirect",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "PreKuraDirectReleaseContext",
+            "revalidate_complete_live_pre_kura_group_locked",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "production_in_flight_first_release_terminal_owner",
+            "begin_durability_transition_locked",
+            "journal.release_batch",
+            "replace_fifo_locked",
+        ),
+    },
+    {
+        "id": "producer_kura_activation",
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "impl": "V2LaneWorkAdapter",
+        "symbol": "drive_pending_autonomous_reservation_batch",
+        "model_actions": ("ActivateKura",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "authorize_lane_reservation_kura_activation",
+            "height_context_id",
+            "AutonomousLifecycleAttemptBindingV1::from_payload",
+            "reservation_group",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "replicated_carrier_owners: validator_mask & !producer",
+            "persist_autonomous_lifecycle_bootstrap",
+            "authenticate_autonomous_lifecycle_bootstrap_recovery",
+            "complete_autonomous_lifecycle_bootstrap",
+            "insert_autonomous_lane_payload",
+            "fanout_producer_lane_executable_payload",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/queue.rs",
+            "impl": "Queue",
+            "symbol": "authorize_lane_reservation_kura_activation",
+            "required_tokens": (
+                "revalidate_complete_live_pre_kura_group_locked",
+                "begin_durability_transition_locked",
+                "AutonomousLaneKuraActivationAuthorization",
+                "authorization.height_context_id()",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "complete_autonomous_lifecycle_bootstrap",
+            "required_tokens": (
+                "refresh_autonomous_lifecycle_bootstrap_authority",
+                "persist_lane_executable_payload",
+                "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
+                "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
+                "delete_completed_autonomous_lifecycle_bootstrap",
+                "read_autonomous_lifecycle_cursor",
+                "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
+            ),
+            "ordered_tokens": (
+                "persist_lane_executable_payload",
+                "autonomous lifecycle bootstrap Prepared cursor lacks exact readback",
+                "autonomous lifecycle bootstrap Live cursor lacks exact readback",
+                "delete_completed_autonomous_lifecycle_bootstrap",
+                "let cursor_read = self.read_autonomous_lifecycle_cursor",
+            ),
+        },
+    },
+    {
+        "id": "startup_generation_crash_cas",
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "impl": None,
+        "symbol": "check_production_in_flight_first_release_crash_transition",
+        "model_actions": ("Crash",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "after.session.crashed |= actor",
+            "after.session.bodies &= !actor",
+            "after.session.ready_authorized &= !actor",
+            "after.session.producer_alive = before.session.producer_alive && actor != before.producer",
+            "check_derived_production_in_flight_first_release_transition",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "impl": None,
+            "symbol": "check_derived_production_in_flight_first_release_transition",
+            "required_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "action: u8",
+                "actor: u128",
+                "target: u128",
+                "before: ProductionInFlightFirstReleaseStateProjection",
+                "after: ProductionInFlightFirstReleaseStateProjection",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection {",
+                "action,",
+                "actor,",
+                "target,",
+                "before,",
+                "after,",
+            ),
+            "transition_projection_count": 2,
+        },
+        "supporting_sources": (
+            {
+                "role": "signed lifecycle CAS cursor constructor",
+                "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+                "impl": None,
+                "symbol": "sign_lifecycle_cursor",
+                "required_tokens": (
+                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "previous_cursor_hash",
+                    "signing_preimage",
+                    "Signature::try_new",
+                    "<[u8; 96]>::try_from",
+                    "unsigned.finalize(signature, validator_set)",
+                ),
+                "ordered_tokens": (
+                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "signing_preimage()",
+                    "Signature::try_new",
+                    "<[u8; 96]>::try_from",
+                    "unsigned.finalize(signature, validator_set)",
+                ),
+            },
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "reconcile_autonomous_lifecycle_startup",
+            "required_tokens": (
+                "into_reconciliation_receipt",
+                "let mut recovered_attempts = 0_usize",
+                "recover_one_attempt",
+                "revalidate_lane_reservation_startup_reconciliation_receipt",
+                "RecoveredAutonomousLifecycleStartup",
+            ),
+            "ordered_tokens": (
+                "into_reconciliation_receipt()",
+                "let mut recovered_attempts = 0_usize",
+                "if recover_one_attempt(",
+                "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
+                "Ok(RecoveredAutonomousLifecycleStartup {",
+            ),
+        },
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "recover_one_attempt",
+            "required_tokens": (
+                "owner_generation < current_generation",
+                "check_production_in_flight_first_release_crash_transition",
+                "AutonomousLifecycleCursorPhaseV2::crashed",
+                "compare_and_swap_phase",
+            ),
+            "ordered_tokens": (
+                "if owner_generation < current_generation",
+                "check_production_in_flight_first_release_crash_transition",
+                "AutonomousLifecycleCursorPhaseV2::crashed(",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "compare_and_swap_phase",
+            "required_tokens": (
+                "read.into_parts",
+                "checked_add(1)",
+                "previous_cursor_hash",
+                "sign_lifecycle_cursor",
+                "compare_and_swap_autonomous_lifecycle_cursor",
+            ),
+            "ordered_tokens": (
+                "let (current, lease) = read.into_parts()",
+                "let sequence = current",
+                "let previous_cursor_hash = current.as_ref().map",
+                "let binding = current",
+                "let next = sign_lifecycle_cursor(",
+                "kura.compare_and_swap_autonomous_lifecycle_cursor(lease, next)",
+            ),
+        },
+    },
+    {
+        "id": "startup_generation_recover_cas",
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "impl": None,
+        "symbol": "check_production_in_flight_first_release_recover_transition",
+        "model_actions": ("Recover",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "after.session.crashed &= !actor",
+            "check_derived_production_in_flight_first_release_transition",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "impl": None,
+            "symbol": "check_derived_production_in_flight_first_release_transition",
+            "required_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "action: u8",
+                "actor: u128",
+                "target: u128",
+                "before: ProductionInFlightFirstReleaseStateProjection",
+                "after: ProductionInFlightFirstReleaseStateProjection",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection {",
+                "action,",
+                "actor,",
+                "target,",
+                "before,",
+                "after,",
+            ),
+            "transition_projection_count": 2,
+        },
+        "supporting_sources": (
+            {
+                "role": "signed lifecycle CAS cursor constructor",
+                "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+                "impl": None,
+                "symbol": "sign_lifecycle_cursor",
+                "required_tokens": (
+                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "previous_cursor_hash",
+                    "signing_preimage",
+                    "Signature::try_new",
+                    "<[u8; 96]>::try_from",
+                    "unsigned.finalize(signature, validator_set)",
+                ),
+                "ordered_tokens": (
+                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "signing_preimage()",
+                    "Signature::try_new",
+                    "<[u8; 96]>::try_from",
+                    "unsigned.finalize(signature, validator_set)",
+                ),
+            },
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "reconcile_autonomous_lifecycle_startup",
+            "required_tokens": (
+                "into_reconciliation_receipt",
+                "let mut recovered_attempts = 0_usize",
+                "recover_one_attempt",
+                "revalidate_lane_reservation_startup_reconciliation_receipt",
+                "RecoveredAutonomousLifecycleStartup",
+            ),
+            "ordered_tokens": (
+                "into_reconciliation_receipt()",
+                "let mut recovered_attempts = 0_usize",
+                "if recover_one_attempt(",
+                "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
+                "Ok(RecoveredAutonomousLifecycleStartup {",
+            ),
+        },
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "recover_one_attempt",
+            "required_tokens": (
+                "AutonomousLifecycleCursorPhaseKindV2::Crashed",
+                "check_production_in_flight_first_release_recover_transition",
+                "AutonomousLifecycleCursorPhaseV2::prepared",
+                "Recover preparation failed",
+                "compare_and_swap_phase",
+            ),
+            "ordered_tokens": (
+                "AutonomousLifecycleCursorPhaseKindV2::Crashed =>",
+                "check_production_in_flight_first_release_recover_transition",
+                "AutonomousLifecycleCursorPhaseV2::prepared(",
+                '"Recover preparation failed"',
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "compare_and_swap_phase",
+            "required_tokens": (
+                "read.into_parts",
+                "checked_add(1)",
+                "previous_cursor_hash",
+                "sign_lifecycle_cursor",
+                "compare_and_swap_autonomous_lifecycle_cursor",
+            ),
+            "ordered_tokens": (
+                "let (current, lease) = read.into_parts()",
+                "let sequence = current",
+                "let previous_cursor_hash = current.as_ref().map",
+                "let binding = current",
+                "let next = sign_lifecycle_cursor(",
+                "kura.compare_and_swap_autonomous_lifecycle_cursor(lease, next)",
+            ),
+        },
+    },
+    {
+        "id": "startup_snapshot_recovery_authorization",
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "impl": None,
+        "symbol": "check_production_in_flight_first_release_recover_reservation_snapshot_transition",
+        "model_actions": ("RecoverReservationSnapshot",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "check_derived_production_in_flight_first_release_transition",
+            "before,",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "impl": None,
+            "symbol": "check_derived_production_in_flight_first_release_transition",
+            "required_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "action: u8",
+                "actor: u128",
+                "target: u128",
+                "before: ProductionInFlightFirstReleaseStateProjection",
+                "after: ProductionInFlightFirstReleaseStateProjection",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection {",
+                "action,",
+                "actor,",
+                "target,",
+                "before,",
+                "after,",
+            ),
+            "transition_projection_count": 2,
+        },
+        "supporting_sources": (
+            {
+                "role": "signed startup lifecycle recovery coordinator",
+                "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+                "impl": None,
+                "symbol": "reconcile_autonomous_lifecycle_startup",
+                "required_tokens": (
+                    "authorize_lane_reservation_snapshot_recovery",
+                    "authorize_recovered_producer_queue_lifecycle_bootstrap",
+                    "authenticate_autonomous_lifecycle_bootstrap_recovery",
+                    "complete_autonomous_lifecycle_bootstrap",
+                    "into_reconciliation_receipt",
+                    "recover_one_attempt",
+                    "revalidate_lane_reservation_startup_reconciliation_receipt",
+                ),
+                "ordered_tokens": (
+                    "authorize_lane_reservation_snapshot_recovery(",
+                    "authorize_recovered_producer_queue_lifecycle_bootstrap(",
+                    "authenticate_autonomous_lifecycle_bootstrap_recovery(",
+                    "complete_autonomous_lifecycle_bootstrap(permit)",
+                    "into_reconciliation_receipt()",
+                    "if recover_one_attempt(",
+                    "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
+                ),
+            },
+            {
+                "role": "recovered ProducerQueue lifecycle bootstrap fence",
+                "path": "crates/iroha_core/src/queue.rs",
+                "impl": "LaneReservationSnapshotRecoveryAuthorization",
+                "symbol": "authorize_recovered_producer_queue_lifecycle_bootstrap",
+                "required_tokens": (
+                    "accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+                    "accepted.before != accepted.after",
+                    "revalidate_lane_reservation_startup_reconciliation_receipt",
+                    "revalidate_complete_live_pre_kura_group_locked",
+                    "begin_durability_transition_locked",
+                    "AutonomousLaneKuraActivationAuthorization",
+                ),
+                "ordered_tokens": (
+                    "checked_group.checked.accepted_projection()",
+                    "revalidate_lane_reservation_startup_reconciliation_receipt(",
+                    "revalidate_complete_live_pre_kura_group_locked(",
+                    "begin_durability_transition_locked(",
+                    "Ok(AutonomousLaneKuraActivationAuthorization {",
+                ),
+            },
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/queue.rs",
+            "impl": "Queue",
+            "symbol": "authorize_lane_reservation_snapshot_recovery",
+            "required_tokens": (
+                "revalidate_lane_reservation_startup_reconciliation_receipt",
+                "lane_reservation_recovery_phase_map",
+                "lane_reservation_snapshot_group_phase_agrees",
+                "check_production_in_flight_first_release_recover_reservation_snapshot_transition",
+                "accepted.before != accepted.after",
+                "covered_owners.len() != phases.len()",
+                "checked_by_group.into_values().collect()",
+            ),
+            "ordered_tokens": (
+                "revalidate_lane_reservation_startup_reconciliation_receipt(",
+                "lane_reservation_recovery_phase_map(&snapshot)",
+                "lane_reservation_snapshot_group_phase_agrees(",
+                "check_production_in_flight_first_release_recover_reservation_snapshot_transition(",
+                "covered_owners.len() != phases.len()",
+                "checked_by_group.into_values().collect()",
+            ),
+        },
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/queue.rs",
+            "impl": "LaneReservationSnapshotRecoveryAuthorization",
+            "symbol": "into_reconciliation_receipt",
+            "required_tokens": (
+                "checked_group.checked.into_projection",
+                "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+                "accepted.actor != 0",
+                "accepted.target != 0",
+                "accepted.before != accepted.after",
+                "checked_group.lifecycle.recovered_state",
+                "self.reconciliation_receipt",
+            ),
+            "ordered_tokens": (
+                "checked_group.checked.into_projection()",
+                "accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+                "accepted.before != checked_group.lifecycle.recovered_state",
+                "Ok(self.reconciliation_receipt)",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": None,
+            "symbol": "apply_lane_reservation_reconciliation_plan",
+            "required_tokens": (
+                "revalidate_lane_reservation_startup_reconciliation_receipt",
+                "commit_lane_reservation_groups_with_authorization",
+                "release_lane_reservations_in_order",
+                "lane_reservation_reconciliation_snapshot",
+                "complete_lane_reservation_startup_reconciliation",
+            ),
+            "ordered_tokens": (
+                "revalidate_lane_reservation_startup_reconciliation_receipt",
+                "commit_lane_reservation_groups_with_authorization",
+                "release_lane_reservations_in_order",
+                "lane_reservation_reconciliation_snapshot",
+                "complete_lane_reservation_startup_reconciliation(replay_receipt)",
+            ),
+        },
+    },
+    {
+        "id": "startup_local_kura_custody_rehydration_cas",
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "impl": None,
+        "symbol": "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
+        "model_actions": ("RehydrateLocalKuraCustody",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "after.session.bodies |= actor",
+            "actor == before.producer",
+            "after.session.producer_alive = true",
+            "check_derived_production_in_flight_first_release_transition",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "impl": None,
+            "symbol": "check_derived_production_in_flight_first_release_transition",
+            "required_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "action: u8",
+                "actor: u128",
+                "target: u128",
+                "before: ProductionInFlightFirstReleaseStateProjection",
+                "after: ProductionInFlightFirstReleaseStateProjection",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection {",
+                "action,",
+                "actor,",
+                "target,",
+                "before,",
+                "after,",
+            ),
+            "transition_projection_count": 2,
+        },
+        "supporting_sources": (
+            {
+                "role": "signed lifecycle CAS cursor constructor",
+                "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+                "impl": None,
+                "symbol": "sign_lifecycle_cursor",
+                "required_tokens": (
+                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "previous_cursor_hash",
+                    "signing_preimage",
+                    "Signature::try_new",
+                    "<[u8; 96]>::try_from",
+                    "unsigned.finalize(signature, validator_set)",
+                ),
+                "ordered_tokens": (
+                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "signing_preimage()",
+                    "Signature::try_new",
+                    "<[u8; 96]>::try_from",
+                    "unsigned.finalize(signature, validator_set)",
+                ),
+            },
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "reconcile_autonomous_lifecycle_startup",
+            "required_tokens": (
+                "into_reconciliation_receipt",
+                "let mut recovered_attempts = 0_usize",
+                "recover_one_attempt",
+                "revalidate_lane_reservation_startup_reconciliation_receipt",
+                "RecoveredAutonomousLifecycleStartup",
+            ),
+            "ordered_tokens": (
+                "into_reconciliation_receipt()",
+                "let mut recovered_attempts = 0_usize",
+                "if recover_one_attempt(",
+                "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
+                "Ok(RecoveredAutonomousLifecycleStartup {",
+            ),
+        },
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "recover_one_attempt",
+            "required_tokens": (
+                "AutonomousLifecycleCursorPhaseKindV2::Live",
+                "before.session.bodies & local_actor",
+                "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
+                "rehydration preparation failed",
+                "compare_and_swap_phase",
+            ),
+            "ordered_tokens": (
+                "AutonomousLifecycleCursorPhaseKindV2::Live =>",
+                "before.session.bodies & local_actor != 0",
+                "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(",
+                '"rehydration preparation failed"',
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+            "impl": None,
+            "symbol": "compare_and_swap_phase",
+            "required_tokens": (
+                "read.into_parts",
+                "checked_add(1)",
+                "previous_cursor_hash",
+                "sign_lifecycle_cursor",
+                "compare_and_swap_autonomous_lifecycle_cursor",
+            ),
+            "ordered_tokens": (
+                "let (current, lease) = read.into_parts()",
+                "let sequence = current",
+                "let previous_cursor_hash = current.as_ref().map",
+                "let binding = current",
+                "let next = sign_lifecycle_cursor(",
+                "kura.compare_and_swap_autonomous_lifecycle_cursor(lease, next)",
+            ),
+        },
+    },
+    {
+        "id": "producer_payload_transport_fanout",
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "impl": "<'queue> FirstReleaseFanoutFromProducerAuthorization<'queue>",
+        "symbol": "new",
+        "model_actions": ("FanoutFromProducer",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "AutonomousLanePayloadFanoutAuthorization",
+            "reservation_authorization.facts",
+            "current_autonomous_lane_payload",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "check_production_in_flight_first_release_fanout_from_producer_transition",
+            "lane_work_effect_key",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "impl": None,
+            "symbol": "check_derived_production_in_flight_first_release_transition",
+            "required_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "action: u8",
+                "actor: u128",
+                "target: u128",
+                "before: ProductionInFlightFirstReleaseStateProjection",
+                "after: ProductionInFlightFirstReleaseStateProjection",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection {",
+                "action,",
+                "actor,",
+                "target,",
+                "before,",
+                "after,",
+            ),
+            "transition_projection_count": 2,
+        },
+        "supporting_sources": (
+            {
+                "role": "action-specific FanoutFromProducer constructor",
+                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "impl": None,
+                "symbol": "check_production_in_flight_first_release_fanout_from_producer_transition",
+                "required_tokens": (
+                    "ProductionInFlightFirstReleaseTransitionProjection",
+                    "after.session.bodies |= replica",
+                    "check_derived_production_in_flight_first_release_transition",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+                    "replica,",
+                ),
+                "ordered_tokens": (
+                    "after.session.bodies |= replica",
+                    "check_derived_production_in_flight_first_release_transition",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+                    "replica,",
+                ),
+            },
+        ),
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "FirstReleaseBodyPublicationAuthorization for FirstReleaseFanoutFromProducerAuthorization<'_>",
+            "symbol": "publish",
+            "required_tokens": (
+                "checked.into_projection",
+                "publish()",
+                "drop(reservation_authorization)",
+            ),
+            "ordered_tokens": (
+                "checked.into_projection",
+                "publish()",
+                "drop(reservation_authorization)",
+            ),
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "V2LaneWorkAdapter",
+            "symbol": "fanout_producer_lane_executable_payload",
+            "required_tokens": (
+                "authorize_lane_reservation_payload_fanout",
+                "push_effect_with_fresh_authorization",
+                "FirstReleaseFanoutFromProducerAuthorization::new",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "V2LaneWorkAdapter",
+            "symbol": "push_effect_with_fresh_authorization",
+            "required_tokens": (
+                "preflight_effect_insertion",
+                "authorization.matches_effect",
+                "authorization.publish",
+                "self.effect_keys.insert(key)",
+                "self.effects.push_back(effect)",
+            ),
+            "ordered_tokens": (
+                "preflight_effect_insertion",
+                "authorization.matches_effect",
+                "authorization.publish",
+                "self.effect_keys.insert(key)",
+                "self.effects.push_back(effect)",
+            ),
+        },
+    },
+    {
+        "id": "producer_payload_fanout_queue_fence",
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "impl": "<'queue> FirstReleaseFanoutFromProducerAuthorization<'queue>",
+        "symbol": "new",
+        "model_actions": ("FanoutFromProducer",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "AutonomousLanePayloadFanoutAuthorization",
+            "reservation_authorization.facts",
+            "current_autonomous_lane_payload",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "check_production_in_flight_first_release_fanout_from_producer_transition",
+            "lane_work_effect_key",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "impl": None,
+            "symbol": "check_derived_production_in_flight_first_release_transition",
+            "required_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "action: u8",
+                "actor: u128",
+                "target: u128",
+                "before: ProductionInFlightFirstReleaseStateProjection",
+                "after: ProductionInFlightFirstReleaseStateProjection",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection {",
+                "action,",
+                "actor,",
+                "target,",
+                "before,",
+                "after,",
+            ),
+            "transition_projection_count": 2,
+        },
+        "supporting_sources": (
+            {
+                "role": "action-specific FanoutFromProducer constructor",
+                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "impl": None,
+                "symbol": "check_production_in_flight_first_release_fanout_from_producer_transition",
+                "required_tokens": (
+                    "ProductionInFlightFirstReleaseTransitionProjection",
+                    "after.session.bodies |= replica",
+                    "check_derived_production_in_flight_first_release_transition",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+                    "replica,",
+                ),
+                "ordered_tokens": (
+                    "after.session.bodies |= replica",
+                    "check_derived_production_in_flight_first_release_transition",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+                    "replica,",
+                ),
+            },
+        ),
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "FirstReleaseBodyPublicationAuthorization for FirstReleaseFanoutFromProducerAuthorization<'_>",
+            "symbol": "publish",
+            "required_tokens": (
+                "checked.into_projection",
+                "publish()",
+                "drop(reservation_authorization)",
+            ),
+            "ordered_tokens": (
+                "checked.into_projection",
+                "publish()",
+                "drop(reservation_authorization)",
+            ),
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/queue.rs",
+            "impl": "Queue",
+            "symbol": "authorize_lane_reservation_payload_fanout",
+            "required_tokens": (
+                "authorize_lane_reservation_kura_activation",
+                "AutonomousLaneKuraActivationAuthorization",
+                "AutonomousLanePayloadFanoutAuthorization",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "V2LaneWorkAdapter",
+            "symbol": "push_effect_with_fresh_authorization",
+            "required_tokens": (
+                "preflight_effect_insertion",
+                "authorization.matches_effect",
+                "authorization.publish",
+                "self.effect_keys.insert(key)",
+                "self.effects.push_back(effect)",
+            ),
+            "ordered_tokens": (
+                "preflight_effect_insertion",
+                "authorization.matches_effect",
+                "authorization.publish",
+                "self.effect_keys.insert(key)",
+                "self.effects.push_back(effect)",
+            ),
+        },
+    },
+    {
+        "id": "producer_payload_retransmission_fanout",
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "impl": "<'queue> FirstReleaseFanoutFromProducerAuthorization<'queue>",
+        "symbol": "new",
+        "model_actions": ("FanoutFromProducer",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "AutonomousLanePayloadFanoutAuthorization",
+            "reservation_authorization.facts",
+            "current_autonomous_lane_payload",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "check_production_in_flight_first_release_fanout_from_producer_transition",
+            "lane_work_effect_key",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "impl": None,
+            "symbol": "check_derived_production_in_flight_first_release_transition",
+            "required_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "action: u8",
+                "actor: u128",
+                "target: u128",
+                "before: ProductionInFlightFirstReleaseStateProjection",
+                "after: ProductionInFlightFirstReleaseStateProjection",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection {",
+                "action,",
+                "actor,",
+                "target,",
+                "before,",
+                "after,",
+            ),
+            "transition_projection_count": 2,
+        },
+        "supporting_sources": (
+            {
+                "role": "action-specific FanoutFromProducer constructor",
+                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "impl": None,
+                "symbol": "check_production_in_flight_first_release_fanout_from_producer_transition",
+                "required_tokens": (
+                    "ProductionInFlightFirstReleaseTransitionProjection",
+                    "after.session.bodies |= replica",
+                    "check_derived_production_in_flight_first_release_transition",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+                    "replica,",
+                ),
+                "ordered_tokens": (
+                    "after.session.bodies |= replica",
+                    "check_derived_production_in_flight_first_release_transition",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+                    "replica,",
+                ),
+            },
+        ),
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "FirstReleaseBodyPublicationAuthorization for FirstReleaseFanoutFromProducerAuthorization<'_>",
+            "symbol": "publish",
+            "required_tokens": (
+                "checked.into_projection",
+                "publish()",
+                "drop(reservation_authorization)",
+            ),
+            "ordered_tokens": (
+                "checked.into_projection",
+                "publish()",
+                "drop(reservation_authorization)",
+            ),
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "V2LaneWorkAdapter",
+            "symbol": "schedule_lane_artifact_retransmissions",
+            "required_tokens": (
+                "plan_autonomous_lane_reservation_slot",
+                "autonomous_proposal_matches_reservation_slot",
+                "fanout_producer_lane_executable_payload",
+            ),
+            "ordered_tokens": (
+                "plan_autonomous_lane_reservation_slot",
+                "autonomous_proposal_matches_reservation_slot",
+                "fanout_producer_lane_executable_payload",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "V2LaneWorkAdapter",
+            "symbol": "push_effect_with_fresh_authorization",
+            "required_tokens": (
+                "preflight_effect_insertion",
+                "authorization.matches_effect",
+                "authorization.publish",
+                "self.effect_keys.insert(key)",
+                "self.effects.push_back(effect)",
+            ),
+            "ordered_tokens": (
+                "preflight_effect_insertion",
+                "authorization.matches_effect",
+                "authorization.publish",
+                "self.effect_keys.insert(key)",
+                "self.effects.push_back(effect)",
+            ),
+        },
+    },
+    {
+        "id": "authenticated_autonomous_late_body_service",
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "impl": "FirstReleaseServeLateBodyAuthorization",
+        "symbol": "new",
+        "model_actions": ("ServeLateBody",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "validate_certified_lane_block_artifact",
+            "read_certified_lane_block_artifact",
+            "current_autonomous_lane_payload",
+            "read_autonomous_lane_block_artifact",
+            "signers_bitmap",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "check_production_in_flight_first_release_serve_late_body_transition",
+            "lane_work_effect_key",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "impl": None,
+            "symbol": "check_derived_production_in_flight_first_release_transition",
+            "required_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+                "action: u8",
+                "actor: u128",
+                "target: u128",
+                "before: ProductionInFlightFirstReleaseStateProjection",
+                "after: ProductionInFlightFirstReleaseStateProjection",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition",
+                "ProductionInFlightFirstReleaseTransitionProjection {",
+                "action,",
+                "actor,",
+                "target,",
+                "before,",
+                "after,",
+            ),
+            "transition_projection_count": 2,
+        },
+        "supporting_sources": (
+            {
+                "role": "action-specific ServeLateBody constructor",
+                "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+                "impl": None,
+                "symbol": "check_production_in_flight_first_release_serve_late_body_transition",
+                "required_tokens": (
+                    "ProductionInFlightFirstReleaseTransitionProjection",
+                    "after.session.bodies |= target",
+                    "check_derived_production_in_flight_first_release_transition",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY",
+                    "source,",
+                    "target,",
+                ),
+                "ordered_tokens": (
+                    "after.session.bodies |= target",
+                    "check_derived_production_in_flight_first_release_transition",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY",
+                    "source,",
+                    "target,",
+                ),
+            },
+        ),
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "FirstReleaseBodyPublicationAuthorization for FirstReleaseServeLateBodyAuthorization",
+            "symbol": "publish",
+            "required_tokens": (
+                "self.checked.into_projection",
+                "publish()",
+            ),
+            "ordered_tokens": (
+                "self.checked.into_projection",
+                "publish()",
+            ),
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "V2LaneWorkAdapter",
+            "symbol": "serve_historical_recovery_request",
+            "required_tokens": (
+                "LaneHistoricalRecoveryPayloadV1::AutonomousPayload",
+                "push_effect_with_fresh_authorization",
+                "FirstReleaseServeLateBodyAuthorization::new",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "impl": "V2LaneWorkAdapter",
+            "symbol": "push_effect_with_fresh_authorization",
+            "required_tokens": (
+                "preflight_effect_insertion",
+                "authorization.matches_effect",
+                "authorization.publish",
+                "self.effect_keys.insert(key)",
+                "self.effects.push_back(effect)",
+            ),
+            "ordered_tokens": (
+                "preflight_effect_insertion",
+                "authorization.matches_effect",
+                "authorization.publish",
+                "self.effect_keys.insert(key)",
+                "self.effects.push_back(effect)",
+            ),
+        },
+    },
+    {
+        "id": "execution_input_persistence",
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "write_lane_block_execution_input_artifact",
+        "model_actions": ("PersistExecutionInput",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "AutonomousLaneExecutionInputPersistenceAuthorization",
+            "consume_for_persistence",
+            "autonomous_input",
+            "append_indexed_sidecar",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+            "impl": "Kura",
+            "symbol": "authorize_autonomous_execution_input_persistence",
+            "required_tokens": (
+                "AutonomousLaneExecutionInputPersistenceAuthorization",
+                "autonomous_lane_block_execution_input_candidate",
+                "local_peer_id",
+                "lane_queue_reservation_group_binding_from_ordered_keys",
+                "canonical_lane_queue_reservation_group_identity_projection",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura/indexed_sidecar_io.rs",
+            "impl": None,
+            "symbol": "append_indexed_sidecar_with_pinned_height",
+            "required_tokens": (
+                "data.write_all(payload)",
+                "sync_indexed_sidecar_initial_data",
+                "index.write_all",
+                "sync_indexed_sidecar_barriers",
+            ),
+        },
+    },
+    {
+        "id": "durable_autonomous_bundle",
+        "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "impl": "Kura",
+        "symbol": "durable_autonomous_lane_merge_source_under_prune_guard",
+        "model_actions": ("PersistExecutionInput", "PersistReadyQc", "LaneCommit"),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT",
+        ),
+        "checked_transition_count": 3,
+        "additional_tokens": (
+            "AutonomousLaneMergeBundleV1",
+            "validate_autonomous_lane_merge_bundle",
+            "source_bundle",
+            "bundle_hash",
+            "canonical_lane_queue_reservation_group_identity_projection",
+        ),
+    },
+    {
+        "id": "ready_qc_persistence",
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "persist_lane_payload_availability_certificate",
+        "model_actions": ("PersistReadyQc",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "authorize_lane_payload_availability_certificate_persistence",
+            "consume_for_persistence",
+            "artifact.availability_certificate = Some(certificate)",
+            "write_autonomous_lane_block_view_state_locked",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+            "impl": "Kura",
+            "symbol": "authorize_lane_payload_availability_certificate_persistence",
+            "required_tokens": (
+                "AutonomousLaneReadyQcPersistenceAuthorization",
+                "validate_lane_payload_availability_certificate",
+                "signers_bitmap",
+                "lane_queue_reservation_group_binding_from_ordered_keys",
+                "canonical_lane_queue_reservation_group_identity_projection",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "write_autonomous_lane_block_view_state_locked",
+            "required_tokens": (
+                "validate_autonomous_lane_block_artifact",
+                "write_autonomous_lane_block_view_state_record_locked",
+            ),
+        },
+    },
+    {
+        "id": "lane_commit_persistence",
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "write_certified_lane_block_artifact_with_authority",
+        "model_actions": ("LaneCommit",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "AutonomousLaneCommitPersistenceAuthorization",
+            "consume_for_persistence",
+            "existing_exact",
+            "publish_latest_certified_lane_block_frontier_locked",
+            "append_indexed_progress_sidecar",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+            "impl": "Kura",
+            "symbol": "authorize_autonomous_lane_commit_persistence",
+            "required_tokens": (
+                "AutonomousLaneCommitPersistenceAuthorization",
+                "validate_autonomous_lane_merge_bundle",
+                "autonomous_lane_block_execution_input_candidate",
+                "signers_bitmap",
+                "lane_queue_reservation_group_binding_from_ordered_keys",
+                "canonical_lane_queue_reservation_group_identity_projection",
+                "ProductionInFlightFirstReleaseTransitionProjection",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "publish_latest_certified_lane_block_frontier_locked",
+            "required_tokens": (
+                "promote_bound_progress_temp",
+                "sync_bound_progress_intent_directories",
+                "read_regular_sidecar_snapshot",
+            ),
+        },
+    },
+    {
+        "id": "kura_slot_retirement_persistence",
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "persist_autonomous_lane_slot_retirement",
+        "model_actions": ("PersistKuraRetirement",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "authorize_autonomous_lane_slot_retirement_persistence",
+            "consume_for_persistence",
+            "record.artifact.executable_payload",
+            "record.view_state_path",
+            "write_autonomous_lane_block_view_state_record_locked",
+            "prepare_autonomous_lane_entrypoint_claim_release_locked",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+            "impl": "AutonomousLaneReleaseProjectionContext",
+            "symbol": "retirement_authorization",
+            "required_tokens": (
+                "AutonomousLaneSlotRetirementPersistenceAuthorization",
+                "canonical_lane_queue_reservation_group_identity_projection",
+                "self.reservation_group",
+                "payload.payload_hash",
+                "payload.origin_proposal.proposal_hash",
+                "retirement.clone",
+                "view_state_path.to_path_buf",
+                "check_production_in_flight_first_release_transition",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "write_autonomous_lane_block_view_state_record_locked",
+            "required_tokens": (
+                "state.matches_payload(payload)",
+                "retirement.matches_payload(payload)",
+                "validate_autonomous_lane_block_artifact",
+                "norito::encode_canonical(state)",
+                "write_atomic_synced_replace",
+            ),
+        },
+    },
+    {
+        "id": "kura_claim_release_prefixes",
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "transition_autonomous_lane_entrypoint_claims_locked",
+        "model_actions": (
+            "AdvanceReleasePendingPrefix",
+            "AdvanceReleasedPrefix",
+        ),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "AutonomousLaneReleaseProjectionContext::from_payload",
+            "unique_paths",
+            "claim.stage > previous_stage",
+            "saw_released && saw_active",
+            "finalize_release && saw_active",
+            "claim_transition_authorization",
+            "norito::encode_canonical",
+            "consume_for_persistence",
+            "write_atomic_synced_replace",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+            "impl": "AutonomousLaneReleaseProjectionContext",
+            "symbol": "claim_transition_authorization",
+            "required_tokens": (
+                "AutonomousLaneEntrypointClaimTransitionAuthorization",
+                "canonical_lane_queue_reservation_group_identity_projection",
+                "replacement.retirement_hash()",
+                "self.retirement_hash",
+                "self.reservation_group.reservation_count",
+                "path.to_path_buf",
+                "replacement.clone",
+                "check_production_in_flight_first_release_transition",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs",
+            "impl": None,
+            "symbol": "write_atomic_synced_impl_with_prefix",
+            "required_tokens": (
+                "write_all(bytes)",
+                "sync_all",
+                "persist(path)",
+                "symlink_metadata(path)",
+                "sync_dir(parent)",
+            ),
+        },
+    },
+    {
+        "id": "queue_release_preparation_handoff",
+        "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "impl": "AutonomousLaneReleaseProjectionContext",
+        "symbol": "queue_preparation_authorization",
+        "model_actions": ("PrepareReservationRelease",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "AutonomousLaneQueueReleasePreparationAuthorization",
+            "retirement.queue_release_barrier",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "claims_fully_released",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "authorize_autonomous_lane_queue_release_preparation",
+            "required_tokens": (
+                "record.retirement.as_ref()",
+                "prepare_autonomous_lane_entrypoint_claim_release_locked",
+                "autonomous_lane_entrypoint_claim_release_progress_locked",
+                "require_autonomous_lane_release_completed_or_superseded_locked",
+                "queue_preparation_authorization",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/queue.rs",
+            "impl": "Queue",
+            "symbol": "prepare_lane_reservation_release_barrier_inner",
+            "required_tokens": (
+                "LaneQueueReleasePreparationGate",
+                "begin_durability_transition_locked",
+                "release_barrier_has_exact_fifo_ownership_locked",
+                "check_production_in_flight_first_release_transition",
+                "journal.prepare_release(barrier.clone())",
+                "DurableLaneQueueReleaseBarrierAuthorization::durable",
+            ),
+        },
+    },
+    {
+        "id": "queue_release_completion_publication",
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "finalize_lane_reservation_release_barrier_inner",
+        "model_actions": (
+            "CompleteReservationRelease",
+            "RestoreReleasedFifo",
+            "ForgetReservationRelease",
+        ),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE",
+        ),
+        "checked_transition_count": 3,
+        "additional_tokens": (
+            "LaneQueueReleaseFinalizationGate",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "journal.complete_release(completion.clone())",
+            "fifo_snapshot_locked",
+            "fifo_with_released_reservations_locked",
+            "replace_fifo_locked",
+            "release_barrier_has_exact_fifo_ownership_locked",
+            "journal.forget_release(completion.barrier.clone())",
+        ),
+        "authorization_source": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "finalize_autonomous_lane_slot_release_inner",
+            "required_tokens": (
+                "AutonomousLaneQueueReleaseBarrierGate",
+                "consume_for_claim_transition",
+                "autonomous_lane_entrypoint_claim_release_progress_locked",
+                "finalize_autonomous_lane_entrypoint_claim_release_locked",
+                "require_autonomous_lane_release_completed_or_superseded_locked",
+                "queue_finalization_authorization",
+            ),
+        },
+    },
+    {
+        "id": "ready_authorization",
+        "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "impl": "Kura",
+        "symbol": "mint_lane_ready_authorization",
+        "model_actions": ("AuthorizeReady",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "LaneReadyAuthorization",
+            "read_lane_block_execution_input_with_repair_policy",
+            "durable_execution_input_hash",
+            "canonical_lane_queue_reservation_group_identity_projection",
+        ),
+    },
+    {
+        "id": "ready_signature",
+        "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "impl": "LaneReadyAuthorization",
+        "symbol": "consume_signing_request",
+        "model_actions": ("SignReady",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "matches_signing_request",
+            "reservation_group",
+            "producer",
+            "canonical_lane_queue_reservation_group_identity_projection",
+        ),
+        "commit_sink": {
+            "path": "crates/iroha_core/src/lane_consensus.rs",
+            "impl": "LanePayloadAvailabilityVoteV1",
+            "symbol": "new_signed_with_authorization",
+            "required_tokens": (
+                "authorization.consume_signing_request",
+                "Signature::try_new",
+                "body.signature_preimage",
+            ),
+        },
+    },
+    {
+        "id": "canonical_wsv_commit_authorization",
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "impl": None,
+        "symbol": "authenticated_autonomous_carrier_application_projections",
+        "model_actions": ("ApplyCarrier",),
+        "action_tags": ("IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER",),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "reference.matches_entry(entry)",
+            "Kura::decode_autonomous_lane_merge_bundle",
+            "authenticated_bundle.bundle_hash",
+            "payload.native_amx_receipts != lane.native_amx_receipts",
+            "availability_qc.signers_bitmap",
+            "commit_qc.signers_bitmap",
+            "lane_commit_candidates",
+            "lane_queue_reservation_group_binding_from_ordered_keys",
+            "canonical_lane_queue_reservation_group_identity_projection",
+            "ProductionInFlightFirstReleaseTransitionProjection",
+            "application.checked_transition()",
+            "checked.into_projection()",
+            "applications.push(application)",
+        ),
+        "checked_transition_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "AuthenticatedCarrierApplicationProjection",
+            "symbol": "checked_transition",
+            "required_tokens": (
+                "CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>",
+                "check_production_in_flight_first_release_transition(self.projection)",
+                "ok_or_else",
+                "to_owned",
+            ),
+            "ordered_tokens": (
+                "check_production_in_flight_first_release_transition(self.projection)",
+                "ok_or_else",
+                "to_owned",
+            ),
+            "transition_projection_count": 1,
+        },
+        "supporting_sources": (
+            {
+                "role": "finality-to-State ApplyCarrier orchestration",
+                "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+                "impl": "V2ApplyService",
+                "symbol": "execute",
+                "required_tokens": (
+                    "check_production_application_transition",
+                    "CheckedCarrierApplications::for_block",
+                    "authenticated_autonomous_carrier_application_projections",
+                    "checked_carrier_applications.bind_execution_batch(reference, applications.len())",
+                    "application.checked_transition()",
+                    "application.projection",
+                    "checked_carrier_applications.push",
+                    "validate_and_apply",
+                    "finish_durable_apply_completion_against",
+                ),
+                "ordered_tokens": (
+                    "check_production_application_transition",
+                    "CheckedCarrierApplications::for_block",
+                    "authenticated_autonomous_carrier_application_projections",
+                    "checked_carrier_applications.bind_execution_batch(reference, applications.len())",
+                    "checked_carrier_applications.push",
+                    "application.checked_transition()",
+                    "application.projection",
+                    "validate_and_apply",
+                    "finish_durable_apply_completion_against",
+                ),
+            },
+        ),
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "CheckedCarrierApplications",
+            "symbol": "consume_for_state_commit",
+            "required_tokens": (
+                "carrier_block_hash",
+                "staged_merge_entry",
+                "CertifiedMergeLedgerReference::new(entry)",
+                "batch.lanes.len()",
+                "checked.into_projection()",
+            ),
+            "ordered_tokens": (
+                "if carrier_block_hash != self.carrier_block_hash",
+                "let committed_execution_reference = staged_merge_entry",
+                "CertifiedMergeLedgerReference::new(entry)",
+                "batch.lanes.len()",
+                "match (self.execution_reference.as_ref()",
+                "for CheckedCarrierApplication",
+                "if checked.into_projection() != projection",
+            ),
+        },
+        "checked_transition_adapter": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "StateBlockCommitAuthorization for CheckedCarrierApplications",
+            "symbol": "consume_for_state_commit",
+            "required_tokens": (
+                "self: Box<Self>",
+                "carrier_block_hash",
+                "staged_merge_entry",
+                "CheckedCarrierApplications::consume_for_state_commit",
+                "*self",
+                "map_err(str::to_owned)",
+            ),
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "V2ApplyService",
+            "symbol": "validate_and_apply",
+            "required_tokens": (
+                "pending_autoscale_retirement_binding",
+                "Box<dyn StateBlockCommitAuthorization>",
+                "Box::new(checked_carrier_applications)",
+                "if carries_scale_in",
+                "lock_lane_retirement_observer",
+                "commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto",
+                "commit_with_state_commit_authorization",
+            ),
+            "ordered_tokens": (
+                "apply_without_execution_with_verified_v2_finality",
+                "pending_autoscale_retirement_binding",
+                "Box::new(checked_carrier_applications)",
+                "if carries_scale_in",
+                "lock_lane_retirement_observer",
+                "commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto",
+                "state_block.commit_with_state_commit_authorization",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/state.rs",
+            "impl": None,
+            "symbol": "commit_inner",
+            "required_tokens": (
+                "state_commit_authorization: Option<Box<dyn StateBlockCommitAuthorization>>",
+                "let _state_commit_lock = state_ref.state_commit_lock.lock()",
+                "let autoscale_lifecycle_guard",
+                "autoscale_retirement_queue_veto.as_mut()",
+                "state_commit_authorization.take()",
+                "authorization.consume_for_state_commit",
+                "apply_committed_autoscale_lane_geometry",
+                "transactions.commit()",
+            ),
+            "ordered_tokens": (
+                "let _state_commit_lock = state_ref.state_commit_lock.lock()",
+                "let autoscale_lifecycle_guard",
+                "autoscale_retirement_queue_veto.as_mut()",
+                "state_commit_authorization.take()",
+                "authorization.consume_for_state_commit",
+                "state_ref.apply_committed_autoscale_lane_geometry",
+                "transactions.commit()",
+            ),
+        },
+    },
+    {
+        "id": "live_post_carrier_evidence_repair",
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "impl": "PostCarrierEvidenceRepairAuthorization",
+        "symbol": "from_authenticated",
+        "model_actions": ("RepairPostCarrierEvidence",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "check_production_in_flight_first_release_repair_post_carrier_evidence_transition",
+            "application.projection.after",
+            "entry_hash",
+            "carrier_block_height",
+            "carrier_block_hash",
+            "reservation_group",
+        ),
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "PostCarrierEvidenceRepairAuthorization",
+            "symbol": "consume_for_kura",
+            "required_tokens": (
+                "expected_entry_hash",
+                "expected_carrier_block_height",
+                "expected_carrier_block_hash",
+                "expected_reservation_group",
+                "checked_repair.into_projection()",
+                "canonical_lane_queue_reservation_group_identity_projection",
+                "projection.before == projection.after",
+                "projection.before.decision.wsv_committed",
+            ),
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "V2ApplyService",
+            "symbol": "publish_committed_block_merge_entry",
+            "required_tokens": (
+                "ensure_globally_committed_merge_entry_applied",
+                "post_carrier_evidence_repair_authorizations",
+                "persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations",
+                "record_globally_committed_merge_entry",
+            ),
+            "ordered_tokens": (
+                "ensure_globally_committed_merge_entry_applied",
+                "post_carrier_evidence_repair_authorizations",
+                "persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations",
+                "record_globally_committed_merge_entry",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations",
+            "required_tokens": (
+                "merge_log.lock().entry_by_hash",
+                "merge_entry_for_carrier",
+                "consume_post_carrier_evidence_repair_authorizations",
+                "persist_merge_lane_block_application_receipts_after_repair_authorization",
+            ),
+            "ordered_tokens": (
+                "merge_log.lock().entry_by_hash",
+                "merge_entry_for_carrier",
+                "consume_post_carrier_evidence_repair_authorizations",
+                "persist_merge_lane_block_application_receipts_after_repair_authorization",
+            ),
+        },
+    },
+    {
+        "id": "startup_reverse_carrier_evidence_repair",
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "impl": "PostCarrierEvidenceRepairAuthorization",
+        "symbol": "from_authenticated",
+        "model_actions": ("RepairPostCarrierEvidence",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "check_production_in_flight_first_release_repair_post_carrier_evidence_transition",
+            "application.projection.after",
+            "entry_hash",
+            "carrier_block_height",
+            "carrier_block_hash",
+            "reservation_group",
+        ),
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "PostCarrierEvidenceRepairAuthorization",
+            "symbol": "consume_for_kura",
+            "required_tokens": (
+                "expected_entry_hash",
+                "expected_carrier_block_height",
+                "expected_carrier_block_hash",
+                "expected_reservation_group",
+                "checked_repair.into_projection()",
+                "canonical_lane_queue_reservation_group_identity_projection",
+                "projection.before == projection.after",
+                "projection.before.decision.wsv_committed",
+            ),
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+            "impl": None,
+            "symbol": "plan_lane_application_evidence_repair",
+            "required_tokens": (
+                "preflight_finalized_merge_carrier_repairs",
+                "ensure_committed_merge_execution_applied",
+                "post_carrier_evidence_repair_authorizations",
+                "merge_carrier_repair_authorizations.push(post_carrier_evidence_repair_authorizations",
+            ),
+            "ordered_tokens": (
+                "preflight_finalized_merge_carrier_repairs",
+                "ensure_committed_merge_execution_applied",
+                "merge_carrier_repair_authorizations.push(post_carrier_evidence_repair_authorizations",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "apply_finalized_merge_carrier_repairs",
+            "required_tokens": (
+                "preflight_finalized_merge_carrier_at_under_prune_and_canonical_guards",
+                "consume_post_carrier_evidence_repair_authorizations",
+                "append_committed_merge_entry_for_block_if_missing",
+                "set_transaction_entrypoint_index_entry_with_merge",
+                "persist_merge_lane_block_application_receipts_after_repair_authorization",
+            ),
+            "ordered_tokens": (
+                "preflight_finalized_merge_carrier_at_under_prune_and_canonical_guards",
+                "consume_post_carrier_evidence_repair_authorizations",
+                "append_committed_merge_entry_for_block_if_missing",
+                "set_transaction_entrypoint_index_entry_with_merge",
+                "persist_merge_lane_block_application_receipts_after_repair_authorization",
+            ),
+        },
+    },
+    {
+        "id": "state_replay_post_carrier_evidence_repair",
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "impl": "PostCarrierEvidenceRepairAuthorization",
+        "symbol": "from_authenticated",
+        "model_actions": ("RepairPostCarrierEvidence",),
+        "action_tags": (
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
+        "checked_transition_count": 1,
+        "additional_tokens": (
+            "check_production_in_flight_first_release_repair_post_carrier_evidence_transition",
+            "application.projection.after",
+            "entry_hash",
+            "carrier_block_height",
+            "carrier_block_hash",
+            "reservation_group",
+        ),
+        "checked_transition_consumer": {
+            "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "impl": "PostCarrierEvidenceRepairAuthorization",
+            "symbol": "consume_for_kura",
+            "required_tokens": (
+                "expected_entry_hash",
+                "expected_carrier_block_height",
+                "expected_carrier_block_hash",
+                "expected_reservation_group",
+                "checked_repair.into_projection()",
+                "canonical_lane_queue_reservation_group_identity_projection",
+                "projection.before == projection.after",
+                "projection.before.decision.wsv_committed",
+            ),
+        },
+        "authorization_source": {
+            "path": "crates/iroha_core/src/state.rs",
+            "impl": "State",
+            "symbol": "replay_persisted_merge_settlements",
+            "required_tokens": (
+                "merge_execution_already_applied(&entry, batch)",
+                "post_carrier_evidence_repair_authorizations",
+                "persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations",
+            ),
+            "ordered_tokens": (
+                "merge_execution_already_applied(&entry, batch)",
+                "post_carrier_evidence_repair_authorizations",
+                "persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations",
+            ),
+        },
+        "commit_sink": {
+            "path": "crates/iroha_core/src/kura.rs",
+            "impl": "Kura",
+            "symbol": "persist_merge_lane_block_application_receipts_from_committed_log_with_authorizations",
+            "required_tokens": (
+                "merge_log.lock().entry_by_hash",
+                "merge_entry_for_carrier",
+                "consume_post_carrier_evidence_repair_authorizations",
+                "persist_merge_lane_block_application_receipts_after_repair_authorization",
+            ),
+            "ordered_tokens": (
+                "merge_log.lock().entry_by_hash",
+                "merge_entry_for_carrier",
+                "consume_post_carrier_evidence_repair_authorizations",
+                "persist_merge_lane_block_application_receipts_after_repair_authorization",
+            ),
+        },
+    },
+)
+
+# Full startup lifecycle extraction. The journal-replay portion remains a
+# parametric noninterference proof, while the production bindings below also
+# authenticate the independently constructed signed lifecycle state, Queue
+# action-25 authorization, bootstrap completion, generation takeover/body
+# rehydration CAS, receipt handoff, final Queue application, and carrier-silent
+# adapter activation order.
+PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": "IndexedReservationReplayState",
+        "symbol": "check_in_flight_transition",
+        "required_tokens": (
+            "LaneQueueReservationJournalFrameV6::Snapshot",
+            "candidate.transition_snapshot",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+            "retain_in_flight_owner_transition",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": "IndexedReservationReplayState",
+        "symbol": "from_replay",
+        "required_tokens": (
+            "prepare_checked_transition",
+            "apply_checked_transition",
+            "canonical_reconciliation_owners_from_state",
+            "canonical_reconciliation_identity",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": None,
+        "symbol": "canonical_reconciliation_owners_from_state",
+        "required_tokens": (
+            "DurableReservationOwnership::Live",
+            "DurableReservationOwnership::Committed",
+            "DurableReservationOwnership::Prepared",
+            "DurableReservationOwnership::Completed",
+            "canonical_reconciliation_record_identity",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": None,
+        "symbol": "canonical_reconciliation_owners_from_snapshot",
+        "required_tokens": (
+            "snapshot.ordered_records",
+            "snapshot.ordered_groups",
+            "snapshot.commit_barriers",
+            "snapshot.prepared_release_barriers",
+            "snapshot.completed_releases",
+            "snapshot.ordered_owner_phases",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": None,
+        "symbol": "canonical_reconciliation_identity",
+        "required_tokens": (
+            "SNAPSHOT_RECONCILIATION_EMPTY_DOMAIN",
+            "SNAPSHOT_RECONCILIATION_STEP_DOMAIN",
+            "checked_owner_projection_digest",
+            "owner.record_identity",
+            "SNAPSHOT_RECONCILIATION_FINAL_DOMAIN",
+            "owners.len",
+        ),
+        "ordered_tokens": (
+            "SNAPSHOT_RECONCILIATION_EMPTY_DOMAIN",
+            "for owner in owners.values()",
+            "let record_present",
+            "rolling = match owner.record_identity",
+            "let count = u64::try_from(owners.len())",
+            "SNAPSHOT_RECONCILIATION_FINAL_DOMAIN",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": None,
+        "symbol": "recover_snapshot_transition_projection",
+        "required_tokens": (
+            "ownership.release_digest",
+            "release_refinement_identity",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+            "reservation_refinement_identity(ownership.key())",
+            "optional_owner_refinement_projection(None)",
+            "ownership.refinement_projection()",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": None,
+        "symbol": "transition_projection_coverage_identity",
+        "required_tokens": (
+            "CHECKED_TRANSITION_COVERAGE_EMPTY_DOMAIN",
+            "checked_transition_projection_digest",
+            "CHECKED_TRANSITION_COVERAGE_STEP_DOMAIN",
+            "count.checked_add",
+            "CHECKED_TRANSITION_COVERAGE_FINAL_DOMAIN",
+        ),
+        "ordered_tokens": (
+            "CHECKED_TRANSITION_COVERAGE_EMPTY_DOMAIN",
+            "for transition in transitions",
+            "checked_transition_projection_digest(transition)",
+            "CHECKED_TRANSITION_COVERAGE_STEP_DOMAIN",
+            "count.checked_add(1)",
+            "CHECKED_TRANSITION_COVERAGE_FINAL_DOMAIN",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": "LaneReservationSnapshotReplayReceipt",
+        "symbol": "binds_reconciliation_snapshot",
+        "required_tokens": (
+            "canonical_reconciliation_owners_from_snapshot",
+            "recover_snapshot_transition_projection",
+            "transition_projection_coverage_identity",
+            "canonical_reconciliation_identity",
+        ),
+        "ordered_tokens": (
+            "canonical_reconciliation_owners_from_snapshot(snapshot)",
+            "transition_projection_coverage_identity(projections)",
+            "canonical_reconciliation_identity(&owners)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "impl": "LaneQueueReservationJournal",
+        "symbol": "consume_snapshot_replay_seal",
+        "required_tokens": (
+            "LaneReservationSnapshotReplaySeal",
+            "checked_file_content_identity",
+            "replay_open_file",
+            "self.replay_state.replay",
+            "transition.receipt.frame_digest",
+        ),
+        "ordered_tokens": (
+            "let current_content_identity = checked_file_content_identity",
+            "if current_content_identity != file_content_identity",
+            "let replay = replay_open_file",
+            "if replay != self.replay_state.replay()",
+            "checked_transition_frame_digest(&frame)? != transition.receipt.frame_digest",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "install_lane_reservation_journal",
+        "required_tokens": (
+            "consume_snapshot_replay_seal",
+            "apply_durable_fifo_order_reconciliation_locked",
+            "remove_hashes_from_fifo_locked",
+            "lane_reservation_snapshot_replay_receipt",
+        ),
+        "ordered_tokens": (
+            "let replay_receipt = journal.consume_snapshot_replay_seal(replay_seal)?",
+            "self.apply_durable_fifo_order_reconciliation_locked(fifo_plan)",
+            "self.remove_hashes_from_fifo_locked(&hashes)",
+            "*store = candidate_store",
+            "*self.lane_reservation_snapshot_replay_receipt.lock() = Some(replay_receipt)",
+            "*journal_guard = Some(journal)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "bind_lane_reservation_startup_reconciliation_receipt",
+        "required_tokens": (
+            "durable_owner_count",
+            "binds_reconciliation_snapshot",
+            "queue_plan_startup_replay_receipt",
+            "revalidate_queue_plan_startup_replay_receipt",
+            "LaneReservationStartupReconciliationReceipt",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "revalidate_queue_plan_startup_replay_receipt",
+        "required_tokens": (
+            "queue_plan_startup_live_claim_identities_locked",
+            "binds_live_claims",
+            "binds_reservation_phases",
+            "revalidate_startup_replay_receipt",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "select_lane_reservation_snapshot_lifecycle_projection",
+        "required_tokens": (
+            "revalidate_lane_reservation_startup_reconciliation_receipt",
+            "lane_reservation_recovery_phase_map",
+            "cursor.before_projection",
+            "cursor.after_projection",
+            "select_unique_lane_reservation_snapshot_recovered_state",
+            "LaneReservationSnapshotLifecycleProjectionV1::from_authenticated_cursor",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "authorize_lane_reservation_snapshot_recovery",
+        "required_tokens": (
+            "LaneReservationSnapshotLifecycleProjectionV1",
+            "revalidate_lane_reservation_startup_reconciliation_receipt",
+            "lane_reservation_recovery_phase_map",
+            "lane_reservation_snapshot_group_phase_agrees",
+            "check_production_in_flight_first_release_recover_reservation_snapshot_transition",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+            "accepted.before != accepted.after",
+            "checked_by_group",
+            "LaneReservationSnapshotRecoveryAuthorization",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "impl": "AutonomousLifecycleBootstrapRecoveryAuthority",
+        "symbol": "prepared_cursor",
+        "required_tokens": (
+            "AutonomousLifecycleCursorV2",
+            "self.bootstrap.body.prepared_activate",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+        "impl": "AutonomousLifecycleBootstrapRecoveryAuthority",
+        "symbol": "live_cursor",
+        "required_tokens": (
+            "AutonomousLifecycleCursorV2",
+            "self.bootstrap.body.live_activate",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "LaneReservationSnapshotRecoveryAuthorization",
+        "symbol": "authorize_recovered_producer_queue_lifecycle_bootstrap",
+        "required_tokens": (
+            "AutonomousLifecycleAttemptBindingV1",
+            "accepted.before != accepted.after",
+            "revalidate_lane_reservation_startup_reconciliation_receipt",
+            "revalidate_complete_live_pre_kura_group_locked",
+            "begin_durability_transition_locked",
+            "AutonomousLaneKuraActivationAuthorization",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "authenticate_autonomous_lifecycle_bootstrap_recovery",
+        "required_tokens": (
+            "refresh_autonomous_lifecycle_bootstrap_authority",
+            "authorization.facts",
+            "validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts",
+            "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
+        ),
+        "ordered_tokens": (
+            "refresh_autonomous_lifecycle_bootstrap_authority(authority)",
+            "authorization.facts()",
+            "validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts(",
+            "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody",
+        "required_tokens": (
+            "refresh_autonomous_lifecycle_bootstrap_authority",
+            "AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue",
+            "AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody",
+        ),
+        "ordered_tokens": (
+            "refresh_autonomous_lifecycle_bootstrap_authority(authority)",
+            "AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue",
+            "AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
+        "symbol": "complete_autonomous_lifecycle_bootstrap",
+        "required_tokens": (
+            "refresh_autonomous_lifecycle_bootstrap_authority",
+            "persist_lane_executable_payload_impl",
+            "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
+            "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
+            "delete_completed_autonomous_lifecycle_bootstrap",
+            "read_autonomous_lifecycle_cursor",
+            "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
+        ),
+        "ordered_tokens": (
+            "persist_lane_executable_payload_impl",
+            '"autonomous lifecycle bootstrap Prepared cursor lacks exact readback"',
+            '"autonomous lifecycle bootstrap Live cursor lacks exact readback"',
+            "delete_completed_autonomous_lifecycle_bootstrap",
+            "let cursor_read = self.read_autonomous_lifecycle_cursor",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "LaneReservationSnapshotRecoveryAuthorization",
+        "symbol": "into_reconciliation_receipt",
+        "required_tokens": (
+            "checked_group.checked.into_projection",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+            "accepted.actor != 0",
+            "accepted.target != 0",
+            "accepted.before != accepted.after",
+            "checked_group.lifecycle.recovered_state",
+            "self.reconciliation_receipt",
+        ),
+        "ordered_tokens": (
+            "checked_group.checked.into_projection()",
+            "accepted.action != IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+            "accepted.before != checked_group.lifecycle.recovered_state",
+            "Ok(self.reconciliation_receipt)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+        "impl": None,
+        "symbol": "sign_lifecycle_cursor",
+        "required_tokens": (
+            "AutonomousLifecycleCursorUnsignedV2::new",
+            "previous_cursor_hash",
+            "signing_preimage",
+            "Signature::try_new",
+            "<[u8; 96]>::try_from",
+            "unsigned.finalize(signature, validator_set)",
+        ),
+        "ordered_tokens": (
+            "AutonomousLifecycleCursorUnsignedV2::new",
+            "signing_preimage()",
+            "Signature::try_new",
+            "<[u8; 96]>::try_from",
+            "unsigned.finalize(signature, validator_set)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+        "impl": None,
+        "symbol": "compare_and_swap_phase",
+        "required_tokens": (
+            "read.into_parts",
+            "checked_add(1)",
+            "previous_cursor_hash",
+            "sign_lifecycle_cursor",
+            "compare_and_swap_autonomous_lifecycle_cursor",
+        ),
+        "ordered_tokens": (
+            "let (current, lease) = read.into_parts()",
+            "let sequence = current",
+            "let previous_cursor_hash = current.as_ref().map",
+            "let binding = current",
+            "let next = sign_lifecycle_cursor(",
+            "kura.compare_and_swap_autonomous_lifecycle_cursor(lease, next)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+        "impl": None,
+        "symbol": "recover_one_attempt",
+        "required_tokens": (
+            "read_autonomous_lifecycle_cursor",
+            "check_production_in_flight_first_release_crash_transition",
+            "check_production_in_flight_first_release_recover_transition",
+            "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
+            "AutonomousLifecycleCursorPhaseV2::crashed",
+            "AutonomousLifecycleCursorPhaseV2::prepared",
+            "AutonomousLifecycleCursorPhaseV2::live",
+            "compare_and_swap_phase",
+            "for _ in 0..8",
+        ),
+        "ordered_tokens": (
+            "read_autonomous_lifecycle_cursor(payload, binding, process_generation)",
+            "check_production_in_flight_first_release_crash_transition(",
+            "AutonomousLifecycleCursorPhaseV2::crashed(",
+            "check_production_in_flight_first_release_recover_transition(",
+            "AutonomousLifecycleCursorPhaseV2::prepared(current_generation, recover)",
+            "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(",
+            "AutonomousLifecycleCursorPhaseV2::prepared(current_generation, rehydrate)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+        "impl": None,
+        "symbol": "reconcile_autonomous_lifecycle_startup",
+        "required_tokens": (
+            "lane_reservation_reconciliation_snapshot",
+            "bind_lane_reservation_startup_reconciliation_receipt",
+            "authorize_lane_reservation_snapshot_recovery",
+            "authorize_recovered_producer_queue_lifecycle_bootstrap",
+            "authenticate_autonomous_lifecycle_bootstrap_recovery",
+            "complete_autonomous_lifecycle_bootstrap",
+            "completion.cursor() != &expected_live",
+            "into_reconciliation_receipt",
+            "recover_one_attempt",
+            "revalidate_lane_reservation_startup_reconciliation_receipt",
+            "RecoveredAutonomousLifecycleStartup",
+        ),
+        "ordered_tokens": (
+            "lane_reservation_reconciliation_snapshot()",
+            "bind_lane_reservation_startup_reconciliation_receipt(&snapshot)",
+            "authorize_lane_reservation_snapshot_recovery(",
+            "authorize_recovered_producer_queue_lifecycle_bootstrap(",
+            "authenticate_autonomous_lifecycle_bootstrap_recovery(",
+            "complete_autonomous_lifecycle_bootstrap(permit)",
+            "completion.cursor() != &expected_live",
+            "into_reconciliation_receipt()",
+            "let mut recovered_attempts = 0_usize",
+            "if recover_one_attempt(",
+            "revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)",
+            "Ok(RecoveredAutonomousLifecycleStartup {",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs",
+        "impl": "RecoveredAutonomousLifecycleStartup",
+        "symbol": "into_queue_handoff",
+        "required_tokens": (
+            "LaneQueueReservationReconciliationSnapshotV1",
+            "LaneReservationStartupReconciliationReceipt",
+            "self.snapshot",
+            "self.receipt",
+        ),
+        "ordered_tokens": (
+            "LaneQueueReservationReconciliationSnapshotV1",
+            "LaneReservationStartupReconciliationReceipt",
+            "(self.snapshot, self.receipt)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "impl": None,
+        "symbol": "plan_lane_reservation_ownership",
+        "required_tokens": (
+            "lifecycle_handoff: Option<RecoveredAutonomousLifecycleStartup>",
+            "handoff.into_queue_handoff",
+            "revalidate_lane_reservation_startup_reconciliation_receipt",
+            "bind_lane_reservation_startup_reconciliation_receipt",
+            "LaneReservationReconciliationPlan",
+            "recovered_receipt",
+            "replay_receipt",
+        ),
+        "ordered_tokens": (
+            "let current_snapshot = queue.lane_reservation_reconciliation_snapshot()",
+            "Some(handoff) =>",
+            "handoff.into_queue_handoff()",
+            "revalidate_lane_reservation_startup_reconciliation_receipt(",
+            "(snapshot, Some(receipt))",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "impl": None,
+        "symbol": "apply_lane_reservation_reconciliation_plan",
+        "required_tokens": (
+            "revalidate_lane_reservation_startup_reconciliation_receipt",
+            "commit_lane_reservation_groups_with_authorization",
+            "complete_lane_reservation_startup_reconciliation",
+        ),
+        "ordered_tokens": (
+            "revalidate_lane_reservation_startup_reconciliation_receipt",
+            "commit_lane_reservation_groups_with_authorization",
+            "complete_lane_reservation_startup_reconciliation(replay_receipt)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "impl": None,
+        "symbol": "run_inner",
+        "required_tokens": (
+            "reservation_reconciliation_pending",
+            "plan_lane_reservation_ownership",
+            "drop(pre_lifecycle_plan)",
+            "reconcile_autonomous_lifecycle_startup",
+            "Some(lifecycle)",
+            "apply_lane_reservation_reconciliation_plan",
+            "construct_after_pending_tip_application_recovery",
+            "install_lane_drain_queue",
+            "activate_after_lane_drain_queue_install",
+        ),
+        "ordered_tokens": (
+            "if reservation_reconciliation_pending",
+            "let planning = plan_lane_reservation_ownership(state.as_ref(), queue.as_ref(), kura.as_ref(), &verified_context, None,)?",
+            "drop(pre_lifecycle_plan)",
+            "reconcile_autonomous_lifecycle_startup(",
+            "let replanned = plan_lane_reservation_ownership(state.as_ref(), queue.as_ref(), kura.as_ref(), &verified_context, Some(lifecycle),)?",
+            "apply_lane_reservation_reconciliation_plan(",
+            "let mut lane_work = construct_after_pending_tip_application_recovery(",
+            "lane_work.install_lane_drain_queue(Arc::clone(&queue))",
+            "lane_work.activate_after_lane_drain_queue_install(&queue)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "impl": "V2LaneWorkAdapter",
+        "symbol": "activate_after_lane_drain_queue_install",
+        "required_tokens": (
+            "startup_activation_complete",
+            "lane_drain_queue",
+            "Arc::ptr_eq",
+            "begin_fail_stop_operation",
+            "hydrate_canonical_lane_artifacts",
+            "revalidate_hydrated_autonomous_queue_owners",
+            "drive_lane_sessions",
+            "activation.complete",
+        ),
+        "ordered_tokens": (
+            "if self.startup_activation_complete",
+            "self.lane_drain_queue.as_ref()",
+            "Arc::ptr_eq(installed_queue, queue)",
+            "begin_fail_stop_operation()",
+            "self.hydrate_canonical_lane_artifacts()",
+            "self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())",
+            "self.startup_activation_complete = true",
+            "self.drive_lane_sessions()",
+            "activation.complete()",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/queue.rs",
+        "impl": "Queue",
+        "symbol": "complete_lane_reservation_startup_reconciliation",
+        "required_tokens": (
+            "receipt.replay_receipt",
+            "receipt.initial_snapshot",
+            "store.commit_barriers",
+            "store.release_barriers",
+            "store.completed_releases",
+            "store.missing_payload_hashes",
+            "store.live_by_hash",
+        ),
+    },
+)
+
 def _production_trace_canonical_json_bytes(value: Any) -> bytes:
     """Encode the theorem certificate in its one accepted byte representation."""
 
@@ -586,6 +2925,12 @@ def _production_trace_extraction_source_snapshot(
         for action in binding["model_actions"]:
             if action not in ordered_actions:
                 ordered_actions.append(action)
+    for open_model_symbol in (
+        "RecoverReservationSnapshot",
+        "RehydrateLocalKuraCustody",
+    ):
+        if open_model_symbol not in ordered_actions:
+            ordered_actions.append(open_model_symbol)
     model_symbols: list[dict[str, Any]] = []
     for symbol in (
         *ordered_actions,
@@ -609,6 +2954,7 @@ def _production_trace_extraction_source_snapshot(
     core_items: list[dict[str, Any]] = []
     for symbol in (
         "check_production_in_flight_first_release_transition",
+        "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
         "production_in_flight_first_release_terminal_owner",
     ):
         item = _production_trace_unique_function(
@@ -652,11 +2998,19 @@ def _production_trace_extraction_source_snapshot(
             )
         )
 
-    verus_relative = "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    verus_relative = (
+        "crates/iroha_sumeragi_core/src/verus_proofs/"
+        "in_flight_first_release_proofs.rs"
+    )
     verus_items: list[dict[str, Any]] = []
     for symbol in (
         "production_in_flight_first_release_transition_refines_named_next",
+        "production_in_flight_reservation_snapshot_replay_refines_composed_stutter",
         "production_in_flight_first_release_snapshot_recovery_is_stutter",
+        "production_in_flight_first_release_local_kura_rehydration_is_exact",
+        "production_in_flight_first_release_local_kura_rehydration_rejects_missing_payload",
+        "production_in_flight_first_release_local_kura_rehydration_rejects_volatile_drift",
+        "production_in_flight_first_release_local_kura_rehydration_rejects_terminal_state",
         "production_in_flight_first_release_terminal_owner_is_exclusive",
     ):
         item = _production_trace_unique_function(
@@ -739,6 +3093,93 @@ def _production_trace_extraction_source_snapshot(
     model_by_symbol = {entry["symbol"]: entry for entry in model_symbols}
     core_by_symbol = {entry["symbol"]: entry for entry in core_items}
     verus_by_symbol = {entry["symbol"]: entry for entry in verus_items}
+    snapshot_recovery_bridge_entries: list[dict[str, Any]] = []
+    for binding in PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS:
+        item = _production_trace_unique_function(
+            root_dir=root_dir,
+            relative=binding["path"],
+            symbol=binding["symbol"],
+            impl_name=binding["impl"],
+            errors=errors,
+        )
+        if item is None:
+            continue
+        item_tokens = rust_code_tokens(item.source)
+        missing_tokens = [
+            token
+            for token in binding["required_tokens"]
+            if _token_sequence_count(item_tokens, rust_code_tokens(token)) == 0
+        ]
+        order_error = _production_trace_ordered_token_sequence_error(
+            item_tokens,
+            binding.get("ordered_tokens", ()),
+        )
+        qualified = (
+            binding["symbol"]
+            if binding["impl"] is None
+            else f"{binding['impl']}::{binding['symbol']}"
+        )
+        if missing_tokens or order_error is not None:
+            detail = []
+            if missing_tokens:
+                detail.append(f"missing exact code tokens {missing_tokens!r}")
+            if order_error is not None:
+                detail.append(order_error)
+            errors.append(
+                "RecoverReservationSnapshot parametric bridge is incomplete at "
+                f"{binding['path']}!{qualified}: " + "; ".join(detail)
+            )
+            continue
+        entry = _production_trace_rust_item_entry(
+            path=binding["path"],
+            kind="fn" if binding["impl"] is None else "method",
+            symbol=qualified,
+            item=item,
+        )
+        snapshot_recovery_bridge_entries.append(entry)
+        production_items.append(entry)
+    if len(snapshot_recovery_bridge_entries) == len(
+        PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS
+    ):
+        snapshot_recovery_bridge_by_symbol = {
+            entry["symbol"]: entry for entry in snapshot_recovery_bridge_entries
+        }
+        source_bindings.append(
+            {
+                "id": "recover_reservation_snapshot_parametric_noninterference",
+                "action_tags": [
+                    "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+                    "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+                ],
+                "model_symbols": [
+                    model_by_symbol.get("RecoverReservationSnapshot")
+                ],
+                "production_symbol": snapshot_recovery_bridge_by_symbol[
+                    "IndexedReservationReplayState::check_in_flight_transition"
+                ],
+                "authorization_source": snapshot_recovery_bridge_by_symbol[
+                    "IndexedReservationReplayState::from_replay"
+                ],
+                "checked_transition_consumer": snapshot_recovery_bridge_by_symbol[
+                    "LaneQueueReservationJournal::consume_snapshot_replay_seal"
+                ],
+                "checked_transition_adapter": snapshot_recovery_bridge_by_symbol[
+                    "LaneReservationSnapshotReplayReceipt::binds_reconciliation_snapshot"
+                ],
+                "canonical_commit_sink": snapshot_recovery_bridge_by_symbol[
+                    "Queue::complete_lane_reservation_startup_reconciliation"
+                ],
+                "carrier_identity_projection": shared_identity_entry,
+                "refinement_kernel": core_by_symbol.get(
+                    "check_production_in_flight_first_release_transition"
+                ),
+                "verus_theorem": verus_by_symbol.get(
+                    "production_in_flight_reservation_snapshot_replay_refines_composed_stutter"
+                ),
+                "bridge_symbols": snapshot_recovery_bridge_entries,
+                "authenticated": True,
+            }
+        )
     for binding in PRODUCTION_TRACE_EXTRACTION_BINDINGS:
         item = _production_trace_unique_function(
             root_dir=root_dir,
@@ -747,7 +3188,11 @@ def _production_trace_extraction_source_snapshot(
             impl_name=binding["impl"],
             errors=errors,
         )
-        qualified = f"{binding['impl']}::{binding['symbol']}"
+        qualified = (
+            binding["symbol"]
+            if binding["impl"] is None
+            else f"{binding['impl']}::{binding['symbol']}"
+        )
         if item is None:
             continue
         item_tokens = rust_code_tokens(item.source)
@@ -755,23 +3200,91 @@ def _production_trace_extraction_source_snapshot(
         for token in (*binding["action_tags"], *binding["additional_tokens"]):
             if _token_sequence_count(item_tokens, rust_code_tokens(token)) == 0:
                 missing_tokens.append(token)
+
+        checked_transition_source_entry = None
+        checked_transition_source = binding.get("checked_transition_source")
+        checked_transition_tokens = item_tokens
+        if checked_transition_source is not None:
+            checked_source_item = _production_trace_unique_function(
+                root_dir=root_dir,
+                relative=checked_transition_source["path"],
+                symbol=checked_transition_source["symbol"],
+                impl_name=checked_transition_source["impl"],
+                errors=errors,
+            )
+            if checked_source_item is None:
+                continue
+            checked_transition_tokens = rust_code_tokens(checked_source_item.source)
+            missing_checked_source_tokens = [
+                token
+                for token in checked_transition_source["required_tokens"]
+                if _token_sequence_count(
+                    checked_transition_tokens, rust_code_tokens(token)
+                )
+                == 0
+            ]
+            checked_source_order_error = _production_trace_ordered_token_sequence_error(
+                checked_transition_tokens,
+                checked_transition_source.get("ordered_tokens", ()),
+            )
+            if missing_checked_source_tokens or checked_source_order_error is not None:
+                detail = []
+                if missing_checked_source_tokens:
+                    detail.append(
+                        f"missing exact code tokens {missing_checked_source_tokens!r}"
+                    )
+                if checked_source_order_error is not None:
+                    detail.append(checked_source_order_error)
+                checked_source_qualified = (
+                    checked_transition_source["symbol"]
+                    if checked_transition_source["impl"] is None
+                    else (
+                        f"{checked_transition_source['impl']}::"
+                        f"{checked_transition_source['symbol']}"
+                    )
+                )
+                errors.append(
+                    "production trace-extraction theorem missing exact checked-transition "
+                    f"source {binding['id']} at {checked_transition_source['path']}!"
+                    f"{checked_source_qualified}: " + "; ".join(detail)
+                )
+                continue
+            checked_source_qualified = (
+                checked_transition_source["symbol"]
+                if checked_transition_source["impl"] is None
+                else (
+                    f"{checked_transition_source['impl']}::"
+                    f"{checked_transition_source['symbol']}"
+                )
+            )
+            checked_transition_source_entry = _production_trace_rust_item_entry(
+                path=checked_transition_source["path"],
+                kind="fn" if checked_transition_source["impl"] is None else "method",
+                symbol=checked_source_qualified,
+                item=checked_source_item,
+            )
         checked_count = _token_sequence_count(
-            item_tokens,
+            checked_transition_tokens,
             rust_code_tokens("check_production_in_flight_first_release_transition"),
         )
         projection_count = _token_sequence_count(
-            item_tokens,
+            checked_transition_tokens,
             rust_code_tokens("ProductionInFlightFirstReleaseTransitionProjection"),
         )
         consumption_count = _token_sequence_count(
             item_tokens, rust_code_tokens("into_projection")
         )
         expected_count = binding["checked_transition_count"]
+        expected_projection_count = (
+            checked_transition_source.get("transition_projection_count", expected_count)
+            if checked_transition_source is not None
+            else expected_count
+        )
         has_separate_consumer = binding.get("checked_transition_consumer") is not None
         if (
             missing_tokens
             or checked_count != expected_count
-            or projection_count != expected_count
+            or projection_count != expected_projection_count
             or (not has_separate_consumer and consumption_count < expected_count)
         ):
             detail: list[str] = []
@@ -782,10 +3295,10 @@ def _production_trace_extraction_source_snapshot(
                     "checked transition calls "
                     f"expected {expected_count}, found {checked_count}"
                 )
-            if projection_count != expected_count:
+            if projection_count != expected_projection_count:
                 detail.append(
                     "transition projections "
-                    f"expected {expected_count}, found {projection_count}"
+                    f"expected {expected_projection_count}, found {projection_count}"
                 )
             if not has_separate_consumer and consumption_count < expected_count:
                 detail.append(
@@ -799,17 +3312,83 @@ def _production_trace_extraction_source_snapshot(
             )
             continue
         entry = _production_trace_rust_item_entry(
-            path=binding["path"], kind="method", symbol=qualified, item=item
+            path=binding["path"],
+            kind="fn" if binding["impl"] is None else "method",
+            symbol=qualified,
+            item=item,
         )
         production_items.append(entry)
+        if checked_transition_source_entry is not None:
+            production_items.append(checked_transition_source_entry)
+
+        supporting_source_entries = []
+        supporting_sources_valid = True
+        for supporting_source in binding.get("supporting_sources", ()):
+            supporting_item = _production_trace_unique_function(
+                root_dir=root_dir,
+                relative=supporting_source["path"],
+                symbol=supporting_source["symbol"],
+                impl_name=supporting_source["impl"],
+                errors=errors,
+            )
+            if supporting_item is None:
+                supporting_sources_valid = False
+                break
+            supporting_tokens = rust_code_tokens(supporting_item.source)
+            missing_supporting_tokens = [
+                token
+                for token in supporting_source["required_tokens"]
+                if _token_sequence_count(supporting_tokens, rust_code_tokens(token)) == 0
+            ]
+            supporting_order_error = _production_trace_ordered_token_sequence_error(
+                supporting_tokens,
+                supporting_source.get("ordered_tokens", ()),
+            )
+            supporting_qualified = (
+                supporting_source["symbol"]
+                if supporting_source["impl"] is None
+                else f"{supporting_source['impl']}::{supporting_source['symbol']}"
+            )
+            if missing_supporting_tokens or supporting_order_error is not None:
+                detail = []
+                if missing_supporting_tokens:
+                    detail.append(
+                        f"missing exact code tokens {missing_supporting_tokens!r}"
+                    )
+                if supporting_order_error is not None:
+                    detail.append(supporting_order_error)
+                errors.append(
+                    "production trace-extraction theorem missing "
+                    f"{supporting_source['role']} for {binding['id']} at "
+                    f"{supporting_source['path']}!{supporting_qualified}: "
+                    + "; ".join(detail)
+                )
+                supporting_sources_valid = False
+                break
+            supporting_entry = _production_trace_rust_item_entry(
+                path=supporting_source["path"],
+                kind="fn" if supporting_source["impl"] is None else "method",
+                symbol=supporting_qualified,
+                item=supporting_item,
+            )
+            supporting_source_entries.append(supporting_entry)
+            production_items.append(supporting_entry)
+        if not supporting_sources_valid:
+            continue
         authorization_source_entry = None
         authorization_source = binding.get("authorization_source")
         if authorization_source is not None:
+            authorization_source_impl = authorization_source.get("impl")
+            authorization_source_qualified = (
+                authorization_source["symbol"]
+                if authorization_source_impl is None
+                else f"{authorization_source_impl}::{authorization_source['symbol']}"
+            )
             source_item = _production_trace_unique_function(
                 root_dir=root_dir,
                 relative=authorization_source["path"],
                 symbol=authorization_source["symbol"],
-                impl_name=authorization_source["impl"],
+                impl_name=authorization_source_impl,
                 errors=errors,
             )
             if source_item is None:
@@ -833,28 +3412,34 @@ def _production_trace_extraction_source_snapshot(
                 errors.append(
                     "production trace-extraction theorem missing canonical authorization "
                     f"source tokens at "
-                    f"{authorization_source['path']}!{authorization_source['impl']}::"
-                    f"{authorization_source['symbol']}: {detail}"
+                    f"{authorization_source['path']}!{authorization_source_qualified}: "
+                    f"{detail}"
                 )
                 continue
             authorization_source_entry = _production_trace_rust_item_entry(
                 path=authorization_source["path"],
-                kind="method",
-                symbol=(
-                    f"{authorization_source['impl']}::"
-                    f"{authorization_source['symbol']}"
-                ),
+                kind="fn" if authorization_source_impl is None else "method",
+                symbol=authorization_source_qualified,
                 item=source_item,
             )
             production_items.append(authorization_source_entry)
         checked_transition_consumer_entry = None
         checked_transition_consumer = binding.get("checked_transition_consumer")
         if checked_transition_consumer is not None:
+            checked_transition_consumer_impl = checked_transition_consumer.get("impl")
+            checked_transition_consumer_qualified = (
+                checked_transition_consumer["symbol"]
+                if checked_transition_consumer_impl is None
+                else (
+                    f"{checked_transition_consumer_impl}::"
+                    f"{checked_transition_consumer['symbol']}"
+                )
+            )
             consumer_item = _production_trace_unique_function(
                 root_dir=root_dir,
                 relative=checked_transition_consumer["path"],
                 symbol=checked_transition_consumer["symbol"],
-                impl_name=checked_transition_consumer["impl"],
+                impl_name=checked_transition_consumer_impl,
                 errors=errors,
             )
             if consumer_item is None:
@@ -892,29 +3477,34 @@ def _production_trace_extraction_source_snapshot(
                 errors.append(
                     "production trace-extraction theorem missing move-only consumer "
                     f"{binding['id']} at {checked_transition_consumer['path']}!"
-                    f"{checked_transition_consumer['impl']}::"
-                    f"{checked_transition_consumer['symbol']}: "
+                    f"{checked_transition_consumer_qualified}: "
                     + "; ".join(detail)
                 )
                 continue
             checked_transition_consumer_entry = _production_trace_rust_item_entry(
                 path=checked_transition_consumer["path"],
-                kind="method",
-                symbol=(
-                    f"{checked_transition_consumer['impl']}::"
-                    f"{checked_transition_consumer['symbol']}"
-                ),
+                kind="fn" if checked_transition_consumer_impl is None else "method",
+                symbol=checked_transition_consumer_qualified,
                 item=consumer_item,
             )
             production_items.append(checked_transition_consumer_entry)
         checked_transition_adapter_entry = None
         checked_transition_adapter = binding.get("checked_transition_adapter")
         if checked_transition_adapter is not None:
+            checked_transition_adapter_impl = checked_transition_adapter.get("impl")
+            checked_transition_adapter_qualified = (
+                checked_transition_adapter["symbol"]
+                if checked_transition_adapter_impl is None
+                else (
+                    f"{checked_transition_adapter_impl}::"
+                    f"{checked_transition_adapter['symbol']}"
+                )
+            )
             adapter_item = _production_trace_unique_function(
                 root_dir=root_dir,
                 relative=checked_transition_adapter["path"],
                 symbol=checked_transition_adapter["symbol"],
-                impl_name=checked_transition_adapter["impl"],
+                impl_name=checked_transition_adapter_impl,
                 errors=errors,
             )
             if adapter_item is None:
@@ -939,17 +3529,13 @@ def _production_trace_extraction_source_snapshot(
                     "production trace-extraction theorem missing move-only State "
                     f"commit adapter {binding['id']} at "
                     f"{checked_transition_adapter['path']}!"
-                    f"{checked_transition_adapter['impl']}::"
-                    f"{checked_transition_adapter['symbol']}: {detail}"
+                    f"{checked_transition_adapter_qualified}: {detail}"
                 )
                 continue
             checked_transition_adapter_entry = _production_trace_rust_item_entry(
                 path=checked_transition_adapter["path"],
-                kind="method",
-                symbol=(
-                    f"{checked_transition_adapter['impl']}::"
-                    f"{checked_transition_adapter['symbol']}"
-                ),
+                kind="fn" if checked_transition_adapter_impl is None else "method",
+                symbol=checked_transition_adapter_qualified,
                 item=adapter_item,
             )
             production_items.append(checked_transition_adapter_entry)
@@ -995,7 +3581,7 @@ def _production_trace_extraction_source_snapshot(
                 continue
             commit_sink_entry = _production_trace_rust_item_entry(
                 path=commit_sink["path"],
-                kind="method",
+                kind="fn" if commit_sink_impl is None else "method",
                 symbol=commit_sink_symbol,
                 item=sink_item,
             )
@@ -1020,6 +3606,8 @@ def _production_trace_extraction_source_snapshot(
                     for action in binding["model_actions"]
                 ],
                 "production_symbol": entry,
+                "checked_transition_source": checked_transition_source_entry,
+                "supporting_sources": supporting_source_entries,
                 "authorization_source": authorization_source_entry,
                 "checked_transition_consumer": checked_transition_consumer_entry,
                 "checked_transition_adapter": checked_transition_adapter_entry,

@@ -8,18 +8,8 @@ source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 
 TEST_ROOT_RAW="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-sdk-lock-test.XXXXXX")"
 TEST_ROOT="$(cd "${TEST_ROOT_RAW}" && pwd -P)"
-cleanup() {
-  local status=$?
-  trap - EXIT HUP INT TERM
-  if [[ -n "${TEST_ROOT:-}" && -d "${TEST_ROOT}" ]]; then
-    rm -rf -- "${TEST_ROOT}"
-  fi
-  exit "${status}"
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+# shellcheck source=ci/privacy_sdk_cargo_lockfile_test_cleanup.sh
+source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile_test_cleanup.sh"
 
 REPOSITORY_ROOT="${TEST_ROOT}/repository"
 PRIVATE_ROOT="${TEST_ROOT}/private"
@@ -4644,14 +4634,14 @@ def validate(source: str) -> None:
     if "Swatinem/rust-cache@" in source:
         raise AssertionError("privacy jobs must not use rust-cache")
     if (
-        source.count("id: privacy-python") != 2
-        or source.count("update-environment: false") != 2
+        source.count("id: privacy-python") != 3
+        or source.count("update-environment: false") != 3
         or "cache: pip" in source
         or "cache-dependency-path: python/iroha_python/requirements-ci.lock"
         in source
     ):
         raise AssertionError("setup-python must remain private and cache-free")
-    if source.count(setup_python_path) != sum(
+    if source.count(setup_python_path) != 1 + sum(
         policy["python_path_count"] for policy in jobs.values()
     ):
         raise AssertionError("setup-python output threading is incomplete")

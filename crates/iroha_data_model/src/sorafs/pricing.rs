@@ -214,7 +214,7 @@ pub struct PricingScheduleRecord {
 }
 
 impl PricingScheduleRecord {
-    /// Default launch schedule matching the SF-8a specification draft.
+    /// Default launch schedule for the canonical SF-8a pricing policy.
     #[must_use]
     pub fn launch_default() -> Self {
         let quantity_nanos = |value| {

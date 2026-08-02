@@ -104,14 +104,15 @@ post-CAS readback; a concurrent replica, ambiguous CAS, corrupt state, or live
 capacity exhaustion fails closed. The deployment-owned receiver is still not
 installed in Kubo or head-service ingress, and the low-level inbound verifier's
 caller-owned replay cache remains process-local until that receiver supplies
-its own sealed cross-replica replay adapter. The source tree supplies both the
-authenticated client and an injected broker-server library boundary. SF-12
-still requires a supervised deployment-owned broker executable, genuine
-HSM/sealed-store and authenticated Kubo/head backends, receiver installation
-with durable shared replay state, deployment/package integration, optional
-RocksDB/IPLD storage if the JSON mirror cannot meet deployment scale, and
-captured multi-instance public rollout evidence—not an unimplemented IPFS/IPNS
-publisher.
+its own sealed cross-replica replay adapter. The source tree supplies the
+authenticated client, injected broker-server boundary, and common catalog-only
+executable shell with secure loading, readiness, signals, and redacted errors.
+SF-12 still requires a supervised concrete registry and vendor-linked broker
+executable, genuine HSM/sealed-store and authenticated Kubo/head backends,
+receiver installation with durable shared replay state, deployment/package
+integration, optional RocksDB/IPLD storage if the JSON mirror cannot meet
+deployment scale, and captured multi-instance public rollout evidence—not an
+unimplemented IPFS/IPNS publisher.
 
 Implemented foundations include:
 - `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`,

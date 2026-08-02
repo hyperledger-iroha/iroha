@@ -1,5 +1,44 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
+            "   AsyncIngressPhysicalHighWatermarkIsMonotone,\n",
+            "",
+        ),
+        (
+            "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
+            "BY AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish,\n",
+            "BY ",
+        ),
+    ),
+)
+def test_quantitative_physical_cut_dependency_chain_fails_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    _, sources = copy_quantitative_fixed_corridor_fixture(tmp_path)
+    module_name = "SumeragiV2AsyncCausalWorkBudgetProofs"
+    sources[module_name] = mutate_tla_theorem(
+        sources[module_name],
+        symbol,
+        old,
+        new,
+    )
+
+    errors = module._quantitative_fixed_corridor_contract_errors(sources)
+
+    assert any(
+        symbol in error and "must retain reviewed proof dependencies" in error
+        for error in errors
+    ), errors
+
 @pytest.mark.parametrize(
     ("symbol", "correct", "grouped_mutation"),
     (
@@ -142,7 +181,7 @@ def async_liveness_symbol_path(
             "SumeragiV2AsyncFairServiceProofs.tla",
             "operator",
             "RecoveryRunNodeGuard",
-            "     /\\ \\/ AsyncServeIngressLifecycleOwnerIdentities(node) = {}\n"
+            "     /\\ \\/ ~AsyncIngressSchedulerBarrierActive(node)\n"
             "        \\/ asyncRunnerPhase[node] = \"Ingress\"",
             "     /\\ asyncRunnerPhase[node] = \"Ingress\"",
             "RecoveryRunNodeGuard must equal only the exact",
@@ -151,7 +190,7 @@ def async_liveness_symbol_path(
             "SumeragiV2AsyncFairServiceProofs.tla",
             "theorem",
             "LocalAdmissionStepIsEnabled",
-            "    /\\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}\n",
+            "    /\\ ~AsyncIngressSchedulerBarrierActive(node)\n",
             "",
             "LocalAdmissionStepIsEnabled must state only",
         ),
@@ -159,7 +198,7 @@ def async_liveness_symbol_path(
             "SumeragiV2AsyncFairServiceProofs.tla",
             "theorem",
             "NoServeIngressTicketSerializedRuntimeIsEnabled",
-            "    /\\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}\n",
+            "    /\\ ~AsyncIngressSchedulerBarrierActive(node)\n",
             "",
             "NoServeIngressTicketSerializedRuntimeIsEnabled must state only",
         ),
@@ -196,6 +235,14 @@ def async_liveness_symbol_path(
             "           /\\ AsyncOlderLocalLifecyclePrecedesServeIngress(node))\n",
             "",
             "ServeIngressTargetOnlyTurnIsEnabled must state only",
+        ),
+        (
+            "SumeragiV2AsyncFairServiceProofs.tla",
+            "theorem",
+            "ResponsiveUnappliedRunNodeIsEnabled",
+            "    /\\ AsyncStrongTypeInvariant\n",
+            "    /\\ AsyncTypeInvariant\n",
+            "ResponsiveUnappliedRunNodeIsEnabled must state only",
         ),
         (
             "SumeragiV2AsyncFairServiceProofs.tla",
@@ -261,7 +308,7 @@ def async_liveness_symbol_path(
             "SumeragiV2AsyncDeadlockProofs.tla",
             "theorem",
             "DirectHistoricalRecoveryNoTicketLocalRunnerCaller",
-            "    /\\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}\n",
+            "    /\\ ~AsyncIngressSchedulerBarrierActive(node)\n",
             "",
             "DirectHistoricalRecoveryNoTicketLocalRunnerCaller must state only",
         ),
@@ -404,6 +451,22 @@ def test_serve_scheduler_gate_proof_mutations_fail_closed(
             "execution premise",
         ),
         (
+            "operator",
+            "AsyncStrongTypeInvariant",
+            "  /\\ AsyncCandidateLifecycleSchedulerCoverageInvariant\n",
+            "",
+            "AsyncStrongTypeInvariant must include the exact recovery "
+            "execution premise",
+        ),
+        (
+            "operator",
+            "AsyncStrongTypeInvariant",
+            "  /\\ AsyncOrdinaryIngressCarrierOwnershipInvariant\n",
+            "",
+            "AsyncStrongTypeInvariant must include the exact recovery "
+            "execution premise",
+        ),
+        (
             "theorem",
             "AsyncInitEstablishesStrongTypeInvariant",
             "    <2>3c. AsyncServiceActivationPairInvariant\n"
@@ -450,6 +513,25 @@ def test_serve_scheduler_gate_proof_mutations_fail_closed(
             "         AsyncNextPreservesLeaderWireIngressCarrierOwnership\n",
             "pass the leader-wire ingress-carrier projection to its exact "
             "preservation step",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
+            "    <2>4c. AsyncCandidateLifecycleSchedulerCoverageInvariant'\n"
+            "      BY <1>1, AsyncNextPreservesCandidateLifecycleSchedulerCoverage\n",
+            "",
+            "retain the exact candidate-lifecycle scheduler coverage "
+            "preservation step",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
+            "    <2>13. AsyncOrdinaryIngressCarrierOwnershipInvariant'\n"
+            "      BY <1>1, <2>2k,\n"
+            "         AsyncNextPreservesOrdinaryIngressCarrierOwnership\n",
+            "",
+            "pass the ordinary-ingress carrier-ownership projection to its "
+            "exact preservation step",
         ),
         (
             "theorem",
@@ -603,11 +685,11 @@ def test_async_recovery_type_premise_mutations_fail_closed(
         ),
         (
             "theorem",
-            "ResetNodeSchedulerForRestartClearsServeIngressOwners",
-            "      => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}",
-            "      => AsyncServeIngressLifecycleOwnerIdentities(node)' "
+            "ResetNodeSchedulerForRestartDischargesServeIngressDebt",
+            "      => /\\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}",
+            "      => /\\ AsyncServeIngressLifecycleOwnerIdentities(node)' "
             "\\subseteq ValidatorIds",
-            "ResetNodeSchedulerForRestartClearsServeIngressOwners must state only",
+            "ResetNodeSchedulerForRestartDischargesServeIngressDebt must state only",
         ),
         (
             "theorem",
@@ -680,11 +762,11 @@ def test_async_recovery_type_premise_mutations_fail_closed(
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, <2>7,\n"
-            "                <2>8, <2>9, <2>10, <2>11, <2>12\n"
+            "    <2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6, <2>7,\n"
+            "                <2>8, <2>9, <2>10, <2>11, <2>12, <2>13\n"
             "         DEF AsyncStrongTypeInvariant",
-            "    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6,\n"
-            "                <2>8, <2>9, <2>10, <2>11, <2>12\n"
+            "    <2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6,\n"
+            "                <2>8, <2>9, <2>10, <2>11, <2>12, <2>13\n"
             "         DEF AsyncStrongTypeInvariant",
             "make the service-activation pair, control-service",
         ),
@@ -753,7 +835,7 @@ def test_async_recovery_execution_contract_mutations_fail_closed(
         ),
         (
             "PreGstResponsiveReplayEstablishesRecoveryExecutionInvariant",
-            "ResetNodeSchedulerForRestartClearsServeIngressOwners",
+            "ResetNodeSchedulerForRestartDischargesServeIngressDebt",
         ),
         (
             "AsyncNextPreservesRecoveryExecutionInvariant",

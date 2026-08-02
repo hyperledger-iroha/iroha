@@ -615,8 +615,7 @@ mod tests {
         let restart_decoded: SumeragiV2Status = norito::json::from_slice(&restart_body)
             .expect("decode restart-required authoritative status");
         assert!(
-            restart_decoded.liveness.no_progress_age_ms
-                >= decoded.liveness.no_progress_age_ms,
+            restart_decoded.liveness.no_progress_age_ms >= decoded.liveness.no_progress_age_ms,
             "read-time liveness age must be monotonic"
         );
         let mut expected_at_restart_read = expected;
@@ -638,6 +637,8 @@ mod tests {
             "consensus_missing_qc_reacquire_attempt_total",
             "lane_settlement_commitments",
             "lane_relay_envelopes",
+            "native_amx_participant_applications",
+            "autonomous_lane_executions",
         ] {
             assert!(
                 json.get(retired).is_none(),

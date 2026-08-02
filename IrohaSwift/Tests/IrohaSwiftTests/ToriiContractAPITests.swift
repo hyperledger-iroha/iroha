@@ -14,17 +14,29 @@ final class ToriiContractAPITests: XCTestCase {
         signingKeypair.publicKey.map { String(format: "%02x", $0) }.joined()
     }
     private func detachedSignatureB64() throws -> String {
-        try signingKeypair.sign(Data(repeating: 0x5a, count: 32)).base64EncodedString()
+        try signingKeypair.sign(IrohaHash.hash(contractTransactionPayload)).base64EncodedString()
     }
     private let merchantAccount = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     private let contractAlias = "bisp::hbl.sbp"
     private let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
     private let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
-    private let codeHash = String(repeating: "a", count: 64)
+    private let codeHash = String(repeating: "a", count: 63) + "b"
     private let abiHash = String(repeating: "b", count: 64)
-    private let entrypointHash = String(repeating: "c", count: 64)
     private let payloadDigest = "180cfc3bcd8ac21e73becfc0ce45618853171b0a20d4db52fac65c6cdd262ddc"
-    private let txHash = String(repeating: "e", count: 64)
+    private var contractTransactionPayload: Data {
+        try! CanonicalUnsignedTransactionTestSupport.contractPayload(
+            request: detachedRequest(),
+            contractAddress: contractAddress,
+            codeHashHex: codeHash,
+            chainId: "contract-test"
+        )
+    }
+    private var txHash: String {
+        CanonicalUnsignedTransactionTestSupport.transactionHash(
+            for: contractTransactionPayload
+        ).map { String(format: "%02x", $0) }.joined()
+    }
+    private var entrypointHash: String { txHash }
 
     override func tearDown() {
         StubURLProtocol.handler = nil
@@ -102,13 +114,13 @@ final class ToriiContractAPITests: XCTestCase {
             "code_hash_hex": codeHash,
             "abi_hash_hex": abiHash,
             "entrypoint": "spend_to_merchant",
-            "entrypoint_hash_hex": entrypointHash,
             "gas_limit": 500_000,
             "fee_payment": testFeePaymentObject(testFeePayment(gasLimit: 500_000)),
             "payload_digest_hex": payloadDigest,
         ]
         if submitted {
             receipt["tx_hash_hex"] = txHash
+            receipt["entrypoint_hash_hex"] = entrypointHash
         }
         var value: [String: Any] = [
             "ok": true,
@@ -119,12 +131,12 @@ final class ToriiContractAPITests: XCTestCase {
             "abi_hash_hex": abiHash,
             "creation_time_ms": detachedCreationTimeMs,
             "transaction_ttl_ms": 120_000,
-            "entrypoint_hash_hex": entrypointHash,
             "entrypoint": "spend_to_merchant",
             "operation_receipt": receipt,
         ]
         if submitted {
             value["tx_hash_hex"] = txHash
+            value["entrypoint_hash_hex"] = entrypointHash
             value["pipeline_status"] = [
                 "hash": txHash,
                 "status": ["kind": "Queued"],
@@ -134,11 +146,8 @@ final class ToriiContractAPITests: XCTestCase {
                 "resolved_from": "queue",
             ]
         } else {
-            let scaffold = Data([1, 2, 3, 4]).base64EncodedString()
-            value["transaction_scaffold_b64"] = scaffold
-            value["signed_transaction_b64"] = scaffold
-            value["signing_message_b64"] = Data(repeating: 0x5a, count: 32).base64EncodedString()
-            value["tx_hash_hex"] = NSNull()
+            value["transaction_payload_b64"] = contractTransactionPayload.base64EncodedString()
+            value["signing_message_b64"] = IrohaHash.hash(contractTransactionPayload).base64EncodedString()
         }
         mutate(&value)
         return value
@@ -323,7 +332,8 @@ final class ToriiContractAPITests: XCTestCase {
 
         let client = makeClient()
         let draft = try await client.prepareDetachedContractCall(detachedRequest())
-        XCTAssertEqual(draft.signingMessage, Data(repeating: 0x5a, count: 32))
+        XCTAssertEqual(draft.transactionPayload, contractTransactionPayload)
+        XCTAssertEqual(draft.signingMessage, IrohaHash.hash(contractTransactionPayload))
         XCTAssertEqual(draft.resolvedContractAddress, contractAddress)
         let submitted = try await client.submitDetachedContractCall(
             draft,
@@ -426,9 +436,17 @@ final class ToriiContractAPITests: XCTestCase {
             { $0["submitted"] = true },
             { $0["signing_message_b64"] = Data(repeating: 1, count: 31).base64EncodedString() },
             { $0["signed_transaction_b64"] = Data([9]).base64EncodedString() },
+            { $0["code_hash_hex"] = "0x" + self.codeHash },
+            { $0["abi_hash_hex"] = self.abiHash.uppercased() },
+            { $0["transaction_ttl_ms"] = 0 },
             {
                 var receipt = $0["operation_receipt"] as! [String: Any]
                 receipt["transport"] = "legacy"
+                $0["operation_receipt"] = receipt
+            },
+            {
+                var receipt = $0["operation_receipt"] as! [String: Any]
+                receipt["payload_digest_hex"] = " " + self.payloadDigest
                 $0["operation_receipt"] = receipt
             },
             {

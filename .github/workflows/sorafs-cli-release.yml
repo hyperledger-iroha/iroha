@@ -14,6 +14,7 @@ on:
       - "scripts/telemetry/normalize_executed_notebook.py"
       - "notebooks/soranet_privacy_dp.ipynb"
       - "scripts/check_sorafs_release_automation.py"
+      - "scripts/check_runtime_provider_broker_install.py"
       - "scripts/check_sorafs_release_version_map.py"
       - "scripts/check_sorafs_reference_sdk_release_evidence.py"
       - "scripts/build_sorafs_reference_sdk_release_canary.py"
@@ -47,6 +48,7 @@ on:
       - "scripts/release_sorafs_cli.sh"
       - "scripts/tests/check_sorafs_release_version_map_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
+      - "scripts/tests/check_runtime_provider_broker_install_test.py"
       - "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py"
       - "scripts/tests/build_sorafs_reference_sdk_release_canary_test.py"
       - "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"
@@ -83,6 +85,10 @@ on:
       - "specs/release_dual_track_runbook*.md"
       - "specs/release_artifact_selection*.md"
       - "specs/sora_nexus_operator_onboarding*.md"
+      - "configs/sorafs/runtime_provider_broker/**"
+      - "crates/irohad/src/runtime_provider_broker.rs"
+      - "crates/irohad/src/runtime_provider_broker/**"
+      - "crates/irohad/src/sorafs_pop_runtime.rs"
       - "CHANGELOG.md"
       - "LICENSE"
       - "crates/sorafs_car/**"
@@ -134,6 +140,8 @@ jobs:
           shared-key: sorafs-cli-release
       - name: Install script test dependencies
         run: python3 -m pip install -r scripts/requirements.txt
+      - name: Validate runtime-provider broker deployment contract
+        run: python3 scripts/tests/check_runtime_provider_broker_install_test.py
       - name: Validate cross-package version map
         id: version
         run: |

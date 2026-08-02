@@ -11,9 +11,11 @@ SFM-4b1 now has canonical PoP credential payloads, a production cryptographic
 membership-proof backend, a consensus-owned issuer/registry foundation, a
 durable issuer/wallet service, and the canonical authenticated Torii V1 API,
 plus the standard-`irohad` runtime-broker injection path and public broker
-server launcher. Release deployment is still blocked because the repository
-does not ship a genuine deployment-owned PoP broker executable or backend
-registry. The first-release proof backend is a
+server launcher. The shared catalog-only executable shell adds secure loading,
+lifecycle, signal, and redacted-failure handling around that launcher. Release
+deployment is still blocked because the repository does not ship a genuine
+deployment-owned PoP backend registry or vendor-linked executable. The
+first-release proof backend is a
 fixed Halo2 circuit over Pasta with transparent IPA polynomial commitments. It
 proves membership in the signed active credential root and empty-leaf membership
 in the signed sparse revocation root while keeping the credential id, holder
@@ -42,6 +44,18 @@ set, and rejects missing, substituted, stale/revoked, test-marked, or drifting
 registries. Qualified HSM, KMS, authentication, private issuance/witness,
 ledger, and finalized-time wrappers recheck the pinned registry before and
 after provider operations and discard provider results on qualification drift.
+Every public read and caller-driven transition now authenticates the exact
+request before advancing the durable registry projection to the exact
+independently sampled finalized block height and hash; reader failure, a
+different cursor, or bound exhaustion rejects the request instead of serving
+or mutating against the cached projection. The
+deployment authenticator must distinguish an authenticated request from a
+verified caller-signed transaction. Enrollment, approval, issuance,
+revocation, wallet-state changes, and nullifier consumption require the latter;
+only payload-free reads and durable outbox submission/reconciliation may use
+ordinary authenticated authority. The broker wire preserves this distinction,
+so standard `irohad` cannot replace caller authority with a process-local
+trigger.
 
 The remaining release blocker is `V1-BLOCK-POP-RUNTIME-01`, but it is no longer
 a missing standard-daemon injection or shared sidecar transport. On Linux and
@@ -357,9 +371,11 @@ reference validator is shipped only for local/CI payload validation.
 `V1-BLOCK-POP-RUNTIME-01` blocks production completion and promotion, not the
 standard-daemon source integration. Stock `irohad` projects the exact public
 PoP binding into its fixed local broker client, and
-`RuntimeProviderBrokerDeploymentV1` is the public sidecar launcher. The broker
-protocol reconstructs a qualified `PopCredentialRuntimeProviderRegistryV1`
-for the daemon. The missing deployment package must implement
+`RuntimeProviderBrokerDeploymentV1` is the public sidecar launcher. The shared
+`RuntimeProviderBrokerExecutableV1` adds its catalog, lifecycle, signal, and
+server process shell. The broker protocol reconstructs a qualified
+`PopCredentialRuntimeProviderRegistryV1` for the daemon. The missing deployment
+package must implement
 `RuntimeProviderBrokerBackendRegistryV1`, attach a genuine PoP registry to
 `RuntimeProviderBrokerBackendsV1`, and resolve:
 

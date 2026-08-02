@@ -1028,6 +1028,13 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 return Ok(HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled);
             }
 
+            // The caller must first cross the signed
+            // CanonicalHistoricalRecoveryRecord custody bootstrap. This
+            // function holds the historical-record batch lock and therefore
+            // cannot safely call back into the signer/State coordinator; it
+            // accepts only the exact independently durable payload produced by
+            // that move-only adapter.
+            #[cfg(test)]
             self.persist_lane_executable_payload(
                 &record.payload,
                 record.payload.chain_id_hash,

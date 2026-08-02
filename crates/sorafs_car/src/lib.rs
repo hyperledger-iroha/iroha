@@ -297,12 +297,12 @@ pub trait PayloadSource {
     /// Reads exactly `buf.len()` bytes starting at `offset` into `buf`.
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError>;
 
-    /// Verify that the source contains exactly the planned payload length when knowable.
+    /// Verify that the source contains exactly the planned payload length.
     ///
-    /// Random-access sources with no cheap length operation may retain the default no-op.
-    fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
-        Ok(())
-    }
+    /// Implementations must fail closed when the exact source length cannot be
+    /// established; silently accepting an unknown or longer source would allow
+    /// trailing bytes to escape the canonical payload commitment.
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError>;
 }
 
 /// Streaming payload backed by a sequential reader.
@@ -3652,18 +3652,6 @@ impl PorMerkleTree {
         self.prove_leaf_with(chunk_index, segment_index, leaf_index, &mut source)
     }
 
-    /// Alias for [`Self::try_prove_leaf`] retained while callers migrate to explicit `try_`
-    /// proof construction.
-    pub fn prove_leaf(
-        &self,
-        chunk_index: usize,
-        segment_index: usize,
-        leaf_index: usize,
-        payload: &[u8],
-    ) -> Result<Option<PorProof>, ChunkStoreError> {
-        self.try_prove_leaf(chunk_index, segment_index, leaf_index, payload)
-    }
-
     pub fn prove_leaf_with<P: PayloadSource>(
         &self,
         chunk_index: usize,
@@ -6971,6 +6959,12 @@ mod tests {
             self.reads.set(self.reads.get() + 1);
             Err(ChunkStoreError::Io(io::Error::other(
                 "probe source must not be read",
+            )))
+        }
+
+        fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
+            Err(ChunkStoreError::Io(io::Error::other(
+                "probe source length must not be queried",
             )))
         }
     }

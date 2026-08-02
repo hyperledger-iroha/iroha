@@ -39,9 +39,13 @@ TMP_DIR="$(mktemp -d)"
 REPLAY_WORKTREES=()
 cleanup() {
   local worktree
-  for worktree in "${REPLAY_WORKTREES[@]}"; do
-    git -C "${REPO_ROOT}" worktree remove --force "${worktree}" >/dev/null 2>&1 || true
-  done
+  # Bash 3.2 treats an empty declared array as unset under `set -u`. Guard the
+  # expansion so an expected preflight failure cannot mask its real error.
+  if (( ${#REPLAY_WORKTREES[@]} > 0 )); then
+    for worktree in "${REPLAY_WORKTREES[@]}"; do
+      git -C "${REPO_ROOT}" worktree remove --force "${worktree}" >/dev/null 2>&1 || true
+    done
+  fi
   rm -rf -- "${TMP_DIR}"
 }
 trap cleanup EXIT
@@ -90,6 +94,34 @@ require_clean_checkout() {
   fi
 }
 
+stage_replay_openapi_dependencies() {
+  local worktree="$1"
+  local source="${REPO_ROOT}/tools/openapi/node_modules"
+  local target="${worktree}/tools/openapi/node_modules"
+  if [[ ! -d "${source}" || -L "${source}" ]]; then
+    echo "error: install the pinned OpenAPI dependency graph before replay." >&2
+    exit 1
+  fi
+  if [[ -e "${target}" || -L "${target}" ]]; then
+    echo "error: isolated OpenAPI replay dependency destination is not fresh." >&2
+    exit 1
+  fi
+  if [[ -n "$(find "${source}" -type l -print -quit)" ]]; then
+    echo "error: installed OpenAPI dependency graph must not contain symlinks." >&2
+    exit 1
+  fi
+  if ! npm --prefix "${REPO_ROOT}/tools/openapi" ls --all --omit=dev --json >/dev/null; then
+    echo "error: installed OpenAPI dependency graph does not match its lockfile." >&2
+    exit 1
+  fi
+  mkdir "${target}"
+  cp -R "${source}/." "${target}/"
+  if ! diff -qr "${source}" "${target}" >/dev/null; then
+    echo "error: isolated OpenAPI replay dependency copy is not exact." >&2
+    exit 1
+  fi
+}
+
 create_replay_worktree() {
   local worktree="$1"
   REPLAY_WORKTREES+=("${worktree}")
@@ -110,8 +142,8 @@ const sourcePath = await realpath(sourceArgument);
 const provisionModule = pathToFileURL(
   join(
     worktreeRoot,
-    'docs',
-    'portal',
+    'tools',
+    'openapi',
     'scripts',
     'provision-openapi-cargo-lock.mjs',
   ),
@@ -137,6 +169,7 @@ if (
   throw new Error('isolated OpenAPI replay Cargo.lock provisioning was not exact');
 }
 NODE
+  stage_replay_openapi_dependencies "${worktree}"
   if [[ -n "$(git -C "${worktree}" status --porcelain=v1 --untracked-files=all)" ]]; then
     echo "error: isolated OpenAPI replay worktree is not clean after Cargo.lock provisioning." >&2
     exit 1

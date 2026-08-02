@@ -90,3 +90,21 @@ if skipped:
         f"SoraFS native Python SDK parity may not contain skipped tests; found {skipped}"
     )
 PY
+
+# Local runs leave no persistent output by default. Release and CI callers may
+# opt in to one payload-free manifest by naming a fresh absolute directory
+# outside the source tree. The checker creates that directory without following
+# symlinks only after the native suite and its zero-skip audit both succeed.
+VERIFY_EVIDENCE_ARGS=()
+if [[ -n "${SORAFS_PYTHON_SDK_EVIDENCE_DIR:-}" ]]; then
+  VERIFY_EVIDENCE_ARGS=(
+    --evidence-dir "${SORAFS_PYTHON_SDK_EVIDENCE_DIR}"
+  )
+fi
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py" \
+  verify \
+  --artifact "${NATIVE_EXTENSION}" \
+  --manifest "${NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --python "${VENV_PYTHON}" \
+  "${VERIFY_EVIDENCE_ARGS[@]}"

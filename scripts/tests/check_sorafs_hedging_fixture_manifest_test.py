@@ -626,7 +626,9 @@ def test_generated_json_sidecar_sanitizes_noncanonical_path_decode_error(
 
 def test_manifest_only_rejects_drifted_validation_command(tmp_path: Path) -> None:
     payload = base_manifest()
-    payload["fixtures"][0]["validation_command"] = "sorafs-validate hedging --statement wrong.to"
+    payload["fixtures"][0]["validation_command"] = (
+        "sorafs-validate hedging --kind billing-statement --input wrong.to"
+    )
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -652,7 +654,9 @@ def test_validation_command_tokenize_error_is_sanitized(monkeypatch) -> None:
         "name": "bad_command",
         "kind": "billing-statement",
         "expected_status": "accepted",
-        "validation_command": "sorafs-validate hedging --statement 'unterminated",
+        "validation_command": (
+            "sorafs-validate hedging --kind billing-statement --input 'unterminated"
+        ),
     }
 
     def split_raises(_command: str):
@@ -682,7 +686,7 @@ def test_validation_command_token_mismatch_is_sanitized() -> None:
         "kind": "billing-statement",
         "expected_status": "accepted",
         "validation_command": (
-            "sorafs-validate hedging --statement "
+            "sorafs-validate hedging --kind billing-statement --input "
             "fixtures/sorafs_manifest/hedging/statement.to "
             "--private-key runtime-secret"
         ),
@@ -752,7 +756,7 @@ def test_manifest_only_rejects_rejected_fixtures_outside_negative_dir(
         "fixtures/sorafs_manifest/hedging/stale_reference_price_decision_v1.json"
     )
     fixture["validation_command"] = (
-        "sorafs-validate hedging --decision "
+        "sorafs-validate hedging --kind reference-price-decision --input "
         "fixtures/sorafs_manifest/hedging/stale_reference_price_decision_v1.to"
     )
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
@@ -1011,7 +1015,7 @@ def test_validator_execution_error_is_sanitized(monkeypatch, tmp_path: Path) -> 
         "kind": "billing-statement",
         "expected_status": "accepted",
         "validation_command": (
-            "sorafs-validate hedging --statement "
+            "sorafs-validate hedging --kind billing-statement --input "
             "fixtures/sorafs_manifest/hedging/statement.to"
         ),
     }

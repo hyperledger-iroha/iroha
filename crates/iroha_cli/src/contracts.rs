@@ -266,11 +266,11 @@ pub struct DevCallArgs {
     #[arg(long)]
     pub authority: Option<String>,
     /// Hex-encoded private key override used to sign and submit the call directly.
-    #[arg(long, value_name = "HEX", conflicts_with = "scaffold_only")]
+    #[arg(long, value_name = "HEX", conflicts_with = "draft_only")]
     pub private_key: Option<String>,
-    /// Request an unsigned transaction scaffold instead of direct submission.
+    /// Request the exact unsigned transaction payload instead of direct submission.
     #[arg(long)]
-    pub scaffold_only: bool,
+    pub draft_only: bool,
     /// Contract entrypoint selector.
     #[arg(long)]
     pub entrypoint: String,
@@ -1189,7 +1189,7 @@ impl DevCallArgs {
             profile_config.as_ref(),
             &authority,
             self.private_key.as_deref(),
-            self.scaffold_only,
+            self.draft_only,
         )?;
         let contract_alias = resolve_contract_manifest_alias(
             &contract.alias,
@@ -1537,9 +1537,9 @@ fn resolve_dev_contract_private_key<C: RunContext>(
     profile_config: Option<&Config>,
     authority: &AccountId,
     private_key_hex: Option<&str>,
-    scaffold_only: bool,
+    draft_only: bool,
 ) -> Result<Option<PrivateKey>> {
-    if scaffold_only {
+    if draft_only {
         return Ok(None);
     }
     if let Some(private_key_hex) = private_key_hex {
@@ -2394,13 +2394,13 @@ pub struct CallArgs {
     #[arg(long)]
     pub authority: Option<String>,
     /// Hex-encoded private key override used to sign and submit the call directly.
-    #[arg(long, value_name = "HEX", conflicts_with = "scaffold_only")]
+    #[arg(long, value_name = "HEX", conflicts_with = "draft_only")]
     pub private_key: Option<String>,
-    /// Request an unsigned transaction scaffold instead of direct submission.
+    /// Request the exact unsigned transaction payload instead of direct submission.
     #[arg(long, conflicts_with = "simulate")]
-    pub scaffold_only: bool,
+    pub draft_only: bool,
     /// Simulate the contract call locally on Torii without submitting a transaction.
-    #[arg(long, conflicts_with_all = ["scaffold_only", "private_key", "wait"])]
+    #[arg(long, conflicts_with_all = ["draft_only", "private_key", "wait"])]
     pub simulate: bool,
     /// Run Torii simulation first and include the server-side execution trace in the submit response.
     #[arg(long, conflicts_with = "simulate")]
@@ -2430,7 +2430,7 @@ impl Run for CallArgs {
                 context,
                 &authority,
                 self.private_key.as_deref(),
-                self.scaffold_only,
+                self.draft_only,
             )?
         };
         let target = resolve_contract_target(self.target)?;
@@ -2791,9 +2791,9 @@ fn resolve_contract_call_private_key<C: RunContext>(
     context: &C,
     authority: &AccountId,
     private_key_hex: Option<&str>,
-    scaffold_only: bool,
+    draft_only: bool,
 ) -> Result<Option<PrivateKey>> {
-    if scaffold_only {
+    if draft_only {
         return Ok(None);
     }
     if let Some(private_key_hex) = private_key_hex {
@@ -4064,7 +4064,6 @@ mod tests {
             }),
             None,
         );
-
         assert!(response.get("operation_receipt").is_none());
         assert!(response.get("tx_hash_hex").is_none());
         assert_eq!(
@@ -4086,6 +4085,7 @@ mod tests {
             "normalized_payload",
             "transaction_scaffold_b64",
             "signed_transaction_b64",
+            "transaction_payload_b64",
             "signing_message_b64",
         ] {
             assert!(

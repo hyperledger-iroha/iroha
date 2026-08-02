@@ -1316,6 +1316,10 @@ pub mod sorafs {
             pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
             /// Maximum checkpoint-plus-minimal-terminal-wrapper archive artifact size.
             pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES: Bytes<u64> = Bytes(40 * 1024 * 1024);
+            /// Minimum canonical archive artifact size admitted by V1.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MIN_BYTES_V1: u64 = 1024 * 1024;
+            /// Hard canonical archive artifact ceiling admitted by V1.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES_LIMIT_V1: u64 = 64 * 1024 * 1024;
             /// Finalized reconciliation and deadline-maintenance cadence.
             pub const WORKER_INTERVAL_MS: u64 = 1_000;
             /// Maximum native maintenance actions emitted in one scan.
@@ -1476,6 +1480,8 @@ pub mod sorafs {
             pub const MAX_SOURCE_JOBS_PER_TICK: usize = 16;
             /// Maximum governed source providers considered for one assignment.
             pub const MAX_SOURCE_PROVIDERS: usize = 1_024;
+            /// Hard deadline ceiling for one authenticated source operation.
+            pub const SOURCE_OPERATION_TIMEOUT_MS_LIMIT_V1: u64 = 24 * 60 * 60 * 1_000;
             /// Timeout for authenticated source fetch, verification, and storage.
             pub const SOURCE_OPERATION_TIMEOUT_MS: u64 = 5 * 60_000;
             /// Durable source-lease renewal cadence.
@@ -2954,6 +2960,11 @@ pub mod torii {
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS: usize = 1_024;
     /// Default maximum canonical appeal-finance checkpoint size.
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+    /// Minimum canonical appeal-finance checkpoint size admitted by V1.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MIN_BYTES_V1: u64 = 4 * 1024;
+    /// Hard canonical appeal-finance checkpoint ceiling admitted by V1.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES_LIMIT_V1: u64 =
+        512 * 1024 * 1024;
 
     /// Canonical first-release appeal-finance asset and policy defaults.
     pub mod sorafs_appeal_finance {

@@ -1,0 +1,214 @@
+//! Test-only extensions and the stable v2 apply test module.
+
+#[derive(Default)]
+pub(super) struct FailureInjection {
+    pub(super) kura_store: std::sync::atomic::AtomicBool,
+    pub(super) wsv_checkpoint: std::sync::atomic::AtomicBool,
+    pub(super) provider_ingest_archive_capture: std::sync::atomic::AtomicBool,
+    pub(super) reputation_archive_capture: std::sync::atomic::AtomicBool,
+}
+
+/// Test-only durable-application crash boundary.
+pub(super) enum CrashPoint {
+    /// After canonical block persistence.
+    KuraStore,
+    /// After the staged WSV checkpoint.
+    WsvCheckpoint,
+    /// After provider-ingest archive capture.
+    ProviderIngestArchiveCapture,
+    /// After reputation archive capture.
+    ReputationArchiveCapture,
+}
+
+/// Persist the exact payload, exact execution input, and immutable recovery
+/// record in crash-safe order after independently rebuilding every authority.
+#[cfg(test)]
+pub(crate) fn install_historical_autonomous_lane_recovery(
+    state: &State,
+    kura: &Kura,
+    input: &HistoricalAutonomousReservationInstallV1,
+) -> Result<HistoricalAutonomousLaneRecoveryInstallOutcome, V2ReservationLifecycleError> {
+    let record = preflight_historical_autonomous_lane_recovery(state, kura, input)?;
+    persist_preflighted_historical_autonomous_lane_recovery(kura, &record)
+}
+
+/// Persist one record whose complete State authority was already validated.
+/// Kura performs its bounded namespace preflight, durable dependency checks,
+/// and collision checks at the persistence boundary.
+#[cfg(test)]
+pub(crate) fn persist_preflighted_historical_autonomous_lane_recovery(
+    kura: &Kura,
+    record: &HistoricalAutonomousLaneRecoveryRecordV1,
+) -> Result<HistoricalAutonomousLaneRecoveryInstallOutcome, V2ReservationLifecycleError> {
+    persist_preflighted_historical_autonomous_lane_recoveries(kura, std::slice::from_ref(record))?
+        .pop()
+        .ok_or_else(|| {
+            invalid_historical_autonomous_recovery(
+                &record.installation_input(),
+                "single historical recovery persistence produced no outcome",
+            )
+        })
+}
+
+impl AutonomousLaneQueueCarrierCleanupAuthorization {
+    #[cfg(test)]
+    fn from_projection_for_test(
+        reservation_group: LaneQueueReservationGroupBindingV1,
+        projection: ProductionInFlightFirstReleaseTransitionProjection,
+    ) -> Result<Self, String> {
+        Self::from_authenticated(AuthenticatedCarrierApplicationProjection {
+            reservation_group,
+            projection,
+        })
+    }
+}
+
+impl AutonomousLaneQueueCarrierCleanupAuthorization {
+    #[cfg(test)]
+    fn accepted_projection_for_test(&self) -> ProductionInFlightFirstReleaseTransitionProjection {
+        *self.checked_apply_carrier.accepted_projection()
+    }
+}
+
+impl V2ApplyService {
+    #[cfg(test)]
+    fn finish_durable_apply_completion(
+        &self,
+        evidence: DurableApplicationEvidence,
+    ) -> Result<DurableApplyCompletion, V2ApplyError> {
+        let application_trace = evidence
+            .application_refinement_projection()
+            .ok_or_else(|| {
+                V2ApplyError::committed_recovery_required(
+                    "application refinement evidence",
+                    &"native application identity cannot be represented losslessly",
+                )
+            })?;
+        let checked_application = check_production_application_transition(application_trace)
+            .ok_or_else(|| {
+                V2ApplyError::committed_recovery_required(
+                    "application refinement evidence",
+                    &"durable application does not refine its Decision completion",
+                )
+            })?;
+        self.finish_durable_apply_completion_against(
+            evidence,
+            checked_application.into_projection(),
+        )
+    }
+}
+
+impl V2ApplyService {
+    pub(super) fn inject_test_crash(&self, point: CrashPoint) -> Result<(), V2ApplyError> {
+        let (requested, error) = match point {
+            CrashPoint::KuraStore => (
+                self.test_failures
+                    .kura_store
+                    .swap(false, std::sync::atomic::Ordering::Relaxed),
+                V2ApplyError::InjectedCrashAfterKuraStore,
+            ),
+            CrashPoint::WsvCheckpoint => (
+                self.test_failures
+                    .wsv_checkpoint
+                    .swap(false, std::sync::atomic::Ordering::Relaxed),
+                V2ApplyError::InjectedCrashAfterWsvCheckpoint,
+            ),
+            CrashPoint::ProviderIngestArchiveCapture => (
+                self.test_failures
+                    .provider_ingest_archive_capture
+                    .swap(false, std::sync::atomic::Ordering::Relaxed),
+                V2ApplyError::InjectedCrashAfterProviderIngestArchiveCapture,
+            ),
+            CrashPoint::ReputationArchiveCapture => (
+                self.test_failures
+                    .reputation_archive_capture
+                    .swap(false, std::sync::atomic::Ordering::Relaxed),
+                V2ApplyError::InjectedCrashAfterReputationArchiveCapture,
+            ),
+        };
+        if requested { Err(error) } else { Ok(()) }
+    }
+
+    #[cfg(test)]
+    fn fail_after_kura_store_for_test(&self) {
+        self.test_failures
+            .kura_store
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn fail_after_wsv_checkpoint_for_test(&self) {
+        self.test_failures
+            .wsv_checkpoint
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn fail_after_provider_ingest_archive_capture_for_test(&self) {
+        self.test_failures
+            .provider_ingest_archive_capture
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn fail_after_reputation_archive_capture_for_test(&self) {
+        self.test_failures
+            .reputation_archive_capture
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshot_mismatch_context(staged: &[u8], committed: &[u8]) -> String {
+    let first_difference = staged
+        .iter()
+        .zip(committed)
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| staged.len().min(committed.len()));
+    let context_start = first_difference.saturating_sub(256);
+    let staged_end = first_difference.saturating_add(768).min(staged.len());
+    let committed_end = first_difference.saturating_add(768).min(committed.len());
+    format!(
+        "first_difference={first_difference}, staged_len={}, committed_len={}, \
+         staged_context={:?}, committed_context={:?}",
+        staged.len(),
+        committed.len(),
+        String::from_utf8_lossy(&staged[context_start..staged_end]),
+        String::from_utf8_lossy(&committed[context_start..committed_end]),
+    )
+}
+
+/// Compatibility shim kept inside the test module only for older focused
+/// fixtures which deliberately exercise the single-process no-network
+/// boundary. Production callers must handle the typed recovery plan.
+fn reconcile_lane_reservation_ownership(
+    state: &State,
+    queue: &Queue,
+    kura: &Kura,
+    verified_active_context: &VerifiedHeightContext,
+) -> Result<LaneReservationReconciliationSummary, V2ReservationLifecycleError> {
+    match plan_lane_reservation_ownership(state, queue, kura, verified_active_context, None)? {
+        LaneReservationReconciliationPlanning::Ready(plan) => {
+            apply_lane_reservation_reconciliation_plan(queue, kura, plan)
+        }
+        LaneReservationReconciliationPlanning::RecoverCanonicalBodies(needs) => {
+            let height = needs.first().map_or(0, |need| need.height);
+            Err(V2ReservationLifecycleError::MissingCanonicalBody { height })
+        }
+        LaneReservationReconciliationPlanning::InstallHistoricalAutonomousRecoveries(installs) => {
+            let install = installs
+                .first()
+                .expect("historical recovery planning is never empty");
+            Err(
+                V2ReservationLifecycleError::HistoricalRecoveryInstallationMissing {
+                    recovery_id: install.recovery_id,
+                    lane_id: install.reservation_group.identity.lane_id,
+                },
+            )
+        }
+    }
+}
+
+include!("tests/v2_apply_unsealed_00.rs");
+include!("tests/v2_apply_unsealed_01.rs");
+include!("tests/v2_apply_unsealed_02.rs");

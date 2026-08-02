@@ -16898,9 +16898,11 @@ function parseSumeragiNativeParticipantApplications(value) {
       if (!states.has(state)) {
         throw new TypeError(`${itemContext}.state has an unknown variant`);
       }
-      if (state === "durably_applied" && applicationHeight === null) {
+      const requiresApplicationBlock = state === "committed_evidence_pending"
+        || state === "durably_applied";
+      if ((applicationHeight !== null) !== requiresApplicationBlock) {
         throw new TypeError(
-          `${itemContext} durably applied evidence requires an application block`,
+          `${itemContext} state and application block identity disagree`,
         );
       }
       return Object.freeze({
@@ -22265,6 +22267,12 @@ function requireExactLowerHex32String(value, name) {
   return requireExactLowerHexBytesString(value, name, 32);
 }
 
+function requireOptionalExactLowerHex32String(value, name) {
+  return value === undefined || value === null
+    ? null
+    : requireExactLowerHex32String(value, name);
+}
+
 function requireExactLowerHexBytesString(value, name, expectedBytes) {
   const literal = requireExactNonEmptyString(value, name);
   if (
@@ -23827,6 +23835,12 @@ function normalizeOptionalBase64Payload(value, name) {
     return null;
   }
   return normalizeRequiredBase64Payload(value, name);
+}
+
+function normalizeOptionalExactBase64Payload(value, name) {
+  return value === undefined || value === null
+    ? null
+    : normalizeRequiredExactBase64Payload(value, name);
 }
 
 function normalizeRequiredBase64Payload(value, name) {
@@ -25542,7 +25556,8 @@ function normalizeContractOperationReceipt(payload, context) {
 }
 
 function normalizeContractCallResponse(payload) {
-  const record = ensureRecord(payload, "contractCall response");
+  const context = "contractCall response";
+  const record = ensureRecord(payload, context);
   assertSupportedOptionKeys(
     record,
     new Set([
@@ -25557,108 +25572,57 @@ function normalizeContractCallResponse(payload) {
       "tx_hash_hex",
       "pipeline_status",
       "entrypoint_hash_hex",
-      "transaction_scaffold_b64",
-      "signed_transaction_b64",
+      "transaction_payload_b64",
       "signing_message_b64",
       "entrypoint",
       "operation_receipt",
     ]),
-    "contractCall response",
+    context,
   );
   const normalized = {
-    ok: requireExactBoolean(record.ok, "contractCall response.ok"),
-    submitted: requireExactBoolean(
-      record.submitted,
-      "contractCall response.submitted",
-    ),
-    dataspace: requireExactNonEmptyString(
-      record.dataspace,
-      "contractCall response.dataspace",
-    ),
-    code_hash_hex: requireExactLowerHex32String(
-      record.code_hash_hex,
-      "contractCall response.code_hash_hex",
-    ),
-    abi_hash_hex: requireExactLowerHex32String(
-      record.abi_hash_hex,
-      "contractCall response.abi_hash_hex",
-    ),
-    creation_time_ms: requireExactJsonUnsignedInteger(
-      record.creation_time_ms,
-      "contractCall response.creation_time_ms",
-      { allowZero: true },
-    ),
+    ok: requireExactBoolean(record.ok, `${context}.ok`),
+    submitted: requireExactBoolean(record.submitted, `${context}.submitted`),
+    dataspace: requireExactNonEmptyString(record.dataspace, `${context}.dataspace`),
+    code_hash_hex: requireExactLowerHex32String(record.code_hash_hex, `${context}.code_hash_hex`),
+    abi_hash_hex: requireExactLowerHex32String(record.abi_hash_hex, `${context}.abi_hash_hex`),
+    creation_time_ms: requireExactJsonUnsignedInteger(record.creation_time_ms, `${context}.creation_time_ms`, { allowZero: true }),
     transaction_ttl_ms:
       record.transaction_ttl_ms === undefined || record.transaction_ttl_ms === null
         ? null
         : requireExactJsonUnsignedInteger(
             record.transaction_ttl_ms,
-            "contractCall response.transaction_ttl_ms",
+            `${context}.transaction_ttl_ms`,
             { allowZero: false },
           ),
   };
   if (record.contract_address !== undefined && record.contract_address !== null) {
     normalized.contract_address = requireExactNonEmptyString(
       record.contract_address,
-      "contractCall response.contract_address",
+      `${context}.contract_address`,
     );
   }
-  if (record.tx_hash_hex !== undefined && record.tx_hash_hex !== null) {
-    normalized.tx_hash_hex = requireExactLowerHex32String(
-      record.tx_hash_hex,
-      "contractCall response.tx_hash_hex",
-    );
-  } else {
-    normalized.tx_hash_hex = null;
-  }
-  normalized.entrypoint_hash_hex =
-    record.entrypoint_hash_hex === undefined || record.entrypoint_hash_hex === null
-      ? null
-      : requireExactLowerHex32String(
-          record.entrypoint_hash_hex,
-          "contractCall response.entrypoint_hash_hex",
-        );
+  normalized.tx_hash_hex = requireOptionalExactLowerHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`);
+  normalized.entrypoint_hash_hex = requireOptionalExactLowerHex32String(record.entrypoint_hash_hex, `${context}.entrypoint_hash_hex`);
   normalized.entrypoint =
     record.entrypoint === undefined || record.entrypoint === null
       ? null
       : requireExactNonEmptyString(
           record.entrypoint,
-          "contractCall response.entrypoint",
+          `${context}.entrypoint`,
         );
-  normalized.transaction_scaffold_b64 =
-    record.transaction_scaffold_b64 === undefined || record.transaction_scaffold_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.transaction_scaffold_b64,
-          "contractCall response.transaction_scaffold_b64",
-        );
-  normalized.signed_transaction_b64 =
-    record.signed_transaction_b64 === undefined || record.signed_transaction_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.signed_transaction_b64,
-          "contractCall response.signed_transaction_b64",
-        );
-  normalized.signing_message_b64 =
-    record.signing_message_b64 === undefined || record.signing_message_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.signing_message_b64,
-          "contractCall response.signing_message_b64",
-        );
+  normalized.transaction_payload_b64 = normalizeOptionalExactBase64Payload(record.transaction_payload_b64, `${context}.transaction_payload_b64`);
+  normalized.signing_message_b64 = normalizeOptionalExactBase64Payload(record.signing_message_b64, `${context}.signing_message_b64`);
   if (record.pipeline_status !== undefined) {
     normalized.pipeline_status =
       record.pipeline_status === null
         ? null
         : normalizePipelineTransactionStatus(
             record.pipeline_status,
-            "contractCall response.pipeline_status",
+            `${context}.pipeline_status`,
           );
   }
-  normalized.operation_receipt = normalizeContractOperationReceipt(
-    record.operation_receipt,
-    "contractCall response.operation_receipt",
-  );
+
+  normalized.operation_receipt = normalizeContractOperationReceipt(record.operation_receipt, `${context}.operation_receipt`);
   return normalized;
 }
 
@@ -25668,26 +25632,28 @@ function normalizeContractCallDraftResponse(payload, request) {
   if (!response.ok || response.submitted) {
     throw new TypeError("contractCall draft must be successful and not submitted");
   }
-  if (response.tx_hash_hex !== null || response.pipeline_status != null) {
+  if (
+    response.tx_hash_hex !== null ||
+    response.entrypoint_hash_hex !== null ||
+    response.pipeline_status != null
+  ) {
     throw new TypeError("contractCall draft must not contain submission state");
   }
-  if (
-    response.transaction_scaffold_b64 === null ||
-    response.transaction_scaffold_b64 !== response.signed_transaction_b64
-  ) {
-    throw new TypeError("contractCall draft must contain one exact transaction scaffold");
-  }
-  decodeVerifyingKeyDraftBase64(
-    response.signing_message_b64,
-    "contractCall response.signing_message_b64",
-    { exactBytes: 32 },
+  normalizeAppApiTransactionDraft(
+    {
+      submitted: response.submitted,
+      transaction_payload_b64: response.transaction_payload_b64,
+      signing_message_b64: response.signing_message_b64,
+    },
+    "contractCall response",
   );
   if (
     response.entrypoint !== request.entrypoint ||
     receipt.operation_kind !== "contract_call" ||
     receipt.status !== "pending_signature" ||
     receipt.entrypoint !== request.entrypoint ||
-    receipt.tx_hash_hex !== null
+    receipt.tx_hash_hex !== null ||
+    receipt.entrypoint_hash_hex !== null
   ) {
     throw new TypeError("contractCall draft is not bound to the requested entrypoint");
   }
@@ -26621,29 +26587,35 @@ function normalizeMultisigContractCallResponse(
       `${context}.ok`,
     );
   }
-  return {
+  for (const retired of ["transaction_scaffold_b64", "signed_transaction_b64"]) {
+    if (Object.hasOwn(record, retired)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} contains retired field ${retired}`,
+        `${context}.${retired}`,
+      );
+    }
+  }
+  const normalized = {
     ok: true,
     resolved_multisig_account_id: requireExactAccountId(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
-    submitted: optionalBoolean(record.submitted, `${context}.submitted`),
+    submitted: requireExactBoolean(record.submitted, `${context}.submitted`),
     proposal_id: optionalString(record.proposal_id, `${context}.proposal_id`),
-    instructions_hash:
-      record.instructions_hash === undefined || record.instructions_hash === null
-        ? null
-        : normalizeHex32String(record.instructions_hash, `${context}.instructions_hash`),
-    tx_hash_hex:
-      record.tx_hash_hex === undefined || record.tx_hash_hex === null
-        ? null
-        : normalizeHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`),
-    executed_tx_hash_hex:
-      record.executed_tx_hash_hex === undefined || record.executed_tx_hash_hex === null
-        ? null
-        : normalizeHex32String(
-            record.executed_tx_hash_hex,
-            `${context}.executed_tx_hash_hex`,
-          ),
+    instructions_hash: requireOptionalExactLowerHex32String(
+      record.instructions_hash,
+      `${context}.instructions_hash`,
+    ),
+    tx_hash_hex: requireOptionalExactLowerHex32String(
+      record.tx_hash_hex,
+      `${context}.tx_hash_hex`,
+    ),
+    executed_tx_hash_hex: requireOptionalExactLowerHex32String(
+      record.executed_tx_hash_hex,
+      `${context}.executed_tx_hash_hex`,
+    ),
     creation_time_ms:
       record.creation_time_ms === undefined || record.creation_time_ms === null
         ? null
@@ -26652,11 +26624,41 @@ function normalizeMultisigContractCallResponse(
             `${context}.creation_time_ms`,
             { allowZero: true },
           ),
-    signing_message_b64: normalizeOptionalBase64Payload(
+    transaction_payload_b64: normalizeOptionalExactBase64Payload(
+      record.transaction_payload_b64,
+      `${context}.transaction_payload_b64`,
+    ),
+    signing_message_b64: normalizeOptionalExactBase64Payload(
       record.signing_message_b64,
       `${context}.signing_message_b64`,
     ),
   };
+  if (normalized.submitted) {
+    if (
+      normalized.tx_hash_hex === null ||
+      normalized.transaction_payload_b64 !== null ||
+      normalized.signing_message_b64 !== null
+    ) {
+      throw new TypeError(
+        `${context} submitted response must contain only the final transaction hash`,
+      );
+    }
+  } else {
+    if (normalized.tx_hash_hex !== null) {
+      throw new TypeError(
+        `${context} unsigned response must contain exactly one payload and signing-message pair`,
+      );
+    }
+    normalizeAppApiTransactionDraft(
+      {
+        submitted: normalized.submitted,
+        transaction_payload_b64: normalized.transaction_payload_b64,
+        signing_message_b64: normalized.signing_message_b64,
+      },
+      context,
+    );
+  }
+  return normalized;
 }
 
 function normalizeMultisigSpecResponse(payload, context = "multisig spec response") {

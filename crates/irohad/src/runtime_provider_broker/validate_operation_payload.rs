@@ -97,6 +97,7 @@ fn validate_operation_payload(
                 || slot == head_auth_slot
                 || slot == checkpoint_slot
                 || slot == stream_token_slot
+                || slot == stream_token_gateway_admission_slot
                 || slot == appeal_signer_slot
                 || slot == appeal_checkpoint_slot
                 || slot == potr_gateway_slot
@@ -683,7 +684,7 @@ fn validate_operation_payload(
             )?;
             validate_gateway_compliance_fetch_request(&fetch)?;
         }
-        (slot, OPERATION_POP_RUNTIME_RESOLVE_V1) if slot == pop_registry_slot => {
+        (slot, OPERATION_POP_RUNTIME_OPEN_V1) if slot == pop_registry_slot => {
             let exact = decode_canonical::<PopCredentialRuntimeBindingWireV1>(
                 &request.payload,
                 MAX_POP_RUNTIME_FRAME_BYTES_V1,
@@ -692,6 +693,16 @@ fn validate_operation_payload(
                 return Err(BrokerError::BindingMismatch);
             }
             pop_runtime_bindings_from_wire(&request.binding)?;
+        }
+        (slot, OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1)
+        | (slot, OPERATION_POP_WALLET_RECIPIENT_OPEN_V1)
+            if slot == pop_registry_slot =>
+        {
+            let open = decode_canonical::<PopRecipientOpenRequestWireV1>(
+                &request.payload,
+                MAX_POP_RUNTIME_FRAME_BYTES_V1,
+            )?;
+            validate_pop_recipient_open_request(&open, request.operation)?;
         }
         (slot, OPERATION_POP_ISSUER_SIGN_V1) if slot == pop_registry_slot => {
             let sign = decode_canonical::<PopIssuerSignRequestWireV1>(

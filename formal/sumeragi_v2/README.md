@@ -372,7 +372,8 @@ certificate round.
   publication/pruning order, same-route control-only treatment, unchanged
   reservation identity, single ownership, a control-only autonomous anchor,
   durable full-candidate authorization, ordered two-phase release, ABA-safe
-  recreation, at-most-once canonical application, exact global QueuePlan CAS,
+  recreation, exact pristine/post-block-pre-vote/finalized carrier metadata,
+  at-most-once canonical application, exact global QueuePlan CAS,
   certificate-before-acceptance durability, Exact-gated queue eligibility,
   immutable admission tombstones, and cancellation. The closure-ledger
   predicates additionally cover atomic route publication, quorum-bound drain
@@ -425,21 +426,29 @@ certificate round.
   wake-up, predecessor drop, successor retry, frozen recipients, and Kura
   revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
   exact Kura replica tests and four exact configuration tests; the complete
-  402-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  469-test `G-UNIT` run, formal-engine receipts, and network corridors remain
   separate release obligations.
-  Seventy-three `_bug.cfg` controls deliberately weaken one boundary each and
+  Ninety-seven `_bug.cfg` controls deliberately weaken one boundary each and
   must produce the named invariant counterexample.
   `multilane_source_bindings.json` binds each kernel to current Rust items and
   semantic tokens; `check_sumeragi_v2_multilane_models.py` validates that
   structure before the default TLC matrix. The Native binding includes the
   QC-authenticated manifest builder, manifest-before-receipt publication,
-  atomic latest-index write/readback, bounded latest lookup, and the
+  atomic latest-index write/readback, authenticated crash-durable temporary
+  recovery, exact-object pruning through authenticated open handles plus
+  inode/metadata/namespace rechecks, bounded latest lookup, and the
   Kura-before-WSV application boundary. The autonomous binding includes
   exclusion-aware FIFO reservation, the durable Queue/Kura release barrier,
   route/incarnation-first canonical source ordering, startup ownership
   reconciliation, bounded canonical-body recovery whose complete-wire length
   is Commit-QC-signed, durable historical-task installation before Queue
-  publication, and exact full-candidate signing authorization.
+  publication, exact full-candidate signing authorization, and all three
+  autonomous carrier commit surfaces. The pre-vote surface retains the exact
+  encoded autonomous event prefix while separately binding the complete
+  deterministic carrier event vector. Final application byte-compares that
+  complete vector before publication, requires the live buffer to be drained,
+  and reconstructs the certified write-set root from the retained autonomous
+  bytes at metadata mint and State commit.
   The QueuePlan binding covers the shared V2 binding and coordinator quorum,
   Kura-before-wake-before-WSV public acceptance, immutable registry CAS,
   Exact-gated autonomous ownership, restart/TTL retention, and exact
@@ -448,7 +457,7 @@ certificate round.
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.
   The same schema-5 ledger machine-maps every conceptual `ML-MUT-*` ID from
-  the closure ledger. `tla_counterexample` entries cover every and only the 73
+  the closure ledger. `tla_counterexample` entries cover every and only the 99
   production-refinement `_bug.cfg` files. Its separate
   `composed_state_action_relation_no_trace_extraction` contract binds the
   accepted payload schema V2 in `LaneExecutablePayloadV1`, QueuePlan journal
@@ -499,7 +508,7 @@ certificate round.
   | Kernel | Fixed configuration | `Next` bound |
   | --- | --- | ---: |
   | autoscale lifecycle | `multilane_autoscale_lifecycle_fixed.cfg` | 8 |
-  | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |
+  | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 8 |
   | autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |
   | QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |
   | Kura replica retention | `kura_replica_retention_fixed.cfg` | 8 |

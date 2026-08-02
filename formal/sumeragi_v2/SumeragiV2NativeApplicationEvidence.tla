@@ -28,6 +28,36 @@ CONSTANTS
   \* @type: Int;
   SourceCount
 
+NativeSourceClaimV4FieldMutationModes ==
+  {"DivergentSourceClaimSourceId",
+   "DivergentSourceClaimTxEntrypointHash",
+   "DivergentSourceClaimPlanDigest",
+   "DivergentSourceClaimRoundContextId",
+   "DivergentSourceClaimRoundHeight",
+   "DivergentSourceClaimRoundView",
+   "DivergentSourceClaimEpoch",
+   "DivergentSourceClaimChainIdHash",
+   "DivergentSourceClaimAuthorityContextHeight",
+   "DivergentSourceClaimCoordinatorLaneId",
+   "DivergentSourceClaimCoordinatorDataspaceId",
+   "DivergentSourceClaimCoordinatorLaneIncarnation",
+   "DivergentSourceClaimPlannedCoordinatorBlockHeight",
+   "DivergentSourceClaimCoordinatorLaneBlockView",
+   "DivergentSourceClaimCoordinatorProposalHash",
+   "DivergentSourceClaimParticipantLaneId",
+   "DivergentSourceClaimParticipantDataspaceId",
+   "DivergentSourceClaimParticipantLaneIncarnation"}
+
+NativeSourceClaimParticipantMembershipMutationMode ==
+  "DivergentSourceClaimParticipantMembership"
+
+NativeSourceClaimPreciseMutationModes ==
+  NativeSourceClaimV4FieldMutationModes
+    \union {NativeSourceClaimParticipantMembershipMutationMode}
+
+NativeSourceClaimMutationModes ==
+  NativeSourceClaimPreciseMutationModes \union {"DivergentSourceClaim"}
+
 NativeEvidenceModes ==
   {"Fixed", "PublishFrontierEarly", "PruneWithHashOnly",
    "SeparateSameRouteMarker", "DivergentSourceClaim",
@@ -40,16 +70,25 @@ NativeEvidenceModes ==
    "RetainedPredecessorDrift", "MutatingUnifiedStartupPlan",
    "UncoalescedCanonicalBodyNeeds", "PartialUnifiedStartupPreflight",
    "QueueBeforeEvidenceReadback", "MissingReverseMergeCarrier",
-   "OrphanMergeCarrier", "SkipPostCacheCarrierReconcile"}
+   "OrphanMergeCarrier", "SkipPostCacheCarrierReconcile",
+   "RepairHistoricalSiblingAsActive", "PruneWithoutProtectedLatest",
+   "PruneNamespaceRebind", "DiscardAuthenticatedLatestTemp"}
+  \union NativeSourceClaimPreciseMutationModes
 
 NativeEvidencePhases ==
   {"Certified", "FinalityDurable", "ManifestTempDurable",
    "ManifestDurable", "ReceiptTempDurable", "ReceiptDurable",
-   "LatestDurable", "Published"}
+   "LatestTempDurable", "LatestTempCrashed", "LatestDurable", "Published"}
+
+NativeLatestTempPhases == {"LatestTempDurable", "LatestTempCrashed"}
 
 NativePruneStages ==
   {"Idle", "TempDurable", "IntentDurable",
    "ManifestUnlinked", "ReceiptUnlinked", "Completed"}
+
+NativeSourceClaimPhases ==
+  {"Unrecorded", "Durable", "Crashed", "Reloaded",
+   "ExactReplayAccepted", "RetryChecked"}
 
 UnifiedStartupRepairStages ==
   {"Unplanned", "NeedBodies", "BodiesRecovered", "CarrierPreflighted",
@@ -63,6 +102,21 @@ UnifiedEvidenceRepairGroups ==
   {OrdinaryReceiptRepairGroup, NativeMarkerRepairGroup,
    MergeCarrierRepairGroup}
 UnifiedEvidenceRepairGroupCount == Cardinality(UnifiedEvidenceRepairGroups)
+
+\* A finalized global carrier authenticates every Native participant leaf it
+\* committed, including a historical incarnation that State has since
+\* advanced, retired, and recreated. Startup repair must authenticate that
+\* complete manifest without treating every authenticated leaf as a current
+\* State-marker repair target.
+ActiveStateMarkerRouteIdentity ==
+  "lane=1/dataspace=1/incarnation=2"
+HistoricalSiblingManifestRouteIdentity ==
+  "lane=1/dataspace=1/incarnation=1"
+QcAuthenticatedCarrierManifestRoutes ==
+  {ActiveStateMarkerRouteIdentity,
+   HistoricalSiblingManifestRouteIdentity}
+ExactActiveStateMarkerRepairRoutes ==
+  {ActiveStateMarkerRouteIdentity}
 
 TargetHeight == 3
 ExtraIncomingHeight == 4
@@ -78,7 +132,7 @@ PublicationTransientByteLimit ==
   StableAggregateByteLimit + IncomingPairByteLimit
 
 NoHeight == 0
-PruneIntentVersion == 1
+PruneIntentVersion == 2
 ActiveRoute == 1
 ActiveIncarnation == 2
 OldestPrunableHeight == 1
@@ -90,6 +144,278 @@ PruneTargetHeight ==
 
 ManifestArtifactHash(height) == height + 10
 ReceiptArtifactHash(height) == height + 20
+
+(***************************************************************************
+The V4 signing journal is represented as an append-only durable record plus
+the route-keyed source claim reconstructed from it. Every bound scalar uses a
+separate record field. The transaction entrypoint hash also carries its type
+tag, so it cannot be confused with an untyped plan, proposal, or settlement
+hash. Participant membership is independent of the three participant-route
+fields: membership says which participant leg the routing plan authorizes,
+while the participant claim binds that member to one route and incarnation.
+
+The bounded trace persists one exact record, crashes after durability, loses
+all volatile state, reloads the exact source-to-claim map, accepts an exact
+idempotent replay, and finally checks one divergent retry. Fixed mode rejects
+that retry. Each mutation mode changes one field and weakens only that field's
+comparison; the legacy aggregate mutation changes and weakens every field.
+***************************************************************************)
+
+ExactClaimValue == 1
+DivergentClaimValue == 2
+
+ExactSourceClaimKey == ExactClaimValue
+SourceClaimKeys == {ExactSourceClaimKey}
+ExactParticipantMember == ExactClaimValue
+UnexpectedParticipantMember == DivergentClaimValue
+
+TypedTransactionEntrypointHash(digest) ==
+  [type_tag |-> "TransactionEntrypoint", digest |-> digest]
+
+NativeSourceSessionClaimV4(
+    sourceId,
+    txEntrypointHash,
+    planDigest,
+    roundContextId,
+    roundHeight,
+    roundView,
+    epochValue,
+    chainIdHash,
+    authorityContextHeight,
+    coordinatorLaneId,
+    coordinatorDataspaceId,
+    coordinatorLaneIncarnation,
+    plannedCoordinatorBlockHeight,
+    coordinatorLaneBlockView,
+    coordinatorProposalHash) ==
+  [source_id |-> sourceId,
+   tx_entrypoint_hash |-> TypedTransactionEntrypointHash(txEntrypointHash),
+   plan_digest |-> planDigest,
+   round |-> [context_id |-> roundContextId,
+              height |-> roundHeight,
+              view |-> roundView],
+   epoch |-> epochValue,
+   chain_id_hash |-> chainIdHash,
+   authority_context_height |-> authorityContextHeight,
+   coordinator_lane_id |-> coordinatorLaneId,
+   coordinator_dataspace_id |-> coordinatorDataspaceId,
+   coordinator_lane_incarnation |-> coordinatorLaneIncarnation,
+   planned_coordinator_block_height |-> plannedCoordinatorBlockHeight,
+   coordinator_lane_block_view |-> coordinatorLaneBlockView,
+   coordinator_proposal_hash |-> coordinatorProposalHash]
+
+NativeSourceParticipantClaimV4(laneId, dataspaceId, laneIncarnation) ==
+  [lane_id |-> laneId,
+   dataspace_id |-> dataspaceId,
+   lane_incarnation |-> laneIncarnation]
+
+NativeDurableSourceClaimV4(sessionClaim, participants) ==
+  [session |-> sessionClaim, participants |-> participants]
+
+NativeSourceClaimAuthorization(
+    sourceKey, sessionClaim, participantMember, participantClaim) ==
+  [source_key |-> sourceKey,
+   session |-> sessionClaim,
+   participant_member |-> participantMember,
+   participant |-> participantClaim]
+
+ExactSourceSessionClaim ==
+  NativeSourceSessionClaimV4(
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue,
+    ExactClaimValue)
+
+ExactSourceParticipantClaim ==
+  NativeSourceParticipantClaimV4(
+    ExactClaimValue, ExactClaimValue, ExactClaimValue)
+
+ExactParticipantClaims ==
+  [member \in {ExactParticipantMember} |-> ExactSourceParticipantClaim]
+
+ExactDurableSourceClaim ==
+  NativeDurableSourceClaimV4(
+    ExactSourceSessionClaim, ExactParticipantClaims)
+
+EmptySourceClaimMap ==
+  [source \in {} |-> ExactDurableSourceClaim]
+
+ExactSourceClaimMap ==
+  [source \in SourceClaimKeys |-> ExactDurableSourceClaim]
+
+ExactSourceClaimAuthorization ==
+  NativeSourceClaimAuthorization(
+    ExactSourceClaimKey,
+    ExactSourceSessionClaim,
+    ExactParticipantMember,
+    ExactSourceParticipantClaim)
+
+SourceClaimMapFromJournalAuthorization(authorization) ==
+  [source \in {authorization.source_key} |->
+     NativeDurableSourceClaimV4(
+       authorization.session,
+       [member \in {authorization.participant_member} |->
+          authorization.participant])]
+
+ReconstructSourceClaimMapFromJournal(records) ==
+  IF records = {}
+  THEN EmptySourceClaimMap
+  ELSE
+    LET authorization == CHOOSE record \in records: TRUE
+    IN SourceClaimMapFromJournalAuthorization(authorization)
+
+RetryFieldDiverges(fieldMode) ==
+  IF Mode \in NativeSourceClaimMutationModes
+  THEN Mode = "DivergentSourceClaim" \/ Mode = fieldMode
+  ELSE fieldMode = "DivergentSourceClaimPlanDigest"
+
+RetryClaimValue(fieldMode) ==
+  IF RetryFieldDiverges(fieldMode)
+  THEN DivergentClaimValue
+  ELSE ExactClaimValue
+
+RetrySourceSessionClaim ==
+  NativeSourceSessionClaimV4(
+    RetryClaimValue("DivergentSourceClaimSourceId"),
+    RetryClaimValue("DivergentSourceClaimTxEntrypointHash"),
+    RetryClaimValue("DivergentSourceClaimPlanDigest"),
+    RetryClaimValue("DivergentSourceClaimRoundContextId"),
+    RetryClaimValue("DivergentSourceClaimRoundHeight"),
+    RetryClaimValue("DivergentSourceClaimRoundView"),
+    RetryClaimValue("DivergentSourceClaimEpoch"),
+    RetryClaimValue("DivergentSourceClaimChainIdHash"),
+    RetryClaimValue("DivergentSourceClaimAuthorityContextHeight"),
+    RetryClaimValue("DivergentSourceClaimCoordinatorLaneId"),
+    RetryClaimValue("DivergentSourceClaimCoordinatorDataspaceId"),
+    RetryClaimValue("DivergentSourceClaimCoordinatorLaneIncarnation"),
+    RetryClaimValue("DivergentSourceClaimPlannedCoordinatorBlockHeight"),
+    RetryClaimValue("DivergentSourceClaimCoordinatorLaneBlockView"),
+    RetryClaimValue("DivergentSourceClaimCoordinatorProposalHash"))
+
+RetrySourceParticipantClaim ==
+  NativeSourceParticipantClaimV4(
+    RetryClaimValue("DivergentSourceClaimParticipantLaneId"),
+    RetryClaimValue("DivergentSourceClaimParticipantDataspaceId"),
+    RetryClaimValue("DivergentSourceClaimParticipantLaneIncarnation"))
+
+RetryParticipantMember ==
+  IF Mode \in
+       {"DivergentSourceClaim",
+        NativeSourceClaimParticipantMembershipMutationMode}
+  THEN UnexpectedParticipantMember
+  ELSE ExactParticipantMember
+
+RetrySourceClaimAuthorization ==
+  NativeSourceClaimAuthorization(
+    ExactSourceClaimKey,
+    RetrySourceSessionClaim,
+    RetryParticipantMember,
+    RetrySourceParticipantClaim)
+
+SourceClaimFieldAccepted(fieldMode, stored, candidate) ==
+  \/ stored = candidate
+  \/ Mode = fieldMode
+  \/ Mode = "DivergentSourceClaim"
+
+SourceSessionClaimAccepted(stored, candidate) ==
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimSourceId",
+       stored.source_id,
+       candidate.source_id)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimTxEntrypointHash",
+       stored.tx_entrypoint_hash,
+       candidate.tx_entrypoint_hash)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimPlanDigest",
+       stored.plan_digest,
+       candidate.plan_digest)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimRoundContextId",
+       stored.round.context_id,
+       candidate.round.context_id)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimRoundHeight",
+       stored.round.height,
+       candidate.round.height)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimRoundView",
+       stored.round.view,
+       candidate.round.view)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimEpoch", stored.epoch, candidate.epoch)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimChainIdHash",
+       stored.chain_id_hash,
+       candidate.chain_id_hash)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimAuthorityContextHeight",
+       stored.authority_context_height,
+       candidate.authority_context_height)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimCoordinatorLaneId",
+       stored.coordinator_lane_id,
+       candidate.coordinator_lane_id)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimCoordinatorDataspaceId",
+       stored.coordinator_dataspace_id,
+       candidate.coordinator_dataspace_id)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimCoordinatorLaneIncarnation",
+       stored.coordinator_lane_incarnation,
+       candidate.coordinator_lane_incarnation)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimPlannedCoordinatorBlockHeight",
+       stored.planned_coordinator_block_height,
+       candidate.planned_coordinator_block_height)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimCoordinatorLaneBlockView",
+       stored.coordinator_lane_block_view,
+       candidate.coordinator_lane_block_view)
+  /\ SourceClaimFieldAccepted(
+       "DivergentSourceClaimCoordinatorProposalHash",
+       stored.coordinator_proposal_hash,
+       candidate.coordinator_proposal_hash)
+
+SourceParticipantClaimAccepted(stored, member, candidate) ==
+  IF ExactParticipantMember \in DOMAIN stored.participants
+  THEN
+    /\ \/ member \in DOMAIN stored.participants
+          \/ Mode = NativeSourceClaimParticipantMembershipMutationMode
+          \/ Mode = "DivergentSourceClaim"
+    /\ SourceClaimFieldAccepted(
+         "DivergentSourceClaimParticipantLaneId",
+         stored.participants[ExactParticipantMember].lane_id,
+         candidate.lane_id)
+    /\ SourceClaimFieldAccepted(
+         "DivergentSourceClaimParticipantDataspaceId",
+         stored.participants[ExactParticipantMember].dataspace_id,
+         candidate.dataspace_id)
+    /\ SourceClaimFieldAccepted(
+         "DivergentSourceClaimParticipantLaneIncarnation",
+         stored.participants[ExactParticipantMember].lane_incarnation,
+         candidate.lane_incarnation)
+  ELSE FALSE
+
+SourceClaimGuardAccepts(
+    sourceClaimMap, sessionClaim, participantMember, participantClaim) ==
+  IF ExactSourceClaimKey \in DOMAIN sourceClaimMap
+  THEN LET stored == sourceClaimMap[ExactSourceClaimKey]
+       IN /\ SourceSessionClaimAccepted(stored.session, sessionClaim)
+          /\ SourceParticipantClaimAccepted(
+               stored, participantMember, participantClaim)
+  ELSE FALSE
 
 NativeEvidenceConfiguration ==
   /\ Mode \in NativeEvidenceModes
@@ -108,6 +434,8 @@ VARIABLES
   manifestTempFiles,
   \* @type: Set(Int);
   receiptTempFiles,
+  \* @type: Set(Int);
+  latestIndexTempFiles,
   \* @type: Bool;
   manifestTempAuthenticated,
   \* @type: Bool;
@@ -174,6 +502,12 @@ VARIABLES
   pruneIntentManifestHash,
   \* @type: Int;
   pruneIntentReceiptHash,
+  \* @type: Int;
+  pruneIntentProtectedLatestHeight,
+  \* @type: Int;
+  pruneIntentProtectedLatestManifestHash,
+  \* @type: Int;
+  pruneIntentProtectedLatestReceiptHash,
   \* @type: Set(Int);
   pruneIntentHeights,
   \* @type: Set(Int);
@@ -184,16 +518,29 @@ VARIABLES
   startupRepairCompleted,
   \* @type: Bool;
   durableApplicationLost,
+  \* True only when every unlink removed the same single-link regular file
+  \* whose open handle, bytes, metadata, and namespace were authenticated.
+  \* @type: Bool;
+  pruneExactObjectRemoval,
   \* @type: Bool;
   sameRouteSettled,
   \* @type: Bool;
   separateParticipantMarker,
+  \* Exact append-only V4 signing-claim crash/reload state.
+  \* @type: Str;
+  sourceClaimPhase,
+  volatileSourceClaimMap,
+  durableSourceClaimJournalRecords,
   \* @type: Bool;
-  sourceClaimRecorded,
-  \* @type: Int;
-  sourceClaimSessionCount,
+  sourceClaimReloadReconstructed,
   \* @type: Bool;
-  sourceClaimFieldsComplete,
+  sourceClaimExactReplayAccepted,
+  \* @type: Bool;
+  sourceClaimDivergentRetryAttempted,
+  \* @type: Bool;
+  sourceClaimDivergentRetryAccepted,
+  \* @type: Bool;
+  sourceClaimDivergentRetryRejected,
   \* @type: Bool;
   nativeAdmissionAttempted,
   \* @type: Bool;
@@ -247,11 +594,22 @@ VARIABLES
   \* @type: Bool;
   bodyCachePopulated,
   \* @type: Bool;
-  postCacheCarrierPreflighted
+  postCacheCarrierPreflighted,
+  \* Full route set whose manifest leaves were authenticated against the
+  \* carrier QC, deliberately broader than the current State-marker target.
+  \* @type: Set(Str);
+  authenticatedCarrierManifestRoutes,
+  \* @type: Set(Str);
+  plannedNativeMarkerRepairRoutes,
+  \* @type: Set(Str);
+  preflightedNativeMarkerRepairRoutes,
+  \* @type: Set(Str);
+  appliedNativeMarkerRepairRoutes
 
 publicationVars ==
   <<phase, finalizedHeights, manifestFiles, receiptFiles,
-    manifestTempFiles, receiptTempFiles, manifestTempAuthenticated,
+    manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
+    manifestTempAuthenticated,
     receiptTempAuthenticated, unauthenticatedTempPromoted,
     publicationPairPendingCleanup,
     retainedPairIdentitiesExact, retainedPredecessorChainExact,
@@ -269,13 +627,26 @@ pruneVars ==
     pruneTempPublishedNoClobber, pruneIntentStoredVersion,
     pruneIntentRoute, pruneIntentIncarnation,
     pruneIntentManifestHash, pruneIntentReceiptHash,
+    pruneIntentProtectedLatestHeight,
+    pruneIntentProtectedLatestManifestHash,
+    pruneIntentProtectedLatestReceiptHash,
     pruneIntentHeights, removedEvidenceHeights, startupRepairRequired,
-    startupRepairCompleted, durableApplicationLost>>
+    startupRepairCompleted, durableApplicationLost,
+    pruneExactObjectRemoval>>
 
 sameRouteVars == <<sameRouteSettled, separateParticipantMarker>>
 
 sourceClaimVars ==
-  <<sourceClaimRecorded, sourceClaimSessionCount, sourceClaimFieldsComplete>>
+  <<sourceClaimPhase, volatileSourceClaimMap,
+    durableSourceClaimJournalRecords, sourceClaimReloadReconstructed,
+    sourceClaimExactReplayAccepted, sourceClaimDivergentRetryAttempted,
+    sourceClaimDivergentRetryAccepted, sourceClaimDivergentRetryRejected>>
+
+startupRepairRouteVars ==
+  <<authenticatedCarrierManifestRoutes,
+    plannedNativeMarkerRepairRoutes,
+    preflightedNativeMarkerRepairRoutes,
+    appliedNativeMarkerRepairRoutes>>
 
 startupRepairVars ==
   <<startupRepairStage, plannedEvidenceRepairGroups,
@@ -286,7 +657,8 @@ startupRepairVars ==
     queueGateOpen, queueReservationReconciled,
     finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
     mergeCarrierRecordExact, mergeCarrierRepairPlanned,
-    bodyCachePopulated, postCacheCarrierPreflighted>>
+    bodyCachePopulated, postCacheCarrierPreflighted,
+    startupRepairRouteVars>>
 
 claimVars == <<sourceClaimVars, startupRepairVars>>
 
@@ -300,7 +672,8 @@ groupVars ==
 
 vars ==
   <<phase, finalizedHeights, manifestFiles, receiptFiles,
-    manifestTempFiles, receiptTempFiles, manifestTempAuthenticated,
+    manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
+    manifestTempAuthenticated,
     receiptTempAuthenticated, unauthenticatedTempPromoted,
     publicationPairPendingCleanup,
     retainedPairIdentitiesExact, retainedPredecessorChainExact,
@@ -316,10 +689,17 @@ vars ==
     pruneTempPublishedNoClobber, pruneIntentStoredVersion,
     pruneIntentRoute, pruneIntentIncarnation,
     pruneIntentManifestHash, pruneIntentReceiptHash,
+    pruneIntentProtectedLatestHeight,
+    pruneIntentProtectedLatestManifestHash,
+    pruneIntentProtectedLatestReceiptHash,
     pruneIntentHeights, removedEvidenceHeights, startupRepairRequired,
     startupRepairCompleted, durableApplicationLost,
+    pruneExactObjectRemoval,
     sameRouteSettled, separateParticipantMarker,
-    sourceClaimRecorded, sourceClaimSessionCount, sourceClaimFieldsComplete,
+    sourceClaimPhase, volatileSourceClaimMap,
+    durableSourceClaimJournalRecords, sourceClaimReloadReconstructed,
+    sourceClaimExactReplayAccepted, sourceClaimDivergentRetryAttempted,
+    sourceClaimDivergentRetryAccepted, sourceClaimDivergentRetryRejected,
     nativeAdmissionAttempted, activeIncarnationExact, predecessorExact,
     contiguousNextHeight, groupApplied, groupUnique, groupOrdered,
     groupExactCover, groupAppliedAtomically,
@@ -331,7 +711,11 @@ vars ==
     queueGateOpen, queueReservationReconciled,
     finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
     mergeCarrierRecordExact, mergeCarrierRepairPlanned,
-    bodyCachePopulated, postCacheCarrierPreflighted>>
+    bodyCachePopulated, postCacheCarrierPreflighted,
+    authenticatedCarrierManifestRoutes,
+    plannedNativeMarkerRepairRoutes,
+    preflightedNativeMarkerRepairRoutes,
+    appliedNativeMarkerRepairRoutes>>
 
 finalityDurable == TargetHeight \in finalizedHeights
 manifestDurable == TargetHeight \in manifestFiles
@@ -380,6 +764,17 @@ HighestHalfRepairOnly ==
   /\ \A partial \in EffectivePartialHeights:
        \A retained \in EffectiveRetainedHeights: retained <= partial
 
+PruneIntentProtectedLatestExact ==
+  /\ pruneIntentProtectedLatestHeight \in
+       (manifestFiles \intersect receiptFiles \intersect finalizedHeights)
+  /\ pruneIntentProtectedLatestManifestHash =
+       ManifestArtifactHash(pruneIntentProtectedLatestHeight)
+  /\ pruneIntentProtectedLatestReceiptHash =
+       ReceiptArtifactHash(pruneIntentProtectedLatestHeight)
+  /\ pruneIntentProtectedLatestHeight \notin pruneIntentHeights
+  /\ \A removedHeight \in pruneIntentHeights:
+       removedHeight < pruneIntentProtectedLatestHeight
+
 ExactPruneIntentIdentity ==
   /\ pruneIntentStoredVersion = PruneIntentVersion
   /\ pruneIntentRoute = ActiveRoute
@@ -387,7 +782,12 @@ ExactPruneIntentIdentity ==
   /\ pruneIntentHeights = {PruneTargetHeight}
   /\ pruneIntentManifestHash = ManifestArtifactHash(PruneTargetHeight)
   /\ pruneIntentReceiptHash = ReceiptArtifactHash(PruneTargetHeight)
-  /\ latestIndexHeight \notin pruneIntentHeights
+  /\ pruneIntentProtectedLatestHeight = latestIndexHeight
+  /\ pruneIntentProtectedLatestManifestHash =
+       ManifestArtifactHash(latestIndexHeight)
+  /\ pruneIntentProtectedLatestReceiptHash =
+       ReceiptArtifactHash(latestIndexHeight)
+  /\ PruneIntentProtectedLatestExact
 
 ResetPruneIntentIdentity ==
   /\ pruneIntentStoredVersion = 0
@@ -395,6 +795,9 @@ ResetPruneIntentIdentity ==
   /\ pruneIntentIncarnation = 0
   /\ pruneIntentManifestHash = 0
   /\ pruneIntentReceiptHash = 0
+  /\ pruneIntentProtectedLatestHeight = NoHeight
+  /\ pruneIntentProtectedLatestManifestHash = 0
+  /\ pruneIntentProtectedLatestReceiptHash = 0
   /\ pruneIntentHeights = {}
 
 Init ==
@@ -405,6 +808,7 @@ Init ==
   /\ receiptFiles = InitialEvidenceHeights
   /\ manifestTempFiles = {}
   /\ receiptTempFiles = {}
+  /\ latestIndexTempFiles = {}
   /\ manifestTempAuthenticated = FALSE
   /\ receiptTempAuthenticated = FALSE
   /\ unauthenticatedTempPromoted = FALSE
@@ -438,16 +842,25 @@ Init ==
   /\ pruneIntentIncarnation = 0
   /\ pruneIntentManifestHash = 0
   /\ pruneIntentReceiptHash = 0
+  /\ pruneIntentProtectedLatestHeight = NoHeight
+  /\ pruneIntentProtectedLatestManifestHash = 0
+  /\ pruneIntentProtectedLatestReceiptHash = 0
   /\ pruneIntentHeights = {}
   /\ removedEvidenceHeights = {}
   /\ startupRepairRequired = FALSE
   /\ startupRepairCompleted = FALSE
   /\ durableApplicationLost = FALSE
+  /\ pruneExactObjectRemoval = TRUE
   /\ sameRouteSettled = FALSE
   /\ separateParticipantMarker = FALSE
-  /\ sourceClaimRecorded = FALSE
-  /\ sourceClaimSessionCount = 0
-  /\ sourceClaimFieldsComplete = TRUE
+  /\ sourceClaimPhase = "Unrecorded"
+  /\ volatileSourceClaimMap = EmptySourceClaimMap
+  /\ durableSourceClaimJournalRecords = {}
+  /\ sourceClaimReloadReconstructed = FALSE
+  /\ sourceClaimExactReplayAccepted = FALSE
+  /\ sourceClaimDivergentRetryAttempted = FALSE
+  /\ sourceClaimDivergentRetryAccepted = FALSE
+  /\ sourceClaimDivergentRetryRejected = FALSE
   /\ nativeAdmissionAttempted = FALSE
   /\ activeIncarnationExact = TRUE
   /\ predecessorExact = TRUE
@@ -475,6 +888,10 @@ Init ==
   /\ mergeCarrierRepairPlanned = FALSE
   /\ bodyCachePopulated = FALSE
   /\ postCacheCarrierPreflighted = FALSE
+  /\ authenticatedCarrierManifestRoutes = {}
+  /\ plannedNativeMarkerRepairRoutes = {}
+  /\ preflightedNativeMarkerRepairRoutes = {}
+  /\ appliedNativeMarkerRepairRoutes = {}
 
 PersistFinality ==
   /\ phase = "Certified"
@@ -482,6 +899,7 @@ PersistFinality ==
   /\ finalizedHeights' = finalizedHeights \union {TargetHeight}
   /\ UNCHANGED
        <<manifestFiles, receiptFiles, manifestTempFiles, receiptTempFiles,
+         latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
@@ -513,6 +931,7 @@ StageStandaloneManifestTemp ==
   /\ manifestPublishedNoClobber' = (Mode # "AmbiguousLatestIndex")
   /\ UNCHANGED
        <<finalizedHeights, manifestFiles, receiptFiles, receiptTempFiles,
+         latestIndexTempFiles,
          receiptTempAuthenticated, unauthenticatedTempPromoted,
          retainedPairIdentitiesExact, retainedPredecessorChainExact,
          frontierPublished, frontierHeight, canonicalWireRetained,
@@ -538,6 +957,7 @@ PersistStandaloneManifest ==
        unauthenticatedTempPromoted \/ ~manifestTempAuthenticated
   /\ UNCHANGED
        <<finalizedHeights, receiptFiles, receiptTempFiles,
+         latestIndexTempFiles,
          receiptTempAuthenticated, retainedPairIdentitiesExact,
          publicationPairPendingCleanup,
          retainedPredecessorChainExact, frontierPublished, frontierHeight,
@@ -566,6 +986,7 @@ StageStandaloneReceiptTemp ==
   /\ receiptPublishedNoClobber' = (Mode # "AmbiguousLatestIndex")
   /\ UNCHANGED
        <<finalizedHeights, manifestFiles, receiptFiles, manifestTempFiles,
+         latestIndexTempFiles,
          manifestTempAuthenticated, unauthenticatedTempPromoted,
          publicationPairPendingCleanup,
          retainedPairIdentitiesExact, retainedPredecessorChainExact,
@@ -595,6 +1016,7 @@ PersistStandaloneReceipt ==
        unauthenticatedTempPromoted \/ ~receiptTempAuthenticated
   /\ UNCHANGED
        <<finalizedHeights, manifestFiles, manifestTempFiles,
+         latestIndexTempFiles,
          manifestTempAuthenticated, retainedPairIdentitiesExact,
          publicationPairPendingCleanup,
          retainedPredecessorChainExact, frontierPublished, frontierHeight,
@@ -608,11 +1030,37 @@ PersistStandaloneReceipt ==
   /\ UNCHANGED pruneVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
-PublishDescriptorBoundLatest ==
+StageDescriptorBoundLatestTemp ==
   /\ phase = "ReceiptDurable"
   /\ receiptDurable
   /\ TargetHeight \in manifestFiles
+  /\ latestIndexTempFiles = {}
+  /\ phase' = "LatestTempDurable"
+  /\ latestIndexTempFiles' = {TargetHeight}
+  /\ UNCHANGED
+       <<finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact, retainedPredecessorChainExact,
+         frontierPublished, frontierHeight, canonicalWireRetained,
+         authenticatedProofAvailable, manifestLeafAuthenticated,
+         manifestLeafExact, manifestTempPublicationExact,
+         receiptTempPublicationExact, latestTempPublicationExact,
+         manifestPublishedNoClobber, receiptPublishedNoClobber,
+         latestIndexPublished, latestIndexHeight, latestIndexExact,
+         latestIndexAmbiguous, latestIndexBounded,
+         legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+PublishDescriptorBoundLatest ==
+  /\ phase = "LatestTempDurable"
+  /\ latestIndexTempFiles = {TargetHeight}
+  /\ receiptDurable
+  /\ TargetHeight \in manifestFiles
   /\ phase' = "LatestDurable"
+  /\ latestIndexTempFiles' = {}
   /\ latestIndexPublished' = TRUE
   /\ latestIndexHeight' = TargetHeight
   /\ latestIndexExact' = (Mode # "AmbiguousLatestIndex")
@@ -636,6 +1084,85 @@ PublishDescriptorBoundLatest ==
   /\ UNCHANGED pruneVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
+CrashAfterDescriptorBoundLatestTemp ==
+  /\ Mode \in {"Fixed", "DiscardAuthenticatedLatestTemp"}
+  /\ phase = "LatestTempDurable"
+  /\ latestIndexTempFiles = {TargetHeight}
+  /\ phase' = "LatestTempCrashed"
+  /\ UNCHANGED
+       <<finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact, retainedPredecessorChainExact,
+         frontierPublished, frontierHeight, canonicalWireRetained,
+         authenticatedProofAvailable, manifestLeafAuthenticated,
+         manifestLeafExact, manifestTempPublicationExact,
+         receiptTempPublicationExact, latestTempPublicationExact,
+         manifestPublishedNoClobber, receiptPublishedNoClobber,
+         latestIndexPublished, latestIndexHeight, latestIndexExact,
+         latestIndexAmbiguous, latestIndexBounded,
+         legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+RecoverDescriptorBoundLatestTempAtStartup ==
+  /\ phase = "LatestTempCrashed"
+  /\ latestIndexTempFiles = {TargetHeight}
+  /\ TargetHeight \in
+       (finalizedHeights \intersect manifestFiles \intersect receiptFiles)
+  /\ manifestLeafAuthenticated
+  /\ manifestLeafExact
+  /\ latestTempPublicationExact
+  /\ phase' = "LatestDurable"
+  /\ latestIndexTempFiles' = {}
+  /\ latestIndexPublished' = TRUE
+  /\ latestIndexHeight' = TargetHeight
+  /\ latestIndexExact' = TRUE
+  /\ latestIndexAmbiguous' = FALSE
+  /\ latestIndexBounded' = TRUE
+  /\ UNCHANGED
+       <<finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact, retainedPredecessorChainExact,
+         frontierPublished, frontierHeight, canonicalWireRetained,
+         authenticatedProofAvailable, manifestLeafAuthenticated,
+         manifestLeafExact, manifestTempPublicationExact,
+         receiptTempPublicationExact, latestTempPublicationExact,
+         manifestPublishedNoClobber, receiptPublishedNoClobber,
+         legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+DiscardAuthenticatedLatestTempAtStartup ==
+  /\ Mode = "DiscardAuthenticatedLatestTemp"
+  /\ phase = "LatestTempCrashed"
+  /\ latestIndexTempFiles = {TargetHeight}
+  /\ TargetHeight \in
+       (finalizedHeights \intersect manifestFiles \intersect receiptFiles)
+  /\ manifestLeafAuthenticated
+  /\ manifestLeafExact
+  /\ latestTempPublicationExact
+  /\ latestIndexTempFiles' = {}
+  /\ UNCHANGED
+       <<phase, finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact, retainedPredecessorChainExact,
+         frontierPublished, frontierHeight, canonicalWireRetained,
+         authenticatedProofAvailable, manifestLeafAuthenticated,
+         manifestLeafExact, manifestTempPublicationExact,
+         receiptTempPublicationExact, latestTempPublicationExact,
+         manifestPublishedNoClobber, receiptPublishedNoClobber,
+         latestIndexPublished, latestIndexHeight, latestIndexExact,
+         latestIndexAmbiguous, latestIndexBounded,
+         legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
 PublishReplicatedFrontier ==
   /\ IF Mode = "PublishFrontierEarly"
      THEN /\ phase = "FinalityDurable"
@@ -655,7 +1182,7 @@ PublishReplicatedFrontier ==
        ELSE publicationPairPendingCleanup
   /\ UNCHANGED
        <<finalizedHeights, manifestFiles, receiptFiles,
-         manifestTempFiles, receiptTempFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, retainedPairIdentitiesExact,
          retainedPredecessorChainExact,
@@ -682,7 +1209,7 @@ PruneCanonicalWire ==
   /\ canonicalWireRetained' = FALSE
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles, receiptFiles,
-         manifestTempFiles, receiptTempFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
@@ -708,6 +1235,7 @@ StageSecondIncomingPair ==
   /\ receiptTempAuthenticated' = FALSE
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles, receiptFiles,
+         latestIndexTempFiles,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
          retainedPredecessorChainExact, frontierPublished, frontierHeight,
@@ -730,6 +1258,7 @@ PunctureRetainedHistory ==
   /\ receiptFiles' = receiptFiles \ {NonOldestPrunableHeight}
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestTempFiles, receiptTempFiles,
+         latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
@@ -751,7 +1280,7 @@ CreateNonHighestRepairHalf ==
   /\ receiptFiles' = receiptFiles \ {OldestPrunableHeight}
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles,
-         manifestTempFiles, receiptTempFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
@@ -773,7 +1302,7 @@ CreateMultipleRepairHalves ==
   /\ receiptFiles' = {}
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles,
-         manifestTempFiles, receiptTempFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
@@ -794,7 +1323,7 @@ CorruptRetainedPairIdentity ==
   /\ retainedPairIdentitiesExact' = FALSE
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles, receiptFiles,
-         manifestTempFiles, receiptTempFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPredecessorChainExact,
@@ -815,7 +1344,7 @@ DriftRetainedPredecessor ==
   /\ retainedPredecessorChainExact' = FALSE
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles, receiptFiles,
-         manifestTempFiles, receiptTempFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
@@ -845,11 +1374,24 @@ StageNativePruneIntentTemp ==
   /\ pruneIntentIncarnation' = ActiveIncarnation
   /\ pruneIntentManifestHash' = ManifestArtifactHash(PruneTargetHeight)
   /\ pruneIntentReceiptHash' = ReceiptArtifactHash(PruneTargetHeight)
+  /\ pruneIntentProtectedLatestHeight' =
+       IF Mode = "PruneWithoutProtectedLatest"
+       THEN NoHeight
+       ELSE latestIndexHeight
+  /\ pruneIntentProtectedLatestManifestHash' =
+       IF Mode = "PruneWithoutProtectedLatest"
+       THEN 0
+       ELSE ManifestArtifactHash(latestIndexHeight)
+  /\ pruneIntentProtectedLatestReceiptHash' =
+       IF Mode = "PruneWithoutProtectedLatest"
+       THEN 0
+       ELSE ReceiptArtifactHash(latestIndexHeight)
   /\ pruneIntentHeights' = {PruneTargetHeight}
   /\ removedEvidenceHeights' = removedEvidenceHeights
   /\ startupRepairRequired' = FALSE
   /\ startupRepairCompleted' = FALSE
   /\ durableApplicationLost' = FALSE
+  /\ pruneExactObjectRemoval' = pruneExactObjectRemoval
   /\ UNCHANGED publicationVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
@@ -865,8 +1407,12 @@ PublishNativePruneIntent ==
        <<pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
+         pruneIntentProtectedLatestHeight,
+         pruneIntentProtectedLatestManifestHash,
+         pruneIntentProtectedLatestReceiptHash,
          pruneIntentHeights, removedEvidenceHeights, startupRepairRequired,
-         startupRepairCompleted, durableApplicationLost>>
+         startupRepairCompleted, durableApplicationLost,
+         pruneExactObjectRemoval>>
   /\ UNCHANGED publicationVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
@@ -881,10 +1427,14 @@ RecoverPruneIntentTempAtStartup ==
   /\ startupRepairRequired' = TRUE
   /\ startupRepairCompleted' = FALSE
   /\ durableApplicationLost' = (Mode = "DropStartupRepair")
+  /\ pruneExactObjectRemoval' = pruneExactObjectRemoval
   /\ UNCHANGED
        <<pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
+         pruneIntentProtectedLatestHeight,
+         pruneIntentProtectedLatestManifestHash,
+         pruneIntentProtectedLatestReceiptHash,
          pruneIntentHeights, removedEvidenceHeights>>
   /\ UNCHANGED publicationVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
@@ -897,11 +1447,15 @@ CrashAfterPruneIntent ==
   /\ startupRepairRequired' = TRUE
   /\ startupRepairCompleted' = FALSE
   /\ durableApplicationLost' = (Mode = "DropStartupRepair")
+  /\ pruneExactObjectRemoval' = pruneExactObjectRemoval
   /\ UNCHANGED
        <<pruneIntentTempPresent, pruneIntentDurable,
          pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
+         pruneIntentProtectedLatestHeight,
+         pruneIntentProtectedLatestManifestHash,
+         pruneIntentProtectedLatestReceiptHash,
          pruneIntentHeights, removedEvidenceHeights>>
   /\ UNCHANGED publicationVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
@@ -916,15 +1470,19 @@ UnlinkManifestBeforeCrash ==
   /\ startupRepairRequired' = TRUE
   /\ startupRepairCompleted' = FALSE
   /\ durableApplicationLost' = (Mode = "DropStartupRepair")
+  /\ pruneExactObjectRemoval' = (Mode # "PruneNamespaceRebind")
   /\ UNCHANGED
        <<pruneIntentTempPresent, pruneIntentDurable,
          pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
+         pruneIntentProtectedLatestHeight,
+         pruneIntentProtectedLatestManifestHash,
+         pruneIntentProtectedLatestReceiptHash,
          pruneIntentHeights, removedEvidenceHeights>>
   /\ UNCHANGED
        <<phase, finalizedHeights, receiptFiles,
-         manifestTempFiles, receiptTempFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
@@ -949,15 +1507,19 @@ UnlinkReceiptBeforeCrash ==
   /\ startupRepairRequired' = TRUE
   /\ startupRepairCompleted' = FALSE
   /\ durableApplicationLost' = (Mode = "DropStartupRepair")
+  /\ pruneExactObjectRemoval' = (Mode # "PruneNamespaceRebind")
   /\ UNCHANGED
        <<pruneIntentTempPresent, pruneIntentDurable,
          pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
+         pruneIntentProtectedLatestHeight,
+         pruneIntentProtectedLatestManifestHash,
+         pruneIntentProtectedLatestReceiptHash,
          pruneIntentHeights, removedEvidenceHeights>>
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles,
-         manifestTempFiles, receiptTempFiles,
+         manifestTempFiles, receiptTempFiles, latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, publicationPairPendingCleanup,
          retainedPairIdentitiesExact,
@@ -987,6 +1549,9 @@ CompletePruneWithoutCrash ==
   /\ pruneIntentIncarnation' = 0
   /\ pruneIntentManifestHash' = 0
   /\ pruneIntentReceiptHash' = 0
+  /\ pruneIntentProtectedLatestHeight' = NoHeight
+  /\ pruneIntentProtectedLatestManifestHash' = 0
+  /\ pruneIntentProtectedLatestReceiptHash' = 0
   /\ removedEvidenceHeights' = removedEvidenceHeights \union pruneIntentHeights
   /\ pruneIntentHeights' = {}
   /\ publicationPairPendingCleanup' =
@@ -994,9 +1559,11 @@ CompletePruneWithoutCrash ==
   /\ startupRepairRequired' = FALSE
   /\ startupRepairCompleted' = TRUE
   /\ durableApplicationLost' = FALSE
+  /\ pruneExactObjectRemoval' = (Mode # "PruneNamespaceRebind")
   /\ UNCHANGED pruneTempPublishedNoClobber
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestTempFiles, receiptTempFiles,
+         latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, retainedPairIdentitiesExact,
          retainedPredecessorChainExact, frontierPublished, frontierHeight,
@@ -1025,6 +1592,9 @@ RunStartupPruneCompletion ==
   /\ pruneIntentIncarnation' = 0
   /\ pruneIntentManifestHash' = 0
   /\ pruneIntentReceiptHash' = 0
+  /\ pruneIntentProtectedLatestHeight' = NoHeight
+  /\ pruneIntentProtectedLatestManifestHash' = 0
+  /\ pruneIntentProtectedLatestReceiptHash' = 0
   /\ removedEvidenceHeights' = removedEvidenceHeights \union pruneIntentHeights
   /\ pruneIntentHeights' = {}
   /\ publicationPairPendingCleanup' =
@@ -1032,9 +1602,11 @@ RunStartupPruneCompletion ==
   /\ startupRepairRequired' = FALSE
   /\ startupRepairCompleted' = TRUE
   /\ durableApplicationLost' = FALSE
+  /\ pruneExactObjectRemoval' = (Mode # "PruneNamespaceRebind")
   /\ UNCHANGED pruneTempPublishedNoClobber
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestTempFiles, receiptTempFiles,
+         latestIndexTempFiles,
          manifestTempAuthenticated, receiptTempAuthenticated,
          unauthenticatedTempPromoted, retainedPairIdentitiesExact,
          retainedPredecessorChainExact, frontierPublished, frontierHeight,
@@ -1064,11 +1636,101 @@ SettleSameRouteControl ==
   /\ UNCHANGED <<claimVars, admissionVars, groupVars>>
 
 RecordSourceSessionClaim ==
-  /\ ~sourceClaimRecorded
-  /\ sourceClaimRecorded' = TRUE
-  /\ sourceClaimSessionCount' =
-       IF Mode = "DivergentSourceClaim" THEN 2 ELSE 1
-  /\ sourceClaimFieldsComplete' = (Mode # "DivergentSourceClaim")
+  /\ sourceClaimPhase = "Unrecorded"
+  /\ sourceClaimPhase' = "Durable"
+  /\ durableSourceClaimJournalRecords' = {ExactSourceClaimAuthorization}
+  /\ volatileSourceClaimMap' =
+       ReconstructSourceClaimMapFromJournal(
+         {ExactSourceClaimAuthorization})
+  /\ UNCHANGED
+       <<sourceClaimReloadReconstructed, sourceClaimExactReplayAccepted,
+         sourceClaimDivergentRetryAttempted,
+         sourceClaimDivergentRetryAccepted,
+         sourceClaimDivergentRetryRejected>>
+  /\ UNCHANGED publicationVars
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED startupRepairVars
+  /\ UNCHANGED <<sameRouteVars, admissionVars, groupVars>>
+
+CrashAfterSourceClaimDurable ==
+  /\ sourceClaimPhase = "Durable"
+  /\ sourceClaimPhase' = "Crashed"
+  /\ volatileSourceClaimMap' = EmptySourceClaimMap
+  /\ UNCHANGED
+       <<durableSourceClaimJournalRecords,
+         sourceClaimReloadReconstructed, sourceClaimExactReplayAccepted,
+         sourceClaimDivergentRetryAttempted,
+         sourceClaimDivergentRetryAccepted,
+         sourceClaimDivergentRetryRejected>>
+  /\ UNCHANGED publicationVars
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED startupRepairVars
+  /\ UNCHANGED <<sameRouteVars, admissionVars, groupVars>>
+
+ReloadDurableSourceClaim ==
+  /\ sourceClaimPhase = "Crashed"
+  /\ durableSourceClaimJournalRecords = {ExactSourceClaimAuthorization}
+  /\ sourceClaimPhase' = "Reloaded"
+  /\ volatileSourceClaimMap' =
+       ReconstructSourceClaimMapFromJournal(
+         durableSourceClaimJournalRecords)
+  /\ sourceClaimReloadReconstructed' = TRUE
+  /\ UNCHANGED
+       <<durableSourceClaimJournalRecords,
+         sourceClaimExactReplayAccepted,
+         sourceClaimDivergentRetryAttempted,
+         sourceClaimDivergentRetryAccepted,
+         sourceClaimDivergentRetryRejected>>
+  /\ UNCHANGED publicationVars
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED startupRepairVars
+  /\ UNCHANGED <<sameRouteVars, admissionVars, groupVars>>
+
+ReplayExactSourceClaim ==
+  /\ sourceClaimPhase = "Reloaded"
+  /\ SourceClaimGuardAccepts(
+       volatileSourceClaimMap,
+       ExactSourceSessionClaim,
+       ExactParticipantMember,
+       ExactSourceParticipantClaim)
+  /\ sourceClaimPhase' = "ExactReplayAccepted"
+  /\ sourceClaimExactReplayAccepted' = TRUE
+  /\ UNCHANGED
+       <<volatileSourceClaimMap,
+         durableSourceClaimJournalRecords,
+         sourceClaimReloadReconstructed,
+         sourceClaimDivergentRetryAttempted,
+         sourceClaimDivergentRetryAccepted,
+         sourceClaimDivergentRetryRejected>>
+  /\ UNCHANGED publicationVars
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED startupRepairVars
+  /\ UNCHANGED <<sameRouteVars, admissionVars, groupVars>>
+
+DivergentSourceClaimRetryAccepted ==
+  SourceClaimGuardAccepts(
+    volatileSourceClaimMap,
+    RetrySourceSessionClaim,
+    RetryParticipantMember,
+    RetrySourceParticipantClaim)
+
+RetryDivergentSourceClaim ==
+  /\ sourceClaimPhase = "ExactReplayAccepted"
+  /\ sourceClaimPhase' = "RetryChecked"
+  /\ durableSourceClaimJournalRecords' =
+       IF DivergentSourceClaimRetryAccepted
+       THEN
+         durableSourceClaimJournalRecords
+           \union {RetrySourceClaimAuthorization}
+       ELSE durableSourceClaimJournalRecords
+  /\ sourceClaimDivergentRetryAttempted' = TRUE
+  /\ sourceClaimDivergentRetryAccepted' =
+       DivergentSourceClaimRetryAccepted
+  /\ sourceClaimDivergentRetryRejected' =
+       ~DivergentSourceClaimRetryAccepted
+  /\ UNCHANGED
+       <<volatileSourceClaimMap,
+         sourceClaimReloadReconstructed, sourceClaimExactReplayAccepted>>
   /\ UNCHANGED publicationVars
   /\ UNCHANGED pruneVars
   /\ UNCHANGED startupRepairVars
@@ -1116,13 +1778,21 @@ PlanUnifiedStartupEvidenceRepair ==
        IF Mode = "MutatingUnifiedStartupPlan"
        THEN {OrdinaryReceiptRepairGroup}
        ELSE appliedEvidenceRepairGroups
+  /\ authenticatedCarrierManifestRoutes' =
+       QcAuthenticatedCarrierManifestRoutes
+  /\ plannedNativeMarkerRepairRoutes' =
+       IF Mode = "RepairHistoricalSiblingAsActive"
+       THEN QcAuthenticatedCarrierManifestRoutes
+       ELSE ExactActiveStateMarkerRepairRoutes
   /\ UNCHANGED
        <<canonicalBodiesRecovered, recoveredCanonicalBodyGroups,
          preflightedEvidenceRepairGroups, evidenceRepairReadBackVerified,
          queueGateOpen, queueReservationReconciled,
          finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
          mergeCarrierRecordExact, mergeCarrierRepairPlanned,
-         bodyCachePopulated, postCacheCarrierPreflighted>>
+         bodyCachePopulated, postCacheCarrierPreflighted,
+         preflightedNativeMarkerRepairRoutes,
+         appliedNativeMarkerRepairRoutes>>
   /\ UNCHANGED
        <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
          admissionVars, groupVars>>
@@ -1146,7 +1816,8 @@ RecoverSharedCanonicalBody ==
          evidenceRepairReadBackVerified, queueGateOpen,
          queueReservationReconciled, finalityDeclaresMergeCarrier,
          mergeCarrierRecordPresent, mergeCarrierRecordExact,
-         mergeCarrierRepairPlanned, postCacheCarrierPreflighted>>
+         mergeCarrierRepairPlanned, postCacheCarrierPreflighted,
+         startupRepairRouteVars>>
   /\ UNCHANGED
        <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
          admissionVars, groupVars>>
@@ -1170,7 +1841,8 @@ ReconcilePostCacheMergeCarrier ==
          evidenceRepairReadBackVerified, queueGateOpen,
          queueReservationReconciled, finalityDeclaresMergeCarrier,
          mergeCarrierRecordPresent, mergeCarrierRecordExact,
-         mergeCarrierRepairPlanned, bodyCachePopulated>>
+         mergeCarrierRepairPlanned, bodyCachePopulated,
+         startupRepairRouteVars>>
   /\ UNCHANGED
        <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
          admissionVars, groupVars>>
@@ -1194,7 +1866,7 @@ ReplanUnifiedStartupEvidenceRepair ==
          queueGateOpen, queueReservationReconciled,
          finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
          mergeCarrierRecordExact, bodyCachePopulated,
-         postCacheCarrierPreflighted>>
+         postCacheCarrierPreflighted, startupRepairRouteVars>>
   /\ UNCHANGED
        <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
          admissionVars, groupVars>>
@@ -1208,6 +1880,10 @@ PreflightUnifiedStartupEvidenceGroups ==
        IF Mode = "PartialUnifiedStartupPreflight"
        THEN {OrdinaryReceiptRepairGroup}
        ELSE UnifiedEvidenceRepairGroups
+  /\ preflightedNativeMarkerRepairRoutes' =
+       IF Mode = "PartialUnifiedStartupPreflight"
+       THEN {}
+       ELSE plannedNativeMarkerRepairRoutes
   /\ UNCHANGED
        <<plannedEvidenceRepairGroups, startupRepairPlanReadOnly,
          canonicalBodyNeedCount, canonicalBodiesRecovered,
@@ -1216,7 +1892,10 @@ PreflightUnifiedStartupEvidenceGroups ==
          queueGateOpen, queueReservationReconciled,
          finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
          mergeCarrierRecordExact, mergeCarrierRepairPlanned,
-         bodyCachePopulated, postCacheCarrierPreflighted>>
+         bodyCachePopulated, postCacheCarrierPreflighted,
+         authenticatedCarrierManifestRoutes,
+         plannedNativeMarkerRepairRoutes,
+         appliedNativeMarkerRepairRoutes>>
   /\ UNCHANGED
        <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
          admissionVars, groupVars>>
@@ -1227,6 +1906,8 @@ ApplyUnifiedStartupEvidenceGroups ==
      \/ Mode = "PartialUnifiedStartupPreflight"
   /\ startupRepairStage' = "EvidenceApplied"
   /\ appliedEvidenceRepairGroups' = preflightedEvidenceRepairGroups
+  /\ appliedNativeMarkerRepairRoutes' =
+       preflightedNativeMarkerRepairRoutes
   /\ mergeCarrierRecordPresent' =
        IF mergeCarrierRepairPlanned THEN TRUE ELSE mergeCarrierRecordPresent
   /\ mergeCarrierRecordExact' =
@@ -1239,7 +1920,10 @@ ApplyUnifiedStartupEvidenceGroups ==
          preflightedEvidenceRepairGroups, evidenceRepairReadBackVerified,
          queueGateOpen, queueReservationReconciled,
          finalityDeclaresMergeCarrier, bodyCachePopulated,
-         postCacheCarrierPreflighted>>
+         postCacheCarrierPreflighted,
+         authenticatedCarrierManifestRoutes,
+         plannedNativeMarkerRepairRoutes,
+         preflightedNativeMarkerRepairRoutes>>
   /\ UNCHANGED
        <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
          admissionVars, groupVars>>
@@ -1257,7 +1941,8 @@ ReadBackUnifiedStartupEvidence ==
          queueGateOpen, queueReservationReconciled,
          finalityDeclaresMergeCarrier, mergeCarrierRecordPresent,
          mergeCarrierRecordExact, mergeCarrierRepairPlanned,
-         bodyCachePopulated, postCacheCarrierPreflighted>>
+         bodyCachePopulated, postCacheCarrierPreflighted,
+         startupRepairRouteVars>>
   /\ UNCHANGED
        <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
          admissionVars, groupVars>>
@@ -1280,7 +1965,7 @@ ReconcileQueueAfterUnifiedStartupEvidence ==
          evidenceRepairReadBackVerified, finalityDeclaresMergeCarrier,
          mergeCarrierRecordPresent, mergeCarrierRecordExact,
          mergeCarrierRepairPlanned, bodyCachePopulated,
-         postCacheCarrierPreflighted>>
+         postCacheCarrierPreflighted, startupRepairRouteVars>>
   /\ UNCHANGED
        <<publicationVars, pruneVars, sameRouteVars, sourceClaimVars,
          admissionVars, groupVars>>
@@ -1291,7 +1976,11 @@ Next ==
   \/ PersistStandaloneManifest
   \/ StageStandaloneReceiptTemp
   \/ PersistStandaloneReceipt
+  \/ StageDescriptorBoundLatestTemp
   \/ PublishDescriptorBoundLatest
+  \/ CrashAfterDescriptorBoundLatestTemp
+  \/ RecoverDescriptorBoundLatestTempAtStartup
+  \/ DiscardAuthenticatedLatestTempAtStartup
   \/ PublishReplicatedFrontier
   \/ PruneCanonicalWire
   \/ StageSecondIncomingPair
@@ -1311,6 +2000,10 @@ Next ==
   \/ RepeatStartupPruneCompletion
   \/ SettleSameRouteControl
   \/ RecordSourceSessionClaim
+  \/ CrashAfterSourceClaimDurable
+  \/ ReloadDurableSourceClaim
+  \/ ReplayExactSourceClaim
+  \/ RetryDivergentSourceClaim
   \/ AdmitNativeControl
   \/ ApplyNativeGroup
   \/ PlanUnifiedStartupEvidenceRepair
@@ -1330,6 +2023,7 @@ NativeEvidenceTypeInvariant ==
   /\ receiptFiles \subseteq EvidenceHeights
   /\ manifestTempFiles \subseteq EvidenceHeights
   /\ receiptTempFiles \subseteq EvidenceHeights
+  /\ latestIndexTempFiles \subseteq EvidenceHeights
   /\ manifestTempAuthenticated \in BOOLEAN
   /\ receiptTempAuthenticated \in BOOLEAN
   /\ unauthenticatedTempPromoted \in BOOLEAN
@@ -1363,16 +2057,29 @@ NativeEvidenceTypeInvariant ==
   /\ pruneIntentIncarnation \in 0..ActiveIncarnation
   /\ pruneIntentManifestHash \in 0..ManifestArtifactHash(TargetHeight)
   /\ pruneIntentReceiptHash \in 0..ReceiptArtifactHash(TargetHeight)
+  /\ pruneIntentProtectedLatestHeight \in NoHeight..ExtraIncomingHeight
+  /\ pruneIntentProtectedLatestManifestHash
+       \in 0..ManifestArtifactHash(ExtraIncomingHeight)
+  /\ pruneIntentProtectedLatestReceiptHash
+       \in 0..ReceiptArtifactHash(ExtraIncomingHeight)
   /\ pruneIntentHeights \subseteq EvidenceHeights
   /\ removedEvidenceHeights \subseteq EvidenceHeights
   /\ startupRepairRequired \in BOOLEAN
   /\ startupRepairCompleted \in BOOLEAN
   /\ durableApplicationLost \in BOOLEAN
+  /\ pruneExactObjectRemoval \in BOOLEAN
   /\ sameRouteSettled \in BOOLEAN
   /\ separateParticipantMarker \in BOOLEAN
-  /\ sourceClaimRecorded \in BOOLEAN
-  /\ sourceClaimSessionCount \in 0..2
-  /\ sourceClaimFieldsComplete \in BOOLEAN
+  /\ sourceClaimPhase \in NativeSourceClaimPhases
+  /\ volatileSourceClaimMap \in {EmptySourceClaimMap, ExactSourceClaimMap}
+  /\ durableSourceClaimJournalRecords
+       \subseteq
+         {ExactSourceClaimAuthorization, RetrySourceClaimAuthorization}
+  /\ sourceClaimReloadReconstructed \in BOOLEAN
+  /\ sourceClaimExactReplayAccepted \in BOOLEAN
+  /\ sourceClaimDivergentRetryAttempted \in BOOLEAN
+  /\ sourceClaimDivergentRetryAccepted \in BOOLEAN
+  /\ sourceClaimDivergentRetryRejected \in BOOLEAN
   /\ nativeAdmissionAttempted \in BOOLEAN
   /\ activeIncarnationExact \in BOOLEAN
   /\ predecessorExact \in BOOLEAN
@@ -1400,6 +2107,14 @@ NativeEvidenceTypeInvariant ==
   /\ mergeCarrierRepairPlanned \in BOOLEAN
   /\ bodyCachePopulated \in BOOLEAN
   /\ postCacheCarrierPreflighted \in BOOLEAN
+  /\ authenticatedCarrierManifestRoutes
+       \subseteq QcAuthenticatedCarrierManifestRoutes
+  /\ plannedNativeMarkerRepairRoutes
+       \subseteq QcAuthenticatedCarrierManifestRoutes
+  /\ preflightedNativeMarkerRepairRoutes
+       \subseteq QcAuthenticatedCarrierManifestRoutes
+  /\ appliedNativeMarkerRepairRoutes
+       \subseteq QcAuthenticatedCarrierManifestRoutes
 
 NativeStandaloneEvidenceInvariant ==
   /\ manifestFiles \subseteq finalizedHeights
@@ -1414,6 +2129,7 @@ NativeEvidenceRetentionBoundInvariant ==
   /\ Cardinality(IncomingEvidenceHeights) <= 1
   /\ Cardinality(manifestTempFiles) <= 1
   /\ Cardinality(receiptTempFiles) <= 1
+  /\ Cardinality(latestIndexTempFiles) <= 1
   /\ (frontierPublished =>
        RetainedStableEvidencePayloadBytes <= StableAggregateByteLimit)
 
@@ -1454,6 +2170,13 @@ NativeNoClobberPublicationInvariant ==
 NativeLegacyDenseRejectedInvariant ==
   /\ legacyDenseRejected
   /\ ~legacyDenseAccepted
+
+MLNativePruneProtectedLatestExact ==
+  (pruneIntentTempPresent \/ pruneIntentDurable) =>
+    PruneIntentProtectedLatestExact
+
+MLNativePruneExactObjectRemoval ==
+  pruneExactObjectRemoval
 
 NativePruneJournalInvariant ==
   /\ ((pruneIntentTempPresent \/ pruneIntentDurable) =>
@@ -1537,10 +2260,82 @@ SameRouteControlOnlyInvariant ==
 
 MLSeparateParticipantApplication == SameRouteControlOnlyInvariant
 
+MLNativeSourceClaimJournalReconstructionExact ==
+  /\ ReconstructSourceClaimMapFromJournal({}) = EmptySourceClaimMap
+  /\ LET authorization == ExactSourceClaimAuthorization
+         reconstructed ==
+           ReconstructSourceClaimMapFromJournal({authorization})
+     IN /\ DOMAIN reconstructed = {authorization.source_key}
+        /\ reconstructed[authorization.source_key].session =
+             authorization.session
+        /\ DOMAIN reconstructed[authorization.source_key].participants =
+             {authorization.participant_member}
+        /\ reconstructed[authorization.source_key].participants[
+             authorization.participant_member] = authorization.participant
+        /\ reconstructed = ExactSourceClaimMap
+
 MLNativeSourceClaimInjective ==
-  sourceClaimRecorded =>
-    /\ sourceClaimSessionCount = 1
-    /\ sourceClaimFieldsComplete
+  /\ Cardinality(durableSourceClaimJournalRecords) <= 1
+  /\ MLNativeSourceClaimJournalReconstructionExact
+  /\ CASE sourceClaimPhase = "Unrecorded" ->
+            /\ volatileSourceClaimMap = EmptySourceClaimMap
+            /\ durableSourceClaimJournalRecords = {}
+            /\ ~sourceClaimReloadReconstructed
+            /\ ~sourceClaimExactReplayAccepted
+            /\ ~sourceClaimDivergentRetryAttempted
+            /\ ~sourceClaimDivergentRetryAccepted
+            /\ ~sourceClaimDivergentRetryRejected
+       [] sourceClaimPhase = "Durable" ->
+            /\ volatileSourceClaimMap =
+                 ReconstructSourceClaimMapFromJournal(
+                   durableSourceClaimJournalRecords)
+            /\ durableSourceClaimJournalRecords =
+                 {ExactSourceClaimAuthorization}
+            /\ ~sourceClaimReloadReconstructed
+            /\ ~sourceClaimExactReplayAccepted
+            /\ ~sourceClaimDivergentRetryAttempted
+            /\ ~sourceClaimDivergentRetryAccepted
+            /\ ~sourceClaimDivergentRetryRejected
+       [] sourceClaimPhase = "Crashed" ->
+            /\ volatileSourceClaimMap = EmptySourceClaimMap
+            /\ durableSourceClaimJournalRecords =
+                 {ExactSourceClaimAuthorization}
+            /\ ~sourceClaimReloadReconstructed
+            /\ ~sourceClaimExactReplayAccepted
+            /\ ~sourceClaimDivergentRetryAttempted
+            /\ ~sourceClaimDivergentRetryAccepted
+            /\ ~sourceClaimDivergentRetryRejected
+       [] sourceClaimPhase = "Reloaded" ->
+            /\ volatileSourceClaimMap =
+                 ReconstructSourceClaimMapFromJournal(
+                   durableSourceClaimJournalRecords)
+            /\ durableSourceClaimJournalRecords =
+                 {ExactSourceClaimAuthorization}
+            /\ sourceClaimReloadReconstructed
+            /\ ~sourceClaimExactReplayAccepted
+            /\ ~sourceClaimDivergentRetryAttempted
+            /\ ~sourceClaimDivergentRetryAccepted
+            /\ ~sourceClaimDivergentRetryRejected
+       [] sourceClaimPhase = "ExactReplayAccepted" ->
+            /\ volatileSourceClaimMap =
+                 ReconstructSourceClaimMapFromJournal(
+                   durableSourceClaimJournalRecords)
+            /\ durableSourceClaimJournalRecords =
+                 {ExactSourceClaimAuthorization}
+            /\ sourceClaimReloadReconstructed
+            /\ sourceClaimExactReplayAccepted
+            /\ ~sourceClaimDivergentRetryAttempted
+            /\ ~sourceClaimDivergentRetryAccepted
+            /\ ~sourceClaimDivergentRetryRejected
+       [] sourceClaimPhase = "RetryChecked" ->
+            /\ volatileSourceClaimMap = ExactSourceClaimMap
+            /\ durableSourceClaimJournalRecords =
+                 {ExactSourceClaimAuthorization}
+            /\ sourceClaimReloadReconstructed
+            /\ sourceClaimExactReplayAccepted
+            /\ sourceClaimDivergentRetryAttempted
+            /\ ~sourceClaimDivergentRetryAccepted
+            /\ sourceClaimDivergentRetryRejected
 
 MLNativeContiguousActiveRoute ==
   nativeAdmissionAttempted =>
@@ -1562,6 +2357,39 @@ MLNativeManifestAuthenticates ==
     /\ manifestLeafAuthenticated
     /\ manifestLeafExact
     /\ authenticatedProofAvailable
+
+\* QC authentication covers the carrier's complete manifest, including a
+\* historical sibling. State-marker repair is a narrower operation: its plan,
+\* preflight, and application may name only the exact currently active marker
+\* route. Authentication therefore cannot promote a retired incarnation into
+\* the current repair target set.
+MLNativeStartupRepairTargetsExactActiveMarkerRoutes ==
+  /\ (startupRepairStage = "Unplanned" =>
+       /\ authenticatedCarrierManifestRoutes = {}
+       /\ plannedNativeMarkerRepairRoutes = {}
+       /\ preflightedNativeMarkerRepairRoutes = {}
+       /\ appliedNativeMarkerRepairRoutes = {})
+  /\ (startupRepairStage # "Unplanned" =>
+       /\ authenticatedCarrierManifestRoutes =
+            QcAuthenticatedCarrierManifestRoutes
+       /\ plannedNativeMarkerRepairRoutes =
+            ExactActiveStateMarkerRepairRoutes)
+  /\ (NativeMarkerRepairGroup \in preflightedEvidenceRepairGroups =>
+       preflightedNativeMarkerRepairRoutes =
+         ExactActiveStateMarkerRepairRoutes)
+  /\ (NativeMarkerRepairGroup \notin preflightedEvidenceRepairGroups =>
+       preflightedNativeMarkerRepairRoutes = {})
+  /\ (NativeMarkerRepairGroup \in appliedEvidenceRepairGroups =>
+       appliedNativeMarkerRepairRoutes =
+         ExactActiveStateMarkerRepairRoutes)
+  /\ (NativeMarkerRepairGroup \notin appliedEvidenceRepairGroups =>
+       appliedNativeMarkerRepairRoutes = {})
+  /\ HistoricalSiblingManifestRouteIdentity
+       \notin plannedNativeMarkerRepairRoutes
+  /\ HistoricalSiblingManifestRouteIdentity
+       \notin preflightedNativeMarkerRepairRoutes
+  /\ HistoricalSiblingManifestRouteIdentity
+       \notin appliedNativeMarkerRepairRoutes
 
 \* Planning spans both ordinary receipt and Native marker groups and remains
 \* observational. Because both groups name the same carrier, exactly one
@@ -1638,6 +2466,7 @@ MLUnifiedStartupEvidenceRepairSafe ==
   /\ MLUnifiedStartupQueueAfterReadback
   /\ MLMergeCarrierEvidenceBidirectional
   /\ MLPostCacheCarrierPreflighted
+  /\ MLNativeStartupRepairTargetsExactActiveMarkerRoutes
 
 MLNativeDurabilityPrecedesFrontier ==
   /\ NativeStandaloneEvidenceInvariant
@@ -1647,6 +2476,8 @@ MLNativeDurabilityPrecedesFrontier ==
   /\ MLNativeTempPromotionAuthenticated
   /\ MLNativeRetainedHistoryExact
   /\ MLNativePruneOldestPrefix
+  /\ MLNativePruneProtectedLatestExact
+  /\ MLNativePruneExactObjectRemoval
   /\ MLUnifiedStartupEvidenceRepairSafe
   /\ NativePruneJournalInvariant
   /\ FrontierPublicationInvariant
@@ -1676,6 +2507,21 @@ MLNativeLatestIndexExact ==
   /\ (~latestIndexPublished =>
        /\ latestIndexHeight = PreviousLatestHeight
        /\ ~frontierPublished)
+  /\ (phase \in NativeLatestTempPhases =>
+       \/ /\ latestIndexTempFiles = {TargetHeight}
+             /\ TargetHeight \in
+                  (finalizedHeights \intersect
+                   manifestFiles \intersect receiptFiles)
+             /\ manifestLeafAuthenticated
+             /\ manifestLeafExact
+             /\ latestTempPublicationExact
+          \/ /\ latestIndexTempFiles = {}
+             /\ latestIndexPublished
+             /\ latestIndexHeight = TargetHeight
+             /\ latestIndexExact
+             /\ ~latestIndexAmbiguous
+             /\ latestIndexBounded)
+  /\ (phase \notin NativeLatestTempPhases => latestIndexTempFiles = {})
 
 NativeApplicationEvidenceSafetyInvariant ==
   /\ NativeEvidenceTypeInvariant
@@ -1686,6 +2532,8 @@ NativeApplicationEvidenceSafetyInvariant ==
   /\ MLNativeTempPromotionAuthenticated
   /\ MLNativeRetainedHistoryExact
   /\ MLNativePruneOldestPrefix
+  /\ MLNativePruneProtectedLatestExact
+  /\ MLNativePruneExactObjectRemoval
   /\ NativeNoClobberPublicationInvariant
   /\ NativeLegacyDenseRejectedInvariant
   /\ NativePruneJournalInvariant

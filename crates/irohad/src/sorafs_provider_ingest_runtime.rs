@@ -62,10 +62,12 @@ use sorafs_node::provider_ingest_runtime::{
 };
 use sorafs_node::{
     FinalizedProviderIngestAuthorizationV1, NodeHandle, NodeStorageError,
-    ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClaimOwnerV1,
-    ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
-    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
-    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolutionContextV1,
+    ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestCheckpointExternalErrorV1,
+    ProviderIngestCheckpointProviderQualificationV1, ProviderIngestCheckpointRuntimeV1,
+    ProviderIngestClaimOwnerV1, ProviderIngestCompletionPayloadBuilderV1,
+    ProviderIngestCompletionPayloadErrorV1, ProviderIngestCompletionPayloadRequestV1,
+    ProviderIngestCompletionSignerErrorV1, ProviderIngestCompletionSignerPolicyV1,
+    ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
     ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
     ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
@@ -1743,6 +1745,39 @@ async fn probe_runtime_dependencies(
     combine_runtime_dependency_probes(source, signer)
 }
 
+async fn probe_checkpoint_runtime_identity(
+    runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    expected_handle: String,
+    expected_qualification: ProviderIngestCheckpointProviderQualificationV1,
+    deadline: Duration,
+) -> RuntimeDependencyProbeV1 {
+    bounded_blocking_readiness_probe(deadline, move || {
+        let handle_before = runtime.handle().to_owned();
+        let qualification = runtime.qualification();
+        let handle_after = runtime.handle().to_owned();
+        match qualification {
+            Ok(qualification)
+                if is_production_runtime_handle(&handle_before)
+                    && handle_before == expected_handle
+                    && handle_after == expected_handle
+                    && qualification.validate().is_ok()
+                    && qualification == expected_qualification =>
+            {
+                RuntimeDependencyProbeV1::Ready
+            }
+            Err(ProviderIngestCheckpointExternalErrorV1::Unavailable) => {
+                RuntimeDependencyProbeV1::Unavailable
+            }
+            Ok(_)
+            | Err(
+                ProviderIngestCheckpointExternalErrorV1::Rejected
+                | ProviderIngestCheckpointExternalErrorV1::Ambiguous,
+            ) => RuntimeDependencyProbeV1::Rejected,
+        }
+    })
+    .await
+}
+
 fn provider_ingest_shutdown_wait(config: &SorafsProviderIngestRuntime) -> Duration {
     let source_budget = config.source_operation_timeout_ms.saturating_mul(3);
     let signer_budget = config.signer_timeout_ms.saturating_mul(4);
@@ -1787,6 +1822,15 @@ fn configured_completion_signer_binding(
     )
 }
 
+fn configured_checkpoint_qualification(
+    config: &SorafsProviderIngestRuntime,
+) -> ProviderIngestCheckpointProviderQualificationV1 {
+    ProviderIngestCheckpointProviderQualificationV1::new(
+        config.checkpoint_store_revision,
+        config.checkpoint_store_policy_digest,
+    )
+}
+
 type NativeProviderIngestRuntimeV1 = ProviderIngestRuntimeV1<
     ObservedArchivedFinalizedAssignmentLedgerV1,
     AuthenticatedSourceAdapterV1,
@@ -1814,6 +1858,29 @@ impl ProviderIngestRuntimeAdaptersV1 {
             authenticated_source,
             signer_resolver,
         }
+    }
+}
+
+/// Opaque proof that provider-ingest's external source, signer, and checkpoint
+/// roles passed a state-free, bounded startup preflight.
+///
+/// Only [`preflight_runtime_adapters`] constructs this token. Keeping its
+/// fields private prevents a launcher from assembling provider-ingest durable
+/// state from raw, unqualified adapters. Runtime startup consumes the token
+/// and repeats every identity, qualification, inventory, and readiness check
+/// before worker assembly.
+pub(crate) struct QualifiedProviderIngestRuntimeAdaptersV1 {
+    adapters: ProviderIngestRuntimeAdaptersV1,
+    checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    qualification: ProviderIngestStartupQualificationV1,
+}
+
+impl QualifiedProviderIngestRuntimeAdaptersV1 {
+    /// Return the exact preflighted checkpoint runtime for `NodeHandle`
+    /// construction. The token retains the same object for launch-time
+    /// revalidation.
+    pub(crate) fn checkpoint_runtime(&self) -> Arc<dyn ProviderIngestCheckpointRuntimeV1> {
+        Arc::clone(&self.checkpoint_runtime)
     }
 }
 
@@ -1860,13 +1927,15 @@ struct ProviderIngestStartupQualificationV1 {
     expected_authenticated_source_qualification: ProviderIngestRuntimeProviderQualificationV1,
     expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1,
     expected_signer_binding: ProviderIngestCompletionSignerBindingV1,
+    expected_checkpoint_qualification: ProviderIngestCheckpointProviderQualificationV1,
     provider_id: ProviderId,
     source_provider_ids: Vec<[u8; 32]>,
 }
 
 fn validate_startup_dependency_qualifications(
     config: &SorafsProviderIngestRuntime,
-    context: &ProviderIngestStartContextV1,
+    authenticated_source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
+    signer_resolver: &dyn ProviderIngestGovernedSignerResolverRuntimeV1,
     expected_authenticated_source: ProviderIngestRuntimeProviderQualificationV1,
     expected_resolver: ProviderIngestRuntimeProviderQualificationV1,
     expected_signer: &ProviderIngestCompletionSignerBindingV1,
@@ -1874,15 +1943,15 @@ fn validate_startup_dependency_qualifications(
     validate_dependency_identity(
         "authenticated source-fetch",
         &config.authenticated_source_fetch_handle,
-        context.authenticated_source.runtime_handle(),
+        authenticated_source.runtime_handle(),
     )?;
     validate_dependency_identity(
         "completion signer-resolver",
         &config.completion_signer_resolver_handle,
-        context.signer_resolver.runtime_handle(),
+        signer_resolver.runtime_handle(),
     )?;
     validate_authenticated_source_qualification(
-        context.authenticated_source.as_ref(),
+        authenticated_source,
         expected_authenticated_source,
     )
     .map_err(|_| {
@@ -1890,25 +1959,20 @@ fn validate_startup_dependency_qualifications(
             "authenticated source-fetch qualification does not match SoraFS provider-ingest configuration"
         )
     })?;
-    validate_resolver_qualification(context.signer_resolver.as_ref(), expected_resolver).map_err(
-        |_| {
-            eyre::eyre!(
-                "completion signer-resolver qualification does not match SoraFS provider-ingest configuration"
-            )
-        },
-    )?;
-    validate_resolver_signer_binding(context.signer_resolver.as_ref(), expected_signer).map_err(
-        |_| {
-            eyre::eyre!(
-                "completion signer binding does not match SoraFS provider-ingest configuration"
-            )
-        },
-    )
+    validate_resolver_qualification(signer_resolver, expected_resolver).map_err(|_| {
+        eyre::eyre!(
+            "completion signer-resolver qualification does not match SoraFS provider-ingest configuration"
+        )
+    })?;
+    validate_resolver_signer_binding(signer_resolver, expected_signer).map_err(|_| {
+        eyre::eyre!("completion signer binding does not match SoraFS provider-ingest configuration")
+    })
 }
 
 fn revalidate_startup_dependencies_after_probe(
     config: &SorafsProviderIngestRuntime,
-    context: &ProviderIngestStartContextV1,
+    authenticated_source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
+    signer_resolver: &dyn ProviderIngestGovernedSignerResolverRuntimeV1,
     expected_authenticated_source: ProviderIngestRuntimeProviderQualificationV1,
     expected_resolver: ProviderIngestRuntimeProviderQualificationV1,
     expected_signer: &ProviderIngestCompletionSignerBindingV1,
@@ -1918,15 +1982,15 @@ fn revalidate_startup_dependencies_after_probe(
     validate_dependency_identity(
         "authenticated source-fetch",
         &config.authenticated_source_fetch_handle,
-        context.authenticated_source.runtime_handle(),
+        authenticated_source.runtime_handle(),
     )?;
     validate_dependency_identity(
         "completion signer-resolver",
         &config.completion_signer_resolver_handle,
-        context.signer_resolver.runtime_handle(),
+        signer_resolver.runtime_handle(),
     )?;
     validate_authenticated_source_qualification(
-        context.authenticated_source.as_ref(),
+        authenticated_source,
         expected_authenticated_source,
     )
     .map_err(|_| {
@@ -1934,73 +1998,64 @@ fn revalidate_startup_dependencies_after_probe(
             "authenticated source-fetch qualification changed during provider-ingest startup readiness"
         )
     })?;
-    validate_resolver_qualification(context.signer_resolver.as_ref(), expected_resolver).map_err(
-        |_| {
-            eyre::eyre!(
-                "completion signer-resolver qualification changed during provider-ingest startup readiness"
-            )
-        },
-    )?;
-    validate_resolver_signer_binding(context.signer_resolver.as_ref(), expected_signer).map_err(
-        |_| {
-            eyre::eyre!(
-                "completion signer binding changed during provider-ingest startup readiness"
-            )
-        },
-    )?;
+    validate_resolver_qualification(signer_resolver, expected_resolver).map_err(|_| {
+        eyre::eyre!(
+            "completion signer-resolver qualification changed during provider-ingest startup readiness"
+        )
+    })?;
+    validate_resolver_signer_binding(signer_resolver, expected_signer).map_err(|_| {
+        eyre::eyre!("completion signer binding changed during provider-ingest startup readiness")
+    })?;
     validate_authenticated_source_inventory(
-        context.authenticated_source.as_ref(),
+        authenticated_source,
         provider_id,
         Some(source_provider_ids),
     )
 }
 
-async fn qualify_provider_ingest_startup(
+async fn qualify_external_runtime_adapters(
     config: &SorafsProviderIngestRuntime,
-    context: &ProviderIngestStartContextV1,
+    provider_id: ProviderId,
+    authenticated_source: &Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
+    signer_resolver: &Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
+    checkpoint_runtime: &Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    expected_source_provider_ids: Option<&[[u8; 32]]>,
 ) -> Result<ProviderIngestStartupQualificationV1> {
     validate_config(config)?;
-    if context.finalized_ledger.chain_id() != &context.chain_id {
-        bail!("daemon-owned finalized provider-ingest query has a substituted chain identity");
+    if provider_id.as_bytes() == &[0; 32] {
+        bail!("provider-ingest runtime requires a non-zero configured provider id");
     }
-    context.finalized_ledger.activation_ready().wrap_err(
-        "qualify daemon-owned finalized provider-ingest archive activation gate at runtime startup",
-    )?;
     let expected_authenticated_source_qualification =
         configured_authenticated_source_qualification(config);
     let expected_resolver_qualification =
         configured_completion_signer_resolver_qualification(config);
     let expected_signer_binding = configured_completion_signer_binding(config);
+    let expected_checkpoint_qualification = configured_checkpoint_qualification(config);
     validate_startup_dependency_qualifications(
         config,
-        context,
+        authenticated_source.as_ref(),
+        signer_resolver.as_ref(),
         expected_authenticated_source_qualification,
         expected_resolver_qualification,
         &expected_signer_binding,
     )?;
-    let provider_id =
-        context.node.config().provider_id().ok_or_else(|| {
-            eyre::eyre!("provider-ingest runtime requires a configured provider id")
-        })?;
-    if context.finalized_ledger.provider_id() != provider_id {
-        bail!("daemon-owned finalized provider-ingest query has a substituted provider identity");
-    }
     validate_authenticated_source_inventory(
-        context.authenticated_source.as_ref(),
+        authenticated_source.as_ref(),
         *provider_id.as_bytes(),
-        None,
+        expected_source_provider_ids,
     )?;
-    let source_provider_ids = context.authenticated_source.source_provider_ids().to_vec();
+    let source_provider_ids = authenticated_source.source_provider_ids().to_vec();
     let dependency_probe = probe_runtime_dependencies(
-        Arc::clone(&context.authenticated_source),
-        Arc::clone(&context.signer_resolver),
+        Arc::clone(authenticated_source),
+        Arc::clone(signer_resolver),
         Duration::from_millis(config.source_operation_timeout_ms),
         Duration::from_millis(config.signer_timeout_ms),
     )
     .await;
     revalidate_startup_dependencies_after_probe(
         config,
-        context,
+        authenticated_source.as_ref(),
+        signer_resolver.as_ref(),
         expected_authenticated_source_qualification,
         expected_resolver_qualification,
         &expected_signer_binding,
@@ -2022,13 +2077,131 @@ async fn qualify_provider_ingest_startup(
             bail!("SoraFS provider-ingest runtime dependency readiness probe panicked");
         }
     }
+    for phase in ["initial", "confirmation"] {
+        let checkpoint_probe = probe_checkpoint_runtime_identity(
+            Arc::clone(checkpoint_runtime),
+            config.checkpoint_store_handle.clone(),
+            expected_checkpoint_qualification,
+            Duration::from_millis(config.outbox.checkpoint_operation_timeout_ms),
+        )
+        .await;
+        match checkpoint_probe {
+            RuntimeDependencyProbeV1::Ready => {}
+            RuntimeDependencyProbeV1::Unavailable => {
+                bail!(
+                    "SoraFS provider-ingest checkpoint runtime is unavailable during {phase} state-free qualification"
+                );
+            }
+            RuntimeDependencyProbeV1::Rejected => {
+                bail!(
+                    "SoraFS provider-ingest checkpoint runtime is substituted, stale, test-marked, or rejected during {phase} state-free qualification"
+                );
+            }
+            RuntimeDependencyProbeV1::TimedOut => {
+                bail!(
+                    "SoraFS provider-ingest checkpoint runtime exceeded its {phase} state-free qualification deadline"
+                );
+            }
+            RuntimeDependencyProbeV1::Panicked => {
+                bail!(
+                    "SoraFS provider-ingest checkpoint runtime panicked during {phase} state-free qualification"
+                );
+            }
+        }
+    }
     Ok(ProviderIngestStartupQualificationV1 {
         expected_authenticated_source_qualification,
         expected_resolver_qualification,
         expected_signer_binding,
+        expected_checkpoint_qualification,
         provider_id,
         source_provider_ids,
     })
+}
+
+/// Qualify deployment-owned provider-ingest source, signer, and checkpoint
+/// roles without opening daemon, outbox, checkpoint, or filesystem state.
+///
+/// # Errors
+///
+/// Fails closed when configuration is invalid or any adapter is missing,
+/// substituted, stale, test-marked, unavailable, noncanonical, or changes
+/// identity/qualification across the bounded readiness probes.
+pub(crate) async fn preflight_runtime_adapters(
+    config: &SorafsProviderIngestRuntime,
+    provider_id: ProviderId,
+    adapters: ProviderIngestRuntimeAdaptersV1,
+    checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+) -> Result<QualifiedProviderIngestRuntimeAdaptersV1> {
+    let qualification = qualify_external_runtime_adapters(
+        config,
+        provider_id,
+        &adapters.authenticated_source,
+        &adapters.signer_resolver,
+        &checkpoint_runtime,
+        None,
+    )
+    .await?;
+    Ok(QualifiedProviderIngestRuntimeAdaptersV1 {
+        adapters,
+        checkpoint_runtime,
+        qualification,
+    })
+}
+
+async fn qualify_provider_ingest_startup(
+    config: &SorafsProviderIngestRuntime,
+    context: &ProviderIngestStartContextV1,
+    checkpoint_runtime: &Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    preflight: &ProviderIngestStartupQualificationV1,
+) -> Result<ProviderIngestStartupQualificationV1> {
+    validate_config(config)?;
+    if context.finalized_ledger.chain_id() != &context.chain_id {
+        bail!("daemon-owned finalized provider-ingest query has a substituted chain identity");
+    }
+    context.finalized_ledger.activation_ready().wrap_err(
+        "qualify daemon-owned finalized provider-ingest archive activation gate at runtime startup",
+    )?;
+    let provider_id =
+        context.node.config().provider_id().ok_or_else(|| {
+            eyre::eyre!("provider-ingest runtime requires a configured provider id")
+        })?;
+    if context.finalized_ledger.provider_id() != provider_id {
+        bail!("daemon-owned finalized provider-ingest query has a substituted provider identity");
+    }
+    if preflight.provider_id != provider_id
+        || preflight.expected_authenticated_source_qualification
+            != configured_authenticated_source_qualification(config)
+        || preflight.expected_resolver_qualification
+            != configured_completion_signer_resolver_qualification(config)
+        || preflight.expected_signer_binding != configured_completion_signer_binding(config)
+        || preflight.expected_checkpoint_qualification
+            != configured_checkpoint_qualification(config)
+    {
+        bail!("provider-ingest runtime configuration changed after state-free preflight");
+    }
+    let qualification = qualify_external_runtime_adapters(
+        config,
+        provider_id,
+        &context.authenticated_source,
+        &context.signer_resolver,
+        checkpoint_runtime,
+        Some(&preflight.source_provider_ids),
+    )
+    .await?;
+    if qualification.expected_authenticated_source_qualification
+        != preflight.expected_authenticated_source_qualification
+        || qualification.expected_resolver_qualification
+            != preflight.expected_resolver_qualification
+        || qualification.expected_signer_binding != preflight.expected_signer_binding
+        || qualification.expected_checkpoint_qualification
+            != preflight.expected_checkpoint_qualification
+        || qualification.provider_id != preflight.provider_id
+        || qualification.source_provider_ids != preflight.source_provider_ids
+    {
+        bail!("provider-ingest runtime adapter binding changed after state-free preflight");
+    }
+    Ok(qualification)
 }
 
 fn provider_ingest_runtime_policy(
@@ -2431,7 +2604,7 @@ impl ProviderIngestWorkerV1 {
 pub(crate) async fn start(
     config: SorafsProviderIngestRuntime,
     args: ProviderIngestRuntimeStartArgsV1,
-    adapters: ProviderIngestRuntimeAdaptersV1,
+    preflight: QualifiedProviderIngestRuntimeAdaptersV1,
     shutdown_signal: ShutdownSignal,
 ) -> Result<(ProviderIngestRuntimeHandleV1, Child)> {
     let ProviderIngestRuntimeStartArgsV1 {
@@ -2441,10 +2614,15 @@ pub(crate) async fn start(
         node,
         finalized_ledger,
     } = args;
-    let ProviderIngestRuntimeAdaptersV1 {
-        authenticated_source,
-        signer_resolver,
-    } = adapters;
+    let QualifiedProviderIngestRuntimeAdaptersV1 {
+        adapters:
+            ProviderIngestRuntimeAdaptersV1 {
+                authenticated_source,
+                signer_resolver,
+            },
+        checkpoint_runtime,
+        qualification: preflight_qualification,
+    } = preflight;
     let context = ProviderIngestStartContextV1 {
         chain_id,
         state,
@@ -2454,7 +2632,13 @@ pub(crate) async fn start(
         authenticated_source,
         signer_resolver,
     };
-    let qualification = qualify_provider_ingest_startup(&config, &context).await?;
+    let qualification = qualify_provider_ingest_startup(
+        &config,
+        &context,
+        &checkpoint_runtime,
+        &preflight_qualification,
+    )
+    .await?;
     let (runtime, handle) =
         assemble_native_provider_ingest_runtime(&config, &context, &qualification)?;
     let shutdown_wait = provider_ingest_shutdown_wait(&config);
@@ -2553,11 +2737,14 @@ fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
     let completion_signer_resolver_qualification =
         configured_completion_signer_resolver_qualification(config);
     let completion_signer_binding = configured_completion_signer_binding(config);
+    let checkpoint_qualification = configured_checkpoint_qualification(config);
     if !is_production_runtime_handle(&config.authenticated_source_fetch_handle)
         || !is_production_runtime_handle(&config.completion_signer_resolver_handle)
+        || !is_production_runtime_handle(&config.checkpoint_store_handle)
         || !authenticated_source_qualification.is_valid()
         || !completion_signer_resolver_qualification.is_valid()
         || completion_signer_binding.validate().is_err()
+        || checkpoint_qualification.validate().is_err()
         || config.scan_interval_ms == 0
         || config.max_page_rows == 0
         || config.max_pages_per_tick == 0
@@ -2636,6 +2823,7 @@ fn validate_authenticated_source_inventory(
 
 #[cfg(test)]
 mod tests {
+    use iroha_config_base::util::Bytes;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::isi::InstructionBox;
     use sorafs_node::provider_ingest_runtime::{
@@ -3557,6 +3745,307 @@ mod tests {
         ]));
         *source.readiness.lock().expect("source readiness lock") = readiness;
         source
+    }
+
+    #[derive(Debug)]
+    struct TestStateFreeCheckpointRuntimeV1 {
+        qualification: Mutex<ProviderIngestCheckpointProviderQualificationV1>,
+        qualification_calls: AtomicU64,
+        load_calls: AtomicU64,
+        compare_and_swap_calls: AtomicU64,
+    }
+
+    impl TestStateFreeCheckpointRuntimeV1 {
+        fn new() -> Self {
+            Self {
+                qualification: Mutex::new(ProviderIngestCheckpointProviderQualificationV1::new(
+                    7, [0xA7; 32],
+                )),
+                qualification_calls: AtomicU64::new(0),
+                load_calls: AtomicU64::new(0),
+                compare_and_swap_calls: AtomicU64::new(0),
+            }
+        }
+    }
+
+    impl ProviderIngestCheckpointRuntimeV1 for TestStateFreeCheckpointRuntimeV1 {
+        fn handle(&self) -> &'static str {
+            "sealed:sorafs-provider-ingest-primary"
+        }
+
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            ProviderIngestCheckpointProviderQualificationV1,
+            ProviderIngestCheckpointExternalErrorV1,
+        > {
+            self.qualification_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(*self
+                .qualification
+                .lock()
+                .expect("checkpoint qualification lock"))
+        }
+
+        fn load_latest(
+            &self,
+        ) -> std::result::Result<
+            Option<sorafs_node::ProviderIngestSealedCheckpointRecordV1>,
+            ProviderIngestCheckpointExternalErrorV1,
+        > {
+            self.load_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            _expected_revision: Option<[u8; 32]>,
+            _next: &sorafs_node::ProviderIngestSealedCheckpointRecordV1,
+        ) -> std::result::Result<(), ProviderIngestCheckpointExternalErrorV1> {
+            self.compare_and_swap_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn state_free_preflight_fixture() -> (
+        SorafsProviderIngestRuntime,
+        ProviderId,
+        Arc<TestAuthenticatedSourceInventoryV1>,
+        Arc<TestGovernedSignerResolverV1>,
+        Arc<TestStateFreeCheckpointRuntimeV1>,
+    ) {
+        let (signer, _, _, _) = test_governed_signer(test_signer_policy(1), None);
+        let config = SorafsProviderIngestRuntime {
+            authenticated_source_fetch_handle: "https-pinned-source-pool:region-a".to_owned(),
+            authenticated_source_fetch_revision: 5,
+            authenticated_source_fetch_policy_digest: [0xB1; 32],
+            completion_signer_resolver_handle: "hsm:sorafs-provider-ingest-resolver".to_owned(),
+            completion_signer_resolver_revision: 6,
+            completion_signer_resolver_policy_digest: [0xB2; 32],
+            completion_signer_handle: signer.runtime_handle().to_owned(),
+            completion_signer_adapter_revision: 1,
+            completion_signer_policy: test_signer_policy(1),
+            completion_signer_algorithm: Algorithm::Ed25519,
+            completion_signer_public_key: signer.key.public_key().clone(),
+            checkpoint_store_handle: "sealed:sorafs-provider-ingest-primary".to_owned(),
+            checkpoint_store_revision: 7,
+            checkpoint_store_policy_digest: [0xA7; 32],
+            scan_interval_ms: 1_000,
+            max_page_rows: 64,
+            max_pages_per_tick: 4,
+            max_source_jobs_per_tick: 32,
+            max_source_providers: 1_024,
+            source_operation_timeout_ms: 30_000,
+            source_lease_renew_interval_ms: 5_000,
+            signer_timeout_ms: 10_000,
+            ingress_timeout_ms: 10_000,
+            completion_transaction_ttl_ms: 30_000,
+            finalized_archive:
+                iroha_config::parameters::actual::SorafsProviderIngestFinalizedArchive {
+                    relative_root: "provider-ingest-finalized-archive-v1".into(),
+                    max_record_bytes: 128 * 1024 * 1024,
+                    max_archive_entries: 1_000_000,
+                    max_total_bytes: 64 * 1024 * 1024 * 1024,
+                    max_providers_per_anchor: 1_024,
+                    max_orders_per_provider: 256,
+                    max_total_orders_per_anchor: 256,
+                    max_page_rows: 64,
+                    max_kura_tip_lag_blocks: 2,
+                    retention_authority: None,
+                },
+            outbox: iroha_config::parameters::actual::SorafsProviderIngestOutbox {
+                max_active_entries: 32,
+                max_terminal_entries: 4_096,
+                max_attempts: 8,
+                checkpoint_max_bytes: Bytes(160 * 1024 * 1024),
+                checkpoint_operation_timeout_ms: 30_000,
+                source_lease_ttl_ms: 30_000,
+                retry_base_delay_ms: 1_000,
+                retry_max_delay_ms: 60_000,
+                terminal_retention_blocks: 100_000,
+                max_signed_transaction_bytes: Bytes(1024 * 1024),
+                max_status_page_size: 256,
+            },
+        };
+        let source = Arc::new(TestAuthenticatedSourceInventoryV1::new(vec![
+            [0x22; 32], [0x33; 32],
+        ]));
+        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
+        let resolver = Arc::new(TestGovernedSignerResolverV1::new(signer));
+        (
+            config,
+            ProviderId::new([0x11; 32]),
+            source,
+            resolver,
+            Arc::new(TestStateFreeCheckpointRuntimeV1::new()),
+        )
+    }
+
+    #[tokio::test]
+    async fn state_free_preflight_accepts_exact_adapters_without_creating_outbox_state() {
+        let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
+        let sentinel_parent = tempfile::tempdir().expect("preflight sentinel parent");
+        let state_root = sentinel_parent.path().join("provider-ingest-outbox");
+        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
+        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
+        let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
+
+        let _preflight = preflight_runtime_adapters(
+            &config,
+            provider_id,
+            ProviderIngestRuntimeAdaptersV1::new(source, resolver),
+            checkpoint_runtime,
+        )
+        .await
+        .expect("qualify exact state-free provider-ingest adapters");
+
+        assert!(
+            !state_root.exists(),
+            "state-free preflight must not create local outbox state"
+        );
+        assert_eq!(checkpoint.qualification_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn state_free_preflight_rejects_stale_source_without_creating_outbox_state() {
+        let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
+        *source
+            .qualification
+            .lock()
+            .expect("source qualification lock") =
+            ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB1; 32]);
+        let sentinel_parent = tempfile::tempdir().expect("preflight sentinel parent");
+        let state_root = sentinel_parent.path().join("provider-ingest-outbox");
+        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
+        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
+        let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
+
+        let result = preflight_runtime_adapters(
+            &config,
+            provider_id,
+            ProviderIngestRuntimeAdaptersV1::new(source, resolver),
+            checkpoint_runtime,
+        )
+        .await;
+
+        let error = result.err().expect("stale source qualification must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated source-fetch qualification"),
+            "unexpected preflight failure: {error:#}"
+        );
+        assert!(
+            !state_root.exists(),
+            "state-free preflight must not create local outbox state"
+        );
+        assert_eq!(checkpoint.qualification_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn state_free_preflight_rejects_stale_resolver_without_creating_outbox_state() {
+        let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
+        *resolver
+            .qualification
+            .lock()
+            .expect("resolver qualification lock") =
+            ProviderIngestRuntimeProviderQualificationV1::new(7, [0xB2; 32]);
+        let sentinel_parent = tempfile::tempdir().expect("preflight sentinel parent");
+        let state_root = sentinel_parent.path().join("provider-ingest-outbox");
+        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
+        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
+        let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
+
+        let result = preflight_runtime_adapters(
+            &config,
+            provider_id,
+            ProviderIngestRuntimeAdaptersV1::new(source, resolver),
+            checkpoint_runtime,
+        )
+        .await;
+
+        let error = result
+            .err()
+            .expect("stale resolver qualification must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("completion signer-resolver qualification"),
+            "unexpected preflight failure: {error:#}"
+        );
+        assert!(
+            !state_root.exists(),
+            "state-free preflight must not create local outbox state"
+        );
+        assert_eq!(checkpoint.qualification_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn state_free_preflight_rejects_stale_checkpoint_without_load_cas_or_local_state() {
+        let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
+        *checkpoint
+            .qualification
+            .lock()
+            .expect("checkpoint qualification lock") =
+            ProviderIngestCheckpointProviderQualificationV1::new(8, [0xA7; 32]);
+        let sentinel_parent = tempfile::tempdir().expect("preflight sentinel parent");
+        let state_root = sentinel_parent.path().join("provider-ingest-outbox");
+        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
+        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
+        let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
+
+        let result = preflight_runtime_adapters(
+            &config,
+            provider_id,
+            ProviderIngestRuntimeAdaptersV1::new(source, resolver),
+            checkpoint_runtime,
+        )
+        .await;
+
+        let error = result
+            .err()
+            .expect("stale checkpoint qualification must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("checkpoint runtime is substituted"),
+            "unexpected preflight failure: {error:#}"
+        );
+        assert!(
+            !state_root.exists(),
+            "state-free preflight must not create local outbox state"
+        );
+        assert_eq!(checkpoint.qualification_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn opaque_preflight_is_consumed_and_revalidated_before_worker_assembly() {
+        let source = include_str!("sorafs_provider_ingest_runtime.rs");
+        let start = source
+            .find("pub(crate) async fn start(")
+            .expect("provider-ingest launcher");
+        let launch = &source[start..];
+        let consume = launch
+            .find("let QualifiedProviderIngestRuntimeAdaptersV1")
+            .expect("opaque preflight consumption");
+        let revalidate = launch
+            .find("qualify_provider_ingest_startup")
+            .expect("preflight revalidation");
+        let assemble = launch
+            .find("assemble_native_provider_ingest_runtime")
+            .expect("provider-ingest worker assembly");
+
+        assert!(
+            consume < revalidate && revalidate < assemble,
+            "the opaque token must be consumed and all adapter pins revalidated before state-backed worker assembly"
+        );
     }
 
     impl ProviderIngestAuthenticatedSourceFetchV1 for TestAuthenticatedSourceInventoryV1 {

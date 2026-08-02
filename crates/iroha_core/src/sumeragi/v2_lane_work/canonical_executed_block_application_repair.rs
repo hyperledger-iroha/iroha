@@ -842,6 +842,7 @@ pub(crate) struct LaneApplicationEvidenceRepairPlan {
     ordinary: Vec<OrdinaryLaneApplicationReceiptRepair>,
     native_carriers: Vec<NativeParticipantCarrierRepair>,
     merge_carriers: Vec<FinalizedMergeCarrierRepair>,
+    merge_carrier_repair_authorizations: Vec<Vec<PostCarrierEvidenceRepairAuthorization>>,
     repair_capacity: usize,
 }
 
@@ -1081,6 +1082,46 @@ pub(crate) fn plan_lane_application_evidence_repair(
             ),
         );
     }
+    let chain_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+    let mut merge_carrier_repair_authorizations = Vec::new();
+    merge_carrier_repair_authorizations
+        .try_reserve_exact(merge_carriers.len())
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+    for repair in &merge_carriers {
+        let block = repair.block();
+        let entry = repair.entry();
+        let height = block.header().height().get();
+        if state.committed_block_hash_at_height(height) != Some(block.hash()) {
+            return Err(V2LaneWorkError::Persistence(format!(
+                "finalized merge carrier {height} differs from committed State"
+            )));
+        }
+        if entry.execution_batch.is_none() {
+            merge_carrier_repair_authorizations.push(Vec::new());
+            continue;
+        }
+        state
+            .ensure_committed_merge_execution_applied(entry)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        let reference = block
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref())
+            .ok_or_else(|| {
+                V2LaneWorkError::Persistence(format!(
+                    "finalized merge carrier {height} lost its compact reference"
+                ))
+            })?;
+        merge_carrier_repair_authorizations.push(
+            post_carrier_evidence_repair_authorizations(
+                reference,
+                entry,
+                chain_hash,
+                height,
+                block.hash(),
+            )
+            .map_err(V2LaneWorkError::Persistence)?,
+        );
+    }
     ordinary.sort_by_key(|repair| {
         let descriptor = &repair.session.proposal.descriptor;
         (
@@ -1098,6 +1139,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
             ordinary,
             native_carriers,
             merge_carriers,
+            merge_carrier_repair_authorizations,
             repair_capacity: limits.session_capacity.get(),
         },
     ))
@@ -1180,6 +1222,19 @@ pub(crate) fn apply_lane_application_evidence_repair(
             "finalized merge-carrier repair changed after all-item startup preflight".to_owned(),
         ));
     }
+    if plan.merge_carrier_repair_authorizations.len() != plan.merge_carriers.len() {
+        return Err(V2LaneWorkError::Persistence(
+            "finalized merge-carrier repair authority cardinality changed after startup preflight"
+                .to_owned(),
+        ));
+    }
+    for repair in &plan.merge_carriers {
+        if repair.entry().execution_batch.is_some() {
+            state
+                .ensure_committed_merge_execution_applied(repair.entry())
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        }
+    }
 
     let mut summary = LaneApplicationEvidenceRepairSummary::default();
     for artifact in &plan.ordinary_pairs {
@@ -1194,7 +1249,10 @@ pub(crate) fn apply_lane_application_evidence_repair(
         summary.ordinary_pairs = summary.ordinary_pairs.saturating_add(1);
     }
     summary.merge_carriers = kura
-        .apply_finalized_merge_carrier_repairs(&plan.merge_carriers)
+        .apply_finalized_merge_carrier_repairs(
+            &plan.merge_carriers,
+            plan.merge_carrier_repair_authorizations,
+        )
         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
     for repair in &plan.ordinary {
         kura.persist_preflighted_lane_block_application_receipt(&repair.receipt)
@@ -1207,10 +1265,19 @@ pub(crate) fn apply_lane_application_evidence_repair(
         summary.ordinary_receipts = summary.ordinary_receipts.saturating_add(1);
     }
     for carrier in &plan.native_carriers {
-        kura.repair_native_amx_participant_application_evidence(&carrier.block)
+        let repaired_routes = kura
+            .repair_native_amx_participant_application_evidence_for_markers(
+                &carrier.block,
+                &carrier.markers,
+            )
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        if repaired_routes != carrier.markers.len() {
+            return Err(V2LaneWorkError::Persistence(
+                "Native AMX startup publication did not cover every exact State marker".to_owned(),
+            ));
+        }
         summary.native_carriers = summary.native_carriers.saturating_add(1);
-        summary.native_routes = summary.native_routes.saturating_add(carrier.markers.len());
+        summary.native_routes = summary.native_routes.saturating_add(repaired_routes);
     }
     let unresolved_native = state
         .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()

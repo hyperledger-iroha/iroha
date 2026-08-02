@@ -263,7 +263,9 @@ remains open.
   `gar-enforcement-receipt`,
   `moderation-ballot-governance-event`, `appeal-finance-report`, and
   `appeal-finance-settlement-receipt`, plus `legal-hold-notice`,
-  `redaction-notice`, and `evidence-access-summary`.
+  `redaction-notice`, and `evidence-access-summary`. The V1 path selector is
+  exact: aliases, case folding, underscore substitution, and surrounding
+  whitespace are rejected.
 - `sorafs_manifest` defines `GovernanceExternalPayloadV1`, and `sorafs_node`
   uses it to sign the canonical transparency publication bytes into the local
   runtime Governance DAG when a runtime signer is configured.

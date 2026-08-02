@@ -7,11 +7,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/prune_commit_merge_support.rs"),
     Path("crates/iroha_core/src/kura/replica_advert_and_body_status.rs"),
     Path("crates/iroha_core/src/kura/retained_finality_replica_authority.rs"),
-    Path("crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs"),
-    Path("crates/iroha_core/src/kura/autonomous_reservation_types.rs"),
-    Path("crates/iroha_core/src/kura/autonomous_reservation_inventory.rs"),
-    Path("crates/iroha_core/src/kura/autonomous_reservation_classifier.rs"),
-    Path("crates/iroha_core/src/kura/historical_autonomous_recovery.rs"),
+    Path("crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"),
 )
 REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path("crates/iroha_config/src/parameters/actual.rs"): (
@@ -28,11 +24,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("kura/prune_commit_merge_support.rs"),
         Path("kura/replica_advert_and_body_status.rs"),
         Path("kura/retained_finality_replica_authority.rs"),
-        Path("kura/autonomous_merge_bundle_support.rs"),
-        Path("kura/autonomous_reservation_types.rs"),
-        Path("kura/autonomous_reservation_inventory.rs"),
-        Path("kura/autonomous_reservation_classifier.rs"),
-        Path("kura/historical_autonomous_recovery.rs"),
+        Path("kura/pipeline_and_lane_artifacts.rs"),
         Path("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs"),
         Path("kura/tests/01a_retained_eviction_and_rewrite_tail.rs"),
         Path("kura/tests/02_replacement_and_preflight.rs"),
@@ -53,6 +45,13 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("kura/tests/12_sidecar_index_and_pruning.rs"),
         Path("kura/tests/13_manifests_and_fsync.rs"),
     ),
+    Path("crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"): (
+        Path("autonomous_merge_bundle_support.rs"),
+        Path("autonomous_reservation_types.rs"),
+        Path("autonomous_reservation_inventory.rs"),
+        Path("autonomous_reservation_classifier.rs"),
+        Path("historical_autonomous_recovery.rs"),
+    ),
     Path("crates/iroha_core/src/kura/lane_geometry.rs"): (
         Path("lane_geometry_tests/00_support.rs"),
         Path("lane_geometry/native_amx_retained_window_tests.rs"),
@@ -71,6 +70,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("v2_worker/kura_replica_advert_refresh.rs"),
         Path("tests/v2_worker_reply_route_cases.rs"),
         Path("tests/v2_worker_backpressure_cases.rs"),
+        Path("v2_worker/applied_height_handoff_tests.rs"),
         Path("tests/v2_worker_serve_unsealed_cases.rs"),
         Path("tests/v2_worker_serve_decision_restart_cases.rs"),
     ),
@@ -85,13 +85,16 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"): (
         Path("tests/v2_core_reducer_primitive_projection.rs"),
+        Path("reducer/counterfeit_boundary_capability_test.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"): (
         Path("tests/v2_core_view_zero_parent_binding.rs"),
         Path("tests/empty_replay_resume_test.rs"),
+        Path("tests/v2_core_terminal_transactionality.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
         Path("v2_lane_work/canonical_executed_block_application_repair.rs"),
+        Path("tests/v2_lane_work_native_signing_guard.rs"),
         Path("tests/v2_lane_work_observer_role.rs"),
         Path("tests/v2_lane_work_native_body_recovery.rs"),
         Path("tests/v2_lane_work_effect_queue.rs"),
@@ -1410,7 +1413,9 @@ MERGE_RUNTIME_PROJECTED_FIELDS = (
 
 def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
     module = load_checker()
-    checker_source = SCRIPT.read_text(encoding="utf-8")
+    checker_source = "\n".join(
+        path.read_text(encoding="utf-8") for path in checker_source_paths()
+    )
 
     assert tuple(
         Path("crates/iroha_core/src") / relative
@@ -2280,6 +2285,10 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "reservation_cleanup_prefixes",
         "pre_kura_direct_reservation_release",
         "producer_kura_activation",
+        "producer_payload_transport_fanout",
+        "producer_payload_fanout_queue_fence",
+        "producer_payload_retransmission_fanout",
+        "authenticated_autonomous_late_body_service",
         "execution_input_persistence",
         "durable_autonomous_bundle",
         "ready_qc_persistence",
@@ -2291,6 +2300,10 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
         "ready_authorization",
         "ready_signature",
         "canonical_wsv_commit_authorization",
+        "live_post_carrier_evidence_repair",
+        "startup_reverse_carrier_evidence_repair",
+        "state_replay_post_carrier_evidence_repair",
+        "recover_reservation_snapshot_parametric_noninterference",
     }
     assert all(binding["authenticated"] is True for binding in bindings.values())
     shared_identities = {
@@ -2310,12 +2323,14 @@ def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
 def test_production_trace_certificate_keeps_unextracted_actions_explicit() -> None:
     module = load_checker()
     assert module.PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS == (
-        "FanoutFromProducer",
-        "ServeLateBody",
         "Crash",
         "Recover",
         "RecoverReservationSnapshot",
-        "RepairPostCarrierEvidence",
+        "RehydrateLocalKuraCustody",
+    )
+    assert all(
+        "RehydrateLocalKuraCustody" not in binding["model_actions"]
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
     )
 
     with pytest.raises(ValueError, match="model actions remain unextracted"):
@@ -2326,6 +2341,103 @@ def test_production_trace_certificate_keeps_unextracted_actions_explicit() -> No
             cross_tool_evidence={},
             artifacts=None,
         )
+
+
+@pytest.mark.parametrize(
+    ("symbol", "required_token"),
+    (
+        (
+            "check_in_flight_transition",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+        ),
+        ("from_replay", "canonical_reconciliation_owners_from_state"),
+        (
+            "canonical_reconciliation_owners_from_snapshot",
+            "snapshot.ordered_groups",
+        ),
+        (
+            "canonical_reconciliation_identity",
+            "SNAPSHOT_RECONCILIATION_FINAL_DOMAIN",
+        ),
+        (
+            "recover_snapshot_transition_projection",
+            "optional_owner_refinement_projection(None)",
+        ),
+        (
+            "transition_projection_coverage_identity",
+            "CHECKED_TRANSITION_COVERAGE_FINAL_DOMAIN",
+        ),
+        (
+            "binds_reconciliation_snapshot",
+            "transition_projection_coverage_identity",
+        ),
+        ("consume_snapshot_replay_seal", "checked_file_content_identity"),
+        (
+            "install_lane_reservation_journal",
+            "consume_snapshot_replay_seal",
+        ),
+        (
+            "bind_lane_reservation_startup_reconciliation_receipt",
+            "binds_reconciliation_snapshot",
+        ),
+        (
+            "plan_lane_reservation_ownership",
+            "bind_lane_reservation_startup_reconciliation_receipt",
+        ),
+        (
+            "apply_lane_reservation_reconciliation_plan",
+            "revalidate_lane_reservation_startup_reconciliation_receipt",
+        ),
+        (
+            "complete_lane_reservation_startup_reconciliation",
+            "receipt.initial_snapshot",
+        ),
+    ),
+)
+def test_production_trace_certificate_rejects_snapshot_recovery_bridge_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    symbol: str,
+    required_token: str,
+) -> None:
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS
+    ]
+    binding = next(candidate for candidate in bindings if candidate["symbol"] == symbol)
+    source = (ROOT_DIR / binding["path"]).read_text(encoding="utf-8")
+    extraction_errors: list[str] = []
+    item = module._production_trace_unique_function(
+        root_dir=ROOT_DIR,
+        relative=binding["path"],
+        symbol=binding["symbol"],
+        impl_name=binding["impl"],
+        errors=extraction_errors,
+    )
+    assert extraction_errors == []
+    assert item is not None
+    assert required_token in item.source
+    mutated_item = item.source.replace(
+        required_token,
+        f"{required_token}_MUTATED",
+        1,
+    )
+    assert mutated_item != item.source
+    mutated_path = tmp_path / f"snapshot-recovery-{symbol}.rs"
+    mutated_path.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    binding["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(
+        module,
+        "PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS",
+        tuple(bindings),
+    )
+
+    with pytest.raises(ValueError, match="RecoverReservationSnapshot parametric bridge"):
+        module._production_trace_extraction_source_snapshot()
 
 
 def test_production_trace_certificate_rejects_erased_open_action_debt(
@@ -2387,6 +2499,22 @@ def test_production_trace_certificate_rejects_model_action_inventory_drift(
             "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA",
         ),
         (
+            "producer_payload_transport_fanout",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+        ),
+        (
+            "producer_payload_fanout_queue_fence",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+        ),
+        (
+            "producer_payload_retransmission_fanout",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER",
+        ),
+        (
+            "authenticated_autonomous_late_body_service",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY",
+        ),
+        (
             "execution_input_persistence",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
         ),
@@ -2442,6 +2570,18 @@ def test_production_trace_certificate_rejects_model_action_inventory_drift(
             "canonical_wsv_commit_authorization",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER",
         ),
+        (
+            "live_post_carrier_evidence_repair",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
+        (
+            "startup_reverse_carrier_evidence_repair",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
+        (
+            "state_replay_post_carrier_evidence_repair",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
     ),
 )
 def test_production_trace_certificate_rejects_each_disconnected_runtime_link(
@@ -2482,6 +2622,10 @@ def test_production_trace_certificate_rejects_each_disconnected_runtime_link(
         "reservation_cleanup_prefixes",
         "pre_kura_direct_reservation_release",
         "producer_kura_activation",
+        "producer_payload_transport_fanout",
+        "producer_payload_fanout_queue_fence",
+        "producer_payload_retransmission_fanout",
+        "authenticated_autonomous_late_body_service",
         "execution_input_persistence",
         "durable_autonomous_bundle",
         "ready_qc_persistence",
@@ -2493,6 +2637,9 @@ def test_production_trace_certificate_rejects_each_disconnected_runtime_link(
         "ready_authorization",
         "ready_signature",
         "canonical_wsv_commit_authorization",
+        "live_post_carrier_evidence_repair",
+        "startup_reverse_carrier_evidence_repair",
+        "state_replay_post_carrier_evidence_repair",
     ),
 )
 def test_production_trace_certificate_rejects_each_disconnected_carrier_identity(
@@ -2646,14 +2793,14 @@ def test_production_trace_certificate_rejects_disconnected_apply_carrier_consume
             "CheckedCarrierApplications::disconnected_for_block",
         ),
         (
-            "checked_carrier_applications.bind_execution_batch",
-            ".bind_execution_batch(reference, execution_batch.lanes.len())",
-            ".disconnected_execution_batch(reference, execution_batch.lanes.len())",
+            "checked_carrier_applications.bind_execution_batch(reference, applications.len())",
+            "checked_carrier_applications.bind_execution_batch(reference, applications.len())",
+            "checked_carrier_applications.disconnected_execution_batch(reference, applications.len())",
         ),
         (
-            "checked_carrier_applications.push(checked, projection)",
-            "checked_carrier_applications.push(checked, projection)",
-            "checked_carrier_applications.discard(checked, projection)",
+            "checked_carrier_applications.push",
+            "checked_carrier_applications.push(",
+            "checked_carrier_applications.discard(",
         ),
     ),
 )
@@ -2674,19 +2821,20 @@ def test_production_trace_certificate_rejects_disconnected_apply_carrier_batch_b
         for candidate in bindings
         if candidate["id"] == "canonical_wsv_commit_authorization"
     )
-    source_path = ROOT_DIR / binding["path"]
+    orchestration = binding["supporting_sources"][0]
+    source_path = ROOT_DIR / orchestration["path"]
     source = source_path.read_text(encoding="utf-8")
     assert source_token in source
     mutated_path = tmp_path / "apply-carrier-batch-binding-disconnected.rs"
     mutated_path.write_text(source.replace(source_token, replacement), encoding="utf-8")
-    binding["path"] = str(mutated_path.resolve())
+    orchestration["path"] = str(mutated_path.resolve())
     monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
 
     with pytest.raises(ValueError) as failure:
         module._production_trace_extraction_source_snapshot()
 
     message = str(failure.value)
-    assert "missing authenticated binding canonical_wsv_commit_authorization" in message
+    assert "missing finality-to-State ApplyCarrier orchestration" in message
     assert binding_token in message
 
 
@@ -3370,3 +3518,104 @@ def test_production_trace_certificate_rejects_missing_proof_linkage(
         "production trace-extraction evidence does not match the canonical "
         "current theorem certificate at $.proof_linkage"
     ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "symbol", "old", "new"),
+    (
+        (
+            "operator",
+            "AsyncIngressSchedulerBarrierActive",
+            "  \\/ AsyncOrdinaryIngressProtectedRecordsAt(node) # {}",
+            "  \\/ FALSE",
+        ),
+        (
+            "operator",
+            "AsyncEarliestIngressSchedulerOrdinal",
+            "       ELSE AsyncOrdinaryIngressEarliestPhysicalRecord(\n"
+            "              node).schedulerOrdinal",
+            "       ELSE AsyncLeaderWireEarliestPhysicalIngressRecord(\n"
+            "              node).schedulerOrdinal",
+        ),
+        (
+            "operator",
+            "AsyncOlderRuntimeLifecyclePrecedesIngressScheduler",
+            "  /\\ AsyncSelectedRuntimeSourcePhysicalOrdinal(node)\n"
+            "       < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "  /\\ TRUE",
+        ),
+        (
+            "operator",
+            "AsyncOlderLocalLifecyclePrecedesServeIngress",
+            "  /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
+            "       node, SelectedLocalSource(node))\n"
+            "       < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "  /\\ TRUE",
+        ),
+        (
+            "operator",
+            "AsyncCandidateLifecycleStateAfterServeIngressAdmission",
+            "     !.retransmitLifecycleOrdinal =",
+            "     !.timeoutLifecycleOrdinal =",
+        ),
+        (
+            "operator",
+            "AsyncSharedSchedulerOrdinalInjectionInvariant",
+            "  /\\ \\A admission \\in asyncServeIngressAdmissions:\n"
+            "       AsyncRetransmitLifecycleOwned(admission.node)\n"
+            "         => admission.schedulerOrdinal #\n"
+            "              AsyncRetransmitLifecycleOrdinal(admission.node)\n",
+            "",
+        ),
+        (
+            "theorem",
+            "SerializedLocalPrecedesServeIngressExactFrame",
+            "         /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
+            "              node, SelectedLocalSource(node))\n"
+            "              < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "         /\\ TRUE",
+        ),
+        (
+            "theorem",
+            "AsyncLaterServeTicketInterleavesOlderRuntimeEpisode",
+            "    /\\ AsyncSelectedRuntimeSourcePhysicalOrdinal(node)\n"
+            "         < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "    /\\ TRUE",
+        ),
+        (
+            "theorem",
+            "AsyncLaterServeTicketInterleavesOlderLocalEpisode",
+            "    /\\ LocalSourceLifecyclePhysicalOrdinal(\n"
+            "         node, SelectedLocalSource(node))\n"
+            "         < AsyncEarliestIngressPhysicalOrdinal(node)",
+            "    /\\ TRUE",
+        ),
+    ),
+)
+def test_serve_scheduler_ordinal_release_contract_rejects_current_weakening(
+    tmp_path: Path,
+    kind: str,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_serve_scheduler_ordinal_mutation_fixture(
+        tmp_path, module
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    mutate = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
+    path.write_text(mutate(source, symbol, old, new), encoding="utf-8")
+    module.SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256[path.name] = (
+        hashlib.sha256(path.read_bytes()).hexdigest()
+    )
+
+    errors = module._serve_scheduler_ordinal_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+
+    prefix = "theorem " if kind == "theorem" else ""
+    assert any(
+        f"{prefix}{symbol} must equal only" in error for error in errors
+    ), errors

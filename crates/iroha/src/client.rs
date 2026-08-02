@@ -19592,11 +19592,11 @@ impl Client {
 
     /// POST `/v1/contracts/call` with a JSON body.
     ///
-    /// Torii first prepares the canonical contract executable. This client then
-    /// quotes that exact unsigned payload, replaces only `fee_payment`, signs
-    /// it with `private_key`, and submits it through the transaction pipeline.
-    /// When `private_key` is absent, the returned scaffold and signing message
-    /// already contain the fixed-point quoted intent for external signing.
+    /// Torii prepares and quotes the canonical unsigned transaction payload. This
+    /// client verifies the exact payload/signing-message pair and, when
+    /// `private_key` is present, signs that payload without rebuilding it before
+    /// submitting it through the transaction pipeline. When `private_key` is
+    /// absent, the verified unsigned draft is returned for external signing.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -19648,30 +19648,75 @@ impl Client {
         )?;
         let mut response_value =
             Self::parse_json_ok_response(&response, "contract call prepare request")?;
-        let scaffold_b64 = response_value
-            .get("signed_transaction_b64")
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| {
-                eyre!("contract call prepare response omitted signed_transaction_b64")
-            })?;
-        let scaffold_bytes = base64::engine::general_purpose::STANDARD
-            .decode(scaffold_b64.as_bytes())
-            .wrap_err("decode contract call transaction scaffold")?;
-        if base64::engine::general_purpose::STANDARD.encode(&scaffold_bytes) != scaffold_b64 {
+        for retired in ["transaction_scaffold_b64", "signed_transaction_b64"] {
+            if response_value.get(retired).is_some() {
+                return Err(eyre!(
+                    "contract call prepare response contains retired `{retired}` field"
+                ));
+            }
+        }
+        if response_value.get("submitted").and_then(JsonValue::as_bool) != Some(false) {
             return Err(eyre!(
-                "contract call transaction scaffold must use canonical padded base64"
+                "contract call prepare response must be an unsubmitted draft"
             ));
         }
-        let scaffold = SignedTransaction::decode_all_versioned(&scaffold_bytes)
-            .wrap_err("decode versioned contract call transaction scaffold")?;
-        let mut exact_payload = scaffold.payload().clone();
-        if &exact_payload.authority != authority {
+        if response_value
+            .get("tx_hash_hex")
+            .is_some_and(|value| !value.is_null())
+            || response_value
+                .get("entrypoint_hash_hex")
+                .is_some_and(|value| !value.is_null())
+            || response_value
+                .get("pipeline_status")
+                .is_some_and(|value| !value.is_null())
+        {
             return Err(eyre!(
-                "contract call scaffold authority does not match the requested authority"
+                "contract call prepare response must not contain submission hashes or status"
+            ));
+        }
+        let transaction_payload_b64 = response_value
+            .get("transaction_payload_b64")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| {
+                eyre!("contract call prepare response omitted transaction_payload_b64")
+            })?;
+        let transaction_payload = base64::engine::general_purpose::STANDARD
+            .decode(transaction_payload_b64.as_bytes())
+            .wrap_err("decode contract call transaction payload")?;
+        if base64::engine::general_purpose::STANDARD.encode(&transaction_payload)
+            != transaction_payload_b64
+        {
+            return Err(eyre!(
+                "contract call transaction payload must use canonical padded base64"
+            ));
+        }
+        let builder = TransactionBuilder::decode_payload(&transaction_payload)
+            .wrap_err("decode canonical contract call transaction payload")?;
+        let signing_message_b64 = response_value
+            .get("signing_message_b64")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("contract call prepare response omitted signing_message_b64"))?;
+        let signing_message = base64::engine::general_purpose::STANDARD
+            .decode(signing_message_b64.as_bytes())
+            .wrap_err("decode contract call signing message")?;
+        if base64::engine::general_purpose::STANDARD.encode(&signing_message) != signing_message_b64
+        {
+            return Err(eyre!(
+                "contract call signing message must use canonical padded base64"
+            ));
+        }
+        let expected_signing_message = builder.payload_hash_bytes();
+        if signing_message.as_slice() != expected_signing_message.as_slice() {
+            return Err(eyre!(
+                "contract call signing message does not match the transaction payload"
+            ));
+        }
+        if builder.payload().chain != self.chain || &builder.payload().authority != authority {
+            return Err(eyre!(
+                "contract call transaction payload changed the requested chain or authority"
             ));
         }
 
-        let mut workflow_client = self.clone();
         if let Some(private_key) = private_key {
             let key_pair = KeyPair::from_private_key(private_key.clone())
                 .wrap_err("derive contract call signing key pair")?;
@@ -19681,44 +19726,17 @@ impl Client {
                     "contract call private key does not match the requested authority"
                 ));
             }
-            workflow_client.key_pair = key_pair;
-            workflow_client.account = authority.clone();
-        } else if &self.account != authority {
-            return Err(eyre!(
-                "contract call quote authentication requires the client account to match the requested authority"
-            ));
-        }
-
-        let quote = workflow_client
-            .quote_fees(&exact_payload)
-            .wrap_err("quote exact contract call transaction payload")?;
-        let recommended_intent = quote.intent;
-        apply_fee_quote_intent(&mut exact_payload, recommended_intent.clone())?;
-
-        let response_object = response_value
-            .as_object_mut()
-            .ok_or_else(|| eyre!("contract call response must be a JSON object"))?;
-        if let Some(receipt) = response_object
-            .get_mut("operation_receipt")
-            .and_then(norito::json::Value::as_object_mut)
-        {
-            receipt.insert(
-                "fee_payment".to_owned(),
-                norito::json::to_value(&recommended_intent)?,
-            );
-        }
-
-        if let Some(private_key) = private_key {
-            let signed = TransactionBuilder::from_payload(exact_payload)
-                .wrap_err("reconstruct quoted contract call payload")?
+            let signed = builder
                 .try_sign(private_key)
-                .wrap_err("sign quoted contract call payload")?;
+                .wrap_err("sign exact contract call transaction payload")?;
             let tx_hash_hex = hex::encode(signed.hash().as_ref());
             let entrypoint_hash_hex = hex::encode(signed.hash_as_entrypoint().as_ref());
-            workflow_client
-                .submit_transaction(&signed)
-                .wrap_err("submit quoted contract call transaction")?;
+            self.submit_transaction(&signed)
+                .wrap_err("submit exact contract call transaction")?;
 
+            let response_object = response_value
+                .as_object_mut()
+                .ok_or_else(|| eyre!("contract call response must be a JSON object"))?;
             response_object.insert("submitted".to_owned(), true.into());
             response_object.insert("tx_hash_hex".to_owned(), tx_hash_hex.clone().into());
             response_object.insert(
@@ -19738,13 +19756,8 @@ impl Client {
                     "queue".to_owned(),
                 ))?,
             );
-            for field in [
-                "transaction_scaffold_b64",
-                "signed_transaction_b64",
-                "signing_message_b64",
-            ] {
-                response_object.insert(field.to_owned(), norito::json::Value::Null);
-            }
+            response_object.remove("transaction_payload_b64");
+            response_object.remove("signing_message_b64");
             if let Some(receipt) = response_object
                 .get_mut("operation_receipt")
                 .and_then(norito::json::Value::as_object_mut)
@@ -19753,31 +19766,6 @@ impl Client {
                 receipt.insert("tx_hash_hex".to_owned(), tx_hash_hex.into());
                 receipt.insert("entrypoint_hash_hex".to_owned(), entrypoint_hash_hex.into());
             }
-        } else {
-            let scaffold_key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-                .wrap_err("generate quoted contract call scaffold key")?;
-            let quoted_builder = TransactionBuilder::from_payload(exact_payload)
-                .wrap_err("reconstruct quoted contract call scaffold")?;
-            let placeholder_signature = Signature::try_new(
-                scaffold_key.private_key(),
-                &quoted_builder.payload_hash_bytes(),
-            )
-            .wrap_err("build quoted contract call scaffold signature")?;
-            let quoted_scaffold = quoted_builder.build_with_signature(placeholder_signature);
-            let scaffold_b64 = base64::engine::general_purpose::STANDARD
-                .encode(quoted_scaffold.encode_versioned());
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(HashOf::new(quoted_scaffold.payload()).as_ref());
-            response_object.insert(
-                "entrypoint_hash_hex".to_owned(),
-                hex::encode(quoted_scaffold.hash_as_entrypoint().as_ref()).into(),
-            );
-            response_object.insert(
-                "transaction_scaffold_b64".to_owned(),
-                scaffold_b64.clone().into(),
-            );
-            response_object.insert("signed_transaction_b64".to_owned(), scaffold_b64.into());
-            response_object.insert("signing_message_b64".to_owned(), signing_message_b64.into());
         }
 
         Ok(response_value)

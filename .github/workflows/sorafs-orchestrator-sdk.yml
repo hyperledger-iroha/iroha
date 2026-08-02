@@ -39,6 +39,7 @@ on:
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
       - "scripts/check_native_sdk_abi21_artifact.py"
       - "scripts/tests/check_native_sdk_abi21_artifact_test.py"
+      - "scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -68,6 +69,8 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - name: Verify Python ABI-21 evidence retention contract
+        run: bash scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh
       - name: Bind the canonical mobile Python
         run: |
           mobile_python="$(python3 -I -S -c '
@@ -111,10 +114,19 @@ jobs:
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - name: Run exact Python 3.12 ABI-21 native reference parity
         env:
+          SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi21-evidence
           SORAFS_PYTHON_SDK_PYTHON_BIN: python3
         run: bash ci/check_sorafs_python_native_sdk.sh
       - name: Run Rust, Python, JavaScript, and Swift fixture parity
         run: bash ci/sdk_sorafs_orchestrator.sh
+      - name: Upload verified Python ABI-21 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-python-native-abi21-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-sorafs-python-native-abi21-evidence/python-native-abi21.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload parity evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

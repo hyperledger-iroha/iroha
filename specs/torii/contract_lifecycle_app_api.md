@@ -24,17 +24,16 @@ Torii when the `app_api` feature is enabled.
   and signs the exact live `expected_code_hash` into the invocation. Validators
   reject the call if governance rebinds the address before execution, so an
   in-flight signature cannot authorize different code. Transaction metadata
-  mirrors the canonical `contract_code_hash` for scaffold inspection; the
+  mirrors the canonical `contract_code_hash` for unsigned-payload inspection; the
   invocation field is the consensus authority. Validators never interpret JSON
   as contract argument transport.
 - Contract-call and contract-view target selectors require exactly one of
   `contract_address` or `contract_alias`.
-- `POST /v1/contracts/call` supports three submission modes:
-  - provide `private_key` and Torii quotes the exact payload, then
-    signs/submits it immediately;
+- `POST /v1/contracts/call` supports two modes:
   - provide `public_key_hex` + `signature_b64` for detached-submit flows; or
-  - provide neither and Torii returns a scaffold plus `signing_message_b64`.
-- Multisig contract-call propose/approve endpoints are detached-or-scaffold
+  - provide neither and Torii returns canonical `transaction_payload_b64` plus
+    its exact `signing_message_b64` (`HashOf<TransactionPayload>`).
+- Multisig contract-call propose/approve endpoints are detached-or-unsigned-draft
   only. Supplying `private_key` fails closed because server-side signing is
   disabled on those routes.
 - Historical `/v1/contracts/instance*` server-side-signing routes are no
@@ -70,7 +69,6 @@ partial effects.
 | Field | Type | Notes |
 |-------|------|-------|
 | `authority` | `AccountId` | Transaction authority. |
-| `private_key` | `Option<ExposedPrivateKey>` | Server-side signing path. |
 | `public_key_hex` | `Option<String>` | Detached Ed25519 submit path. |
 | `signature_b64` | `Option<String>` | Detached Ed25519 signature over `signing_message_b64`. |
 | `contract_address` | `Option<ContractAddress>` | Canonical target address. |
@@ -80,12 +78,11 @@ partial effects.
 | `creation_time_ms` | `Option<u64>` | Optional fixed timestamp for deterministic detached flows. |
 | `fee_payment` | `FeePaymentIntent` | Required typed payer selection, exact sponsor program/revision when sponsored, charge maxima, and positive gas bound. |
 
-The retired `fee_sponsor`, `gas_asset_id`, and standalone transaction
-`gas_limit` fields are rejected. The immediate-signing path runs the same Core
-fee quote used by `POST /v1/fees/quote`, retains the requested payer, exact
-program revision, and gas bound, replaces only the charge maxima, then signs
-that exact payload. Detached clients must perform the same quote-to-sign flow
-before producing their signature.
+The retired `private_key`, `fee_sponsor`, `gas_asset_id`, and standalone
+transaction `gas_limit` fields are rejected. Torii runs the same Core fee quote
+used by `POST /v1/fees/quote`, retains the requested payer, exact program
+revision, and gas bound, and replaces only the charge maxima before returning
+the unsigned payload. Detached clients sign that exact quoted payload.
 
 Direct settlement accepts either the transaction authority or one exact
 sponsor program. Receipt-lane (`lane_relay_burn`) Nexus settlement is
@@ -99,11 +96,14 @@ Response (`ContractCallResponseDto`) always includes `ok`, `submitted`,
 
 Submission-mode fields:
 
-- Immediate submit (`private_key` or detached signature): `submitted = true`
-  and `tx_hash_hex` is populated.
-- Scaffold mode (no signature material): `submitted = false` and Torii returns
-  `transaction_scaffold_b64`, `signed_transaction_b64`, and
-  `signing_message_b64`.
+- Detached submit (`public_key_hex` plus `signature_b64`): `submitted = true`
+  and `tx_hash_hex` is populated; unsigned-draft fields are absent.
+- Unsigned-draft mode (no signature material): `submitted = false`, both
+  transaction and entrypoint hashes remain absent, and Torii returns only the
+  canonical Norito `TransactionPayload` bytes in `transaction_payload_b64`
+  together with the exact `HashOf<TransactionPayload>` bytes in
+  `signing_message_b64`. Torii does not fabricate a signed transaction for
+  preparation.
 
 ## `POST /v1/contracts/call/simulate`
 
@@ -197,7 +197,7 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
 
 - Request type: `MultisigContractCallProposeDto`.
 - The selector wire shape contains exactly one of `multisig_account_id` or
-  `multisig_account_alias`, but this unsigned transaction-scaffold route accepts
+  `multisig_account_alias`, but this unsigned transaction-draft route accepts
   only the canonical `multisig_account_id`. An alias selector is rejected with
   `403 multisig_alias_signature_required`; body-asserted signer fields do not
   authenticate alias resolution.
@@ -208,8 +208,8 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
 - The route validates the signer against the live multisig spec, normalizes the
   contract payload, wraps the call in `MultisigPropose`, and returns
   `MultisigContractCallResponseDto` with `proposal_id`, `instructions_hash`,
-  `resolved_multisig_account_id`, and either `tx_hash_hex` or
-  `signing_message_b64`. A signed proposal that reaches quorum immediately also
+  `resolved_multisig_account_id`, and either `tx_hash_hex` or the exact pair
+  `transaction_payload_b64` plus `signing_message_b64`. A signed proposal that reaches quorum immediately also
   returns `executed_tx_hash_hex` equal to `tx_hash_hex`, because the proposal,
   approval, and nested call execute atomically in that transaction. It remains
   null when the proposal is only collecting signatures.
@@ -218,7 +218,7 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
 
 - Request type: `MultisigContractCallApproveDto`.
 - Requires exactly one of `proposal_id` or `instructions_hash`.
-- The multisig selector rules match the propose route: unsigned scaffold
+- The multisig selector rules match the propose route: unsigned draft
   preparation requires the canonical `multisig_account_id`.
 - Returns `MultisigContractCallResponseDto`, including
   `executed_tx_hash_hex` when the approval reached quorum and executed the

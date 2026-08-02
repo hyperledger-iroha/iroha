@@ -18,11 +18,9 @@ struct NativeBodyRecoveryFixture {
 }
 
 fn native_body_recovery_adapter() -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneId, DataSpaceId) {
-    native_body_recovery_adapter_with_kura(
-        Kura::blank_kura_for_testing_with_blocks_in_memory(
-            NonZeroUsize::new(1).expect("retain one carrier body"),
-        ),
-    )
+    native_body_recovery_adapter_with_kura(Kura::blank_kura_for_testing_with_blocks_in_memory(
+        NonZeroUsize::new(1).expect("retain one carrier body"),
+    ))
 }
 
 fn native_body_recovery_adapter_with_kura(
@@ -308,47 +306,46 @@ fn grouped_native_candidate_fixture(
     crate::lane_consensus::validate_lane_block_proposal(&participant_proposal)
         .expect("grouped participant proposal is structurally valid");
 
-    let bind_request =
-        |source_id: [u8; Hash::LENGTH], entrypoint_hash: HashOf<TransactionEntrypoint>| {
-            let coordinator_descriptor = &coordinator_proposal.descriptor;
-            let participant_descriptor = &participant_proposal.descriptor;
-            let mut request = native_request_with_distinct_participant(
-                &adapter,
-                &keys,
-                participant_lane,
-                participant_dataspace,
-                coordinator_descriptor.lane_block_height,
-                coordinator_descriptor.previous_lane_block_descriptor_hash,
-            );
-            request.plan_legs = routing_plan.legs();
-            request.coordinator_proposal = coordinator_proposal.clone();
-            request.participant_proposal = participant_proposal.clone();
+    let bind_request = |source_id: [u8; Hash::LENGTH],
+                        entrypoint_hash: HashOf<TransactionEntrypoint>| {
+        let coordinator_descriptor = &coordinator_proposal.descriptor;
+        let participant_descriptor = &participant_proposal.descriptor;
+        let mut request = native_request_with_distinct_participant(
+            &adapter,
+            &keys,
+            participant_lane,
+            participant_dataspace,
+            coordinator_descriptor.lane_block_height,
+            coordinator_descriptor.previous_lane_block_descriptor_hash,
+        );
+        request.plan_legs = routing_plan.legs();
+        request.coordinator_proposal = coordinator_proposal.clone();
+        request.participant_proposal = participant_proposal.clone();
 
-            let body = &mut request.body;
-            body.source_id = source_id;
-            body.tx_entrypoint_hash = entrypoint_hash;
-            body.plan_digest = routing_plan.digest();
-            body.coordinator_lane_id = coordinator_descriptor.lane_id;
-            body.coordinator_dataspace_id = coordinator_descriptor.dataspace_id;
-            body.coordinator_lane_incarnation = coordinator_descriptor.lane_incarnation;
-            body.planned_coordinator_block_height = coordinator_descriptor.lane_block_height;
-            body.coordinator_lane_block_view = coordinator_descriptor.lane_block_view;
-            body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
-            body.participant_lane_id = participant_descriptor.lane_id;
-            body.participant_dataspace_id = participant_descriptor.dataspace_id;
-            body.participant_lane_incarnation = participant_descriptor.lane_incarnation;
-            body.participant_previous_block_height =
-                participant_descriptor.previous_lane_block_height;
-            body.participant_previous_block_descriptor_hash =
-                participant_descriptor.previous_lane_block_descriptor_hash;
-            body.participant_lane_block_height = participant_descriptor.lane_block_height;
-            body.participant_lane_block_view = participant_descriptor.lane_block_view;
-            body.participant_proposal_hash = participant_proposal.proposal_hash;
-            body.participant_validator_set_hash = participant_descriptor.validator_set_hash;
-            body.participant_validator_count = participant_descriptor.validator_count;
-            body.participant_min_quorum = participant_descriptor.min_quorum;
-            request
-        };
+        let body = &mut request.body;
+        body.source_id = source_id;
+        body.tx_entrypoint_hash = entrypoint_hash;
+        body.plan_digest = routing_plan.digest();
+        body.coordinator_lane_id = coordinator_descriptor.lane_id;
+        body.coordinator_dataspace_id = coordinator_descriptor.dataspace_id;
+        body.coordinator_lane_incarnation = coordinator_descriptor.lane_incarnation;
+        body.planned_coordinator_block_height = coordinator_descriptor.lane_block_height;
+        body.coordinator_lane_block_view = coordinator_descriptor.lane_block_view;
+        body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
+        body.participant_lane_id = participant_descriptor.lane_id;
+        body.participant_dataspace_id = participant_descriptor.dataspace_id;
+        body.participant_lane_incarnation = participant_descriptor.lane_incarnation;
+        body.participant_previous_block_height = participant_descriptor.previous_lane_block_height;
+        body.participant_previous_block_descriptor_hash =
+            participant_descriptor.previous_lane_block_descriptor_hash;
+        body.participant_lane_block_height = participant_descriptor.lane_block_height;
+        body.participant_lane_block_view = participant_descriptor.lane_block_view;
+        body.participant_proposal_hash = participant_proposal.proposal_hash;
+        body.participant_validator_set_hash = participant_descriptor.validator_set_hash;
+        body.participant_validator_count = participant_descriptor.validator_count;
+        body.participant_min_quorum = participant_descriptor.min_quorum;
+        request
+    };
     let template = bind_request(source_ids[0], entrypoint_hashes[0]);
     let participant_settlement = template
         .body
@@ -521,8 +518,7 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
             .expect("read exact pre-vote durable height"),
         3
     );
-    let state_hash_before =
-        crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref());
+    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref());
     let candidate_height = NonZeroUsize::new(
         usize::try_from(negative.context.height).expect("candidate height fits usize"),
     )
@@ -965,4 +961,39 @@ fn native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_r
     );
     assert_eq!(receipt.source_ids, vec![fixture.source_id]);
     assert_eq!(receipt.entrypoint_hashes, vec![fixture.entrypoint_hash]);
+
+    assert_eq!(
+        kura.repair_native_amx_participant_application_evidence_for_markers(
+            &fixture.carrier,
+            &[fixture.marker.clone()],
+        )
+        .expect("retry exact Native startup evidence repair"),
+        1,
+        "an exact post-recovery retry must remain idempotent"
+    );
+    let mut drifted_marker = fixture.marker.clone();
+    drifted_marker.participant_proposal_hash =
+        Hash::new(b"drifted Native body-recovery participant proposal");
+    let error = kura
+        .preflight_native_amx_participant_application_evidence_repair(
+            &fixture.carrier,
+            &[drifted_marker],
+        )
+        .expect_err("a drifted State marker must not select carrier evidence");
+    assert!(
+        error
+            .to_string()
+            .contains("absent from its authenticated carrier manifest"),
+        "unexpected drifted Native marker error: {error}"
+    );
+    assert_eq!(
+        kura.read_native_amx_participant_application_receipt(
+            fixture.marker.lane_id,
+            fixture.marker.dataspace_id,
+            fixture.marker.lane_incarnation,
+            fixture.marker.lane_block_height,
+        ),
+        Some(receipt),
+        "failed marker preflight must leave the repaired receipt unchanged"
+    );
 }

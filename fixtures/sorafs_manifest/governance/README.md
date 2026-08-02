@@ -45,8 +45,9 @@ cargo run -p sorafs_manifest --features dev-tools --bin generate_por_fixtures --
   is signed under the same explicitly test-only Ed25519 key used by the
   deterministic Governance DAG fixtures. Its public-key fingerprint is pinned
   by `scripts/check_sorafs_governance_sdk_fixtures.py`; it is not a production
-  release key or a substitute for the later globally signed multi-domain fixture
-  inventory.
+  release key. The current release-wide test inventory is
+  `../reference_sdk_validation_inventory_v1.json`; neither inventory is
+  production release or deployment evidence.
 
 `node_v1` carries a deterministic Dilithium3/ML-DSA publisher signature so
 reference validators can exercise non-Ed25519 governance key verification. The

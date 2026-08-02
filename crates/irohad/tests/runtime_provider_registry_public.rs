@@ -4,9 +4,12 @@ use std::sync::Arc;
 
 use irohad::{
     BuildLine, IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1,
-    IrohaRuntimeProviderRegistryErrorV1, IrohaRuntimeProviderRegistryV1, MainError, ReportResult,
+    IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
+    IrohaRuntimeProviderRegistryV1, MainError, RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1, ReportResult,
     RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
-    RuntimeProviderBrokerDeploymentV1,
+    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
+    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
+    load_runtime_provider_broker_catalog_file_v1,
 };
 
 struct DeploymentRegistry;
@@ -126,6 +129,29 @@ fn external_crate_can_implement_and_name_broker_backend_launcher() {
 }
 
 #[test]
+fn external_crate_can_name_standard_broker_executable_shell() {
+    let load: fn(
+        &std::path::Path,
+    )
+        -> Result<IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerExecutableErrorV1> =
+        load_runtime_provider_broker_catalog_file_v1;
+    let assemble = RuntimeProviderBrokerExecutableV1::try_from_args;
+    let assemble_file = RuntimeProviderBrokerExecutableV1::try_from_catalog_file;
+    let serve = RuntimeProviderBrokerExecutableV1::serve::<fn()>;
+    let serve_signalled = RuntimeProviderBrokerExecutableV1::serve_until_shutdown_signal::<fn()>;
+    let catalog_path = RuntimeProviderBrokerExecutableArgsV1::catalog_path;
+
+    let _ = (
+        load,
+        assemble,
+        assemble_file,
+        serve,
+        serve_signalled,
+        catalog_path,
+    );
+}
+
+#[test]
 fn external_crate_can_name_standalone_governance_view_projection() {
     let projection: fn(
         &iroha_data_model::ChainId,
@@ -136,6 +162,22 @@ fn external_crate_can_name_standalone_governance_view_projection() {
     > = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view;
 
     let _ = projection;
+}
+
+#[test]
+fn external_crate_can_name_secret_free_broker_catalog_handoff() {
+    let export: fn(
+        &IrohaRuntimeProviderBindingsV1,
+    ) -> Result<Vec<u8>, IrohaRuntimeProviderCatalogErrorV1> =
+        IrohaRuntimeProviderBindingsV1::export_canonical_v1;
+    let load: fn(
+        &[u8],
+    )
+        -> Result<IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1> =
+        IrohaRuntimeProviderBindingsV1::load_canonical_v1;
+
+    assert_eq!(RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1, 256 * 1024);
+    let _ = (export, load);
 }
 
 #[test]

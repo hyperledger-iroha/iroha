@@ -11,7 +11,7 @@ export const SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS = Object.freeze([
   "getSumeragiDiagnosticsTyped preserves exact u64 Native AMX V2 receipt identities",
   "getSumeragiDiagnosticsTyped rejects non-u64 Native integer spellings",
   "typed Sumeragi JSON rejects duplicate keys, trailing input, and oversized bodies",
-  "getSumeragiDiagnosticsTyped parses bounded native application evidence",
+  "getSumeragiDiagnosticsTyped parses bounded native application evidence and enforces state geometry",
   "getSumeragiDiagnosticsTyped rejects native application evidence above the server bound",
   "getSumeragiDiagnosticsTyped requires the autonomous execution vector",
   "getSumeragiDiagnosticsTyped parses autonomous execution stages and explicit conflict",
@@ -71,11 +71,15 @@ if (selectedClientPath === "") {
 }
 const { ToriiClient } = await import(clientModuleUrl.href);
 assert.equal(typeof ToriiClient, "function");
+const clientIndexModuleUrl = new URL("./index.js", clientModuleUrl);
+const { ValidationError } = await import(clientIndexModuleUrl.href);
+assert.equal(typeof ValidationError, "function");
 
 const focus = {
   names: new Set(SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS),
   observed: [],
   ToriiClient,
+  ValidationError,
 };
 assert.equal(focus.names.size, SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS.length);
 globalThis[focusSymbol] = focus;

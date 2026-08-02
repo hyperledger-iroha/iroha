@@ -75,9 +75,11 @@ use super::{
         HistoricalRecoveryServiceOutcome, LaneApplicationEvidenceRepairPlanning,
         MergeSidecarDeferralDisposition, RetainedMergeSidecars, V2LaneIngressOutcome,
         V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError, V2LaneWorkLimits,
-        apply_lane_application_evidence_repair, plan_lane_application_evidence_repair,
-        require_validator_storage_platform,
+        apply_lane_application_evidence_repair,
+        persist_canonical_historical_recovery_payload_custody,
+        plan_lane_application_evidence_repair, require_validator_storage_platform,
     },
+    v2_lifecycle_recovery::reconcile_autonomous_lifecycle_startup,
     v2_npos::V2NposVrfLifecycle,
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
@@ -101,7 +103,7 @@ use crate::{
     },
     native_amx::NativeAmxMessage,
     queue::{GlobalQueueSelectionLease, Queue},
-    state::State,
+    state::{PendingCertifiedMergeSelection, State},
 };
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
@@ -926,6 +928,34 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         recovered_successor_activation,
         mut staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
+    let local_peer = common_config.peer.id().clone();
+    // Membership and role validation is read-only and must precede the first
+    // lifecycle mutation. Observers audit retained Kura records during Kura
+    // startup but never consume a process generation; a configured validator
+    // absent from the authenticated recovered roster fails before touching it.
+    let initial_local_validator =
+        local_validator_index(verified_context.context(), &local_peer, config.role)?;
+    // Claim the process generation before constructing any height-local lane
+    // service.  The claim is rooted in the authenticated recovered chain
+    // context and the immutable local Kura identity; later startup lifecycle
+    // reconciliation consumes this same process-lifetime claim rather than
+    // allowing each height adapter to invent a generation.
+    let lifecycle_chain_id = verified_context.context().chain_id.clone().into_inner();
+    let _lifecycle_process_generation = if initial_local_validator.is_some() {
+        Some(
+            kura.claim_autonomous_lifecycle_process_generation(
+                Hash::new(lifecycle_chain_id.as_bytes()),
+                &local_peer,
+            )
+            .map_err(|error| {
+                V2RunnerError::Service(format!(
+                    "failed to claim the durable autonomous lifecycle process generation: {error}"
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
     // A process which recovered durable v2 height ownership may be behind its
     // peers. Probe that exact active context immediately, then retain eager
     // discovery only while an authenticated discovered CommitQC acquires or
@@ -937,7 +967,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     // completed State application. Running before that boundary could mistake
     // the tip's not-yet-published membership for a losing lane proposal.
     let mut reservation_reconciliation_pending = true;
-    let local_peer = common_config.peer.id().clone();
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
@@ -1441,12 +1470,50 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         if reservation_reconciliation_pending {
             let summary = loop {
-                match plan_lane_reservation_ownership(
+                let planning = plan_lane_reservation_ownership(
                     state.as_ref(),
                     queue.as_ref(),
                     kura.as_ref(),
                     &verified_context,
-                )? {
+                    None,
+                )?;
+                let planning = match planning {
+                    LaneReservationReconciliationPlanning::Ready(pre_lifecycle_plan) => {
+                        // Classification is read-only. Discard its first receipt, reconcile every
+                        // signed local lifecycle boundary while the Queue gate remains closed, then
+                        // rebuild the complete plan with the exact receipt retained by that flow.
+                        drop(pre_lifecycle_plan);
+                        let lifecycle = reconcile_autonomous_lifecycle_startup(
+                            state.as_ref(),
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            &context,
+                            _lifecycle_process_generation.as_ref(),
+                            &local_peer,
+                            &common_config.key_pair,
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                        let completed_bootstraps = lifecycle.completed_bootstraps();
+                        let recovered_attempts = lifecycle.recovered_attempts();
+                        let replanned = plan_lane_reservation_ownership(
+                            state.as_ref(),
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            &verified_context,
+                            Some(lifecycle),
+                        )?;
+                        if completed_bootstraps != 0 || recovered_attempts != 0 {
+                            iroha_logger::info!(
+                                completed_bootstraps,
+                                recovered_attempts,
+                                "reconciled signed autonomous lifecycle custody before Queue publication"
+                            );
+                        }
+                        replanned
+                    }
+                    pending => pending,
+                };
+                match planning {
                     LaneReservationReconciliationPlanning::Ready(plan) => {
                         let reservation_recovery = output_guard
                             .begin_fail_stop_operation()
@@ -1567,6 +1634,23 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 )
                             })
                             .collect::<Result<Vec<_>, _>>()?;
+                        let process_generation = _lifecycle_process_generation
+                            .as_ref()
+                            .ok_or_else(|| {
+                                V2RunnerError::Service(
+                                    "historical autonomous recovery payload custody requires a validator process generation"
+                                        .to_owned(),
+                                )
+                            })?;
+                        for record in &records {
+                            persist_canonical_historical_recovery_payload_custody(
+                                kura.as_ref(),
+                                process_generation,
+                                &common_config.key_pair,
+                                &local_peer,
+                                record,
+                            )?;
+                        }
                         let _outcomes =
                             persist_preflighted_historical_autonomous_lane_recoveries(
                                 kura.as_ref(),
@@ -1617,11 +1701,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     Arc::clone(&output_guard),
                     exact_output_transport_owner,
                     retained_merge_sidecars.take(),
+                    _lifecycle_process_generation.clone(),
                 )
                 .map_err(V2RunnerError::from)
             },
         )?;
         lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
+        // Signed lifecycle bootstrap, generation takeover, Queue snapshot recovery, and local
+        // Kura body rehydration completed above while the adapter was still carrier-silent.
+        // Activation is one-shot and independently revalidates every hydrated owner before work.
+        lane_work.activate_after_lane_drain_queue_install(&queue)?;
         let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
         committed_lane_status_publisher.publish_if_changed(&lane_work);
         if let Some(scheduler_ordinal) = services
@@ -2646,7 +2735,28 @@ fn schedule_local_proposal(
             &carrier_context_header,
             npos_vrf,
         )?;
-        let candidate = if proposal_state.heartbeat_only == Some(owner) {
+        let certified_execution_carrier = attachments
+            .certified_merge_entry
+            .as_ref()
+            .is_some_and(|entry| entry.execution_batch.is_some());
+        claim_certified_execution_proposal_turn(proposal_state, certified_execution_carrier);
+        let candidate = if certified_execution_carrier {
+            lane_work
+                .prepare_certified_execution_carrier(context, directive.tag().view(), &[])
+                .map_err(|error| V2RunnerError::Candidate(error.reason().to_owned()))?;
+            assembler.assemble(CandidateRequest {
+                context,
+                directive,
+                local_validator,
+                parent,
+                state,
+                queue,
+                key_pair,
+                output_guard,
+                attachments,
+                work_provider: CertifiedExecutionCarrierWorkProvider,
+            })?
+        } else if proposal_state.heartbeat_only == Some(owner) {
             assembler.assemble(CandidateRequest {
                 context,
                 directive,
@@ -2678,10 +2788,20 @@ fn schedule_local_proposal(
             return Err(V2RunnerError::StaleTag);
         }
         let report = candidate.scan_report();
-        if proposal_state.heartbeat_only != Some(owner)
-            && report.selected == 0
-            && report.work_deferred > 0
-        {
+        if report.carrier_excluded > 0 {
+            iroha_logger::debug!(
+                height = context.height,
+                view = tag.view(),
+                excluded = report.carrier_excluded,
+                "certified execution carrier retained ordinary FIFO work for a later block"
+            );
+        }
+        if candidate_work_requires_wait(
+            proposal_state.heartbeat_only == Some(owner),
+            certified_execution_carrier,
+            report.selected,
+            report.work_deferred,
+        ) {
             let now = Instant::now();
             proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound);
             return Ok(());
@@ -4653,21 +4773,6 @@ fn candidate_attachments(
             "certified merge carrier probe differs from the frozen round".to_owned(),
         ));
     }
-    let expected_merge_epoch = state
-        .merge_ledger()
-        .latest()
-        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
-    let certified_merge_entry = state
-        .select_pending_certified_merge_entry_for_round(round_header, expected_merge_epoch)
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
-        .map(|(_, entry, _)| entry)
-        .map(|entry| {
-            super::v2_lane_work::authenticate_merge_entry_for_height_context(context, &entry)
-                .map(|()| entry)
-                .map_err(V2RunnerError::Candidate)
-        })
-        .transpose()?;
-
     let effects = if context.mode == wire::ConsensusMode::Npos {
         super::penalties::PenaltyApplier::from_parts(
             state,
@@ -4681,8 +4786,38 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
+    let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
+    super::v2_npos::validate_candidate_records(context, state, npos_consensus_effects.as_ref())
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let merge_selection = certified_merge_selection_for_npos(npos_consensus_effects.is_some());
+    if merge_selection == PendingCertifiedMergeSelection::ControlOnly {
+        iroha_logger::debug!(
+            height = context.height,
+            view,
+            "prioritizing deterministic NPoS effects before a certified execution carrier"
+        );
+    }
+    let expected_merge_epoch = state
+        .merge_ledger()
+        .latest()
+        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
+    let selected_merge_entry = state
+        .select_pending_certified_merge_entry_for_round(
+            round_header,
+            expected_merge_epoch,
+            merge_selection,
+        )
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let certified_merge_entry = selected_merge_entry
+        .map(|(_, entry, _)| entry)
+        .map(|entry| {
+            super::v2_lane_work::authenticate_merge_entry_for_height_context(context, &entry)
+                .map(|()| entry)
+                .map_err(V2RunnerError::Candidate)
+        })
+        .transpose()?;
     Ok(CandidateAttachments {
-        npos_consensus_effects: (!effects.is_empty()).then_some(effects),
+        npos_consensus_effects,
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
@@ -4690,6 +4825,36 @@ fn candidate_attachments(
         certified_merge_entry,
         ..CandidateAttachments::default()
     })
+}
+
+const fn certified_merge_selection_for_npos(
+    has_npos_effects: bool,
+) -> PendingCertifiedMergeSelection {
+    if has_npos_effects {
+        PendingCertifiedMergeSelection::ControlOnly
+    } else {
+        PendingCertifiedMergeSelection::Any
+    }
+}
+
+const fn candidate_work_requires_wait(
+    heartbeat_only: bool,
+    certified_execution_carrier: bool,
+    selected: usize,
+    work_deferred: usize,
+) -> bool {
+    !heartbeat_only && !certified_execution_carrier && selected == 0 && work_deferred > 0
+}
+
+fn claim_certified_execution_proposal_turn(
+    proposal_state: &mut LocalProposalState,
+    certified_execution_carrier: bool,
+) {
+    if certified_execution_carrier {
+        // A prior empty-heartbeat fallback must not classify a later dedicated
+        // execution carrier (or its rejection) as a heartbeat; it owns this turn.
+        proposal_state.heartbeat_only = None;
+    }
 }
 
 fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> AdapterFingerprints {
@@ -4723,6 +4888,26 @@ impl CandidateWorkProvider for HeartbeatOnlyWorkProvider {
         Err(CandidateWorkUnavailable::new(
             (0..candidates.len()).collect::<BTreeSet<_>>(),
             "local fallback requested an empty heartbeat",
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CertifiedExecutionCarrierWorkProvider;
+
+impl CandidateWorkProvider for CertifiedExecutionCarrierWorkProvider {
+    fn prepare(
+        &mut self,
+        _context: &wire::HeightContext,
+        _view: wire::View,
+        candidates: &[CandidateDescriptor<'_>],
+    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+        if candidates.is_empty() {
+            return Ok(PreparedCandidateWork::default());
+        }
+        Err(CandidateWorkUnavailable::new(
+            (0..candidates.len()).collect::<BTreeSet<_>>(),
+            "certified execution carrier requires an empty ordinary batch",
         ))
     }
 }
@@ -5214,207 +5399,8 @@ fn drain_lane_relay_ingress(
     Ok(())
 }
 
-/// Fail-closed live-runner error.
-#[derive(Debug, Error)]
-pub(super) enum V2RunnerError {
-    /// Active-height recovery failed.
-    #[error(transparent)]
-    Recovery(#[from] super::v2_recovery::V2RecoveryError),
-    /// Runner/status activation ownership was inconsistent.
-    #[error(transparent)]
-    SuccessorActivation(#[from] super::status::V2SuccessorActivationError),
-    /// Successor construction returned authority for another same-height predecessor.
-    #[error(
-        "Sumeragi v2 successor predecessor authority changed during construction: expected {expected:?}, actual {actual:?}"
-    )]
-    SuccessorPredecessorAuthorityMismatch {
-        /// Exact predecessor identity which began the Running handoff.
-        expected: DurableV2PredecessorIdentity,
-        /// Exact predecessor identity returned by verified construction.
-        actual: DurableV2PredecessorIdentity,
-    },
-    /// A typed successor lifecycle transition failed the shared pure refinement kernel.
-    #[error("Sumeragi v2 successor lifecycle failed the production refinement kernel")]
-    SuccessorRefinementRejected,
-    /// Reducer/WAL adapter failed.
-    #[error(transparent)]
-    Adapter(#[from] super::v2::AdapterError),
-    /// Runtime configuration failed.
-    #[error("invalid Sumeragi v2 runtime configuration: {0}")]
-    RuntimeConfig(#[from] super::v2_runtime::RuntimeConfigError),
-    /// Live pacemaker clocks were activated outside the one-shot startup boundary.
-    #[error(transparent)]
-    RuntimeClock(#[from] super::v2_runtime::RuntimeClockError),
-    /// Canonical shared consensus configuration was invalid.
-    #[error(transparent)]
-    SharedConfig(#[from] iroha_config::parameters::actual::SumeragiV2ConfigError),
-    /// Effect boundary failed closed.
-    #[error(transparent)]
-    Effect(#[from] super::v2_effects::EffectExecutorError),
-    /// Candidate construction failed.
-    #[error(transparent)]
-    CandidateBuild(#[from] super::v2_candidate::CandidateError),
-    /// Bounded lane-local/merge/Native-AMX adapter failed closed.
-    #[error(transparent)]
-    LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
-    /// Authenticated NPoS VRF lifecycle failed closed.
-    #[error(transparent)]
-    NposVrf(#[from] super::v2_npos::V2NposError),
-    /// Durable lane reservation ownership could not be reconciled exactly.
-    #[error(transparent)]
-    Reservation(#[from] V2ReservationLifecycleError),
-    /// Integer conversion failed.
-    #[error(transparent)]
-    Integer(#[from] std::num::TryFromIntError),
-    /// Sequential CommitQC/body synchronization failed closed.
-    #[error(transparent)]
-    BlockSync(#[from] V2BlockSyncError),
-    /// Production service failed.
-    #[error("Sumeragi v2 production service failed: {0}")]
-    Service(String),
-    /// Local validator role is absent from the frozen voting roster.
-    #[error("Sumeragi v2 node is configured as validator but absent from the frozen roster")]
-    ValidatorAbsent,
-    /// Fresh genesis leader no longer has the signed genesis body.
-    #[error("Sumeragi v2 height one is missing its signed genesis body")]
-    MissingGenesisBody,
-    /// Staged and pending-replay height-one capabilities were both present.
-    #[error("Sumeragi v2 startup produced conflicting authenticated genesis Nexus/AMX contexts")]
-    ConflictingGenesisNexusContext,
-    /// Interrupted-tip application did not reach its strict durable repair boundary.
-    #[error(
-        "Sumeragi v2 interrupted-tip recovery did not complete post-apply metadata and Native AMX evidence repair before lane-work construction"
-    )]
-    PendingTipRecoveryIncomplete,
-    /// Closed-ingress interrupted-tip recovery exhausted its cadence-derived deadline.
-    #[error(
-        "Sumeragi v2 interrupted-tip recovery exceeded {timeout:?} after {attempts} serialized attempts at stage {stage:?}; process restart is required"
-    )]
-    PendingTipRecoveryDeadlineExceeded {
-        /// Cadence-derived maximum local recovery duration.
-        timeout: Duration,
-        /// Number of serialized recovery scheduler attempts completed.
-        attempts: u64,
-        /// Exact authenticated recovery stage retained at expiry.
-        stage: Option<PendingKuraApplyRecoveryStage>,
-    },
-    /// Durable parent body is unavailable in Kura.
-    #[error("Sumeragi v2 successor is missing its canonical parent block")]
-    MissingParent,
-    /// Snapshot bootstrap context is not the exact successor of an unavailable Kura parent.
-    #[error("Sumeragi v2 snapshot bootstrap parent geometry is invalid or unexpectedly has a body")]
-    InvalidSnapshotBootstrapParent,
-    /// Snapshot successor cadence is zero or not representable as whole wire milliseconds.
-    #[error("Sumeragi v2 snapshot bootstrap cadence must be positive whole milliseconds")]
-    InvalidSnapshotBootstrapCadence,
-    /// Locked subject differs from loaded durable bytes.
-    #[error("loaded Sumeragi v2 locked body differs from the reducer lock")]
-    LockedBodyMismatch,
-    /// A local or recovered proposal carried execution results.
-    #[error("Sumeragi v2 proposal body must be resultless")]
-    ResultBearingProposal,
-    /// A locally assembled body could not bind its lane-local work to the exact round.
-    #[error("local Sumeragi v2 candidate could not bind its lane-local ownership artifacts")]
-    LaneCandidateBinding,
-    /// Candidate tag belongs to another height.
-    #[error("stale Sumeragi v2 proposal tag")]
-    StaleTag,
-    /// Runtime has already failed closed.
-    #[error("Sumeragi v2 runtime is fail-closed")]
-    RuntimeFailClosed,
-    /// Single-owner runtime capacity changed between fair dequeue and enqueue.
-    #[error("Sumeragi v2 atomic runtime admission invariant failed: {0}")]
-    RuntimeAdmissionInvariant(String),
-    /// A process-lifetime fatal guard was activated by another consensus service.
-    #[error("Sumeragi v2 consensus requires process restart")]
-    RestartRequired,
-    /// A configured limit is zero.
-    #[error("Sumeragi v2 configured limits must be positive")]
-    InvalidLimits,
-    /// The fixed v2 ingress cannot reserve first-message and progress slots for the roster.
-    #[error(
-        "Sumeragi v2 body ingress capacity {configured} is smaller than the {required} first-message, progress, and untrusted slots required by the frozen roster"
-    )]
-    IngressCapacity {
-        /// Configured fixed queue capacity.
-        configured: usize,
-        /// Required validator-lane plus untrusted-lane capacity.
-        required: usize,
-    },
-    /// The fixed v2 ingress cannot isolate one wire-byte quota per active source lane.
-    #[error(
-        "Sumeragi v2 body ingress byte capacity {configured} is smaller than the {required} bytes required to isolate the frozen roster plus the untrusted lane"
-    )]
-    IngressByteCapacity {
-        /// Configured aggregate canonical-wire byte capacity.
-        configured: usize,
-        /// Required per-source byte reservations for validators and untrusted traffic.
-        required: usize,
-    },
-    /// Outstanding asynchronous work could overflow trusted completion admission.
-    #[error(
-        "Sumeragi v2 effect-work capacity {pending} exceeds runtime completion reserve {reserve}"
-    )]
-    EffectWorkExceedsCompletionReserve {
-        /// Maximum outstanding asynchronous tasks.
-        pending: usize,
-        /// Runtime slots reserved for their trusted completions.
-        reserve: usize,
-    },
-    /// The deterministic parent-plus-cadence timestamp exceeded wire range.
-    #[error("Sumeragi v2 logical block timestamp exceeds u64 milliseconds")]
-    V2BlockTimeOverflow,
-    /// Deterministic local candidate operation failed.
-    #[error("Sumeragi v2 candidate failed: {0}")]
-    Candidate(String),
-    /// Even an empty fallback failed deterministic validation.
-    #[error("Sumeragi v2 empty heartbeat failed validation: {0}")]
-    LocalHeartbeatRejected(String),
-    /// The exact bounded discovery request vanished before reducer admission.
-    #[error("Sumeragi v2 CommitQC discovery request disappeared before reducer admission")]
-    BlockSyncRequestDisappeared,
-}
+include!("v2_runner_error.rs");
 
 #[cfg(test)]
-mod tests {
-    use std::{
-        cell::{Cell, RefCell},
-        collections::VecDeque,
-        sync::{Mutex, atomic::AtomicUsize},
-    };
-
-    use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{
-        ChainId,
-        account::AccountId,
-        block::decode_framed_signed_block,
-        isi::Log,
-        peer::PeerId,
-        transaction::{TransactionBuilder, signed::TransactionResultInner},
-        trigger::DataTriggerSequence,
-    };
-    use iroha_logger::Level;
-    use iroha_p2p::network::{
-        NetworkActorAdmissionError, NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture,
-        NetworkReplyRoutes,
-    };
-    use tempfile::TempDir;
-
-    use super::super::FairV2IngressPushError;
-    use super::*;
-    use crate::{
-        NetworkMessage,
-        merge_sidecar::{
-            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
-            CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarMessage,
-            CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
-            CertifiedMergeSidecarStreamEpochV1,
-        },
-        sumeragi::LaneRelayMessage,
-    };
-
-    include!("tests/v2_runner_unsealed_00.rs");
-    include!("tests/v2_runner_unsealed_01.rs");
-    include!("tests/v2_runner_unsealed_02.rs");
-}
+#[path = "v2_runner_tests.rs"]
+mod tests;

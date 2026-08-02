@@ -117,25 +117,31 @@ function runCargo(repoRoot, args) {
   });
 }
 
+export function openApiGeneratorCargoArgs(outputFile) {
+  return [
+    'run',
+    '--locked',
+    '--offline',
+    '-p',
+    'xtask',
+    '--features',
+    'dev-tools',
+    '--bin',
+    'xtask',
+    '--',
+    'openapi',
+    '--output',
+    outputFile,
+  ];
+}
+
 const defaultContext = {
   repoRoot: defaultRepoRoot,
   outputDir: defaultOutputDir,
   versionsDir: defaultVersionsDir,
   allowedSignersFile: join(defaultOutputDir, 'allowed_signers.json'),
   async generateSpec(repoRoot, outputFile) {
-    const code = await runCargo(repoRoot, [
-      'run',
-      '--locked',
-      '--offline',
-      '-p',
-      'xtask',
-      '--bin',
-      'xtask',
-      '--',
-      'openapi',
-      '--output',
-      outputFile,
-    ]);
+    const code = await runCargo(repoRoot, openApiGeneratorCargoArgs(outputFile));
     if (code !== 0) {
       throw new Error(`OpenAPI generation failed (cargo exit code ${code})`);
     }

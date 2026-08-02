@@ -203,14 +203,14 @@ run_positive \
   native-application-evidence \
   "$NATIVE_MODULE" \
   multilane_native_application_evidence_fixed.cfg \
-  5 \
+  8 \
   "NativeEvidenceTypeInvariant, NativeStandaloneEvidenceInvariant, NativeEvidenceRetentionBoundInvariant, NativeNoClobberPublicationInvariant, NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLUnifiedStartupEvidenceRepairSafe, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact"
 run_positive \
   autonomous-reservation-carrier \
   "$AUTONOMOUS_MODULE" \
   multilane_autonomous_reservation_carrier_fixed.cfg \
   10 \
-  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLStageEvidenceMonotonic"
+  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierCommitSurfaceExact, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLRecoveredCarrierBodyAuthenticated, MLRecoveredCarrierLengthAuthenticated, MLHistoricalRecoveryContextExact, MLHistoricalQueueGateOrder, MLHistoricalAllGroupsPreflight, MLStageEvidenceMonotonic"
 run_positive \
   queue-plan-admission-registry \
   "$QUEUE_PLAN_ADMISSION_MODULE" \
@@ -253,7 +253,7 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
     "$(hash_file "${FORMAL_DIR}/${AUTOSCALE_MODULE}.tla")" \
     "$(hash_file "${FORMAL_DIR}/multilane_autoscale_lifecycle_fixed.cfg")" \
     "$(hash_file "${LOG_DIR}/autoscale-lifecycle.check.log")"
-  printf 'result\tnative-application-evidence\t%s\t%s\t5\tNoError\t%s\t%s\t%s\n' \
+  printf 'result\tnative-application-evidence\t%s\t%s\t8\tNoError\t%s\t%s\t%s\n' \
     "$NATIVE_MODULE" \
     "multilane_native_application_evidence_fixed.cfg" \
     "$(hash_file "${FORMAL_DIR}/${NATIVE_MODULE}.tla")" \

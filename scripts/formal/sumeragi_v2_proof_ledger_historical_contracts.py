@@ -1,5 +1,11 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+HISTORICAL_BODY_RESPONSE_PHASE_MARKERS = (
+    "Hash::new(&body) != request.subject.payload_hash",
+    "match request.certificate.phase",
+    "wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit => {}",
+)
+
 REQUIRED_MODEL_MODULES = (
     "SumeragiV2",
     "SumeragiV2Quorums",

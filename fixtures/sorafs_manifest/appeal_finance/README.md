@@ -44,18 +44,21 @@ reference-SDK inventory:
 ```sh
 cargo run --locked -p iroha_data_model --features test-fixtures,dev-tools \
   --bin cancel_asset_lock_fixtures
+cargo run --locked -p sorafs_manifest --features dev-tools \
+  --bin generate_pdp_fixtures
 cargo run --locked -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write
 python3 scripts/check_sorafs_reference_sdk_fixtures.py
 ```
 
 Use `--check` with `cancel_asset_lock_fixtures` for a read-only byte-parity
-check. Both generators also accept a separate `--output-dir PATH` argument
-after Cargo's `--`; the aggregate generator interprets it as the
-`sorafs_manifest` root, while the cancellation generator interprets it as the
-`appeal_finance` directory. `ci/check_sorafs_fixtures.sh` copies the complete
-manifest tree into two isolated temporary roots, regenerates both passes there,
-validates each signed inventory, and requires byte-identical checked-in,
-first-pass, and second-pass manifests.
+check. All three generators also accept a separate `--output-dir PATH`
+argument after Cargo's `--`; the cancellation and PDP generators interpret it
+as their respective `appeal_finance` and `pdp` directories, while the aggregate
+generator interprets it as the `sorafs_manifest` root.
+`ci/check_sorafs_fixtures.sh` copies the complete manifest tree into two
+isolated temporary roots, runs all three generators in that order for both
+passes, validates each signed inventory, and requires byte-identical
+checked-in, first-pass, and second-pass manifests.
 
 Cancellation publication uses same-directory synchronized temporary files and
 atomic rename, rejects symlinked/non-regular/hardlinked targets and parent

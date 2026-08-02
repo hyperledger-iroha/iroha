@@ -28,6 +28,8 @@ from typing import NoReturn
 SCHEMA = "iroha.native-sdk-abi21-artifact.v1"
 REQUIRED_BRIDGE_ABI_VERSION = 21
 MAX_MANIFEST_BYTES = 64 * 1024
+MAX_EVIDENCE_DIRECTORY_PATH_BYTES = 4 * 1024
+MAX_EVIDENCE_DIRECTORY_COMPONENTS = 64
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 TARGET_RE = re.compile(r"[a-z0-9][a-z0-9._+-]{0,127}")
@@ -565,6 +567,193 @@ def _exclusive_write(path: Path, payload: bytes) -> None:
         os.close(descriptor)
 
 
+def _require_real_directory_ancestry(path: Path, *, label: str) -> None:
+    """Require an existing absolute directory path without symlink components."""
+
+    if not path.is_absolute():
+        fail(f"{label} must be absolute")
+    anchor = Path(path.anchor)
+    current = anchor
+    for component in path.parts[len(anchor.parts) :]:
+        current /= component
+        try:
+            metadata = current.lstat()
+        except OSError as error:
+            raise ArtifactContractError(
+                f"{label} ancestry is unavailable: {current}"
+            ) from error
+        if stat.S_ISLNK(metadata.st_mode):
+            fail(f"{label} ancestry must not contain symlinks: {current}")
+        if not stat.S_ISDIR(metadata.st_mode):
+            fail(f"{label} ancestry must contain only directories: {current}")
+
+
+def _exclusive_write_at(directory: int, name: str, payload: bytes) -> None:
+    """Create one private regular file relative to an authenticated directory."""
+
+    flags = (
+        os.O_CREAT
+        | os.O_EXCL
+        | os.O_WRONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(name, flags, 0o600, dir_fd=directory)
+    except OSError as error:
+        raise ArtifactContractError(
+            f"retained native artifact manifest output must be fresh: {name}"
+        ) from error
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            fail("retained native artifact manifest must be one regular file")
+        offset = 0
+        while offset < len(payload):
+            offset += os.write(descriptor, payload[offset:])
+        os.fsync(descriptor)
+        written = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(written.st_mode)
+            or stat.S_IMODE(written.st_mode) & 0o077 != 0
+            or written.st_nlink != 1
+            or written.st_size != len(payload)
+        ):
+            fail("retained native artifact manifest changed while it was written")
+    finally:
+        os.close(descriptor)
+
+
+def retain_verified_manifest(
+    manifest: Mapping[str, object],
+    *,
+    artifact_path: Path,
+    evidence_directory: Path,
+    source_root: Path,
+    probe: Callable[[str, Path], int] = probe_artifact,
+) -> Path:
+    """Re-authenticate and retain a manifest in one fresh private directory.
+
+    The output directory is deliberately fresh and external to the
+    authenticated source tree so retaining evidence cannot invalidate the
+    clean-tree claim.
+    """
+
+    validated = validate_manifest(dict(manifest))
+    verify_manifest(
+        validated,
+        artifact_path=artifact_path,
+        source_root=source_root,
+        probe=probe,
+    )
+    path_text = os.fspath(evidence_directory)
+    try:
+        encoded_path = os.fsencode(path_text)
+    except UnicodeError as error:
+        raise ArtifactContractError(
+            "native artifact evidence directory path is not representable"
+        ) from error
+    if (
+        not evidence_directory.is_absolute()
+        or len(encoded_path) == 0
+        or len(encoded_path) > MAX_EVIDENCE_DIRECTORY_PATH_BYTES
+        or len(evidence_directory.parts) > MAX_EVIDENCE_DIRECTORY_COMPONENTS
+        or any(component in {".", ".."} for component in evidence_directory.parts)
+        or evidence_directory == Path(evidence_directory.anchor)
+    ):
+        fail("native artifact evidence directory must be a bounded absolute leaf path")
+
+    parent = evidence_directory.parent
+    _require_real_directory_ancestry(
+        parent,
+        label="native artifact evidence directory",
+    )
+    try:
+        evidence_directory.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise ArtifactContractError(
+            f"native artifact evidence directory is unavailable: {evidence_directory}"
+        ) from error
+    else:
+        fail(
+            "native artifact evidence directory must be fresh and must not be a symlink"
+        )
+
+    canonical_source = source_root.resolve(strict=True)
+    canonical_parent = parent.resolve(strict=True)
+    canonical_output = canonical_parent / evidence_directory.name
+    if canonical_output == canonical_source or canonical_source in canonical_output.parents:
+        fail("native artifact evidence directory must be outside the source tree")
+
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        parent_descriptor = os.open(canonical_parent, directory_flags)
+    except OSError as error:
+        raise ArtifactContractError(
+            "native artifact evidence directory parent could not be opened"
+        ) from error
+    directory_descriptor: int | None = None
+    try:
+        parent_identity = os.fstat(parent_descriptor)
+        current_parent = canonical_parent.lstat()
+        if (
+            not stat.S_ISDIR(parent_identity.st_mode)
+            or stat.S_ISLNK(current_parent.st_mode)
+            or (parent_identity.st_dev, parent_identity.st_ino)
+            != (current_parent.st_dev, current_parent.st_ino)
+        ):
+            fail("native artifact evidence directory parent changed before creation")
+        try:
+            os.mkdir(evidence_directory.name, 0o700, dir_fd=parent_descriptor)
+            directory_descriptor = os.open(
+                evidence_directory.name,
+                directory_flags,
+                dir_fd=parent_descriptor,
+            )
+        except OSError as error:
+            raise ArtifactContractError(
+                "native artifact evidence directory must be created as one fresh directory"
+            ) from error
+        created = os.fstat(directory_descriptor)
+        current = canonical_output.lstat()
+        if (
+            not stat.S_ISDIR(created.st_mode)
+            or stat.S_IMODE(created.st_mode) & 0o077 != 0
+            or stat.S_ISLNK(current.st_mode)
+            or (created.st_dev, created.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            fail("native artifact evidence directory changed while it was created")
+        output_name = f"{validated['sdk']}-native-abi21.json"
+        _exclusive_write_at(
+            directory_descriptor,
+            output_name,
+            canonical_manifest_bytes(validated),
+        )
+        current_after_write = canonical_output.lstat()
+        if (
+            stat.S_ISLNK(current_after_write.st_mode)
+            or (created.st_dev, created.st_ino)
+            != (current_after_write.st_dev, current_after_write.st_ino)
+        ):
+            fail("native artifact evidence directory changed while evidence was written")
+    finally:
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
+        os.close(parent_descriptor)
+
+    retained_path = canonical_output / f"{validated['sdk']}-native-abi21.json"
+    if load_manifest(retained_path) != validated:
+        fail("retained native artifact manifest does not match verified evidence")
+    return retained_path
+
+
 def parse_args() -> argparse.Namespace:
     """Parse the record/verify command line."""
 
@@ -577,6 +766,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--sdk", choices=tuple(sorted(SDK_VALUES)))
     parser.add_argument("--target")
+    parser.add_argument("--evidence-dir", type=Path)
     return parser.parse_args()
 
 
@@ -597,6 +787,8 @@ def main() -> int:
         python=args.python,
     )
     if args.mode == "record":
+        if args.evidence_dir is not None:
+            fail("record mode does not accept --evidence-dir")
         if args.sdk is None or args.target is None:
             fail("record mode requires --sdk and --target")
         manifest = build_manifest(
@@ -610,12 +802,22 @@ def main() -> int:
     else:
         if args.sdk is not None or args.target is not None:
             fail("verify mode reads SDK and target from the manifest")
-        verify_manifest(
-            load_manifest(Path(os.path.abspath(args.manifest))),
-            artifact_path=artifact,
-            source_root=source_root,
-            probe=probe,
-        )
+        manifest = load_manifest(Path(os.path.abspath(args.manifest)))
+        if args.evidence_dir is not None:
+            retain_verified_manifest(
+                manifest,
+                artifact_path=artifact,
+                evidence_directory=args.evidence_dir,
+                source_root=source_root,
+                probe=probe,
+            )
+        else:
+            verify_manifest(
+                manifest,
+                artifact_path=artifact,
+                source_root=source_root,
+                probe=probe,
+            )
     return 0
 
 

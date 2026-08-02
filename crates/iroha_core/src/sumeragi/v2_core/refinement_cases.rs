@@ -454,25 +454,15 @@ fn in_flight_first_release_ready_state_with_selected_count(
 ) -> ProductionInFlightFirstReleaseStateProjection {
     let mut state = in_flight_first_release_reserved_state_with_selected_count(selected_count);
 
-    let before = state;
-    state.session.bodies |= 2;
-    state = checked_in_flight_first_release_step(
-        IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER,
-        2,
-        0,
-        before,
-        state,
-    );
+    state = check_production_in_flight_first_release_fanout_from_producer_transition(state, 2)
+        .expect("producer fanout must derive checked replica custody")
+        .into_projection()
+        .after;
 
-    let before = state;
-    state.session.bodies |= 4;
-    state = checked_in_flight_first_release_step(
-        IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY,
-        2,
-        4,
-        before,
-        state,
-    );
+    state = check_production_in_flight_first_release_serve_late_body_transition(state, 2, 4)
+        .expect("late-body service must derive checked target custody")
+        .into_projection()
+        .after;
 
     for actor in [1u128, 2, 4] {
         let before = state;
@@ -615,27 +605,15 @@ fn in_flight_first_release_advance_commit_cleanup_prefixes(
 fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
     let mut state = in_flight_first_release_ready_state();
 
-    let before = state;
-    state.session.crashed |= 4;
-    state.session.bodies &= !4;
-    state.session.ready_authorized &= !4;
-    state = checked_in_flight_first_release_step(
-        IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH,
-        4,
-        0,
-        before,
-        state,
-    );
+    state = check_production_in_flight_first_release_crash_transition(state, 4)
+        .expect("crash must derive exact volatile-custody loss")
+        .into_projection()
+        .after;
 
-    let before = state;
-    state.session.crashed &= !4;
-    state = checked_in_flight_first_release_step(
-        IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER,
-        4,
-        0,
-        before,
-        state,
-    );
+    state = check_production_in_flight_first_release_recover_transition(state, 4)
+        .expect("recovery must derive exact crashed-bit removal")
+        .into_projection()
+        .after;
 
     let before = state;
     state.decision.lane_commit_owner = 1;
@@ -719,14 +697,10 @@ fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
         }
     }
 
-    let before = state;
-    state = checked_in_flight_first_release_step(
-        IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER,
-        0,
-        0,
-        before,
-        state,
-    );
+    state = check_production_in_flight_first_release_repair_post_carrier_evidence_transition(state)
+        .expect("post-carrier repair must derive an exact checked stutter")
+        .into_projection()
+        .after;
 
     assert_eq!(
         production_in_flight_first_release_terminal_owner(state),
@@ -1070,12 +1044,13 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
 #[test]
 fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
     let reserved = in_flight_first_release_reserved_state();
-    checked_in_flight_first_release_step(
-        IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT,
-        0,
-        0,
+    assert_in_flight_first_release_transport_constructors_fail_closed(reserved);
+    assert_in_flight_first_release_crash_recovery_constructors_fail_closed(
+        in_flight_first_release_ready_state(),
+    );
+    assert_in_flight_first_release_stutter_constructors_are_exact(
         reserved,
-        reserved,
+        in_flight_first_release_applied_state_with_selected_count(2),
     );
 
     let mut after = reserved;
@@ -1109,6 +1084,191 @@ fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
         )
         .is_none(),
         "WSV application without a lane-commit owner must fail closed"
+    );
+}
+
+#[test]
+fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
+    let ready = in_flight_first_release_ready_state();
+
+    let crashed_replica = check_production_in_flight_first_release_crash_transition(ready, 4)
+        .expect("a Kura-owning replica can lose volatile custody")
+        .into_projection()
+        .after;
+    let recovered_replica =
+        check_production_in_flight_first_release_recover_transition(crashed_replica, 4)
+            .expect("the replica can clear its crash marker without regaining custody")
+            .into_projection()
+            .after;
+    let replica_rehydration =
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            recovered_replica,
+            4,
+        )
+        .expect("exact durable Kura ownership must rehydrate one replica body")
+        .into_projection();
+    let mut expected_replica = recovered_replica;
+    expected_replica.session.bodies |= 4;
+    assert_eq!(
+        replica_rehydration.action,
+        IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY
+    );
+    assert_eq!(
+        (replica_rehydration.actor, replica_rehydration.target),
+        (4, 0)
+    );
+    assert_eq!(replica_rehydration.after, expected_replica);
+    assert_eq!(
+        replica_rehydration.after.session.ready_authorized & 4,
+        0,
+        "body rehydration must not recreate READY authorization"
+    );
+
+    let crashed_producer =
+        check_production_in_flight_first_release_crash_transition(ready, ready.producer)
+            .expect("the frozen producer can lose volatile custody")
+            .into_projection()
+            .after;
+    let recovered_producer = check_production_in_flight_first_release_recover_transition(
+        crashed_producer,
+        ready.producer,
+    )
+    .expect("Recover must clear only the frozen producer crash marker")
+    .into_projection()
+    .after;
+    assert!(!recovered_producer.session.producer_alive);
+    assert_eq!(recovered_producer.session.bodies & ready.producer, 0);
+    let producer_rehydration =
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            recovered_producer,
+            ready.producer,
+        )
+        .expect("the frozen producer's exact Kura payload must restore local custody")
+        .into_projection();
+    let mut expected_producer = recovered_producer;
+    expected_producer.session.bodies |= ready.producer;
+    expected_producer.session.producer_alive = true;
+    assert_eq!(producer_rehydration.after, expected_producer);
+    assert_eq!(
+        producer_rehydration.after.session.ready_authorized & ready.producer,
+        0,
+        "producer rehydration must not recreate READY authorization"
+    );
+
+    for invalid_actor in [0, 3, 8] {
+        assert!(
+            check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+                recovered_replica,
+                invalid_actor,
+            )
+            .is_none(),
+            "rehydration must reject invalid local actor bitmap {invalid_actor:#x}"
+        );
+    }
+    assert!(
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(ready, 4)
+            .is_none(),
+        "rehydration must require missing volatile body custody"
+    );
+    assert!(
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            crashed_replica,
+            4,
+        )
+        .is_none(),
+        "rehydration must not bypass the crashed-bit recovery action"
+    );
+    let mut no_kura_owner = recovered_replica;
+    no_kura_owner.carrier.kura_active &= !4;
+    no_kura_owner.carrier.execution_input_durable &= !4;
+    no_kura_owner.history.ever_execution_input_durable &= !4;
+    assert!(production_in_flight_first_release_state_kernel(
+        no_kura_owner
+    ));
+    assert!(
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            no_kura_owner,
+            4,
+        )
+        .is_none(),
+        "rehydration must require the actor's exact durable Kura payload"
+    );
+
+    let accepted = replica_rehydration;
+    let mut omitted_body = accepted;
+    omitted_body.after.session.bodies = omitted_body.before.session.bodies;
+    assert!(
+        check_production_in_flight_first_release_transition(omitted_body).is_none(),
+        "rehydration must reject an omitted body-custody publication"
+    );
+    let mut invented_ready = accepted;
+    invented_ready.after.session.ready_authorized |= invented_ready.actor;
+    assert!(
+        check_production_in_flight_first_release_transition(invented_ready).is_none(),
+        "rehydration must reject invented READY authorization"
+    );
+    assert_in_flight_first_release_actor_target_tampering_fails(accepted, 0, 1);
+
+    let mut producer_down_replica = recovered_producer;
+    producer_down_replica.session.bodies &= !4;
+    assert!(production_in_flight_first_release_state_kernel(
+        producer_down_replica
+    ));
+    let replica_while_producer_down =
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            producer_down_replica,
+            4,
+        )
+        .expect("replica custody recovery is independent of frozen producer liveness")
+        .into_projection();
+    assert!(
+        !replica_while_producer_down.after.session.producer_alive,
+        "a replica must not revive the frozen producer"
+    );
+
+    let mut committed = in_flight_first_release_applied_state_with_selected_count(2);
+    committed.session.bodies &= !committed.producer;
+    committed.session.ready_authorized &= !committed.producer;
+    committed.session.producer_alive = false;
+    assert!(production_in_flight_first_release_state_kernel(committed));
+    assert!(
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            committed,
+            committed.producer,
+        )
+        .is_none(),
+        "canonical WSV application must prevent volatile custody resurrection"
+    );
+
+    let mut terminal = ready;
+    terminal.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED;
+    terminal.release.fifo_restored = true;
+    terminal.session.bodies &= !4;
+    terminal.session.ready_authorized &= !4;
+    assert!(production_in_flight_first_release_state_kernel(terminal));
+    assert!(
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            terminal, 4,
+        )
+        .is_none(),
+        "terminal FIFO ownership must prevent volatile custody resurrection"
+    );
+
+    let mut retired = ready;
+    retired.decision.release_owner = retired.producer;
+    retired.decision.release_scope = retired.binding_a;
+    retired.release.kura_retired = true;
+    retired.session.bodies &= !retired.producer;
+    retired.session.ready_authorized &= !retired.producer;
+    retired.session.producer_alive = false;
+    assert!(production_in_flight_first_release_state_kernel(retired));
+    assert!(
+        check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+            retired,
+            retired.producer,
+        )
+        .is_none(),
+        "retired Kura custody must not be resurrected"
     );
 }
 
@@ -4819,187 +4979,5 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
     assert!(!accepts_facts(advancing_install_keeps_timeout_control));
 }
 
-#[test]
-fn decision_ack_retires_competing_owners_and_keeps_one_body_pipeline() {
-    let mut terminal = base_facts();
-    terminal.action_kind = ACTION_ACKNOWLEDGE_WAL;
-    terminal.wal_record_kind = WAL_RECORD_DECISION;
-    terminal.event_kind = EVENT_PERSISTED;
-    terminal.pending_unchanged = false;
-    terminal.acknowledge_persist_exact = true;
-    terminal.acknowledgement_continuation = CONTINUATION_DECIDE;
-    terminal.volatile_before.body_work = 2;
-    terminal.volatile_after.body_work = 1;
-    terminal.volatile_after.outbound_control = 1;
-    terminal.volatile_after.durable_signable_limit = 0;
-    assert!(accepts_facts(terminal));
-
-    let mut stale_pipeline = terminal;
-    stale_pipeline.volatile_after.body_work = 2;
-    assert!(!accepts_facts(stale_pipeline));
-
-    let mut stale_candidate = terminal;
-    stale_candidate.volatile_after.candidate_present = true;
-    assert!(!accepts_facts(stale_candidate));
-
-    let mut stale_signature = terminal;
-    stale_signature.volatile_after.signature_queue = 1;
-    stale_signature.volatile_after.durable_signable_limit = 1;
-    assert!(!accepts_facts(stale_signature));
-
-    let mut missing_pipeline = terminal;
-    missing_pipeline.volatile_before.body_work = 0;
-    assert!(!accepts_facts(missing_pipeline));
-
-    let mut dropped_pipeline = terminal;
-    dropped_pipeline.volatile_after.body_work = 0;
-    assert!(!accepts_facts(dropped_pipeline));
-}
-
-#[test]
-fn body_pipeline_classifier_rejects_non_pipeline_effects() {
-    let mut stored = base_facts();
-    stored.action_kind = ACTION_BODY_PROGRESS;
-    stored.event_kind = EVENT_BODY_AVAILABLE;
-    assert!(push_authorized(&mut stored.effects, EFFECT_STORE));
-    assert!(accepts_facts(stored));
-
-    let mut validated = base_facts();
-    validated.action_kind = ACTION_BODY_PROGRESS;
-    validated.event_kind = 10;
-    assert!(push_authorized(&mut validated.effects, EFFECT_REPORT));
-    assert!(accepts_facts(validated));
-
-    let mut invented_broadcast = validated;
-    invented_broadcast.effects = EffectTrace::empty();
-    assert!(push_authorized(
-        &mut invented_broadcast.effects,
-        EFFECT_BROADCAST
-    ));
-    assert!(!accepts_facts(invented_broadcast));
-
-    let mut invented_fetch = validated;
-    invented_fetch.effects = EffectTrace::empty();
-    assert!(push_authorized(&mut invented_fetch.effects, EFFECT_FETCH));
-    assert!(!accepts_facts(invented_fetch));
-}
-
-#[test]
-fn retransmit_may_reconstruct_one_final_decision_body_stage() {
-    let mut store_retry = base_facts();
-    store_retry.action_kind = ACTION_VOLATILE_PROTOCOL;
-    store_retry.event_kind = 7;
-    for _ in 0..7 {
-        assert!(push_authorized(&mut store_retry.effects, EFFECT_BROADCAST));
-    }
-    assert!(push_authorized(&mut store_retry.effects, EFFECT_STORE));
-    assert!(accepts_facts(store_retry));
-
-    let mut validate_retry = base_facts();
-    validate_retry.action_kind = ACTION_VOLATILE_PROTOCOL;
-    validate_retry.event_kind = 7;
-    assert!(push_authorized(
-        &mut validate_retry.effects,
-        EFFECT_BROADCAST
-    ));
-    assert!(push_authorized(
-        &mut validate_retry.effects,
-        EFFECT_VALIDATE
-    ));
-    assert!(accepts_facts(validate_retry));
-
-    let mut not_final = validate_retry;
-    not_final.effects = EffectTrace::empty();
-    assert!(push_authorized(&mut not_final.effects, EFFECT_VALIDATE));
-    assert!(push_authorized(&mut not_final.effects, EFFECT_BROADCAST));
-    assert!(!accepts_facts(not_final));
-
-    let mut mixed_stages = validate_retry;
-    mixed_stages.effects = EffectTrace::empty();
-    assert!(push_authorized(&mut mixed_stages.effects, EFFECT_STORE));
-    assert!(push_authorized(&mut mixed_stages.effects, EFFECT_VALIDATE));
-    assert!(!accepts_facts(mixed_stages));
-
-    let mut fetch_and_store = validate_retry;
-    fetch_and_store.effects = EffectTrace::empty();
-    assert!(push_authorized(&mut fetch_and_store.effects, EFFECT_FETCH));
-    assert!(push_authorized(&mut fetch_and_store.effects, EFFECT_STORE));
-    assert!(!accepts_facts(fetch_and_store));
-
-    let mut report_and_store = validate_retry;
-    report_and_store.effects = EffectTrace::empty();
-    assert!(push_authorized(
-        &mut report_and_store.effects,
-        EFFECT_REPORT
-    ));
-    assert!(push_authorized(&mut report_and_store.effects, EFFECT_STORE));
-    assert!(!accepts_facts(report_and_store));
-
-    let mut apply_and_fetch = validate_retry;
-    apply_and_fetch.effects = EffectTrace::empty();
-    assert!(push_authorized(&mut apply_and_fetch.effects, EFFECT_APPLY));
-    assert!(push_authorized(&mut apply_and_fetch.effects, EFFECT_FETCH));
-    assert!(!accepts_facts(apply_and_fetch));
-
-    let mut fetch_not_final = validate_retry;
-    fetch_not_final.effects = EffectTrace::empty();
-    assert!(push_authorized(&mut fetch_not_final.effects, EFFECT_FETCH));
-    assert!(push_authorized(
-        &mut fetch_not_final.effects,
-        EFFECT_BROADCAST
-    ));
-    assert!(!accepts_facts(fetch_not_final));
-
-    let mut wrong_event = validate_retry;
-    wrong_event.event_kind = 6;
-    assert!(!accepts_facts(wrong_event));
-}
-
-#[test]
-fn signed_classifier_and_inactive_slots_are_canonical() {
-    let mut invented_signed_transition = base_facts();
-    invented_signed_transition.event_kind = EVENT_SIGNED;
-    invented_signed_transition.action_kind = ACTION_VOLATILE_PROTOCOL;
-    assert!(!accepts_facts(invented_signed_transition));
-
-    let mut noncanonical_empty = base_facts();
-    noncanonical_empty.effects.slot0 = EffectSlotProjection {
-        kind: EFFECT_BROADCAST,
-        requested: EffectCapabilityKey::none(),
-        granted: EffectCapabilityKey::none(),
-    };
-    assert!(!accepts_facts(noncanonical_empty));
-
-    let mut impossible_roster = base_facts();
-    impossible_roster.validator_count = u64::MAX / 2 + 1;
-    assert!(!accepts_facts(impossible_roster));
-}
-
-#[test]
-fn replay_resume_has_a_distinct_one_shot_effect_relation() {
-    let mut resumed = base_facts();
-    resumed.event_kind = EVENT_RESUME_AFTER_REPLAY;
-    resumed.action_kind = ACTION_RESUME_AFTER_REPLAY;
-    resumed.replay_effect_kind = REPLAY_EFFECT_PREPARE;
-    resumed.volatile_after.replay_resumed = true;
-    resumed.volatile_after.awaiting_signature = true;
-    assert!(push_authorized(&mut resumed.effects, EFFECT_SIGN));
-    assert!(accepts_facts(resumed));
-
-    let mut stale_did_work = resumed;
-    stale_did_work.tag_matches = false;
-    assert!(!accepts_facts(stale_did_work));
-
-    let mut replayed_twice = resumed;
-    replayed_twice.volatile_before.replay_resumed = true;
-    assert!(!accepts_facts(replayed_twice));
-
-    let mut decision_fetch = base_facts();
-    decision_fetch.event_kind = EVENT_RESUME_AFTER_REPLAY;
-    decision_fetch.action_kind = ACTION_RESUME_AFTER_REPLAY;
-    decision_fetch.replay_effect_kind = REPLAY_EFFECT_DECISION;
-    decision_fetch.volatile_after.replay_resumed = true;
-    decision_fetch.volatile_after.body_work = 1;
-    assert!(push_authorized(&mut decision_fetch.effects, EFFECT_FETCH));
-    assert!(accepts_facts(decision_fetch));
-}
+#[path = "refinement_cases/terminal_body_pipeline.rs"]
+mod terminal_body_pipeline;

@@ -832,17 +832,21 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
         for mutation in control["mutations"]
     } <= {"replace", "remove", "copy", "swap", "repeat"}
     assert all(
-        mutation["path"].startswith(
-            (
-                "/golden/receipt_group/",
-                "/golden/application_evidence/",
-            )
+        mutation["path"]
+        in {
+            "/golden/application_evidence",
+            "/golden/expected_diagnostics",
+        }
+        or mutation["path"].startswith(
+            ("/golden/receipt_group/", "/golden/application_evidence/")
         )
         for control in controls
         for mutation in control["mutations"]
     )
     assert {
         "coherent_unordered_validator_set",
+        "coherent_duplicate_validator_set",
+        "coherent_over_quorum_requirement",
         "under_quorum_bitmap",
         "out_of_range_bitmap",
         "zero_pop",
@@ -869,6 +873,23 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
         "manifest_proof_position_tampering",
         "application_block_substitution",
     } <= {control["id"] for control in controls}
+    coherent_committee_paths = {
+        "/golden/receipt_group/native_amx_receipts/0/legs/1",
+        "/golden/receipt_group/native_amx_receipts/1/legs/1",
+        "/golden/application_evidence",
+        "/golden/expected_diagnostics",
+    }
+    for control in controls:
+        if control["id"] in {
+            "coherent_duplicate_validator_set",
+            "coherent_over_quorum_requirement",
+        }:
+            assert {mutation["op"] for mutation in control["mutations"]} == {
+                "replace"
+            }
+            assert {
+                mutation["path"] for mutation in control["mutations"]
+            } == coherent_committee_paths
 
 
 def test_receipt_group_negative_controls_fail_closed_semantically() -> None:
@@ -881,6 +902,16 @@ def test_receipt_group_negative_controls_fail_closed_semantically() -> None:
         mutated = deepcopy(canonical)
         for mutation in control["mutations"]:
             _apply_mutation(mutated, mutation)
+        if control["id"] in {
+            "coherent_duplicate_validator_set",
+            "coherent_over_quorum_requirement",
+        }:
+            # These controls rebuild the shared participant identity and
+            # manifest evidence; only the named committee invariant may fail.
+            assert mutated["golden"]["expected_diagnostics"][
+                "lane_settlement_commitments"
+            ] == [mutated["golden"]["receipt_group"]]
+            _validate_application_evidence(mutated)
         try:
             _validate_receipt_group(mutated)
         except (AssertionError, KeyError, TypeError, ValueError):

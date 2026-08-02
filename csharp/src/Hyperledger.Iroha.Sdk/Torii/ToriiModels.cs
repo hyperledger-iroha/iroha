@@ -6131,9 +6131,7 @@ public sealed record class ToriiContractCallResponse
     private string abiHashHex = string.Empty;
     private ulong creationTimeMilliseconds;
     private string? transactionHashHex;
-    private string? transactionScaffoldBase64;
-    private string? signedTransactionBase64;
-    private string? signingMessageBase64;
+    private string? transactionPayloadBase64, signingMessageBase64;
     private string? entrypoint;
 
     [JsonPropertyName("ok")]
@@ -6203,24 +6201,12 @@ public sealed record class ToriiContractCallResponse
     [JsonPropertyName("entrypoint_hash_hex")]
     public string? EntrypointHashHex { get; init; }
 
-    [JsonPropertyName("transaction_scaffold_b64")]
-    public string? TransactionScaffoldBase64
+    [JsonPropertyName("transaction_payload_b64")]
+    public string? TransactionPayloadBase64
     {
-        get => transactionScaffoldBase64;
-        init => transactionScaffoldBase64 = ToriiContractCallDirectMetadata.RequireOptionalBase64(
-            value,
-            nameof(TransactionScaffoldBase64));
+        get => transactionPayloadBase64;
+        init => transactionPayloadBase64 = ToriiContractCallDirectMetadata.RequireOptionalBase64(value, nameof(TransactionPayloadBase64));
     }
-
-    [JsonPropertyName("signed_transaction_b64")]
-    public string? SignedTransactionBase64
-    {
-        get => signedTransactionBase64;
-        init => signedTransactionBase64 = ToriiContractCallDirectMetadata.RequireOptionalBase64(
-            value,
-            nameof(SignedTransactionBase64));
-    }
-
     [JsonPropertyName("signing_message_b64")]
     public string? SigningMessageBase64
     {
@@ -6880,7 +6866,7 @@ public sealed record class ToriiMultisigResponse
     private string? transactionHashHex;
     private string? executedTransactionHashHex;
     private ulong? creationTimeMilliseconds;
-    private string? signingMessageBase64;
+    private string? transactionPayloadBase64, signingMessageBase64;
 
     [JsonPropertyName("ok")]
     public bool Ok
@@ -6899,7 +6885,7 @@ public sealed record class ToriiMultisigResponse
     }
 
     [JsonPropertyName("submitted")]
-    public bool? Submitted { get; init; }
+    public bool Submitted { get; init; }
 
     [JsonPropertyName("proposal_id")]
     public string? ProposalId
@@ -6946,6 +6932,12 @@ public sealed record class ToriiMultisigResponse
             nameof(CreationTimeMilliseconds));
     }
 
+    [JsonPropertyName("transaction_payload_b64")]
+    public string? TransactionPayloadBase64
+    {
+        get => transactionPayloadBase64;
+        init => transactionPayloadBase64 = ToriiMultisigDirectMetadata.RequireOptionalBase64(value, nameof(TransactionPayloadBase64));
+    }
     [JsonPropertyName("signing_message_b64")]
     public string? SigningMessageBase64
     {
@@ -6965,7 +6957,7 @@ public sealed record class ToriiMultisigCancelResponse
     public string ResolvedMultisigAccountId { get; init; } = string.Empty;
 
     [JsonPropertyName("submitted")]
-    public bool? Submitted { get; init; }
+    public bool Submitted { get; init; }
 
     [JsonPropertyName("action")]
     public string Action { get; init; } = string.Empty;
@@ -6991,6 +6983,8 @@ public sealed record class ToriiMultisigCancelResponse
     [JsonPropertyName("creation_time_ms")]
     public ulong? CreationTimeMilliseconds { get; init; }
 
+    [JsonPropertyName("transaction_payload_b64")]
+    public string? TransactionPayloadBase64 { get; init; }
     [JsonPropertyName("signing_message_b64")]
     public string? SigningMessageBase64 { get; init; }
 }
@@ -7005,7 +6999,7 @@ public sealed record class ToriiMultisigContractCallResponse
     private string? transactionHashHex;
     private string? executedTransactionHashHex;
     private ulong? creationTimeMilliseconds;
-    private string? signingMessageBase64;
+    private string? transactionPayloadBase64, signingMessageBase64;
 
     [JsonPropertyName("ok")]
     public bool Ok
@@ -7024,7 +7018,7 @@ public sealed record class ToriiMultisigContractCallResponse
     }
 
     [JsonPropertyName("submitted")]
-    public bool? Submitted { get; init; }
+    public bool Submitted { get; init; }
 
     [JsonPropertyName("proposal_id")]
     public string? ProposalId
@@ -7071,6 +7065,12 @@ public sealed record class ToriiMultisigContractCallResponse
             nameof(CreationTimeMilliseconds));
     }
 
+    [JsonPropertyName("transaction_payload_b64")]
+    public string? TransactionPayloadBase64
+    {
+        get => transactionPayloadBase64;
+        init => transactionPayloadBase64 = ToriiMultisigDirectMetadata.RequireOptionalBase64(value, nameof(TransactionPayloadBase64));
+    }
     [JsonPropertyName("signing_message_b64")]
     public string? SigningMessageBase64
     {

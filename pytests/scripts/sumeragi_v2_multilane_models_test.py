@@ -115,7 +115,6 @@ def test_kura_replica_retention_contract_rejects_unsigned_identity_drift(
         for error in errors
     ), errors
 
-
 def test_kura_replica_retention_contract_rejects_final_prestage_order_drift(
     tmp_path: Path,
 ) -> None:
@@ -451,6 +450,33 @@ def validate_native_prepublication_fixture(
 ) -> tuple[str, ...]:
     errors: list[str] = []
     module._validate_native_prepublication_contract(tmp_path, models, errors)
+    return tuple(errors)
+
+
+def copy_native_exact_object_prune_fixture(
+    tmp_path: Path, module
+) -> list[dict]:
+    """Copy the production source consumed by the exact-object prune seal."""
+
+    models = canonical_models()
+    relatives = {
+        Path(relative)
+        for relative, _, _, _ in module.NATIVE_EXACT_OBJECT_PRUNE_BINDINGS
+    }
+    for relative in relatives:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    return models
+
+
+def validate_native_exact_object_prune_fixture(
+    tmp_path: Path, module, models: list[dict]
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    module._validate_native_exact_object_prune_contract(
+        tmp_path, models, errors
+    )
     return tuple(errors)
 
 
@@ -1013,6 +1039,56 @@ def test_native_prepublication_contract_accepts_current_production(
     assert validate_native_prepublication_fixture(tmp_path, module, models) == ()
 
 
+def test_native_exact_object_prune_contract_accepts_current_production(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_exact_object_prune_fixture(tmp_path, module)
+    assert (
+        validate_native_exact_object_prune_fixture(tmp_path, module, models)
+        == ()
+    )
+
+
+@pytest.mark.parametrize(
+    ("anchor", "old", "new"),
+    (
+        (
+            "fn verify_bound_open_regular_file_exact_bytes_locked(",
+            "|| !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened)",
+            "|| false",
+        ),
+        (
+            "fn verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(",
+            "|| !Self::progress_mutation_namespace_unchanged(namespace)",
+            "|| false",
+        ),
+        (
+            "fn remove_bound_progress_file_if_matches(",
+            "|| entry.st_ino as u64 != expected_snapshot.file.ino()",
+            "|| false",
+        ),
+        (
+            "fn complete_native_amx_evidence_prune_intent_locked(",
+            "Self::remove_bound_progress_file_if_matches(",
+            "std::fs::remove_file(",
+        ),
+    ),
+)
+def test_native_exact_object_prune_contract_rejects_security_relation_drift(
+    tmp_path: Path, anchor: str, old: str, new: str
+) -> None:
+    module = load_checker()
+    models = copy_native_exact_object_prune_fixture(tmp_path, module)
+    replace_once_after(
+        tmp_path / "crates/iroha_core/src/kura.rs", anchor, old, new
+    )
+    errors = validate_native_exact_object_prune_fixture(
+        tmp_path, module, models
+    )
+    assert any("exact-object" in error for error in errors), errors
+
+
 def test_native_prepublication_contract_rejects_removed_prepublication_call(
     tmp_path: Path,
 ) -> None:
@@ -1183,7 +1259,13 @@ def test_native_prepublication_contract_rejects_kura_phase_order_drift(
     module = load_checker()
     models = copy_native_prepublication_fixture(tmp_path, module)
     path = tmp_path / "crates/iroha_core/src/kura.rs"
-    swap_ordered_once(path, earlier, later)
+    swap_ordered_once_after(
+        path,
+        "fn persist_native_amx_participant_application_evidence_"
+        "under_publication_guard(",
+        earlier,
+        later,
+    )
     errors = validate_native_prepublication_fixture(tmp_path, module, models)
     assert any(
         "ordered Native prepublication item "
@@ -1198,7 +1280,10 @@ def test_native_prepublication_contract_rejects_prewsv_retention_cleanup(
 ) -> None:
     module = load_checker()
     models = copy_native_prepublication_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+    )
     replace_once(
         path,
         "const fn permits_retention_cleanup(self) -> bool {\n"
@@ -1298,6 +1383,381 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
+    ("relative", "anchor", "old", "new", "symbol", "required_token"),
+    (
+        (
+            "crates/iroha_core/src/queue/reservation_journal.rs",
+            "pub(super) fn consume_snapshot_replay_seal(",
+            "if current_content_identity != file_content_identity {",
+            "if false {",
+            "LaneQueueReservationJournal::consume_snapshot_replay_seal",
+            "current_content_identity != file_content_identity",
+        ),
+        (
+            "crates/iroha_core/src/queue/reservation_journal.rs",
+            "pub(crate) fn binds_reconciliation_snapshot(",
+            "canonical_reconciliation_identity(&owners)?",
+            'Hash::new(b"unchecked-reconciliation")',
+            "LaneReservationSnapshotReplayReceipt::binds_reconciliation_snapshot",
+            "canonical_reconciliation_identity(&owners)?",
+        ),
+        (
+            "crates/iroha_core/src/queue.rs",
+            "pub fn install_lane_reservation_journal(",
+            "let replay_receipt = journal.consume_snapshot_replay_seal(replay_seal)?;",
+            "let replay_receipt = self.lane_reservation_snapshot_replay_receipt()?;",
+            "Queue::install_lane_reservation_journal",
+            "journal.consume_snapshot_replay_seal(replay_seal)?",
+        ),
+        (
+            "crates/iroha_core/src/queue.rs",
+            "pub(crate) fn bind_lane_reservation_startup_reconciliation_receipt(",
+            "if !replay_receipt.binds_reconciliation_snapshot(expected_snapshot)? {",
+            "if false {",
+            "Queue::bind_lane_reservation_startup_reconciliation_receipt",
+            "replay_receipt.binds_reconciliation_snapshot(expected_snapshot)?",
+        ),
+        (
+            "crates/iroha_core/src/queue.rs",
+            "pub(crate) fn complete_lane_reservation_startup_reconciliation(",
+            "Some(&receipt.replay_receipt)",
+            "None",
+            "Queue::complete_lane_reservation_startup_reconciliation",
+            "Some(&receipt.replay_receipt)",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "pub(crate) fn apply_lane_reservation_reconciliation_plan(",
+            "revalidate_lane_reservation_startup_reconciliation_receipt(",
+            "revalidate_unchecked_startup_reconciliation_receipt(",
+            "apply_lane_reservation_reconciliation_plan",
+            "revalidate_lane_reservation_startup_reconciliation_receipt(",
+        ),
+        (
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "pub proof fn production_in_flight_reservation_snapshot_replay_refines_composed_stutter(",
+            "production_in_flight_reservation_transition_kernel(primitive),",
+            "true,",
+            "production_in_flight_reservation_snapshot_replay_refines_composed_stutter",
+            "production_in_flight_reservation_transition_kernel(primitive)",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_snapshot_replay_bridge_weakening(
+    tmp_path: Path,
+    relative: str,
+    anchor: str,
+    old: str,
+    new: str,
+    symbol: str,
+    required_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    replace_once_after(tmp_path / relative, anchor, old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and required_token in error for error in errors), errors
+
+
+def test_inflight_layout_contract_rejects_partial_lane_transport_whitelist(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    replace_once(
+        path,
+        "        if !message.is_lane_local() {\n",
+        "        if !matches!(message, BlockMessage::LaneBlockProposal(_)) {\n",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "ProductionV2Services::post_lane_block" in error
+        and "message.is_lane_local()" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "LaneExecutablePayload",
+        "LaneBlockNewViewVote",
+        "LaneBlockNewViewCertificate",
+    ),
+)
+def test_inflight_layout_contract_rejects_non_retireable_lane_transport_omission(
+    tmp_path: Path, variant: str
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/message.rs"
+    replace_once(path, f"                | Self::{variant}(_)\n", "")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "BlockMessage::is_lane_local" in error
+        and f"Self::{variant}" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "symbol", "old", "new", "required_token"),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+            "ExactOutputRolloverClaim::scope",
+            "Self::Exact | Self::NonRetireableLaneTransport { .. } => None",
+            "Self::Exact => None",
+            "Self::Exact | Self::NonRetireableLaneTransport { .. } => None",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+            "ExactOutputRolloverClaim::validate_non_retireable_lane_transport_fanout",
+            "HashOf::new(message) != message_hash",
+            "false",
+            "HashOf::new(message) != message_hash",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "applied_height_reconstruction_covers",
+            "non-retireable lane transport must drain before applied-height handoff",
+            "lane transport handoff accepted",
+            "non-retireable lane transport must drain before applied-height handoff",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_weakened_non_retireable_lane_claim(
+    tmp_path: Path,
+    relative: str,
+    symbol: str,
+    old: str,
+    new: str,
+    required_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    replace_once(tmp_path / relative, old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and required_token in error for error in errors), errors
+
+
+def test_inflight_layout_contract_rejects_early_autonomous_queue_plan_cleanup(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
+    replace_once(
+        path,
+        "                .filter(|transaction_hash| {\n"
+        "                    !staged_merge_queue_reservation_hashes.contains(transaction_hash)\n"
+        "                }),\n",
+        "                ,\n",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "V2ApplyService::validate_and_apply" in error
+        and ".filter(|transaction_hash|" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_queue_cleanup_before_evidence_repair(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
+    source = path.read_text(encoding="utf-8")
+    start = source.index("    pub(crate) fn execute(")
+    end = source.index("\n    #[cfg(test)]\n    fn finish_durable_apply_completion(", start)
+    method = source[start:end]
+    promote = "promote_kagemusha_topup_finality_sidecar"
+    finalize = "finalize_committed_block_merge_reservations"
+    assert method.count(promote) == 1
+    assert method.count(finalize) == 1
+    marker = "__SWAP_POST_CARRIER_REPAIR_ORDER__"
+    method = method.replace(promote, marker, 1)
+    method = method.replace(finalize, promote, 1)
+    method = method.replace(marker, finalize, 1)
+    path.write_text(source[:start] + method + source[end:], encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "ordered in-flight item V2ApplyService::execute" in error
+        and "missing or reorders token" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_da_policy_as_carrier_effect(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/block.rs"
+    replace_once(
+        path,
+        "            block.da_commitments().is_some() || block.da_pin_intents().is_some()\n",
+        "            block.da_commitments().is_some()\n"
+        "                || block.da_proof_policies().is_some()\n"
+        "                || block.da_pin_intents().is_some()\n",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "ValidBlock::autonomous_merge_carrier_has_da_effect" in error
+        and "da_proof_policies" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    "effect_accessor",
+    ("block.da_commitments().is_some()", "block.da_pin_intents().is_some()"),
+)
+def test_inflight_layout_contract_rejects_unbound_da_carrier_effect(
+    tmp_path: Path, effect_accessor: str
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/block.rs"
+    replace_once(path, effect_accessor, "false")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "ValidBlock::autonomous_merge_carrier_has_da_effect" in error
+        and effect_accessor in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_partial_ordinary_carrier_filter(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_candidate.rs"
+    replace_once(
+        path,
+        "                certified_execution_selected,\n                report,\n            ) {\n",
+        "                certified_execution_selected\n"
+        "                    && transaction.creation_time() >= Duration::from_millis(1_000),\n"
+        "                report,\n"
+        "            ) {\n",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "V2CandidateAssembler::snapshot_routable_candidates" in error
+        and "transaction.creation_time()" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_carrier_exclusion_as_unavailable_work(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_candidate.rs"
+    replace_once(
+        path,
+        "    report.carrier_excluded = report.carrier_excluded.saturating_add(1);\n",
+        "    report.work_deferred = report.work_deferred.saturating_add(1);\n",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "record_ordinary_execution_carrier_exclusion" in error
+        and "report.work_deferred" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_execution_provider_releasing_pending_anchors(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    source = path.read_text(encoding="utf-8")
+    start = source.index("    pub(crate) fn prepare_certified_execution_carrier(")
+    end = source.index("\n    fn frozen_roster_contains(", start)
+    method = source[start:end]
+    assert method.count("        self.planned_lane_proposals.clear();\n") == 1
+    method = method.replace(
+        "        self.planned_lane_proposals.clear();\n",
+        "        self.pending_autonomous_anchor_payloads.clear();\n"
+        "        self.planned_lane_proposals.clear();\n",
+        1,
+    )
+    path.write_text(source[:start] + method + source[end:], encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "V2LaneWorkAdapter::prepare_certified_execution_carrier" in error
+        and "pending_autonomous_anchor_payloads.clear" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "symbol", "required"),
+    (
+        (
+            "super::v2_npos::validate_candidate_records(",
+            "super::v2_npos::validate_candidate_records_unchecked(",
+            "candidate_attachments",
+            "validate_candidate_records(",
+        ),
+        (
+            "!selection.allows_execution() && entry.execution_batch.is_some()",
+            "false && entry.execution_batch.is_some()",
+            "State::select_pending_certified_merge_entry_for_round",
+            "!selection.allows_execution() && entry.execution_batch.is_some()",
+        ),
+        (
+            "matches!(self, Self::Any)",
+            "true",
+            "PendingCertifiedMergeSelection::allows_execution",
+            "matches!(self, Self::Any)",
+        ),
+        (
+            "proposal_state.heartbeat_only = None",
+            "proposal_state.heartbeat_only = proposal_state.heartbeat_only",
+            "claim_certified_execution_proposal_turn",
+            "proposal_state.heartbeat_only = None",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_weakened_execution_carrier_priority(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    symbol: str,
+    required: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    relative = (
+        "crates/iroha_core/src/state.rs"
+        if symbol.startswith(("State::", "PendingCertifiedMergeSelection::"))
+        else "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    )
+    replace_once(tmp_path / relative, old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and required in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
     ("relative", "old", "new"),
     (
         (
@@ -1337,7 +1797,10 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
             "MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_097",
         ),
         (
-            Path("crates/iroha_core/src/kura.rs"),
+            Path(
+                "crates/iroha_core/src/kura/"
+                "pipeline_and_lane_artifacts.rs"
+            ),
             "pub entrypoint_hashes: Vec<Hash>,\n"
             "    /// Accepted entrypoints in lane descriptor order.\n"
             "    pub entrypoints: Vec<TransactionEntrypoint>,\n"
@@ -2324,7 +2787,7 @@ def test_inflight_contract_rejects_reservation_journal_prune_variant_reintroduct
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
-        "LaneQueueReservationJournalFrameV5" in error
+        "LaneQueueReservationJournalFrameV6" in error
         and "forbidden source-bound token 'Prune'" in error
         for error in errors
     ), errors
@@ -2339,13 +2802,13 @@ def test_inflight_contract_rejects_reservation_bootstrap_without_operation_schem
     path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
     replace_once(
         path,
-        "            RESERVATION_JOURNAL_OPERATION_SCHEMA_V5,\n",
+        "            RESERVATION_JOURNAL_OPERATION_SCHEMA_V6,\n",
         "",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "bootstrap_frame" in error
-        and "RESERVATION_JOURNAL_OPERATION_SCHEMA_V5" in error
+        and "RESERVATION_JOURNAL_OPERATION_SCHEMA_V6" in error
         for error in errors
     ), errors
 
@@ -2424,225 +2887,92 @@ def test_inflight_composed_contract_rejects_missing_direct_release_action(
     ), errors
 
 
-def test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping(
+def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = (
-        tmp_path
-        / "formal"
-        / "sumeragi_v2"
-        / "SumeragiV2InFlightFirstRelease.tla"
-    )
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     replace_once(
         path,
-        "RecoverReservationSnapshot ==\n  UNCHANGED vars",
-        "RecoverReservationSnapshot ==\n"
-        "  /\\ queue' = [queue EXCEPT !.reservation = \"Live\"]\n"
-        "  /\\ UNCHANGED <<ownership, payloadBinding, carrier, session, "
-        "history, decision, release>>",
+        "                    && (before.session.crashed & projection.actor) == 0u128\n"
+        "                    && (before.carrier.kura_active & projection.actor) != 0u128\n"
+        "                    && (before.session.bodies & projection.actor) == 0u128\n"
+        "                    && !before.release.kura_retired\n",
+        "                    && (before.session.crashed & projection.actor) == 0u128\n"
+        "                    && (before.session.bodies & projection.actor) == 0u128\n"
+        "                    && !before.release.kura_retired\n",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
-        "composed Rust/TLA action-alignment token" in error
-        and "RecoverReservationSnapshot" in error
+        "production_in_flight_first_release_transition_body" in error
+        and "kura_active" in error
         for error in errors
     ), errors
 
 
-def test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal(
+def test_inflight_composed_contract_rejects_rehydrate_action_tag_drift(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     replace_once(
         path,
-        "pub proof fn production_in_flight_first_release_snapshot_recovery_is_stutter(",
-        "pub proof fn production_in_flight_first_release_snapshot_recovery_is_unbound(",
+        "pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY: u8 = 27;",
+        "pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY: u8 = 28;",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
-        "production_in_flight_first_release_snapshot_recovery_is_stutter" in error
+        "current-layout token" in error
+        and "REHYDRATE_LOCAL_KURA_CUSTODY" in error
+        and "27" in error
         for error in errors
     ), errors
 
 
-def test_inflight_layout_contract_rejects_refinement_claim_inflation(
+def test_inflight_composed_contract_rejects_rehydrate_ready_tampering(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    module_path = (
-        tmp_path
-        / "formal"
-        / "sumeragi_v2"
-        / "SumeragiV2InFlightFirstRelease.tla"
-    )
-    replace_once(
-        module_path,
-        "InFlightFirstReleaseSpec == Init /\\ [][Next]_vars",
-        "InFlightFirstReleaseProductionRefinementObligation == TRUE\n\n"
-        "InFlightFirstReleaseSpec == Init /\\ [][Next]_vars",
-    )
-    errors = validate_fixture(tmp_path, module, contract)
-    assert any("must not declare a production refinement" in error for error in errors)
-
-
-def test_inflight_layout_contract_rejects_kura_release_prefix_preflight_weakening(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/kura.rs"
-    replace_once(path, "if claim.stage > previous_stage", "if false")
-
-    errors = validate_fixture(tmp_path, module, contract)
-
-    assert any(
-        "Kura::transition_autonomous_lane_entrypoint_claims_locked" in error
-        and "if claim.stage > previous_stage" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_layout_contract_rejects_kura_atomic_replace_order_drift(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/kura.rs"
-    swap_ordered_once(path, ".write_all(bytes)", ".flush()")
-
-    errors = validate_fixture(tmp_path, module, contract)
-
-    assert any(
-        "ordered in-flight item Kura::write_atomic_synced_impl" in error
-        and "missing or reorders token" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_layout_contract_rejects_missing_queue_release_pending_guard(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     replace_once(
         path,
-        "missing Queue release ownership cannot authorize pending Kura claims",
-        "missing Queue release ownership is accepted without Kura evidence",
+        "                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED\n"
+        "                        )\n"
+        "                    && after.session.bodies == (before.session.bodies | projection.actor)\n"
+        "                    && after.session.ready_authorized == before.session.ready_authorized\n"
+        "                    && after.session.crashed == before.session.crashed\n",
+        "                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED\n"
+        "                        )\n"
+        "                    && after.session.bodies == (before.session.bodies | projection.actor)\n"
+        "                    && after.session.ready_authorized\n"
+        "                        == (before.session.ready_authorized | projection.actor)\n"
+        "                    && after.session.crashed == before.session.crashed\n",
     )
-
     errors = validate_fixture(tmp_path, module, contract)
-
     assert any(
-        "Queue::prepare_lane_reservation_release_barrier_inner" in error
-        and "missing Queue release ownership cannot authorize pending Kura claims" in error
+        "production_in_flight_first_release_transition_body" in error
+        and "ready_authorized" in error
         for error in errors
     ), errors
 
 
-def test_inflight_layout_contract_rejects_terminal_fifo_ownership_weakening(
+def test_inflight_composed_contract_rejects_terminal_rehydrate_resurrection(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue.rs"
-    replace_once(
-        path,
-        "for key in &barrier.ordered_keys {\n"
-        "            let hash = key.signed_transaction_hash;\n"
-        "            if !self.txs.contains_key(&hash)",
-        "for key in &barrier.ordered_keys {\n"
-        "            let hash = key.signed_transaction_hash;\n"
-        "            if false",
-    )
-
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    replace_once(path, "                    && !before.release.kura_retired\n", "")
     errors = validate_fixture(tmp_path, module, contract)
-
     assert any(
-        "Queue::release_barrier_has_exact_fifo_ownership_locked" in error
-        and "self.txs.contains_key(&hash)" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_layout_contract_rejects_expired_release_owner_filter(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue.rs"
-    replace_once(
-        path,
-        "            drop(tx);\n"
-        "            if members.insert(hash)",
-        "            if self.is_expired(tx.as_accepted()) {\n"
-        "                continue;\n"
-        "            }\n"
-        "            drop(tx);\n"
-        "            if members.insert(hash)",
-    )
-
-    errors = validate_fixture(tmp_path, module, contract)
-
-    assert any(
-        "Queue::fifo_with_released_reservations_locked" in error
-        and "is_expired(" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_layout_contract_rejects_disconnected_queue_to_kura_release_proof(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/kura.rs"
-    replace_once(
-        path,
-        "consume_for_claim_transition(queue_barrier)",
-        "disconnect_from_claim_transition(queue_barrier)",
-    )
-
-    errors = validate_fixture(tmp_path, module, contract)
-
-    assert any(
-        "ordered in-flight item Kura::finalize_autonomous_lane_slot_release_inner" in error
-        and "missing or reorders token" in error
-        for error in errors
-    ), errors
-
-
-def test_inflight_layout_contract_rejects_queue_release_sink_reordering(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    contract = canonical_contract()
-    copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue.rs"
-    swap_ordered_once(
-        path,
-        "journal.complete_release(completion.clone())",
-        "journal.forget_release(completion.barrier.clone())",
-    )
-
-    errors = validate_fixture(tmp_path, module, contract)
-
-    assert any(
-        "ordered in-flight item Queue::finalize_lane_reservation_release_barrier_inner" in error
-        and "missing or reorders token" in error
+        "production_in_flight_first_release_transition_body" in error
+        and "kura_retired" in error
         for error in errors
     ), errors

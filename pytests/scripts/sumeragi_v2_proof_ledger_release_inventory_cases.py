@@ -62,26 +62,26 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=418",
-            "readonly expected_multilane_focus_test_count=417",
-            "multilane G-UNIT source count must be sealed as 418",
+            "readonly expected_multilane_focus_test_count=472",
+            "readonly expected_multilane_focus_test_count=467",
+            "multilane G-UNIT source count must be sealed as 472",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 419 ]]; then""",
+                """'[:space:]')" != 473 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 418 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 418 focus rows",
+                """'[:space:]')" != 472 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 472 focus rows",
         ),
         (
-            "The canonical 418-row TSV is",
-            "The canonical 417-row TSV is",
-            "G-UNIT inventory comment must seal 418 rows",
+            "The canonical 472-row TSV is",
+            "The canonical 467-row TSV is",
+            "G-UNIT inventory comment must seal 472 rows",
         ),
         (
-            "including exact 418/418 G-UNIT,",
-            "including exact 417/418 G-UNIT,",
-            "terminal success text must seal exact 418/418 G-UNIT",
+            "including exact 472/472 G-UNIT,",
+            "including exact 471/472 G-UNIT,",
+            "terminal success text must seal exact 472/472 G-UNIT",
         ),
         (
             "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable\n",
@@ -162,10 +162,52 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "canonical G-UNIT leg/crate/test inventory SHA-256",
         ),
         (
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_seal_covers_empty_and_live_owner_replays\n",
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_seal_covers_empty_and_live_owner_replays_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_seal_rejects_changed_journal_before_publication\n",
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_seal_rejects_changed_journal_before_publication_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_receipt_rejects_same_count_owner_identity_drift\n",
+            "  queue::reservation_journal::tests::"
+            "snapshot_replay_receipt_rejects_same_count_owner_identity_drift_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
             "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n"
             "  native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation\n",
             "  native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation\n"
             "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  block::tests::historical_native_amx_source_bundle_"
+            "authenticates_every_evidence_layer\n",
+            "  block::tests::historical_native_amx_source_bundle_"
+            "authenticates_every_evidence_layer_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  kura::tests::native_amx_all_manifest_barrier_"
+            "does_not_promote_another_routes_receipt_temp\n",
+            "  kura::tests::native_amx_all_manifest_barrier_"
+            "does_not_promote_another_routes_receipt_temp_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  sumeragi::v2_apply::tests::historical_autonomous_recovery_"
+            "reaches_exactly_once_canonical_merge_application\n",
+            "  sumeragi::v2_apply::tests::historical_autonomous_recovery_"
+            "reaches_exactly_once_canonical_merge_application_mutant\n",
             "canonical G-UNIT leg/crate/test inventory SHA-256",
         ),
         (
@@ -253,24 +295,24 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
             "  native_amx_grouped_parity_test_counts=(\n"
             "    7\n"
-            "    58\n"
-            "    56\n",
+            "    60\n"
+            "    58\n",
             "  native_amx_grouped_parity_test_counts=(\n"
             "    7\n"
-            "    57\n"
-            "    56\n",
+            "    59\n"
+            "    58\n",
             "grouped Native AMX SDK runner suite inventory must equal",
         ),
         (
             Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
-            "  python)\n    observed_test_count=58\n",
-            "  python)\n    observed_test_count=57\n",
+            "  python)\n    observed_test_count=60\n",
+            "  python)\n    observed_test_count=59\n",
             "grouped Native AMX SDK harness suite inventory must equal",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '    ("python", 58),\n',
-            '    ("python", 57),\n',
+            '    ("python", 60),\n',
+            '    ("python", 59),\n',
             "grouped Native AMX SDK receipt suite inventory must equal",
         ),
     ),

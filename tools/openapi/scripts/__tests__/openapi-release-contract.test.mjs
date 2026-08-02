@@ -20,6 +20,10 @@ test('OpenAPI CI replays complete bundles from independent clean sources', async
   const gate = await readFile(join(repoRoot, 'ci', 'check_openapi_spec.sh'), 'utf8');
 
   assert.match(gate, /require_clean_checkout/);
+  assert.ok(
+    gate.includes('if (( ${#REPLAY_WORKTREES[@]} > 0 )); then'),
+    'cleanup must guard empty-array expansion for Bash 3.2 with set -u',
+  );
   assert.doesNotMatch(gate, /EXPECTED_GENERATOR_COMMIT/);
   assert.equal(
     Array.from(
@@ -58,6 +62,14 @@ test('OpenAPI CI replays complete bundles from independent clean sources', async
     /const sourcePath = await realpath\(sourceArgument\);/,
   );
   assert.match(gate, /provisionOpenApiCargoLock,/);
+  const provisionerPath = [
+    "    'tools',",
+    "    'openapi',",
+    "    'scripts',",
+    "    'provision-openapi-cargo-lock.mjs',",
+  ].join('\n');
+  assert.ok(gate.includes(provisionerPath));
+  assert.ok(!gate.includes("    'docs',\n    'portal',"));
   assert.match(gate, /const summary = await provisionOpenApiCargoLock\(\{/);
   assert.match(gate, /repoRoot: worktreeRoot,/);
   assert.match(gate, /summary\.status !== 'installed'/);
@@ -65,6 +77,15 @@ test('OpenAPI CI replays complete bundles from independent clean sources', async
   assert.match(gate, /summary\.path !== 'Cargo\.lock'/);
   assert.match(gate, /"\$\{REPO_ROOT\}\/Cargo\.lock"/);
   assert.doesNotMatch(gate, /cp "\$\{REPO_ROOT\}\/Cargo\.lock"/);
+  for (const dependencyContract of [
+    'stage_replay_openapi_dependencies()',
+    'npm --prefix "${REPO_ROOT}/tools/openapi" ls --all --omit=dev --json',
+    'cp -R "${source}/." "${target}/"',
+    'diff -qr "${source}" "${target}"',
+    'stage_replay_openapi_dependencies "${worktree}"',
+  ]) {
+    assert.ok(gate.includes(dependencyContract), dependencyContract);
+  }
   assert.match(gate, /REPLAY_CARGO_TARGET_DIR="\$\{TMP_DIR\}\/cargo-target"/);
   assert.doesNotMatch(gate, /REPLAY_CARGO_TARGET_DIR="\$\{REPO_ROOT\}/);
   assert.match(gate, /CARGO_TARGET_DIR="\$\{REPLAY_CARGO_TARGET_DIR\}"/);
@@ -149,6 +170,7 @@ test('OpenAPI workflow actions and tooling tests are pinned', async () => {
   assert.match(workflow, /name: Complete Norito binding parity/);
   assert.match(workflow, /run: bash ci\/check_norito_bindings_sync\.sh/);
   for (const releaseInputTrigger of [
+    '.cargo/config.toml',
     'Cargo.lock',
     'IrohaSwift/**',
     'Makefile',

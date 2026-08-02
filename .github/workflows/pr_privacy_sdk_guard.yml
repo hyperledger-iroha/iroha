@@ -29,6 +29,7 @@ on:
       - "ci/check_privacy_sdk_guard.sh"
       - "ci/check_privacy_swift_sdk.sh"
       - "ci/privacy_sdk_cargo_lockfile.sh"
+      - "ci/privacy_sdk_cargo_lockfile_test_cleanup.sh"
       - "ci/privacy_sdk_cargo_lockfile_test.sh"
       - "ci/privacy_sdk_cargo_wrapper.sh"
       - "ci/verify_privacy_python_wheel.py"

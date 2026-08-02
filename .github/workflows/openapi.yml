@@ -5,6 +5,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - ".cargo/config.toml"
       - ".github/workflows/openapi.yml"
       - "Cargo.lock"
       - "Cargo.toml"
@@ -42,6 +43,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".cargo/config.toml"
       - ".github/workflows/openapi.yml"
       - "Cargo.lock"
       - "Cargo.toml"
@@ -171,10 +173,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: tools/openapi/package-lock.json
       - name: Provision the pinned ignored OpenAPI Cargo lock
         run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs
       - name: Verify Cargo lock provisioning keeps the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Install the deterministic OpenAPI dependency graph
+        working-directory: tools/openapi
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"

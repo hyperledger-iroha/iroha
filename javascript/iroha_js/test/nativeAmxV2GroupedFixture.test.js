@@ -280,6 +280,8 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
   const negativeControlIds = new Set(
     fixtureDocument.negative_controls.map((control) => control.id),
   );
+  assert.ok(negativeControlIds.has("coherent_duplicate_validator_set"));
+  assert.ok(negativeControlIds.has("coherent_over_quorum_requirement"));
   assert.ok(
     negativeControlIds.has(
       "execution_commitment_merge_carrier_wrong_version",

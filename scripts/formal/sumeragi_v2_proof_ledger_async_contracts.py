@@ -169,12 +169,13 @@ MERGE_RUNTIME_CONFIG_FIELDS = (
 )
 
 ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
-# The retained-lock vocabulary moved below the shard chain to remove the
-# debt-to-proof-leaf cycle.  Its exact provider and bodies are independently
-# pinned by ``_acyclic_liveness_debt_topology_errors`` before this reviewed
-# mechanical shard seal is accepted.
+# This digest binds the current logical pre-split body reconstructed by removing
+# every exact shard header/footer in order.  The retained-lock vocabulary lives
+# below the shard chain to avoid the debt-to-proof-leaf cycle; its provider and
+# bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
+# before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "58304eaddaf96ca5b5053c96b6c48603110d3b2b6570b1e05d765db03e7f19dc"
+    "1afd0b7075a4e1ab1ccfdf3d012e592669e2adc7f9523d6d261a8c7f5490e4aa"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -528,6 +529,51 @@ ASYNC_LIVENESS_EXTENDS_OVERRIDES = {
         "SumeragiV2AsyncCandidateProducerContinuationProofs",
     ),
 }
+
+
+def _async_liveness_shard_source_prefix(module: str, index: int) -> str:
+    """Return the exact reviewed header/import prefix for one proof shard."""
+
+    header = f"---- MODULE {module} ----\n"
+    if index == 0:
+        return header
+    dependencies = ASYNC_LIVENESS_EXTENDS_OVERRIDES.get(
+        module, (ASYNC_LIVENESS_SHARDS[index - 1][0],)
+    )
+    if module == "SumeragiV2AsyncDeadlockProofs":
+        return header + "EXTENDS " + ",\n        ".join(dependencies) + "\n\n"
+    return header + f"EXTENDS {', '.join(dependencies)}\n\n"
+
+
+def _async_liveness_shard_bodies(
+    sources: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Strip exact reviewed shard framing, failing closed on any drift."""
+
+    bodies: list[str] = []
+    errors: list[str] = []
+    footer = "=============================================================================\n"
+    for index, (module, _) in enumerate(ASYNC_LIVENESS_SHARDS):
+        source = sources.get(module)
+        if source is None:
+            errors.append(f"missing required async liveness shard {module}.tla")
+            continue
+        prefix = _async_liveness_shard_source_prefix(module, index)
+        prefix_matches = source.startswith(prefix)
+        footer_matches = source.endswith(footer)
+        if not prefix_matches:
+            errors.append(
+                f"{module}.tla must start with its exact reviewed async liveness shard prefix"
+            )
+        if not footer_matches:
+            errors.append(
+                f"{module}.tla must end with its exact reviewed async liveness shard footer"
+            )
+        if prefix_matches and footer_matches:
+            bodies.append(source[len(prefix) : -len(footer)])
+    return bodies, errors
+
+
 ASYNC_LIVENESS_DEBT_SHARD = "SumeragiV2AsyncOutstandingLivenessDebt"
 ASYNC_LIVENESS_PROOF_SHARDS = tuple(
     module for module, _ in ASYNC_LIVENESS_SHARDS if module != ASYNC_LIVENESS_DEBT_SHARD
@@ -999,7 +1045,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "e743bca57dd0ee2d975b5c3239804eefc6e8e7127006acb28ee55f7d6c668844"
+        "d856c24a09f9bcc47998359363d2a03a17a07462ca12b3188845882029fbdd1c"
     ),
 }
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_ARTIFACTS = (
@@ -1157,7 +1203,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "7c0839a76c10f033ad77258b2b83efdef751fe1887f052cf5b93ed0958571ade"
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
-        "93b8bc15cc7a4209976e319f8556e74dc4d2b333c9f5b7c39ad873c2b1cba07e"
+        "ad9062d5fd77113cc19c5dcfc14d4f6c0bb7ea49e515ee1bf6c3fe87f5762f36"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
         "fc841bb679feaf1ded305f1ab0e39ba388e49876bcbc1e3cb39436b09be74a78"

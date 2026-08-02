@@ -388,10 +388,12 @@ pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO: u8 = 22;
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE: u8 = 23;
 /// Repair post-carrier evidence without changing the safety projection.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER: u8 = 24;
-/// Rebuild local reservation ownership from the already-durable V5 snapshot.
+/// Rebuild local reservation ownership from the already-durable V6 snapshot envelope.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT: u8 = 25;
 /// Directly restore exact aborted/recovery-orphaned work to ordinary FIFO.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT: u8 = 26;
+/// Restore one validator's volatile body custody from its exact durable Kura payload.
+pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY: u8 = 27;
 
 /// Successor authority derived from an applied predecessor in this process.
 pub(crate) const SUCCESSOR_AUTHORITY_APPLIED: u8 = 1;
@@ -779,6 +781,9 @@ macro_rules! refinement_tag_value {
     (IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT) => {
         26u8
     };
+    (IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY) => {
+        27u8
+    };
     (SUCCESSOR_AUTHORITY_APPLIED) => {
         1u8
     };
@@ -941,6 +946,7 @@ assert_refinement_tag_values!(
     IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER,
     IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
+    IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY,
     SUCCESSOR_AUTHORITY_APPLIED,
     SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
     SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
@@ -4976,7 +4982,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                     IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT
                 )
             {
-                // A V5 snapshot reconstructs process-local indexes from bytes
+                // A V6 snapshot envelope reconstructs process-local indexes from bytes
                 // already represented by the durable abstract owner. It is an
                 // exact stutter, never a new reservation acquisition.
                 projection.actor == 0u128
@@ -5007,6 +5013,48 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && in_flight_first_release_session_equal_body!(before.session, after.session)
                     && in_flight_first_release_history_equal_body!(before.history, after.history)
                     && in_flight_first_release_decision_equal_body!(before.decision, after.decision)
+            } else if projection.action
+                == refinement_tag_value!(
+                    IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY
+                )
+            {
+                // Startup rehydrates only process-local body custody from the
+                // actor's exact durable Kura payload. It does not confer READY
+                // authorization or alter any durable/economic fact.
+                in_flight_first_release_single_validator_body!(projection.actor, validator_mask)
+                    && projection.target == 0u128
+                    && (before.session.crashed & projection.actor) == 0u128
+                    && (before.carrier.kura_active & projection.actor) != 0u128
+                    && (before.session.bodies & projection.actor) == 0u128
+                    && !before.release.kura_retired
+                    && !before.decision.wsv_committed
+                    && before.decision.release_owner == 0u128
+                    && before.queue.reservation_state
+                        != refinement_tag_value!(
+                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN
+                        )
+                    && before.queue.reservation_state
+                        != refinement_tag_value!(
+                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN
+                        )
+                    && before.queue.reservation_state
+                        != refinement_tag_value!(
+                            IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED
+                        )
+                    && after.session.bodies == (before.session.bodies | projection.actor)
+                    && after.session.ready_authorized == before.session.ready_authorized
+                    && after.session.crashed == before.session.crashed
+                    && after.session.producer_alive
+                        == if projection.actor == before.producer {
+                            true
+                        } else {
+                            before.session.producer_alive
+                        }
+                    && in_flight_first_release_queue_equal_body!(before.queue, after.queue)
+                    && in_flight_first_release_carrier_equal_body!(before.carrier, after.carrier)
+                    && in_flight_first_release_history_equal_body!(before.history, after.history)
+                    && in_flight_first_release_decision_equal_body!(before.decision, after.decision)
+                    && in_flight_first_release_release_equal_body!(before.release, after.release)
             } else {
                 false
             }
@@ -8605,6 +8653,174 @@ pub(crate) fn check_production_in_flight_first_release_transition(
         None
     }
 }
+
+fn check_derived_production_in_flight_first_release_transition(
+    action: u8,
+    actor: u128,
+    target: u128,
+    before: ProductionInFlightFirstReleaseStateProjection,
+    after: ProductionInFlightFirstReleaseStateProjection,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    check_production_in_flight_first_release_transition(
+        ProductionInFlightFirstReleaseTransitionProjection {
+            action,
+            actor,
+            target,
+            before,
+            after,
+        },
+    )
+}
+
+/// Derive and check one `FanoutFromProducer` action.
+///
+/// `replica` is the one-hot validator bitmap receiving volatile body custody.
+/// The full transition checker rejects a producer, malformed bitmap, crashed
+/// recipient, absent producer custody, or otherwise malformed pre-state.
+#[must_use]
+pub(crate) fn check_production_in_flight_first_release_fanout_from_producer_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+    replica: u128,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    let mut after = before;
+    after.session.bodies |= replica;
+    check_derived_production_in_flight_first_release_transition(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER,
+        replica,
+        0,
+        before,
+        after,
+    )
+}
+
+/// Derive and check one `ServeLateBody` action.
+///
+/// `source` and `target` are one-hot validator bitmaps. The transition checker
+/// authenticates source custody and rejects a self-send or crashed target.
+#[must_use]
+pub(crate) fn check_production_in_flight_first_release_serve_late_body_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+    source: u128,
+    target: u128,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    let mut after = before;
+    after.session.bodies |= target;
+    check_derived_production_in_flight_first_release_transition(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY,
+        source,
+        target,
+        before,
+        after,
+    )
+}
+
+/// Derive and check one `Crash` action.
+///
+/// A crash removes exactly the actor's volatile body and READY custody, marks
+/// that validator crashed, and clears producer liveness only for the producer.
+#[must_use]
+#[allow(dead_code)] // Awaiting concrete trace-extraction call sites; exercised by the harness.
+pub(crate) fn check_production_in_flight_first_release_crash_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+    actor: u128,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    let mut after = before;
+    after.session.crashed |= actor;
+    after.session.bodies &= !actor;
+    after.session.ready_authorized &= !actor;
+    after.session.producer_alive = before.session.producer_alive && actor != before.producer;
+    check_derived_production_in_flight_first_release_transition(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH,
+        actor,
+        0,
+        before,
+        after,
+    )
+}
+
+/// Derive and check one `Recover` action.
+///
+/// Recovery removes only the actor's crashed bit. It cannot fabricate volatile
+/// body custody, READY authorization, or producer liveness.
+#[must_use]
+#[allow(dead_code)] // Awaiting concrete trace-extraction call sites; exercised by the harness.
+pub(crate) fn check_production_in_flight_first_release_recover_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+    actor: u128,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    let mut after = before;
+    after.session.crashed &= !actor;
+    check_derived_production_in_flight_first_release_transition(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER,
+        actor,
+        0,
+        before,
+        after,
+    )
+}
+
+/// Derive and check the exact `RecoverReservationSnapshot` stutter.
+///
+/// Snapshot replay rebuilds process-local indexes only, so no composed safety
+/// fact is permitted to change.
+#[must_use]
+pub(crate) fn check_production_in_flight_first_release_recover_reservation_snapshot_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    check_derived_production_in_flight_first_release_transition(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT,
+        0,
+        0,
+        before,
+        before,
+    )
+}
+
+/// Derive and check one `RehydrateLocalKuraCustody` action.
+///
+/// The actor is a one-hot local validator with exact durable Kura payload
+/// ownership, no crash marker, and no volatile body custody. Rehydration adds
+/// only that body custody. It revives producer liveness only when the actor is
+/// the frozen producer and never invents READY authorization.
+#[must_use]
+#[allow(dead_code)] // Awaiting startup lifecycle trace extraction; exercised by the harness.
+pub(crate) fn check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+    actor: u128,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    let mut after = before;
+    after.session.bodies |= actor;
+    if actor == before.producer {
+        after.session.producer_alive = true;
+    }
+    check_derived_production_in_flight_first_release_transition(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY,
+        actor,
+        0,
+        before,
+        after,
+    )
+}
+
+/// Derive and check the exact `RepairPostCarrierEvidence` stutter.
+///
+/// Post-carrier repair is authorized only after canonical WSV application and
+/// cannot change any composed safety fact.
+#[must_use]
+pub(crate) fn check_production_in_flight_first_release_repair_post_carrier_evidence_transition(
+    before: ProductionInFlightFirstReleaseStateProjection,
+) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
+    check_derived_production_in_flight_first_release_transition(
+        IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER,
+        0,
+        0,
+        before,
+        before,
+    )
+}
+
+#[cfg(test)]
+include!("refinement_constructor_test_helpers.rs");
 
 fn volatile_summary_is_well_formed(summary: VolatileSummary, validator_count: u64) -> bool {
     volatile_summary_well_formed_body!(summary, validator_count)

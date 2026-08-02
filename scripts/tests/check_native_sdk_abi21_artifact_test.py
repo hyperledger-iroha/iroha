@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -89,6 +90,7 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         "scripts/exec_with_file_lock.py",
         "scripts/norito_bridge_source_seal.py",
         "scripts/run_mobile_hermetic_command.py",
+        "scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh",
     },
 }
 
@@ -464,6 +466,286 @@ def test_manifest_loader_rejects_final_path_replacement(
     monkeypatch.setattr(checker.os, "read", replace_during_read)
     with pytest.raises(checker.ArtifactContractError, match="changed while it was read"):
         checker.load_manifest(path)
+
+
+def test_retained_native_manifest_is_private_canonical_and_payload_free(
+    tmp_path: Path,
+) -> None:
+    """Successful retention emits only the verified fixed-schema manifest."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    evidence_directory = tmp_path / "python-native-evidence"
+    retained = checker.retain_verified_manifest(
+        manifest,
+        artifact_path=artifact,
+        evidence_directory=evidence_directory,
+        source_root=source,
+        probe=exact_probe,
+    )
+
+    assert retained == evidence_directory / "python-native-abi21.json"
+    assert checker.load_manifest(retained) == manifest
+    assert {path.name for path in evidence_directory.iterdir()} == {
+        "python-native-abi21.json"
+    }
+    directory_metadata = evidence_directory.lstat()
+    manifest_metadata = retained.lstat()
+    assert stat.S_ISDIR(directory_metadata.st_mode)
+    assert stat.S_IMODE(directory_metadata.st_mode) == 0o700
+    assert stat.S_ISREG(manifest_metadata.st_mode)
+    assert manifest_metadata.st_nlink == 1
+    assert stat.S_IMODE(manifest_metadata.st_mode) == 0o600
+    retained_text = retained.read_text(encoding="ascii")
+    assert str(tmp_path) not in retained_text
+    assert "artifact_path" not in retained_text
+    assert "private_key" not in retained_text
+
+
+def test_verify_cli_retains_native_manifest_only_after_reauthentication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shell-facing verify operation owns the opt-in retention action."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_bytes(checker.canonical_manifest_bytes(manifest))
+    evidence_directory = tmp_path / "retained"
+
+    def cli_probe(
+        _sdk: str,
+        _path: Path,
+        *,
+        node: str,
+        python: str,
+    ) -> int:
+        del node, python
+        return checker.REQUIRED_BRIDGE_ABI_VERSION
+
+    monkeypatch.setattr(checker, "probe_artifact", cli_probe)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_native_sdk_abi21_artifact.py",
+            "verify",
+            "--artifact",
+            str(artifact),
+            "--manifest",
+            str(manifest_path),
+            "--source-root",
+            str(source),
+            "--evidence-dir",
+            str(evidence_directory),
+        ],
+    )
+
+    assert checker.main() == 0
+    assert checker.load_manifest(
+        evidence_directory / "python-native-abi21.json"
+    ) == manifest
+
+
+def test_retained_native_manifest_is_not_created_when_reauthentication_fails(
+    tmp_path: Path,
+) -> None:
+    """Stale artifact bytes fail before the evidence directory is created."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    artifact.write_bytes(b"stale native artifact")
+    evidence_directory = tmp_path / "must-not-exist"
+
+    with pytest.raises(checker.ArtifactContractError, match="artifact bytes"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=evidence_directory,
+            source_root=source,
+            probe=exact_probe,
+        )
+    assert not evidence_directory.exists()
+
+
+@pytest.mark.parametrize("relative", (Path("evidence"), Path("../evidence")))
+def test_retained_native_manifest_rejects_relative_output(
+    tmp_path: Path,
+    relative: Path,
+) -> None:
+    """The opt-in evidence destination must be an explicit absolute path."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+
+    with pytest.raises(checker.ArtifactContractError, match="bounded absolute"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=relative,
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
+def test_retained_native_manifest_rejects_existing_or_symlinked_output(
+    tmp_path: Path,
+) -> None:
+    """Retention never merges with or follows a pre-existing leaf."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    with pytest.raises(checker.ArtifactContractError, match="must be fresh"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=existing,
+            source_root=source,
+            probe=exact_probe,
+        )
+
+    target = tmp_path / "target"
+    target.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(target, target_is_directory=True)
+    with pytest.raises(checker.ArtifactContractError, match="must be fresh"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=linked,
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
+def test_retained_native_manifest_rejects_symlinked_ancestry(
+    tmp_path: Path,
+) -> None:
+    """An alias in the requested output ancestry is rejected, not resolved."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(checker.ArtifactContractError, match="must not contain symlinks"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=linked_parent / "evidence",
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
+def test_retained_native_manifest_rejects_source_tree_destination(
+    tmp_path: Path,
+) -> None:
+    """Evidence retention cannot invalidate the attested clean source tree."""
+
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="darwin-arm64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+    )
+
+    with pytest.raises(checker.ArtifactContractError, match="outside the source tree"):
+        checker.retain_verified_manifest(
+            manifest,
+            artifact_path=artifact,
+            evidence_directory=source / "evidence",
+            source_root=source,
+            probe=exact_probe,
+        )
+
+
+def test_python_native_evidence_retention_is_opt_in_and_uploaded() -> None:
+    """Freeze the zero-skip, final-verify, and exact-file upload ordering."""
+
+    runner = (REPO_ROOT / "ci/check_sorafs_python_native_sdk.sh").read_text(
+        encoding="utf-8"
+    )
+    workflow = (
+        REPO_ROOT / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    ).read_text(encoding="utf-8")
+
+    assert 'SORAFS_PYTHON_SDK_EVIDENCE_DIR:-' in runner
+    assert runner.count("--evidence-dir") == 1
+    assert 'VERIFY_EVIDENCE_ARGS=()' in runner
+    assert '"${VERIFY_EVIDENCE_ARGS[@]}"' in runner
+    skip_audit = runner.index(
+        "SoraFS native Python SDK parity may not contain skipped tests"
+    )
+    assert skip_audit < runner.index('VERIFY_EVIDENCE_ARGS=()')
+    assert runner.index('VERIFY_EVIDENCE_ARGS=()') < runner.rindex("  verify \\")
+    assert "SDK_SESSION}/pytest.xml" in runner
+    assert "SDK_SESSION}/python-native-abi21.json" in runner
+
+    evidence_directory = (
+        "${{ runner.temp }}/iroha-sorafs-python-native-abi21-evidence"
+    )
+    evidence_file = f"{evidence_directory}/python-native-abi21.json"
+    assert f"SORAFS_PYTHON_SDK_EVIDENCE_DIR: {evidence_directory}" in workflow
+    assert "name: Upload verified Python ABI-21 evidence" in workflow
+    assert evidence_file in workflow
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in workflow
+    upload = workflow.split("name: Upload verified Python ABI-21 evidence", 1)[1]
+    upload = upload.split("- name: Upload parity evidence", 1)[0]
+    assert "if: always()" in upload
+    assert "if-no-files-found: error" in upload
+    assert "retention-days: 30" in upload
+    assert "pytest.xml" not in upload
+    assert "iroha-sorafs-python-sdk" not in upload
 
 
 def test_node_probe_requires_exports_and_exact_integer_abi(

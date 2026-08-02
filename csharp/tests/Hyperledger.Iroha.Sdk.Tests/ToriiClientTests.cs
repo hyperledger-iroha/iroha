@@ -33,6 +33,8 @@ public sealed partial class ToriiClientTests
     private const string VerifyingKeySigningChainId = "test-chain";
     private static readonly string SoraFsAuthorityAccountId = TestAccountId(0x49);
     private static readonly string ExplorerTransactionAuthorityAccountId = TestAccountId(0x4B);
+    private static readonly string MultisigTransactionPayloadBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("multisig"));
+    private static readonly string MultisigSigningMessageBase64 = Convert.ToBase64String(IrohaHash.Hash(Encoding.UTF8.GetBytes("multisig")));
     private static readonly string ExplorerInstructionAuthorityAccountId = TestAccountId(0x4C);
     private static readonly string ExplorerInstructionAccountId = TestAccountId(0x4D);
     private static readonly string ExplorerDirectoryAccountId = TestAccountId(0x5B);
@@ -16295,7 +16297,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task CallContractAsyncDeserializesScaffoldResponse()
+    public async Task CallContractAsyncDeserializesUnsignedPayloadResponse()
     {
         using var handler = new RecordingHandler(request =>
         {
@@ -16318,7 +16320,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.True(response.Ok);
         Assert.False(response.Submitted);
         Assert.NotNull(response.ContractAddress);
-        Assert.Equal("c2NhZmZvbGQ=", response.TransactionScaffoldBase64);
+        Assert.Equal("cGF5bG9hZA==", response.TransactionPayloadBase64);
         Assert.Equal("/v1/contracts/call", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
     }
@@ -16347,10 +16349,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("transaction_scaffold_b64", "", "non-empty")]
-    [InlineData("transaction_scaffold_b64", " c2NhZmZvbGQ=", "surrounding whitespace")]
-    [InlineData("signed_transaction_b64", "c2ln bmVk", "whitespace")]
-    [InlineData("signed_transaction_b64", "c2ln\u00A0bmVk", "whitespace")]
+    [InlineData("transaction_payload_b64", "", "non-empty")]
+    [InlineData("transaction_payload_b64", " cGF5bG9hZA==", "surrounding whitespace")]
+    [InlineData("transaction_scaffold_b64", "c2NhZmZvbGQ=", "retired")]
+    [InlineData("signed_transaction_b64", "c2lnbmVk", "retired")]
     [InlineData("signing_message_b64", "bWVzc2FnZQ==\u0001", "control characters")]
     [InlineData("signing_message_b64", "not-base64", "valid base64")]
     [InlineData("signing_message_b64", "AR==", "canonical base64")]
@@ -16452,8 +16454,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "creation_time_ms", ContractCallRawResponseJson("creation_time_ms", -1), "unsigned integer" };
         yield return new object[] { "creation_time_ms", ContractCallRawResponseJson("creation_time_ms", 0), "positive" };
         yield return new object[] { "tx_hash_hex", ContractCallRawResponseJson("tx_hash_hex", " " + ToriiTransactionHashHex), "surrounding whitespace" };
-        yield return new object[] { "transaction_scaffold_b64", ContractCallRawResponseJson("transaction_scaffold_b64", ""), "non-empty base64 string" };
-        yield return new object[] { "signed_transaction_b64", ContractCallRawResponseJson("signed_transaction_b64", "c2ln bmVk"), "whitespace" };
+        yield return new object[] { "transaction_payload_b64", ContractCallRawResponseJson("transaction_payload_b64", ""), "non-empty base64 string" };
+        yield return new object[] { "transaction_scaffold_b64", ContractCallRawResponseJson("transaction_scaffold_b64", "c2NhZmZvbGQ="), "retired" };
+        yield return new object[] { "signed_transaction_b64", ContractCallRawResponseJson("signed_transaction_b64", "c2lnbmVk"), "retired" };
         yield return new object[] { "signing_message_b64", ContractCallRawResponseJson("signing_message_b64", "AR=="), "canonical base64" };
         yield return new object[] { "entrypoint", ContractCallRawResponseJson("entrypoint", " main"), "surrounding whitespace" };
         yield return new object[]
@@ -16783,8 +16786,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "contract-call", "AbiHashHex", new string('B', 64) };
         yield return new object?[] { "contract-call", "CreationTimeMilliseconds", 0UL };
         yield return new object?[] { "contract-call", "TransactionHashHex", " " + ToriiTransactionHashHex };
-        yield return new object?[] { "contract-call", "TransactionScaffoldBase64", "" };
-        yield return new object?[] { "contract-call", "SignedTransactionBase64", "c2ln bmVk" };
+        yield return new object?[] { "contract-call", "TransactionPayloadBase64", "" };
         yield return new object?[] { "contract-call", "SigningMessageBase64", "AR==" };
         yield return new object?[] { "contract-call", "Entrypoint", " main" };
 
@@ -17233,7 +17235,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task ProposeMultisigContractCallAsyncDeserializesScaffoldResponse()
+    public async Task ProposeMultisigContractCallAsyncDeserializesUnsignedPayloadResponse()
     {
         using var handler = new RecordingHandler(request =>
         {
@@ -17252,7 +17254,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "tx_hash_hex": null,
                   "executed_tx_hash_hex": null,
                   "creation_time_ms": 321,
-                  "signing_message_b64": "bXVsdGlzaWc="
+                  "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                 }
                 """),
             };
@@ -17666,6 +17668,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "generic", "TransactionHashHex", " " + ToriiTransactionHashHex };
         yield return new object?[] { "generic", "ExecutedTransactionHashHex", "0x" + ToriiTransactionHashHex };
         yield return new object?[] { "generic", "CreationTimeMilliseconds", 0UL };
+        yield return new object?[] { "generic", "TransactionPayloadBase64", "" };
         yield return new object?[] { "generic", "SigningMessageBase64", "AR==" };
 
         yield return new object?[] { "contract-call", "Ok", false };
@@ -17675,6 +17678,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "contract-call", "TransactionHashHex", ToriiTransactionHashHex.ToUpperInvariant() };
         yield return new object?[] { "contract-call", "ExecutedTransactionHashHex", " " + ToriiTransactionHashHex };
         yield return new object?[] { "contract-call", "CreationTimeMilliseconds", 0UL };
+        yield return new object?[] { "contract-call", "TransactionPayloadBase64", "" };
         yield return new object?[] { "contract-call", "SigningMessageBase64", "" };
     }
 
@@ -17761,7 +17765,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                       "tx_hash_hex": null,
                       "executed_tx_hash_hex": null,
                       "creation_time_ms": 123,
-                      "signing_message_b64": "bXVsdGlzaWc="
+                      "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                     }
                     """),
             };
@@ -17781,7 +17785,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.False(response.Submitted);
         Assert.Equal(MultisigProposalIdHex, response.ProposalId);
         Assert.Equal(MultisigInstructionsHashHex, response.InstructionsHash);
-        Assert.Equal("bXVsdGlzaWc=", response.SigningMessageBase64);
+        Assert.Equal(MultisigTransactionPayloadBase64, response.TransactionPayloadBase64);
+        Assert.Equal(MultisigSigningMessageBase64, response.SigningMessageBase64);
     }
 
     [Fact]
@@ -17796,10 +17801,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""
+                Content = new StringContent($$"""
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
+                      "resolved_multisig_account_id": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53", "submitted": false,
+                      "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                     }
                     """),
             };
@@ -17854,7 +17860,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Content = new StringContent($$"""
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "{{CanonicalMultisigAccountId}}"
+                      "resolved_multisig_account_id": "{{CanonicalMultisigAccountId}}", "submitted": false,
+                      "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                     }
                     """),
             };
@@ -18108,7 +18115,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task ApproveMultisigContractCallAsyncDeserializesScaffoldResponse()
+    public async Task ApproveMultisigContractCallAsyncDeserializesUnsignedPayloadResponse()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -18122,7 +18129,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "tx_hash_hex": null,
                   "executed_tx_hash_hex": null,
                   "creation_time_ms": 654,
-                  "signing_message_b64": "YXBwcm92ZQ=="
+                  "transaction_payload_b64": "{{MultisigTransactionPayloadBase64}}", "signing_message_b64": "{{MultisigSigningMessageBase64}}"
                 }
                 """),
         });
@@ -19726,6 +19733,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 CreationTimeMilliseconds = RequiredUInt64Value(value),
             },
+            ("generic", "TransactionPayloadBase64") => ValidMultisigResponse() with { TransactionPayloadBase64 = RequiredStringValue(value) },
             ("generic", "SigningMessageBase64") => ValidMultisigResponse() with
             {
                 SigningMessageBase64 = RequiredStringValue(value),
@@ -19758,6 +19766,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 CreationTimeMilliseconds = RequiredUInt64Value(value),
             },
+            ("contract-call", "TransactionPayloadBase64") => ValidMultisigContractCallResponse() with { TransactionPayloadBase64 = RequiredStringValue(value) },
             ("contract-call", "SigningMessageBase64") => ValidMultisigContractCallResponse() with
             {
                 SigningMessageBase64 = RequiredStringValue(value),
@@ -19779,10 +19788,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Submitted = false,
             ProposalId = MultisigProposalIdHex,
             InstructionsHash = MultisigInstructionsHashHex,
-            TransactionHashHex = ToriiTransactionHashHex,
+            TransactionHashHex = null,
             ExecutedTransactionHashHex = null,
             CreationTimeMilliseconds = 321,
-            SigningMessageBase64 = "bXVsdGlzaWc=",
+            TransactionPayloadBase64 = MultisigTransactionPayloadBase64, SigningMessageBase64 = MultisigSigningMessageBase64,
         };
     }
 
@@ -19795,10 +19804,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Submitted = false,
             ProposalId = MultisigProposalIdHex,
             InstructionsHash = MultisigInstructionsHashHex,
-            TransactionHashHex = ToriiTransactionHashHex,
+            TransactionHashHex = null,
             ExecutedTransactionHashHex = null,
             CreationTimeMilliseconds = 321,
-            SigningMessageBase64 = "bXVsdGlzaWc=",
+            TransactionPayloadBase64 = MultisigTransactionPayloadBase64, SigningMessageBase64 = MultisigSigningMessageBase64,
         };
     }
 
@@ -20202,14 +20211,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 TransactionHashHex = RequiredStringValue(value),
             },
-            ("contract-call", "TransactionScaffoldBase64") => ValidContractCallResponse() with
-            {
-                TransactionScaffoldBase64 = RequiredStringValue(value),
-            },
-            ("contract-call", "SignedTransactionBase64") => ValidContractCallResponse() with
-            {
-                SignedTransactionBase64 = RequiredStringValue(value),
-            },
+            ("contract-call", "TransactionPayloadBase64") => ValidContractCallResponse() with { TransactionPayloadBase64 = RequiredStringValue(value) },
             ("contract-call", "SigningMessageBase64") => ValidContractCallResponse() with
             {
                 SigningMessageBase64 = RequiredStringValue(value),
@@ -20329,10 +20331,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             CodeHashHex = ContractCodeHashHex,
             AbiHashHex = ContractAbiHashHex,
             CreationTimeMilliseconds = 123456,
-            TransactionHashHex = ToriiTransactionHashHex,
-            TransactionScaffoldBase64 = "c2NhZmZvbGQ=",
-            SignedTransactionBase64 = "c2lnbmVk",
-            SigningMessageBase64 = "bWVzc2FnZQ==",
+            TransactionHashHex = null,
+            TransactionPayloadBase64 = "cGF5bG9hZA==", SigningMessageBase64 = Convert.ToBase64String(IrohaHash.Hash(Encoding.UTF8.GetBytes("payload"))),
             Entrypoint = "main",
             OperationReceipt = ValidContractCallOperationReceipt(),
         };
@@ -26895,9 +26895,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["abi_hash_hex"] = ContractAbiHashHex,
             ["creation_time_ms"] = 123456,
             ["tx_hash_hex"] = null,
-            ["transaction_scaffold_b64"] = "c2NhZmZvbGQ=",
-            ["signed_transaction_b64"] = "c2lnbmVk",
-            ["signing_message_b64"] = "bWVzc2FnZQ==",
+            ["transaction_payload_b64"] = "cGF5bG9hZA==",
+            ["signing_message_b64"] = Convert.ToBase64String(IrohaHash.Hash(Encoding.UTF8.GetBytes("payload"))),
             ["entrypoint"] = "main",
             ["operation_receipt"] = ContractCallOperationReceiptJsonObject(),
         };
@@ -28076,7 +28075,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["tx_hash_hex"] = null,
             ["executed_tx_hash_hex"] = null,
             ["creation_time_ms"] = 321,
-            ["signing_message_b64"] = "bXVsdGlzaWc=",
+            ["transaction_payload_b64"] = MultisigTransactionPayloadBase64,
+            ["signing_message_b64"] = MultisigSigningMessageBase64,
         };
 
         response[field] = JsonValueForMultisig(value);

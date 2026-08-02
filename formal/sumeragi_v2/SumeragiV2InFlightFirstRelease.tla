@@ -329,6 +329,30 @@ ReleaseReservationDirect ==
   /\ UNCHANGED <<ownership, payloadBinding, carrier, session, history, decision>>
 
 (***************************************************************************
+After `Recover` clears one local crash marker, exact durable Kura payload
+ownership may restore only that validator's volatile body custody. The frozen
+producer alone regains producer liveness. READY authorization and every
+durable/economic fact remain unchanged, and terminal or retired work cannot be
+resurrected.
+***************************************************************************)
+RehydrateLocalKuraCustody(p) ==
+  /\ p \in Validators
+  /\ p \notin session.crashed
+  /\ p \in carrier.kuraActive
+  /\ p \notin session.bodies
+  /\ ~release.kuraRetired
+  /\ ~decision.wsvCommitted
+  /\ decision.releaseOwner = "None"
+  /\ queue.reservation
+       \notin {"CommitForgotten", "ReleaseForgotten", "DirectReleased"}
+  /\ session' =
+       [session EXCEPT
+          !.bodies = @ \union {p},
+          !.producerAlive = IF p = Producer THEN TRUE ELSE @]
+  /\ UNCHANGED <<ownership, payloadBinding, queue, carrier, history, decision,
+                 release>>
+
+(***************************************************************************
 LaneCommit is the lane consensus decision.  It is intentionally distinct from
 the post-carrier reservation journal Commit action below.
 ***************************************************************************)
@@ -537,6 +561,7 @@ Next ==
   \/ \E p \in Validators: Recover(p)
   \/ RecoverReservationSnapshot
   \/ ReleaseReservationDirect
+  \/ \E p \in Validators: RehydrateLocalKuraCustody(p)
   \/ \E p \in Validators: LaneCommit(p)
   \/ \E p \in Validators: ApplyCarrier(p)
   \/ \E key \in PrefixThrough(SelectedBatchSize):

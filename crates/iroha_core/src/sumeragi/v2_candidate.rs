@@ -15,7 +15,6 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     num::NonZeroUsize,
-    time::Duration,
 };
 
 use super::v2_core::EventTag;
@@ -328,6 +327,8 @@ pub(crate) struct CandidateScanReport {
     pub(crate) payload_deferred: usize,
     /// Entries skipped because certified lane/AMX work was unavailable.
     pub(crate) work_deferred: usize,
+    /// Ordinary FIFO entries excluded by an exact-empty certified execution carrier.
+    pub(crate) carrier_excluded: usize,
     /// External transactions included in the final body.
     pub(crate) selected: usize,
 }
@@ -590,36 +591,16 @@ impl V2CandidateAssembler {
         if queue.transaction_selection_durability_faulted() {
             return Err(CandidateError::RestartRequired);
         }
-        let certified_merge_filter = attachments
+        let certified_execution_selected = attachments
             .certified_merge_entry
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
-            .map(|batch| {
-                (
-                    batch.application_block_header.creation_time(),
-                    batch
-                        .lanes
-                        .iter()
-                        .flat_map(|lane| lane.entrypoint_hashes.iter().copied())
-                        .collect::<BTreeSet<_>>(),
-                )
-            });
+            .is_some();
 
         let mut records = Vec::with_capacity(pending.len());
         for (source_ordinal, transaction) in pending.into_iter().enumerate() {
             report.inspected = report.inspected.saturating_add(1);
-            if certified_merge_filter
-                .as_ref()
-                .is_some_and(|(application_time, entrypoints)| {
-                    transaction_conflicts_with_certified_merge(
-                        transaction.creation_time(),
-                        Hash::from(transaction.hash_as_entrypoint()),
-                        *application_time,
-                        entrypoints,
-                    )
-                })
-            {
-                report.work_deferred = report.work_deferred.saturating_add(1);
+            if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {
                 continue;
             }
             let routing_plan = match queue.route_plan_with_state(&transaction, state) {
@@ -807,13 +788,18 @@ fn stripped_carrier_context_matches(
         && built_header.view_change_index() == certified_header.view_change_index()
 }
 
-fn transaction_conflicts_with_certified_merge(
-    creation_time: Duration,
-    entrypoint_hash: Hash,
-    application_time: Duration,
-    certified_entrypoints: &BTreeSet<Hash>,
+fn record_ordinary_execution_carrier_exclusion(
+    certified_execution_selected: bool,
+    report: &mut CandidateScanReport,
 ) -> bool {
-    creation_time >= application_time || certified_entrypoints.contains(&entrypoint_hash)
+    // A certified autonomous execution batch commits an exact-empty global
+    // carrier. Every ordinary queue candidate therefore conflicts regardless
+    // of its timestamp or entrypoint identity.
+    if !certified_execution_selected {
+        return false;
+    }
+    report.carrier_excluded = report.carrier_excluded.saturating_add(1);
+    true
 }
 
 fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), CandidateError> {
@@ -1995,36 +1981,24 @@ mod tests {
     }
 
     #[test]
-    fn certified_merge_filter_defers_time_boundary_and_duplicate_entrypoints() {
-        let application_time = Duration::from_millis(1_000);
-        let duplicate = Hash::new(b"certified merge duplicate entrypoint");
-        let unrelated = Hash::new(b"ordinary queue entrypoint");
-        let certified_entrypoints = BTreeSet::from([duplicate]);
-
-        assert!(!transaction_conflicts_with_certified_merge(
-            Duration::from_millis(999),
-            unrelated,
-            application_time,
-            &certified_entrypoints,
-        ));
-        assert!(transaction_conflicts_with_certified_merge(
-            Duration::from_millis(999),
-            duplicate,
-            application_time,
-            &certified_entrypoints,
-        ));
-        assert!(transaction_conflicts_with_certified_merge(
-            application_time,
-            unrelated,
-            application_time,
-            &certified_entrypoints,
-        ));
-        assert!(transaction_conflicts_with_certified_merge(
-            Duration::from_millis(1_001),
-            unrelated,
-            application_time,
-            &certified_entrypoints,
-        ));
+    fn certified_execution_filter_defers_every_ordinary_entrypoint() {
+        let mut report = CandidateScanReport::default();
+        for _ in 0..4 {
+            assert!(
+                record_ordinary_execution_carrier_exclusion(true, &mut report),
+                "every ordinary entrypoint conflicts with a selected execution carrier"
+            );
+        }
+        assert_eq!(report.carrier_excluded, 4);
+        assert_eq!(
+            report.work_deferred, 0,
+            "carrier exclusions are not unavailable lane work and must not arm heartbeat fallback"
+        );
+        assert!(
+            !record_ordinary_execution_carrier_exclusion(false, &mut report),
+            "ordinary queue selection remains enabled without a selected execution carrier"
+        );
+        assert_eq!(report.carrier_excluded, 4);
     }
 
     #[test]

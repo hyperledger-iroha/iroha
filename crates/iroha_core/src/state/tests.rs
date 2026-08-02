@@ -7178,6 +7178,15 @@ fn native_amx_participant_receipt_requires_exact_v2_frontier_context() {
         row.application_block_hash,
         Some(marker.application_block_hash)
     );
+    let conflict_row = State::native_amx_participant_application_diagnostic_row(
+        marker,
+        SumeragiNativeAmxParticipantApplicationState::Conflict,
+    );
+    conflict_row
+        .validate()
+        .expect("conflicting marker fields produce a non-selecting diagnostics row");
+    assert_eq!(conflict_row.application_block_height, None);
+    assert_eq!(conflict_row.application_block_hash, None);
 
     let mut conflicting_receipt = receipt.clone();
     conflicting_receipt.participant_proposal.proposal_hash =
@@ -9716,12 +9725,9 @@ fn committed_drain_suppresses_hot_scale_out_and_only_later_commitment_retires_hi
         *state.nexus.write() = nexus;
 
         if certified {
-            let committed_third = ValidBlock::new_unverified_for_tests(third.clone())
-                .commit_unchecked()
-                .unpack(|_| {});
             let same_carrier = state.block(third.header());
             assert_eq!(
-                same_carrier.select_autoscale_scale_in_action(&committed_third),
+                same_carrier.select_autoscale_scale_in_action(&third),
                 None,
                 "the certificate carrier itself must never retire its lane"
             );

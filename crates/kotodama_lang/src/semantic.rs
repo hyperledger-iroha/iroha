@@ -16276,9 +16276,9 @@ mod tests {
 
     #[test]
     fn native_json_rejects_decoded_duplicate_keys_and_oversized_nodes() {
-        let error = analyze_error(
-            include_str!("semantic/test_sources/native_json_rejects_decoded_duplicate_keys_and_oversized_nodes_1.ko"),
-        );
+        let error = analyze_error(include_str!(
+            "semantic/test_sources/native_json_rejects_decoded_duplicate_keys_and_oversized_nodes_1.ko"
+        ));
         assert_eq!(error.code, "E_JSON_DUPLICATE_KEY");
 
         let object_entries = (0..65)
@@ -16302,15 +16302,15 @@ mod tests {
 
     #[test]
     fn json_parse_literals_fail_during_semantic_analysis() {
-        let duplicate = analyze_error(
-            include_str!("semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_1.ko"),
-        );
+        let duplicate = analyze_error(include_str!(
+            "semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_1.ko"
+        ));
         assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
         assert!(duplicate.message.contains("owner"), "{}", duplicate.message);
 
-        let malformed = analyze_error(
-            include_str!("semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_2.ko"),
-        );
+        let malformed = analyze_error(include_str!(
+            "semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_2.ko"
+        ));
         assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
         assert!(
             malformed.message.contains("Json::parse"),
@@ -16322,9 +16322,15 @@ mod tests {
     #[test]
     fn json_parse_requires_a_direct_literal_but_native_json_remains_typed() {
         for source in [
-            include_str!("semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_1.ko"),
-            include_str!("semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_2.ko"),
-            include_str!("semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_3.ko"),
+            include_str!(
+                "semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_1.ko"
+            ),
+            include_str!(
+                "semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_2.ko"
+            ),
+            include_str!(
+                "semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_3.ko"
+            ),
         ] {
             let dynamic = analyze_error(source);
             assert_eq!(dynamic.code, "E_JSON_LITERAL_REQUIRED", "{source}");
@@ -16541,9 +16547,9 @@ mod tests {
 
     #[test]
     fn list_contains_accepts_recursive_durable_aggregates() {
-        let expression = function_tail(
-            include_str!("semantic/test_sources/list_contains_accepts_recursive_durable_aggregates_1.ko"),
-        );
+        let expression = function_tail(include_str!(
+            "semantic/test_sources/list_contains_accepts_recursive_durable_aggregates_1.ko"
+        ));
         assert_eq!(expression.ty, Type::Bool);
         assert!(
             matches!(expression.expr, ExprKind::Call { ref name, .. } if name == LIST_CONTAINS_INTRINSIC)
@@ -18197,9 +18203,9 @@ mod tests {
 
     #[test]
     fn trigger_callbacks_accept_trigger_event_payload_helpers() {
-        let program = parse(
-            include_str!("semantic/test_sources/trigger_callbacks_accept_trigger_event_payload_helpers_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/trigger_callbacks_accept_trigger_event_payload_helpers_1.ko"
+        ))
         .expect("parse trigger callback trigger_event");
         analyze(&program).expect("trigger callback trigger_event should type-check");
     }
@@ -18233,18 +18239,18 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_accepts_test_functions() {
-        let program = parse(
-            include_str!("semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko"
+        ))
         .expect("parse invoke_entrypoint");
         analyze_test(&program).expect("invoke_entrypoint in tests should type-check");
     }
 
     #[test]
     fn invoke_entrypoint_rejects_non_test_functions() {
-        let program = parse(
-            include_str!("semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko"
+        ))
         .expect("parse non-test invoke_entrypoint");
         let err = analyze_test(&program).expect_err("non-test invoke_entrypoint should fail");
         assert!(err.message.contains("only available inside #[test]"));
@@ -18252,18 +18258,18 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_accepts_name_literal_target() {
-        let program = parse(
-            include_str!("semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko"
+        ))
         .expect("parse name literal invoke_entrypoint");
         analyze_test(&program).expect("name literal invoke_entrypoint should type-check");
     }
 
     #[test]
     fn invoke_entrypoint_rejects_non_literal_target() {
-        let program = parse(
-            include_str!("semantic/test_sources/invoke_entrypoint_rejects_non_literal_target_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/invoke_entrypoint_rejects_non_literal_target_1.ko"
+        ))
         .expect("parse dynamic target invoke_entrypoint");
         let err = analyze_test(&program).expect_err("dynamic target should fail");
         assert!(
@@ -18274,9 +18280,9 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_rejects_non_json_payload() {
-        let program = parse(
-            include_str!("semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko"
+        ))
         .expect("parse non-json payload invoke_entrypoint");
         let err = analyze_test(&program).expect_err("non-json payload should fail");
         assert!(err.message.contains("expects a Json payload"));
@@ -18284,9 +18290,9 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_rejects_internal_target() {
-        let program = parse(
-            include_str!("semantic/test_sources/invoke_entrypoint_rejects_internal_target_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/invoke_entrypoint_rejects_internal_target_1.ko"
+        ))
         .expect("parse internal target invoke_entrypoint");
         let err = analyze_test(&program).expect_err("internal target should fail");
         assert!(
@@ -18297,52 +18303,50 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_as_and_actor_helpers_type_check_in_tests() {
-        let program = parse(
-            include_str!("semantic/test_sources/invoke_entrypoint_as_and_actor_helpers_type_check_in_tests_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/invoke_entrypoint_as_and_actor_helpers_type_check_in_tests_1.ko"
+        ))
         .expect("parse invoke_entrypoint_as");
         analyze_test(&program).expect("test helpers should type-check");
     }
 
     #[test]
     fn invoke_entrypoint_as_accepts_tuple_returning_targets() {
-        let program = parse(
-            include_str!("semantic/test_sources/invoke_entrypoint_as_accepts_tuple_returning_targets_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/invoke_entrypoint_as_accepts_tuple_returning_targets_1.ko"
+        ))
         .expect("parse tuple invoke_entrypoint_as");
         analyze_test(&program).expect("tuple-returning target should type-check");
     }
 
     #[test]
     fn standalone_test_helpers_preserve_external_entrypoint_kind() {
-        let target = parse(
-            include_str!("semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_1.ko"),
-        )
+        let target = parse(include_str!(
+            "semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_1.ko"
+        ))
         .expect("parse target contract");
         let signatures = SemanticContext::with_capabilities(false, true)
             .resolve_function_signatures(&target)
             .expect("resolve target signatures");
 
-        let accepted = parse(
-            include_str!("semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_2.ko"),
-        )
+        let accepted = parse(include_str!(
+            "semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_2.ko"
+        ))
         .expect("parse standalone test module");
         SemanticContext::with_capabilities(false, true)
             .analyze_with_external_functions(&accepted, &signatures)
             .expect("external lifecycle entrypoint should retain its kind");
 
-        let rejected = parse(
-            include_str!("semantic/test_sources/invokes_lifecycle_1.ko"),
-        )
-        .expect("parse private-helper test module");
+        let rejected = parse(include_str!("semantic/test_sources/invokes_lifecycle_1.ko"))
+            .expect("parse private-helper test module");
         let error = SemanticContext::with_capabilities(false, true)
             .analyze_with_external_functions(&rejected, &signatures)
             .expect_err("private target helper must not become an entrypoint");
         assert_eq!(error.code(), "E_TEST_ENTRYPOINT_KIND");
 
-        let direct_call = parse(
-            include_str!("semantic/test_sources/invokes_private_helper_1.ko"),
-        )
+        let direct_call = parse(include_str!(
+            "semantic/test_sources/invokes_private_helper_1.ko"
+        ))
         .expect("parse direct external-entrypoint call");
         let error = SemanticContext::with_capabilities(false, true)
             .analyze_with_external_functions(&direct_call, &signatures)
@@ -18352,9 +18356,9 @@ mod tests {
 
     #[test]
     fn actor_helpers_reject_non_test_functions() {
-        let program = parse(
-            include_str!("semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko"
+        ))
         .expect("parse non-test actor helper");
         let err = analyze_test(&program).expect_err("actor helper outside test should fail");
         assert!(err.message.contains("only available inside #[test]"));
@@ -18940,24 +18944,24 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn canonical_context_and_ledger_namespaces_type_check() {
-        let program = parse(
-            include_str!("semantic/test_sources/canonical_context_and_ledger_namespaces_type_check_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/canonical_context_and_ledger_namespaces_type_check_1.ko"
+        ))
         .expect("parse canonical namespaced calls");
         analyze(&program).expect("canonical context and ledger namespaces should type-check");
     }
 
     #[test]
     fn escrow_open_offer_signature_matches_the_host_abi() {
-        let program = parse(
-            include_str!("semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_1.ko"
+        ))
         .expect("parse canonical escrow calls");
         analyze(&program).expect("three required arguments plus optional evidence must type-check");
 
-        let invalid = parse(
-            include_str!("semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_2.ko"),
-        )
+        let invalid = parse(include_str!(
+            "semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_2.ko"
+        ))
         .expect("parse invalid escrow call");
         let error = analyze(&invalid).expect_err("the retired five-argument shape must fail");
         assert_eq!(error.code, "E_UNKNOWN_NAMED_ARGUMENT");
@@ -19048,9 +19052,9 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn durable_state_maps_accept_forward_declared_struct_values() {
-        let program = parse(
-            include_str!("semantic/test_sources/durable_state_maps_accept_forward_declared_struct_values_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/durable_state_maps_accept_forward_declared_struct_values_1.ko"
+        ))
         .expect("parse durable struct map");
         analyze(&program).expect("durable struct-valued state map should type-check");
     }
@@ -19090,18 +19094,18 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn durable_string_state_is_supported() {
-        let program = parse(
-            include_str!("semantic/test_sources/durable_string_state_is_supported_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/durable_string_state_is_supported_1.ko"
+        ))
         .expect("parse string state");
         analyze(&program).expect("string state should be supported");
     }
 
     #[test]
     fn durable_struct_string_field_is_supported() {
-        let program = parse(
-            include_str!("semantic/test_sources/durable_struct_string_field_is_supported_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/durable_struct_string_field_is_supported_1.ko"
+        ))
         .expect("parse state struct");
         analyze(&program).expect("string state field should be supported");
     }
@@ -19125,9 +19129,9 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn durable_option_and_result_accept_aggregate_payloads() {
-        let program = parse(
-            include_str!("semantic/test_sources/durable_option_and_result_accept_aggregate_payloads_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/durable_option_and_result_accept_aggregate_payloads_1.ko"
+        ))
         .expect("parse aggregate sum state");
         analyze(&program).expect("aggregate Option/Result state should type-check");
     }
@@ -19375,14 +19379,14 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn trigger_metadata_json_parse_uses_json_literal_diagnostics() {
-        let duplicate = analyze_error(
-            include_str!("semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko"),
-        );
+        let duplicate = analyze_error(include_str!(
+            "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko"
+        ));
         assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
 
-        let malformed = analyze_error(
-            include_str!("semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko"),
-        );
+        let malformed = analyze_error(include_str!(
+            "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko"
+        ));
         assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
     }
 
@@ -19441,9 +19445,9 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn trigger_decl_supports_data_filter() {
-        let program = parse(
-            include_str!("semantic/test_sources/trigger_decl_supports_data_filter_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/trigger_decl_supports_data_filter_1.ko"
+        ))
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
         let trigger = &typed.triggers[0];
@@ -19782,9 +19786,9 @@ seiyaku UnshieldAmount {{
     fn trigger_decl_supports_pipeline_filter() {
         use iroha_data_model::events::pipeline::{BlockEventFilter, BlockStatus};
 
-        let program = parse(
-            include_str!("semantic/test_sources/trigger_decl_supports_pipeline_filter_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/trigger_decl_supports_pipeline_filter_1.ko"
+        ))
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
         let trigger = &typed.triggers[0];
@@ -19800,9 +19804,9 @@ seiyaku UnshieldAmount {{
     fn trigger_decl_supports_pipeline_transaction_approved_filter() {
         use iroha_data_model::events::pipeline::{TransactionEventFilter, TransactionStatus};
 
-        let program = parse(
-            include_str!("semantic/test_sources/trigger_decl_supports_pipeline_transaction_approved_filter_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/trigger_decl_supports_pipeline_transaction_approved_filter_1.ko"
+        ))
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
         let trigger = &typed.triggers[0];
@@ -19816,9 +19820,9 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn trigger_decl_rejects_invalid_data_matcher_literal() {
-        let program = parse(
-            include_str!("semantic/test_sources/trigger_decl_rejects_invalid_data_matcher_literal_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/trigger_decl_rejects_invalid_data_matcher_literal_1.ko"
+        ))
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("invalid matcher should error");
         assert!(
@@ -19854,9 +19858,9 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn trigger_decl_rejects_invalid_authority() {
-        let program = parse(
-            include_str!("semantic/test_sources/trigger_decl_rejects_invalid_authority_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/trigger_decl_rejects_invalid_authority_1.ko"
+        ))
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("invalid authority should error");
         assert!(err.message.contains("invalid trigger authority"));
@@ -19891,9 +19895,9 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn trigger_decl_requires_kotoage_entrypoint() {
-        let program = parse(
-            include_str!("semantic/test_sources/trigger_decl_requires_kotoage_entrypoint_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/trigger_decl_requires_kotoage_entrypoint_1.ko"
+        ))
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("non-kotoage target should error");
         assert!(err.message.contains("`kotoage`/`言挙げ` function"));
@@ -20046,9 +20050,9 @@ seiyaku UnshieldAmount {{
 
     #[test]
     fn divergent_expression_arms_inhabit_the_sibling_value_type() {
-        let program = parse(
-            include_str!("semantic/test_sources/divergent_expression_arms_inhabit_the_sibling_value_type_1.ko"),
-        )
+        let program = parse(include_str!(
+            "semantic/test_sources/divergent_expression_arms_inhabit_the_sibling_value_type_1.ko"
+        ))
         .expect("parse divergent expression arms");
         analyze(&program).expect("a returning arm must not synthesize a unit placeholder value");
     }

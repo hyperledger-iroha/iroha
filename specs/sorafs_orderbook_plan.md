@@ -18,7 +18,7 @@ canonical Ed25519 digest and verification helpers for order, cancel, and
 settlement-receipt payloads.
 `sorafs_manifest::reference` exposes
 `validate_orderbook_payload_bytes` and `OrderbookValidationPayloadKindV1`, and
-the `sorafs-validate orderbook` CLI validates those payloads by kind or alias.
+the `sorafs-validate orderbook` CLI validates those payloads by exact V1 kind.
 The composite fixture-bundle validator also accepts the committed orderbook
 payloads so release smoke checks catch drift in order, trade, channel, and
 settlement-receipt fixtures.
@@ -252,9 +252,9 @@ book.
 - The validator emits stable `ValidationOutcomeV1` records and maps orderbook
   structural, settlement-accounting, policy, signature, and Norito decode
   failures into the reference SDK error catalogue.
-- The `sorafs-validate orderbook` CLI supports `--kind <payload-kind> --input
-  <path>` plus payload aliases: `--order`, `--cancel`, `--trade`, `--channel`,
-  and `--receipt`. The retired runtime-snapshot alias is rejected.
+- The `sorafs-validate orderbook` CLI supports only the exact `--kind
+  <payload-kind> --input <path>` V1 form. Payload flags and the retired
+  runtime-snapshot selector are rejected.
 - The `sorafs-validate sign --kind orderbook --payload-kind
   order-request|order-cancel|settlement-receipt` CLI path signs those
   orderbook payloads with runtime-only Ed25519 seeds, validates the signed
@@ -398,14 +398,13 @@ Implemented:
   non-crossing book remainders, deterministic permutation-invariance scenarios
   that prove canonical sequence drives matching and expired tombstone ordering,
   plus overlapping receipt-range rejection. Retired runtime-snapshot selectors
-  and CLI aliases are covered only as negative compatibility rejection.
+  and CLI aliases are covered as hard-cut rejection cases.
 - `crates/sorafs_manifest/src/reference.rs` unit tests cover accepted orderbook
   payloads, malformed Norito, policy failures, signature failures, and
   settlement-accounting imbalance outcomes; bundle tests cover orderbook
   payloads mixed with linked SoraFS artifacts.
 - `crates/sorafs_manifest/src/bin/sorafs-validate.rs` parser tests cover the
-  orderbook CLI kind path, receipt alias, duplicate alias rejection, and
-  supported kind aliases.
+  exact orderbook CLI kind path and reject every retired flag and kind alias.
 - `crates/sorafs_manifest/src/reference_ffi.rs` tests cover accepted orderbook
   FFI validation, bundle validation with canonical order/trade/channel/receipt
   payloads, and unsupported retired-selector rejection.

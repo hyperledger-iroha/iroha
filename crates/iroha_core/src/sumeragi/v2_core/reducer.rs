@@ -72,11 +72,9 @@ pub enum EquivocationKind {
     Proposal,
 }
 
-/// Exact pair of authenticated artifacts proving one validator equivocated.
-///
-/// Keeping both signatures inside the reducer effect prevents a downstream
-/// adapter from turning a non-verifiable offender/round summary into slashing
-/// evidence.
+/// Exact pair of authenticated artifacts proving one validator equivocated. Keeping both
+/// signatures inside the reducer effect prevents a downstream adapter from turning a
+/// non-verifiable offender/round summary into slashing evidence.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EquivocationEvidence {
@@ -5724,25 +5722,5 @@ mod source_link_tests {
         assert!(recovered.pending_persistence.is_none());
     }
 
-    #[test]
-    fn counterfeit_boundary_capability_cannot_invent_a_wal_transition() {
-        let before = reducer();
-        let after = before.clone();
-        let event = Event::RetransmitElapsed {
-            tag: before.current_tag(),
-        };
-        let mut projection = before.transition_projection(&event, &after, &[]);
-        let counterfeit = BoundaryCapabilityKey {
-            kind: refinement::BOUNDARY_BEGIN_WAL,
-            record_kind: WAL_RECORD_PREPARE_INTENT,
-            continuation: CONTINUATION_SIGN,
-            persistence_id: 1,
-            context_id: before.context.id(),
-            tag: Reducer::tag_projection(before.current_tag()),
-            ..BoundaryCapabilityKey::none()
-        };
-        projection.boundary_claimed = counterfeit;
-        projection.boundary_granted = counterfeit;
-        assert!(!refinement::accepts(projection));
-    }
+    include!("reducer/counterfeit_boundary_capability_test.rs");
 }
