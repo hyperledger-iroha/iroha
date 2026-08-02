@@ -39,9 +39,10 @@ Remaining release gates, in order, are:
   terminal finalized pages, never reuses a retired stable ID, and recovers a
   replacement after authoritative rejection/rebase, expiry, applied-then-
   retired, or later retirement evidence. Replication, readback, and release
-  submission recheck the active finalized location, including a typed
-  post-rejection check. Native AMX evidence retains its applied height and final
-  verification must cover it.
+  submission retain and recheck the complete finalized directory, including a
+  typed post-rejection check; stale healthy or retirement pages cannot overwrite
+  a later journaled renewal. Native AMX evidence retains its applied height and
+  final verification must cover it.
   Retain as a release blocker the absent deployment-owned storage/finality
   backend. The latest exact archive query can now reproduce the immutable
   registration projection without a historical mutable WSV. Same-ID renewal

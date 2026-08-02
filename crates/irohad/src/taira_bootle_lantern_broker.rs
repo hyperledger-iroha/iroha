@@ -24,8 +24,7 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
     BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceAuthorizationV1,
     BootleLanternIssuanceErrorV1, BootleLanternIssuerKeyPairV1,
     BootleLanternIssuerPolicyMetadataV1, MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1,
-    TAIRA_BOOTLE_LANTERN_BROKER_CONTRACT_V1, TairaBootleLanternBrokerQualificationErrorV1,
-    TairaBootleLanternBrokerQualificationInputsV1,
+    TairaBootleLanternBrokerQualificationErrorV1, TairaBootleLanternBrokerQualificationInputsV1,
     derive_taira_bootle_lantern_broker_qualification_digest_v1,
     issuer_issue_validated_blind_issuance_request_encoded_v1,
     issuer_prepare_blind_issuance_authorization_candidate_v1,
@@ -1124,7 +1123,7 @@ fn load_credential_v1(
     minimum_bytes: usize,
     maximum_bytes: usize,
 ) -> Result<OpenedCredentialV1, TairaBootleLanternBrokerErrorV1> {
-    use std::{ffi::OsString, os::unix::ffi::OsStrExt as _, os::unix::fs::MetadataExt as _};
+    use std::{ffi::OsString, os::unix::fs::MetadataExt as _};
 
     use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 

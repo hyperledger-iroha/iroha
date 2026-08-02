@@ -1004,6 +1004,20 @@ pub enum PublicationArchiveLocationTerminalReasonV1 {
     Retired,
 }
 
+/// Durable finalized floor against which one archive-location terminal was accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum PublicationArchiveLocationTerminalFloorV1 {
+    /// The transaction never acquired finalized application evidence; use its prepared page.
+    #[codec(index = 0)]
+    Prepared,
+    /// No healthy replication checkpoint existed; use the finalized application page.
+    #[codec(index = 1)]
+    Registered,
+    /// A later healthy full-directory checkpoint existed and is retained exactly.
+    #[codec(index = 2)]
+    Replication(PublicationReplicationCheckpointV1),
+}
+
 /// Finalized full-directory evidence terminating one archive-location generation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveLocationTerminalV1 {
@@ -1023,6 +1037,7 @@ impl PublicationArchiveLocationTerminalV1 {
         registered_archive: &PublicationRegisteredArchiveV1,
         attempt: &PublicationArchiveLocationAttemptV1,
         prior_location_ids: &[MusubiArchiveLocationIdV1],
+        floor: &PublicationArchiveLocationTerminalFloorV1,
     ) -> Result<(), PublicationError> {
         attempt.intent.validate_for(
             operation_id,
@@ -1031,6 +1046,43 @@ impl PublicationArchiveLocationTerminalV1 {
             prior_location_ids,
         )?;
         validate_archive_location_page(request, registered_archive, &self.finalized_page)?;
+        let floor_page = match (floor, attempt.registration.as_ref()) {
+            (PublicationArchiveLocationTerminalFloorV1::Prepared, None) => {
+                &attempt.intent.prepared_page
+            }
+            (PublicationArchiveLocationTerminalFloorV1::Registered, Some(registration)) => {
+                &registration.finalized_page
+            }
+            (
+                PublicationArchiveLocationTerminalFloorV1::Replication(checkpoint),
+                Some(registration),
+            ) => {
+                checkpoint.validate_for(request, registration)?;
+                &checkpoint.finalized_page
+            }
+            _ => {
+                return Err(PublicationError::InvalidEvidence {
+                    phase: PublicationPhaseV1::Replication,
+                    reason: "archive-location terminal used an invalid durable floor".to_owned(),
+                });
+            }
+        };
+        let requires_strict_revision = !matches!(
+            self.reason,
+            PublicationArchiveLocationTerminalReasonV1::RegistryExpired { .. }
+        );
+        if finalized_page_progress(floor_page, &self.finalized_page)?
+            != PublicationLocationProgressV1::Current
+            || (requires_strict_revision
+                && self.finalized_page.archive.location_revision
+                    <= floor_page.archive.location_revision)
+        {
+            return Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Replication,
+                reason: "archive-location terminal regressed its durable finalized floor"
+                    .to_owned(),
+            });
+        }
         let absent = self
             .finalized_page
             .archive
@@ -1117,6 +1169,8 @@ pub struct PublicationArchiveLocationAttemptV1 {
     pub registration: Option<PublicationArchiveRegistrationV1>,
     /// Finalized terminal evidence, appended before a later generation is allowed.
     pub terminal: Option<PublicationArchiveLocationTerminalV1>,
+    /// Finalized floor against which `terminal` was accepted, retained for journal recovery.
+    pub terminal_floor: Option<PublicationArchiveLocationTerminalFloorV1>,
 }
 
 impl PublicationArchiveLocationAttemptV1 {
@@ -1126,6 +1180,7 @@ impl PublicationArchiveLocationAttemptV1 {
             intent,
             registration: None,
             terminal: None,
+            terminal_floor: None,
         }
     }
 }
@@ -1146,10 +1201,51 @@ pub enum PublicationArchiveLocationAdvanceV1 {
 pub enum PublicationReplicationAdvanceV1 {
     /// The location exists but is not currently healthy at quorum, or the query is not yet current.
     Pending,
-    /// Current finalized healthy location with exact provider bundle attestations.
-    Healthy(MusubiArchiveLocationV1),
+    /// Current finalized healthy location and the complete directory snapshot that authenticated it.
+    Healthy(PublicationReplicationCheckpointV1),
     /// Complete finalized proof that the stable location identity was retired.
     Retired(PublicationArchiveLocationTerminalV1),
+}
+
+/// Durable finalized replication floor for one active archive-location generation.
+///
+/// Retaining the complete directory page prevents a later lagging absence response from being
+/// mistaken for retirement after the target location or another directory entry has advanced.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct PublicationReplicationCheckpointV1 {
+    /// Complete finalized archive-location directory containing the active healthy location.
+    pub finalized_page: MusubiArchiveLocationPageV1,
+}
+
+impl PublicationReplicationCheckpointV1 {
+    /// Return the active generation's exact location from this finalized page.
+    pub(crate) fn location(
+        &self,
+        registration: &PublicationArchiveRegistrationV1,
+    ) -> Result<&MusubiArchiveLocationV1, PublicationError> {
+        self.finalized_page
+            .items
+            .binary_search_by_key(&registration.location_id(), |location| location.location_id)
+            .ok()
+            .map(|index| &self.finalized_page.items[index])
+            .ok_or_else(|| PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Replication,
+                reason: "finalized replication checkpoint is missing its active location"
+                    .to_owned(),
+            })
+    }
+
+    pub(crate) fn validate_for(
+        &self,
+        request: &PublicationRequestV1,
+        registration: &PublicationArchiveRegistrationV1,
+    ) -> Result<(), PublicationError> {
+        self.finalized_page
+            .validate()
+            .map_err(|error| invalid(PublicationPhaseV1::Replication, error))?;
+        registration.validate_polled_page(request, &self.finalized_page)?;
+        validate_replication(request, registration, self.location(registration)?)
+    }
 }
 
 pub(crate) fn validate_archive_location_page(
@@ -1428,8 +1524,8 @@ pub struct PublicationJournalV1 {
     pub registered_archive: Option<PublicationRegisteredArchiveV1>,
     /// Bounded append-only signed archive-location transaction generations.
     pub archive_location_attempts: Vec<PublicationArchiveLocationAttemptV1>,
-    /// Finalized healthy location with provider attestations.
-    pub replication: Option<MusubiArchiveLocationV1>,
+    /// Complete finalized page containing the healthy active location and provider attestations.
+    pub replication: Option<PublicationReplicationCheckpointV1>,
     /// Two distinct provider readback results.
     pub readbacks: Vec<PublicationReadbackEvidenceV1>,
     /// Idempotent Native AMX submission result.
@@ -1608,13 +1704,19 @@ impl PublicationJournalV1 {
                     ));
                 }
             }
-            if let Some(terminal) = &attempt.terminal {
+            if attempt.terminal.is_some() != attempt.terminal_floor.is_some() {
+                return Err(PublicationError::InvalidJournal(
+                    "archive-location terminal evidence is missing its durable floor".to_owned(),
+                ));
+            }
+            if let (Some(terminal), Some(floor)) = (&attempt.terminal, &attempt.terminal_floor) {
                 terminal.validate_for(
                     self.operation_id,
                     &self.request,
                     registered,
                     attempt,
                     &prior_location_ids,
+                    floor,
                 )?;
             }
             prior_location_ids.push(attempt.intent.location_id);
@@ -1683,10 +1785,11 @@ impl PublicationJournalV1 {
                     })?,
             )?;
         }
-        if let Some(location) = &self.replication {
-            validate_replication(&self.request, self.registration()?, location)?;
+        if let Some(checkpoint) = &self.replication {
+            checkpoint.validate_for(&self.request, self.registration()?)?;
         }
-        if let Some(location) = &self.replication {
+        if let Some(checkpoint) = &self.replication {
+            let location = checkpoint.location(self.registration()?)?;
             for (readback, provider) in self.readbacks.iter().zip(location.providers.iter()) {
                 readback.validate_for(&self.request, location, *provider)?;
             }
@@ -1781,10 +1884,13 @@ fn archive_location_attempts_are_append_only(
     }
     let registration_appended = previous[last].registration.is_none()
         && next[last].registration.is_some()
-        && previous[last].terminal == next[last].terminal;
+        && previous[last].terminal == next[last].terminal
+        && previous[last].terminal_floor == next[last].terminal_floor;
     let terminal_appended = previous[last].registration == next[last].registration
         && previous[last].terminal.is_none()
-        && next[last].terminal.is_some();
+        && next[last].terminal.is_some()
+        && previous[last].terminal_floor.is_none()
+        && next[last].terminal_floor.is_some();
     registration_appended || terminal_appended
 }
 
@@ -2740,9 +2846,9 @@ impl<'a> PublicationEngine<'a> {
                     PublicationReplicationAdvanceV1::Pending => {
                         return Ok(PublicationAdvanceV1::Pending(phase));
                     }
-                    PublicationReplicationAdvanceV1::Healthy(location) => {
-                        validate_replication(&journal.request, registration, &location)?;
-                        next.replication = Some(location);
+                    PublicationReplicationAdvanceV1::Healthy(checkpoint) => {
+                        checkpoint.validate_for(&journal.request, registration)?;
+                        next.replication = Some(checkpoint);
                         next.phase = PublicationPhaseV1::Readback;
                     }
                     PublicationReplicationAdvanceV1::Retired(terminal) => {
@@ -2752,10 +2858,10 @@ impl<'a> PublicationEngine<'a> {
             }
             PublicationPhaseV1::Readback => {
                 let registration = journal.registration()?;
-                let journaled_location = journal.replication.as_ref().ok_or_else(|| {
+                let journaled_checkpoint = journal.replication.as_ref().ok_or_else(|| {
                     PublicationError::InvalidJournal("missing finalized replication".to_owned())
                 })?;
-                let location = match backend
+                let checkpoint = match backend
                     .finalized_replication(operation_id, &journal.request, registration)
                     .map_err(PublicationError::Backend)?
                 {
@@ -2763,20 +2869,32 @@ impl<'a> PublicationEngine<'a> {
                         return Ok(PublicationAdvanceV1::Pending(phase));
                     }
                     PublicationReplicationAdvanceV1::Retired(terminal) => {
+                        if retirement_checkpoint_progress(
+                            &journal,
+                            journaled_checkpoint,
+                            &terminal,
+                        )? == PublicationLocationProgressV1::Stale
+                        {
+                            return Ok(PublicationAdvanceV1::Pending(phase));
+                        }
                         append_location_terminal(&journal, &mut next, terminal)?;
                         return self.persist_advance(&journal, next);
                     }
-                    PublicationReplicationAdvanceV1::Healthy(location) => location,
+                    PublicationReplicationAdvanceV1::Healthy(checkpoint) => checkpoint,
                 };
-                validate_replication(&journal.request, registration, &location)?;
-                if location_progress(journaled_location, &location)?
-                    == PublicationLocationProgressV1::Stale
+                if replication_checkpoint_progress(
+                    &journal.request,
+                    registration,
+                    journaled_checkpoint,
+                    &checkpoint,
+                )? == PublicationLocationProgressV1::Stale
                 {
                     return Ok(PublicationAdvanceV1::Pending(phase));
                 }
-                if &location != journaled_location {
-                    next.replication = Some(location.clone());
+                if &checkpoint != journaled_checkpoint {
+                    next.replication = Some(checkpoint.clone());
                 }
+                let location = checkpoint.location(registration)?;
                 let providers = location.providers.get(..2).ok_or_else(|| {
                     PublicationError::InvalidEvidence {
                         phase,
@@ -2802,9 +2920,10 @@ impl<'a> PublicationEngine<'a> {
             }
             PublicationPhaseV1::ReleaseSubmission => {
                 let registration = journal.registration()?;
-                let journaled_location = journal.replication.as_ref().ok_or_else(|| {
+                let journaled_checkpoint = journal.replication.as_ref().ok_or_else(|| {
                     PublicationError::InvalidJournal("missing finalized replication".to_owned())
                 })?;
+                let journaled_location = journaled_checkpoint.location(registration)?;
                 match backend
                     .finalized_replication(operation_id, &journal.request, registration)
                     .map_err(PublicationError::Backend)?
@@ -2813,19 +2932,34 @@ impl<'a> PublicationEngine<'a> {
                         return Ok(PublicationAdvanceV1::Pending(phase));
                     }
                     PublicationReplicationAdvanceV1::Retired(terminal) => {
-                        append_location_terminal(&journal, &mut next, terminal)?;
-                    }
-                    PublicationReplicationAdvanceV1::Healthy(location) => {
-                        validate_replication(&journal.request, registration, &location)?;
-                        if location_progress(journaled_location, &location)?
-                            == PublicationLocationProgressV1::Stale
+                        if retirement_checkpoint_progress(
+                            &journal,
+                            journaled_checkpoint,
+                            &terminal,
+                        )? == PublicationLocationProgressV1::Stale
                         {
                             return Ok(PublicationAdvanceV1::Pending(phase));
                         }
-                        if &location != journaled_location {
-                            next.replication = Some(location);
-                            next.readbacks.clear();
-                            next.phase = PublicationPhaseV1::Readback;
+                        append_location_terminal(&journal, &mut next, terminal)?;
+                    }
+                    PublicationReplicationAdvanceV1::Healthy(checkpoint) => {
+                        if replication_checkpoint_progress(
+                            &journal.request,
+                            registration,
+                            journaled_checkpoint,
+                            &checkpoint,
+                        )? == PublicationLocationProgressV1::Stale
+                        {
+                            return Ok(PublicationAdvanceV1::Pending(phase));
+                        }
+                        let location = checkpoint.location(registration)?;
+                        if &checkpoint != journaled_checkpoint {
+                            let target_changed = location != journaled_location;
+                            next.replication = Some(checkpoint);
+                            if target_changed {
+                                next.readbacks.clear();
+                                next.phase = PublicationPhaseV1::Readback;
+                            }
                         } else {
                             let instruction = journal.request.publish_instruction();
                             match backend.submit_release_native_amx(operation_id, &instruction) {
@@ -2847,12 +2981,31 @@ impl<'a> PublicationEngine<'a> {
                                         .map_err(PublicationError::Backend)?
                                     {
                                         PublicationReplicationAdvanceV1::Retired(terminal) => {
+                                            if retirement_checkpoint_progress(
+                                                &journal,
+                                                journaled_checkpoint,
+                                                &terminal,
+                                            )? == PublicationLocationProgressV1::Stale
+                                            {
+                                                return Ok(PublicationAdvanceV1::Pending(phase));
+                                            }
                                             append_location_terminal(
                                                 &journal, &mut next, terminal,
                                             )?;
                                         }
-                                        PublicationReplicationAdvanceV1::Pending
-                                        | PublicationReplicationAdvanceV1::Healthy(_) => {
+                                        PublicationReplicationAdvanceV1::Healthy(checkpoint) => {
+                                            if replication_checkpoint_progress(
+                                                &journal.request,
+                                                registration,
+                                                journaled_checkpoint,
+                                                &checkpoint,
+                                            )? == PublicationLocationProgressV1::Stale
+                                            {
+                                                return Ok(PublicationAdvanceV1::Pending(phase));
+                                            }
+                                            return Err(PublicationError::Backend(error));
+                                        }
+                                        PublicationReplicationAdvanceV1::Pending => {
                                             // TODO: Once release submission itself has the same
                                             // pre-submit exact-transaction journal checkpoint,
                                             // retain a rejected transaction's height so a lagging
@@ -2919,6 +3072,46 @@ fn append_location_terminal(
     next: &mut PublicationJournalV1,
     terminal: PublicationArchiveLocationTerminalV1,
 ) -> Result<(), PublicationError> {
+    let floor = location_terminal_floor(journal)?;
+    validate_location_terminal(journal, &terminal, &floor)?;
+    let attempt = next
+        .archive_location_attempts
+        .last_mut()
+        .expect("active location attempt exists");
+    attempt.terminal = Some(terminal);
+    attempt.terminal_floor = Some(floor);
+    next.replication = None;
+    next.readbacks.clear();
+    next.phase = PublicationPhaseV1::ArchiveRegistration;
+    Ok(())
+}
+
+fn location_terminal_floor(
+    journal: &PublicationJournalV1,
+) -> Result<PublicationArchiveLocationTerminalFloorV1, PublicationError> {
+    let attempt = journal
+        .archive_location_attempts
+        .last()
+        .filter(|attempt| attempt.terminal.is_none())
+        .ok_or_else(|| {
+            PublicationError::InvalidJournal(
+                "archive-location terminal evidence has no active generation".to_owned(),
+            )
+        })?;
+    Ok(if let Some(checkpoint) = &journal.replication {
+        PublicationArchiveLocationTerminalFloorV1::Replication(checkpoint.clone())
+    } else if attempt.registration.is_some() {
+        PublicationArchiveLocationTerminalFloorV1::Registered
+    } else {
+        PublicationArchiveLocationTerminalFloorV1::Prepared
+    })
+}
+
+fn validate_location_terminal(
+    journal: &PublicationJournalV1,
+    terminal: &PublicationArchiveLocationTerminalV1,
+    floor: &PublicationArchiveLocationTerminalFloorV1,
+) -> Result<(), PublicationError> {
     let attempt = journal
         .archive_location_attempts
         .last()
@@ -2944,14 +3137,8 @@ fn append_location_terminal(
         registered,
         attempt,
         &prior_location_ids,
+        floor,
     )?;
-    next.archive_location_attempts
-        .last_mut()
-        .expect("active location attempt exists")
-        .terminal = Some(terminal);
-    next.replication = None;
-    next.readbacks.clear();
-    next.phase = PublicationPhaseV1::ArchiveRegistration;
     Ok(())
 }
 
@@ -2959,6 +3146,75 @@ fn append_location_terminal(
 enum PublicationLocationProgressV1 {
     Stale,
     Current,
+}
+
+fn finalized_page_progress(
+    previous: &MusubiArchiveLocationPageV1,
+    current: &MusubiArchiveLocationPageV1,
+) -> Result<PublicationLocationProgressV1, PublicationError> {
+    if (current.snapshot.finalized_height == previous.snapshot.finalized_height
+        && current.snapshot != previous.snapshot)
+        || (current.snapshot == previous.snapshot
+            && (current.archive != previous.archive || current.items != previous.items))
+        || (current.archive.location_revision == previous.archive.location_revision
+            && (current.archive != previous.archive || current.items != previous.items))
+    {
+        return Err(PublicationError::InvalidEvidence {
+            phase: PublicationPhaseV1::Replication,
+            reason: "equal finalized archive-location checkpoints carried different state"
+                .to_owned(),
+        });
+    }
+    if current.snapshot.finalized_height < previous.snapshot.finalized_height
+        || current.snapshot.index_revision < previous.snapshot.index_revision
+        || current.archive.location_revision < previous.archive.location_revision
+    {
+        return Ok(PublicationLocationProgressV1::Stale);
+    }
+    Ok(PublicationLocationProgressV1::Current)
+}
+
+fn replication_checkpoint_progress(
+    request: &PublicationRequestV1,
+    registration: &PublicationArchiveRegistrationV1,
+    previous: &PublicationReplicationCheckpointV1,
+    current: &PublicationReplicationCheckpointV1,
+) -> Result<PublicationLocationProgressV1, PublicationError> {
+    previous.validate_for(request, registration)?;
+    current.validate_for(request, registration)?;
+    if finalized_page_progress(&previous.finalized_page, &current.finalized_page)?
+        == PublicationLocationProgressV1::Stale
+    {
+        return Ok(PublicationLocationProgressV1::Stale);
+    }
+    location_progress(
+        previous.location(registration)?,
+        current.location(registration)?,
+    )
+}
+
+fn retirement_checkpoint_progress(
+    journal: &PublicationJournalV1,
+    checkpoint: &PublicationReplicationCheckpointV1,
+    terminal: &PublicationArchiveLocationTerminalV1,
+) -> Result<PublicationLocationProgressV1, PublicationError> {
+    let registration = journal.registration()?;
+    checkpoint.validate_for(&journal.request, registration)?;
+    validate_location_terminal(
+        journal,
+        terminal,
+        &PublicationArchiveLocationTerminalFloorV1::Registered,
+    )?;
+    if finalized_page_progress(&checkpoint.finalized_page, &terminal.finalized_page)?
+        == PublicationLocationProgressV1::Stale
+        || terminal.finalized_page.archive.location_revision
+            <= checkpoint.finalized_page.archive.location_revision
+    {
+        return Ok(PublicationLocationProgressV1::Stale);
+    }
+    let floor = location_terminal_floor(journal)?;
+    validate_location_terminal(journal, terminal, &floor)?;
+    Ok(PublicationLocationProgressV1::Current)
 }
 
 fn location_progress(
@@ -3710,6 +3966,7 @@ mod tests {
         applied_generations: Vec<u8>,
         drop_location_response_once: bool,
         reject_release: bool,
+        release_submissions: usize,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3723,7 +3980,9 @@ mod tests {
     enum LocationPollV1 {
         Healthy,
         HealthyRevisionOffset(u64),
+        HealthyDirectoryAdvance,
         Retired,
+        RetiredRevisionOffset(u64),
     }
 
     impl EarlyBackend {
@@ -3928,11 +4187,9 @@ mod tests {
                 self.replication_pending_once = false;
                 return Ok(PublicationReplicationAdvanceV1::Pending);
             }
-            Ok(PublicationReplicationAdvanceV1::Healthy(location(
-                request,
-                registration,
-                3,
-            )))
+            Ok(PublicationReplicationAdvanceV1::Healthy(
+                replication_checkpoint(request, registration, 3),
+            ))
         }
 
         fn readback_provider(
@@ -4144,6 +4401,7 @@ mod tests {
                 applied_generations: Vec::new(),
                 drop_location_response_once: false,
                 reject_release: false,
+                release_submissions: 0,
             }
         }
     }
@@ -4240,20 +4498,27 @@ mod tests {
                 .pop_front()
                 .unwrap_or(LocationPollV1::Healthy)
             {
-                LocationPollV1::Healthy => Ok(PublicationReplicationAdvanceV1::Healthy(location(
-                    request,
-                    registration,
-                    3,
-                ))),
+                LocationPollV1::Healthy => Ok(PublicationReplicationAdvanceV1::Healthy(
+                    replication_checkpoint(request, registration, 3),
+                )),
                 LocationPollV1::HealthyRevisionOffset(offset) => {
-                    let mut current = location(request, registration, 3);
-                    current.revision += offset;
-                    current.finalized_height += offset;
-                    Ok(PublicationReplicationAdvanceV1::Healthy(current))
+                    Ok(PublicationReplicationAdvanceV1::Healthy(
+                        replication_checkpoint_with_revision_offset(request, registration, offset),
+                    ))
+                }
+                LocationPollV1::HealthyDirectoryAdvance => {
+                    Ok(PublicationReplicationAdvanceV1::Healthy(
+                        replication_checkpoint_with_directory_advance(request, registration),
+                    ))
                 }
                 LocationPollV1::Retired => Ok(PublicationReplicationAdvanceV1::Retired(
                     retired_location_terminal(registration),
                 )),
+                LocationPollV1::RetiredRevisionOffset(offset) => {
+                    Ok(PublicationReplicationAdvanceV1::Retired(
+                        retired_location_terminal_with_revision_offset(registration, offset),
+                    ))
+                }
             }
         }
 
@@ -4279,6 +4544,7 @@ mod tests {
             operation_id: PublicationOperationIdV1,
             instruction: &PublishMusubiReleaseV1,
         ) -> Result<PublicationAmxSubmissionV1, PublicationBackendError> {
+            self.release_submissions += 1;
             if self.reject_release {
                 return Err(PublicationBackendError::permanent(
                     "RELEASE_SUBMISSION_TRANSACTION_REJECTED",
@@ -4714,14 +4980,23 @@ mod tests {
     fn retired_location_terminal(
         registration: &PublicationArchiveRegistrationV1,
     ) -> PublicationArchiveLocationTerminalV1 {
+        retired_location_terminal_with_revision_offset(registration, 0)
+    }
+
+    fn retired_location_terminal_with_revision_offset(
+        registration: &PublicationArchiveRegistrationV1,
+        offset: u64,
+    ) -> PublicationArchiveLocationTerminalV1 {
         let mut finalized_page = registration.finalized_page.clone();
-        finalized_page.archive.location_revision += 1;
+        finalized_page.archive.location_revision += 1 + offset;
         finalized_page.archive.location_ids.clear();
         finalized_page.items.clear();
-        finalized_page.snapshot.finalized_height += 1;
-        finalized_page.snapshot.finalized_block_hash =
-            [0x70_u8.saturating_add(registration.intent.generation); 32];
-        finalized_page.snapshot.index_revision += 1;
+        finalized_page.snapshot.finalized_height += 1 + offset;
+        finalized_page.snapshot.finalized_block_hash = [0x70_u8
+            .saturating_add(registration.intent.generation)
+            .saturating_add(u8::try_from(offset).unwrap_or(u8::MAX));
+            32];
+        finalized_page.snapshot.index_revision += 1 + offset;
         PublicationArchiveLocationTerminalV1 {
             transaction_hash: registration.intent.transaction_hash,
             reason: PublicationArchiveLocationTerminalReasonV1::Retired,
@@ -4809,6 +5084,70 @@ mod tests {
             revision: registered_location.revision,
             state: MusubiArchiveLocationStateV1::Healthy,
         }
+    }
+
+    fn replication_checkpoint(
+        request: &PublicationRequestV1,
+        registration: &PublicationArchiveRegistrationV1,
+        provider_count: u8,
+    ) -> PublicationReplicationCheckpointV1 {
+        let mut finalized_page = registration.finalized_page.clone();
+        let index = finalized_page
+            .items
+            .binary_search_by_key(&registration.location_id(), |location| location.location_id)
+            .expect("registered fixture location is present");
+        finalized_page.items[index] = location(request, registration, provider_count);
+        PublicationReplicationCheckpointV1 { finalized_page }
+    }
+
+    fn replication_checkpoint_with_revision_offset(
+        request: &PublicationRequestV1,
+        registration: &PublicationArchiveRegistrationV1,
+        offset: u64,
+    ) -> PublicationReplicationCheckpointV1 {
+        let mut checkpoint = replication_checkpoint(request, registration, 3);
+        if offset == 0 {
+            return checkpoint;
+        }
+        let location = checkpoint
+            .finalized_page
+            .items
+            .iter_mut()
+            .find(|location| location.location_id == registration.location_id())
+            .expect("registered fixture location is present");
+        location.revision += offset;
+        location.finalized_height += offset;
+        checkpoint.finalized_page.archive.location_revision += offset;
+        checkpoint.finalized_page.snapshot.finalized_height += offset;
+        checkpoint.finalized_page.snapshot.finalized_block_hash =
+            [0x80_u8.saturating_add(u8::try_from(offset).unwrap_or(u8::MAX)); 32];
+        checkpoint.finalized_page.snapshot.index_revision += offset;
+        checkpoint
+    }
+
+    fn replication_checkpoint_with_directory_advance(
+        request: &PublicationRequestV1,
+        registration: &PublicationArchiveRegistrationV1,
+    ) -> PublicationReplicationCheckpointV1 {
+        let mut checkpoint = replication_checkpoint(request, registration, 3);
+        checkpoint.finalized_page.archive.location_revision += 1;
+        checkpoint.finalized_page.snapshot.finalized_height += 1;
+        checkpoint.finalized_page.snapshot.finalized_block_hash = [0x91; 32];
+
+        let mut unrelated = checkpoint
+            .location(registration)
+            .expect("registered fixture location")
+            .clone();
+        unrelated.location_id = MusubiArchiveLocationIdV1::new([0xF0; 32]);
+        unrelated.revision = checkpoint.finalized_page.archive.location_revision;
+        unrelated.finalized_height = checkpoint.finalized_page.snapshot.finalized_height;
+        checkpoint
+            .finalized_page
+            .archive
+            .location_ids
+            .push(unrelated.location_id);
+        checkpoint.finalized_page.items.push(unrelated);
+        checkpoint
     }
 
     fn final_evidence(request: &PublicationRequestV1) -> PublicationFinalEvidenceV1 {
@@ -5333,6 +5672,8 @@ mod tests {
                 .replication
                 .as_ref()
                 .expect("renewed replication")
+                .finalized_page
+                .items[0]
                 .revision,
             3
         );
@@ -5366,11 +5707,341 @@ mod tests {
                 .replication
                 .as_ref()
                 .expect("newer replication")
+                .finalized_page
+                .items[0]
                 .revision,
             4
         );
         assert!(newer.readbacks.is_empty());
         assert!(newer.submission.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_healthy_poll_in_release_submission_preserves_checkpoint_and_readbacks() {
+        let temp = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, broker) = request();
+        let operation_id = engine
+            .begin_detached(request)
+            .expect("persist detached operation");
+        let source = BytesSource(b"canonical-car".to_vec());
+        let mut backend = LocationRecoveryBackend::new(
+            broker,
+            [
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::HealthyRevisionOffset(1),
+                LocationPollV1::HealthyRevisionOffset(2),
+            ],
+        );
+
+        for step in 0..8 {
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .unwrap_or_else(|error| panic!("reach release submission step {step}: {error}"));
+        }
+        let guarded = store.load(operation_id).expect("release journal");
+        assert_eq!(guarded.phase, PublicationPhaseV1::ReleaseSubmission);
+        assert_eq!(guarded.readbacks.len(), 2);
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("stale healthy page remains retryable"),
+            PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
+        );
+        assert_eq!(
+            store.load(operation_id).expect("unchanged journal"),
+            guarded
+        );
+        assert_eq!(backend.release_submissions, 0);
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("exact checkpoint permits submission"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::FinalVerification)
+        );
+        assert_eq!(backend.release_submissions, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn page_only_release_advance_is_journaled_before_submission_without_dropping_readbacks() {
+        let temp = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, broker) = request();
+        let operation_id = engine
+            .begin_detached(request)
+            .expect("persist detached operation");
+        let source = BytesSource(b"canonical-car".to_vec());
+        let mut backend = LocationRecoveryBackend::new(
+            broker,
+            [
+                LocationPollV1::Healthy,
+                LocationPollV1::Healthy,
+                LocationPollV1::HealthyDirectoryAdvance,
+                LocationPollV1::HealthyDirectoryAdvance,
+            ],
+        );
+
+        for step in 0..8 {
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .unwrap_or_else(|error| panic!("reach release submission step {step}: {error}"));
+        }
+        let before = store.load(operation_id).expect("release journal");
+        assert_eq!(before.phase, PublicationPhaseV1::ReleaseSubmission);
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("persist complete advanced directory"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::ReleaseSubmission)
+        );
+        let checkpointed = store
+            .load(operation_id)
+            .expect("advanced checkpoint journal");
+        assert_ne!(checkpointed.replication, before.replication);
+        assert_eq!(checkpointed.readbacks, before.readbacks);
+        assert_eq!(backend.release_submissions, 0);
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("exact advanced page permits release submission"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::FinalVerification)
+        );
+        assert_eq!(backend.release_submissions, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_retirement_is_pending_in_readback_and_release_submission() {
+        for (script, guarded_phase) in [
+            (
+                vec![
+                    LocationPollV1::HealthyRevisionOffset(2),
+                    LocationPollV1::Retired,
+                    LocationPollV1::RetiredRevisionOffset(2),
+                ],
+                PublicationPhaseV1::Readback,
+            ),
+            (
+                vec![
+                    LocationPollV1::HealthyRevisionOffset(2),
+                    LocationPollV1::HealthyRevisionOffset(2),
+                    LocationPollV1::Retired,
+                    LocationPollV1::RetiredRevisionOffset(2),
+                ],
+                PublicationPhaseV1::ReleaseSubmission,
+            ),
+        ] {
+            let temp = tempdir().expect("state root");
+            let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+            let engine = PublicationEngine::new(&store);
+            let (request, broker) = request();
+            let operation_id = engine
+                .begin_detached(request)
+                .expect("persist detached operation");
+            let source = BytesSource(b"canonical-car".to_vec());
+            let mut backend = LocationRecoveryBackend::new(broker, script);
+            for step in 0..6 {
+                engine
+                    .advance_once(operation_id, &source, &mut backend)
+                    .unwrap_or_else(|error| panic!("reach replication step {step}: {error}"));
+            }
+            while store.load(operation_id).expect("phase journal").phase != guarded_phase {
+                engine
+                    .advance_once(operation_id, &source, &mut backend)
+                    .expect("advance to guarded phase");
+            }
+            let guarded = store.load(operation_id).expect("guarded journal");
+
+            assert_eq!(
+                engine
+                    .advance_once(operation_id, &source, &mut backend)
+                    .expect("stale retirement remains retryable"),
+                PublicationAdvanceV1::Pending(guarded_phase)
+            );
+            assert_eq!(
+                store.load(operation_id).expect("unchanged journal"),
+                guarded
+            );
+
+            assert_eq!(
+                engine
+                    .advance_once(operation_id, &source, &mut backend)
+                    .expect("strictly later retirement permits rotation"),
+                PublicationAdvanceV1::Progressed(PublicationPhaseV1::ArchiveRegistration)
+            );
+            let retired = store.load(operation_id).expect("retired journal");
+            let attempt = &retired.archive_location_attempts[0];
+            assert!(attempt.terminal.is_some());
+            assert!(matches!(
+                &attempt.terminal_floor,
+                Some(PublicationArchiveLocationTerminalFloorV1::Replication(_))
+            ));
+            let reopened = PublicationJournalStore::open(temp.path())
+                .expect("reopen journal store")
+                .load(operation_id)
+                .expect("revalidate terminal against durable replication floor");
+            assert_eq!(reopened, retired);
+
+            let mut regressed = retired;
+            let registration = regressed.archive_location_attempts[0]
+                .registration
+                .as_ref()
+                .expect("finalized registration");
+            let stale_terminal = retired_location_terminal(registration);
+            regressed.archive_location_attempts[0]
+                .terminal
+                .as_mut()
+                .expect("persisted terminal")
+                .finalized_page = stale_terminal.finalized_page;
+            assert!(matches!(
+                regressed.validate(),
+                Err(PublicationError::InvalidEvidence {
+                    phase: PublicationPhaseV1::Replication,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_post_rejection_retirement_preserves_the_latest_checkpoint() {
+        let temp = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, broker) = request();
+        let operation_id = engine
+            .begin_detached(request)
+            .expect("persist detached operation");
+        let source = BytesSource(b"canonical-car".to_vec());
+        let mut backend = LocationRecoveryBackend::new(
+            broker,
+            [
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::Retired,
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::RetiredRevisionOffset(2),
+            ],
+        );
+        backend.reject_release = true;
+        for step in 0..8 {
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .unwrap_or_else(|error| panic!("reach release submission step {step}: {error}"));
+        }
+        let guarded = store.load(operation_id).expect("release journal");
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("stale post-rejection retirement remains retryable"),
+            PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
+        );
+        assert_eq!(
+            store.load(operation_id).expect("unchanged journal"),
+            guarded
+        );
+        assert_eq!(backend.release_submissions, 1);
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("later post-rejection retirement permits rotation"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::ArchiveRegistration)
+        );
+        assert_eq!(backend.release_submissions, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_post_rejection_healthy_page_is_pending_but_current_state_keeps_rejection() {
+        let temp = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, broker) = request();
+        let operation_id = engine
+            .begin_detached(request)
+            .expect("persist detached operation");
+        let source = BytesSource(b"canonical-car".to_vec());
+        let mut backend = LocationRecoveryBackend::new(
+            broker,
+            [
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::HealthyRevisionOffset(1),
+                LocationPollV1::HealthyRevisionOffset(2),
+                LocationPollV1::HealthyRevisionOffset(2),
+            ],
+        );
+        backend.reject_release = true;
+        for step in 0..8 {
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .unwrap_or_else(|error| panic!("reach release submission step {step}: {error}"));
+        }
+        let guarded = store.load(operation_id).expect("release journal");
+
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("stale post-rejection healthy page remains retryable"),
+            PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
+        );
+        assert_eq!(
+            store.load(operation_id).expect("unchanged journal"),
+            guarded
+        );
+        assert_eq!(backend.release_submissions, 1);
+
+        let error = engine
+            .advance_once(operation_id, &source, &mut backend)
+            .expect_err("current location state preserves the release rejection");
+        assert!(matches!(
+            error,
+            PublicationError::Backend(ref error)
+                if error.code() == "RELEASE_SUBMISSION_TRANSACTION_REJECTED"
+        ));
+        assert_eq!(
+            store.load(operation_id).expect("unchanged journal"),
+            guarded
+        );
+        assert_eq!(backend.release_submissions, 2);
+    }
+
+    #[test]
+    fn checkpoint_allows_higher_target_revision_at_equal_location_height_on_a_newer_page() {
+        let (request, broker) = request();
+        let registration = registration(&request, &broker);
+        let previous = replication_checkpoint(&request, &registration, 3);
+        let mut current = replication_checkpoint_with_revision_offset(&request, &registration, 1);
+        current
+            .finalized_page
+            .items
+            .iter_mut()
+            .find(|location| location.location_id == registration.location_id())
+            .expect("registered fixture location")
+            .finalized_height = previous
+            .location(&registration)
+            .expect("previous fixture location")
+            .finalized_height;
+
+        assert_eq!(
+            replication_checkpoint_progress(&request, &registration, &previous, &current)
+                .expect("newer full page authenticates the higher local revision"),
+            PublicationLocationProgressV1::Current
+        );
     }
 
     #[cfg(unix)]
@@ -5718,6 +6389,7 @@ mod tests {
                     intent: registration.intent.clone(),
                     registration: Some(registration),
                     terminal: Some(terminal),
+                    terminal_floor: Some(PublicationArchiveLocationTerminalFloorV1::Registered),
                 });
         }
         journal
@@ -5751,6 +6423,7 @@ mod tests {
                 intent: registration.intent.clone(),
                 registration: Some(registration),
                 terminal: Some(terminal),
+                terminal_floor: Some(PublicationArchiveLocationTerminalFloorV1::Registered),
             });
         assert!(matches!(
             oversized.validate(),
@@ -5775,6 +6448,7 @@ mod tests {
             intent: second.intent.clone(),
             registration: None,
             terminal: None,
+            terminal_floor: None,
         };
         let prior_location_ids = [first.location_id()];
         let active_second_attempt = PublicationArchiveLocationAttemptV1 {
@@ -5782,6 +6456,7 @@ mod tests {
             intent: second.intent.clone(),
             registration: Some(second.clone()),
             terminal: None,
+            terminal_floor: None,
         };
         let mut equal_index_retirement = retired_location_terminal(&second);
         equal_index_retirement
@@ -5795,6 +6470,7 @@ mod tests {
                 &registered,
                 &active_second_attempt,
                 &prior_location_ids,
+                &PublicationArchiveLocationTerminalFloorV1::Registered,
             )
             .expect("retirement may preserve the resolver index revision");
         let mut lower_index_retirement = equal_index_retirement;
@@ -5810,6 +6486,7 @@ mod tests {
                     &registered,
                     &active_second_attempt,
                     &prior_location_ids,
+                    &PublicationArchiveLocationTerminalFloorV1::Registered,
                 )
                 .is_err()
         );
@@ -5828,6 +6505,7 @@ mod tests {
                 &registered,
                 &second_attempt,
                 &prior_location_ids,
+                &PublicationArchiveLocationTerminalFloorV1::Prepared,
             )
             .expect("unchanged prepared snapshot proves exact expiry absence");
 
@@ -5860,6 +6538,7 @@ mod tests {
                     &registered,
                     &second_attempt,
                     &prior_location_ids,
+                    &PublicationArchiveLocationTerminalFloorV1::Prepared,
                 )
                 .is_err()
         );
@@ -5894,6 +6573,7 @@ mod tests {
                     &registered,
                     &second_attempt,
                     &prior_location_ids,
+                    &PublicationArchiveLocationTerminalFloorV1::Prepared,
                 )
                 .is_err()
         );
@@ -5914,6 +6594,7 @@ mod tests {
                 intent: first.intent.clone(),
                 registration: Some(first),
                 terminal: Some(first_terminal),
+                terminal_floor: Some(PublicationArchiveLocationTerminalFloorV1::Registered),
             },
             second_attempt,
         ];
@@ -6182,6 +6863,7 @@ mod tests {
                 intent: registration.intent.clone(),
                 registration: Some(registration),
                 terminal: None,
+                terminal_floor: None,
             });
         journal.phase = PublicationPhaseV1::Replication;
         journal
@@ -6251,6 +6933,7 @@ mod tests {
                 intent: registration.intent.clone(),
                 registration: Some(registration),
                 terminal: None,
+                terminal_floor: None,
             });
         journal.phase = PublicationPhaseV1::Replication;
         assert!(matches!(

@@ -607,14 +607,17 @@ later height and revision that omit the stable ID append exact retirement
 evidence, clear replication and readback checkpoints, and return to location
 coordination for the next bounded generation. Release rejection gets one typed
 post-rejection location check; only exact retirement evidence permits rotation.
-A finalized page may not regress height, resolver index, archive revision, or
-the active location revision. Equal finalized heights require the exact same
-snapshot; an equal snapshot or equal archive revision requires the exact same
-archive directory. The first applied target revision (`expected + 1`) must
-exactly reproduce the signed intent fields and application height. A lower
-healthy location revision observed after a later one was journaled is a
-retryable stale poll and never overwrites the journal; the exact journaled
-record or a higher revision at a non-regressing location height may resume.
+The journal retains the complete healthy directory page as the replication
+floor, not only its target location record. A finalized page may not regress
+height, resolver index, archive revision, or the active location revision.
+Equal finalized heights require the exact same snapshot; an equal snapshot or
+equal archive revision requires the exact same archive directory. Retirement
+must be a later page state with an archive revision beyond the complete
+journaled floor. The first applied target revision (`expected + 1`) must exactly
+reproduce the signed intent fields and application height. A lower healthy or
+retirement page observed after a later one was journaled is a retryable stale
+poll and never overwrites the journal; the exact journaled record or a higher
+revision at a non-regressing page and location height may resume.
 A healthy same-ID renewal resumes from its current finalized pin, order, epochs,
 and provider attestations, all of which must still bind the exact chain,
 archive, bundle, source, semantic manifest, verification lock, and replication

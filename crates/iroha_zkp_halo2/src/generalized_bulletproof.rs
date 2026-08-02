@@ -199,7 +199,14 @@ impl<S: ProofSuite> ProofGenerators<S> {
         g_bold: Vec<S::Point>,
         h_bold: Vec<S::Point>,
     ) -> Result<Self, GeneralizedBulletproofErrorV1> {
-        if g.is_identity() || h.is_identity() || g_bold.is_empty() || g_bold.len() != h_bold.len() {
+        if g.is_identity()
+            || h.is_identity()
+            || g_bold.is_empty()
+            || g_bold.len() != h_bold.len()
+            || !(1..=256).contains(&S::Scalar::SCALAR_BITS)
+            || g_bold.iter().copied().any(S::Point::is_identity)
+            || h_bold.iter().copied().any(S::Point::is_identity)
+        {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
         let mut h_sum = Vec::new();
@@ -208,6 +215,9 @@ impl<S: ProofSuite> ProofGenerators<S> {
         for (index, point) in h_bold.iter().copied().enumerate() {
             running += point;
             if index + 1 == next_power {
+                if running.is_identity() {
+                    return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+                }
                 h_sum.push(running);
                 next_power = next_power
                     .checked_mul(2)
@@ -720,10 +730,68 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         vector_commitments: Vec<S::Point>,
         scalar_commitments: Vec<S::Point>,
     ) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        let generator_count = generators.g_bold.len();
+        let suite_generators = S::generators();
+        if generator_count == 0
+            || !generator_count.is_power_of_two()
+            || generators.h_bold.len() != generator_count
+            || !(1..=256).contains(&S::Scalar::SCALAR_BITS)
+            || generators.g.is_identity()
+            || generators.h.is_identity()
+            || generators
+                .g_bold
+                .iter()
+                .copied()
+                .any(S::Point::is_identity)
+            || generators
+                .h_bold
+                .iter()
+                .copied()
+                .any(S::Point::is_identity)
+            // A suite statically binds its basis. Accepting an unrelated
+            // public view here would make the statement equations use one
+            // basis while the batch verifier resolves weights against
+            // `S::generators()`.
+            || generators.g != suite_generators.g
+            || generators.h != suite_generators.h
+            || generator_count > suite_generators.g_bold.len()
+            || generator_count > suite_generators.h_bold.len()
+            || generators.g_bold != &suite_generators.g_bold[..generator_count]
+            || generators.h_bold != &suite_generators.h_bold[..generator_count]
+        {
+            return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+        }
+
         for constraint in &constraints {
-            if Some(generators.g_bold.len()) <= constraint.highest_a_index
-                || Some(vector_commitments.len()) <= constraint.highest_c_index
-                || Some(scalar_commitments.len()) <= constraint.highest_v_index
+            let actual_highest_a_index = constraint
+                .wl
+                .iter()
+                .chain(&constraint.wr)
+                .chain(&constraint.wo)
+                .map(|(index, _)| *index)
+                .chain(
+                    constraint
+                        .wcg
+                        .iter()
+                        .flat_map(|weights| weights.iter().map(|(index, _)| *index)),
+                )
+                .max();
+            let actual_highest_c_index = constraint
+                .wcg
+                .iter()
+                .enumerate()
+                .filter_map(|(commitment, weights)| (!weights.is_empty()).then_some(commitment))
+                .max();
+            let actual_highest_v_index = constraint.wv.iter().map(|(index, _)| *index).max();
+
+            if constraint.highest_a_index != actual_highest_a_index
+                || constraint.highest_c_index != actual_highest_c_index
+                || constraint.highest_v_index != actual_highest_v_index
+                || actual_highest_a_index.is_some_and(|index| index >= generator_count)
+                || actual_highest_c_index
+                    .is_some_and(|commitment| commitment >= vector_commitments.len())
+                || actual_highest_v_index.is_some_and(|index| index >= scalar_commitments.len())
+                || constraint.wcg.len() > vector_commitments.len()
             {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }

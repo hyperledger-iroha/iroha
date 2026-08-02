@@ -181,12 +181,11 @@ pub struct ZkAmsMkheDirectCeremonyContextV1 {
 impl ZkAmsMkheDirectCeremonyContextV1 {
     /// Build one release-profile context without accepting any contribution.
     ///
-    /// This raw-digest constructor deliberately remains crate-private: a digest
-    /// does not prove persistent-witness membership.  The eventual public
-    /// constructor must consume eight opaque verified persistent-witness
-    /// bindings whose secret role mask covers CPK, both RKG rounds,
-    /// normalization, every Galois key, and decryption.  Until that exact
-    /// membership backend exists, outside callers cannot manufacture a context.
+    /// This raw-digest constructor exists only for adversarial unit fixtures: a
+    /// digest does not prove persistent-witness membership.  Production uses
+    /// `from_verified_binding_set`, which consumes the opaque ordered set whose
+    /// secret role mask covers CPK, both RKG rounds, normalization, every
+    /// Galois key, and decryption.
     #[cfg(test)]
     pub(super) fn new(
         roster: &ZkAmsMkheGovernedActiveRosterV1,

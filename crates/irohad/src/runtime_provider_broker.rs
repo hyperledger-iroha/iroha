@@ -20437,7 +20437,7 @@ mod protocol {
                 let provider = Arc::new(self.clone());
                 let issuer_provider: Arc<
                     dyn iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1,
-                > = Arc::clone(&provider);
+                > = provider.clone();
                 let authenticator: Arc<
                     dyn iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatorV1,
                 > = provider;

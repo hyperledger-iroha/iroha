@@ -21,6 +21,8 @@ use thiserror::Error;
 
 #[path = "vega/algebra.rs"]
 mod algebra;
+#[path = "vega/bulletproof_t256.rs"]
+mod bulletproof_t256;
 #[path = "vega/canonical_mc.rs"]
 mod canonical_mc;
 #[path = "vega/circuit.rs"]
@@ -264,13 +266,13 @@ pub struct VegaT256ScalarV1(Fq);
 impl VegaT256ScalarV1 {
     /// Return the additive identity.
     #[must_use]
-    pub fn zero() -> Self {
+    pub const fn zero() -> Self {
         Self(Fq::ZERO)
     }
 
     /// Return the multiplicative identity.
     #[must_use]
-    pub fn one() -> Self {
+    pub const fn one() -> Self {
         Self(Fq::ONE)
     }
 

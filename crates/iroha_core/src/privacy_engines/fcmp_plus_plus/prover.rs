@@ -34,9 +34,8 @@ use super::{
         native_parameters, selene_curve,
     },
     proof_math::{
-        FcmpProofRandomSource, HeliosSuite, ProofPoint, ProofScalar, ProofSuite,
-        ProverTranscript, SeleneSuite, helios_bp_generators, random_scalar_from_fcmp_rng,
-        selene_bp_generators,
+        FcmpProofRandomSource, HeliosSuite, ProofPoint, ProofScalar, ProofSuite, ProverTranscript,
+        SeleneSuite, helios_bp_generators, random_scalar_from_fcmp_rng, selene_bp_generators,
     },
     range::prove_fcmp_range_with_checked_rng_v1,
     sal::{generator_t, generator_u, generator_v, prove_fcmp_sal_with_checked_rng_v1},
@@ -699,7 +698,7 @@ fn random_proof_scalar<F: ProofScalar>(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<F, FcmpNativeErrorV1> {
     for _ in 0..MAX_PROVER_SCALAR_ATTEMPTS_V1 {
-        if let Some(scalar) = random_scalar_from_fcmp_rng(rng)?
+        if let Some(scalar) = random_scalar_from_fcmp_rng::<F, _>(rng)?
             && !scalar.is_zero()
         {
             return Ok(scalar);

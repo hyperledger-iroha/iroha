@@ -18,16 +18,17 @@ mod tests {
     use rand_core_06::{CryptoRng, RngCore};
 
     use super::*;
-    use iroha_zkp_halo2::generalized_bulletproof::{
-        GeneralizedBulletproofErrorV1, MAX_PROVER_SCALAR_ATTEMPTS_V1, random_scalar,
-    };
     use crate::privacy_engines::fcmp_plus_plus::{
-        FailingRngV1,
+        FailingRngV1, FcmpNativeErrorV1,
         field::{Field25519, SelenePoint},
         proof_math::{
             ProofGeneratorView, ProofPoint, ProofScalar, ProverTranscript, SeleneSuite,
             VerifierTranscript, multiexp, selene_bp_generators,
         },
+    };
+    use iroha_zkp_halo2::generalized_bulletproof::{
+        GeneralizedBulletproofErrorV1, MAX_PROVER_SCALAR_ATTEMPTS_V1, ProofGenerators,
+        random_scalar,
     };
 
     #[derive(Default)]
@@ -239,6 +240,137 @@ mod tests {
                 &mut FcmpProofRandomSource::new(&mut rng),
                 &mut bad_opening_transcript,
                 invalid_opening_witness,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn statement_rejects_forged_indices_and_malformed_generator_views() {
+        let basis = selene_bp_generators();
+        let valid = basis.reduce(4).expect("valid view");
+        let commitments = vec![basis.g];
+        let scalar_commitments = vec![basis.h];
+
+        let rejects = |constraint| {
+            assert_eq!(
+                ArithmeticCircuitStatement::new(
+                    valid,
+                    vec![constraint],
+                    commitments.clone(),
+                    scalar_commitments.clone(),
+                )
+                .unwrap_err(),
+                GeneralizedBulletproofErrorV1::ArithmeticInvariant
+            );
+        };
+
+        let mut forged_l = LinComb::empty().term(Field25519::ONE, Variable::aL(4));
+        forged_l.highest_a_index = Some(0);
+        rejects(forged_l);
+        let mut forged_r = LinComb::empty().term(Field25519::ONE, Variable::aR(4));
+        forged_r.highest_a_index = Some(0);
+        rejects(forged_r);
+        let mut forged_o = LinComb::empty().term(Field25519::ONE, Variable::aO(4));
+        forged_o.highest_a_index = Some(0);
+        rejects(forged_o);
+        let mut forged_cg = LinComb::empty().term(
+            Field25519::ONE,
+            Variable::CG {
+                commitment: 1,
+                index: 0,
+            },
+        );
+        forged_cg.highest_c_index = Some(0);
+        rejects(forged_cg);
+        let mut forged_v = LinComb::empty().term(Field25519::ONE, Variable::V(1));
+        forged_v.highest_v_index = Some(0);
+        rejects(forged_v);
+
+        let empty: [SelenePoint; 0] = [];
+        let one_g = [basis.g_bold[0]];
+        let three_g = [basis.g_bold[0], basis.g_bold[1], basis.g_bold[2]];
+        let three_h = [basis.h_bold[0], basis.h_bold[1], basis.h_bold[2]];
+        let identity_g = [SelenePoint::identity(), basis.g_bold[1]];
+        let two_h = [basis.h_bold[0], basis.h_bold[1]];
+        let foreign_g = [basis.g_bold[0] + basis.h, basis.g_bold[1]];
+
+        let rejects_view = |view| {
+            assert_eq!(
+                ArithmeticCircuitStatement::new(view, Vec::new(), Vec::new(), Vec::new())
+                    .unwrap_err(),
+                GeneralizedBulletproofErrorV1::ArithmeticInvariant
+            );
+        };
+        rejects_view(ProofGeneratorView {
+            g: basis.g,
+            h: basis.h,
+            g_bold: &empty,
+            h_bold: &empty,
+        });
+        rejects_view(ProofGeneratorView {
+            g: basis.g,
+            h: basis.h,
+            g_bold: &one_g,
+            h_bold: &empty,
+        });
+        rejects_view(ProofGeneratorView {
+            g: basis.g,
+            h: basis.h,
+            g_bold: &three_g,
+            h_bold: &three_h,
+        });
+        rejects_view(ProofGeneratorView {
+            g: SelenePoint::identity(),
+            h: basis.h,
+            g_bold: &basis.g_bold[..2],
+            h_bold: &basis.h_bold[..2],
+        });
+        rejects_view(ProofGeneratorView {
+            g: basis.g,
+            h: basis.h,
+            g_bold: &identity_g,
+            h_bold: &two_h,
+        });
+        rejects_view(ProofGeneratorView {
+            g: basis.g,
+            h: basis.h,
+            g_bold: &foreign_g,
+            h_bold: &two_h,
+        });
+    }
+
+    #[test]
+    fn generator_constructor_rejects_identity_and_degenerate_prefixes() {
+        let basis = selene_bp_generators();
+        let identity = SelenePoint::identity();
+        let valid_g = vec![basis.g_bold[0], basis.g_bold[1]];
+        let valid_h = vec![basis.h_bold[0], basis.h_bold[1]];
+
+        assert!(
+            ProofGenerators::<SeleneSuite>::new(
+                identity,
+                basis.h,
+                valid_g.clone(),
+                valid_h.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            ProofGenerators::<SeleneSuite>::new(
+                basis.g,
+                basis.h,
+                vec![identity, basis.g_bold[1]],
+                valid_h,
+            )
+            .is_err()
+        );
+        assert!(
+            ProofGenerators::<SeleneSuite>::new(
+                basis.g,
+                basis.h,
+                valid_g,
+                vec![basis.h_bold[0], -basis.h_bold[0]],
             )
             .is_err()
         );

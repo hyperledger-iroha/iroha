@@ -59,7 +59,7 @@ use crate::publish::{
     PublicationBackendError, PublicationBackendFailureClass, PublicationCarSource,
     PublicationEngine, PublicationError, PublicationFinalEvidenceV1, PublicationOperationIdV1,
     PublicationReadbackEvidenceV1, PublicationRegisteredArchiveV1, PublicationReplicationAdvanceV1,
-    PublicationRequestV1, PublicationValidationEvidenceV1,
+    PublicationReplicationCheckpointV1, PublicationRequestV1, PublicationValidationEvidenceV1,
     archive_registration_intent_valid_until_ms,
 };
 
@@ -1506,7 +1506,17 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
             return if location.state == MusubiArchiveLocationStateV1::Healthy
                 && location.providers.len() >= usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1)
             {
-                Ok(PublicationReplicationAdvanceV1::Healthy(location))
+                let checkpoint = PublicationReplicationCheckpointV1 {
+                    finalized_page: page,
+                };
+                checkpoint
+                    .validate_for(request, registration)
+                    .map_err(|_| {
+                        PublicationBackendError::permanent(
+                            "ARCHIVE_LOCATION_FINALIZED_CHECKPOINT_INVALID",
+                        )
+                    })?;
+                Ok(PublicationReplicationAdvanceV1::Healthy(checkpoint))
             } else {
                 Ok(PublicationReplicationAdvanceV1::Pending)
             };
