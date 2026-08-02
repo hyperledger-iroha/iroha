@@ -36954,6 +36954,192 @@ async fn handler_post_multisig_proposals_resolve(
 }
 
 #[cfg(feature = "app_api")]
+async fn check_account_recovery_route_admission(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    remote_ip: std::net::IpAddr,
+    route: &'static str,
+    metric: &'static str,
+) -> Result<(), Error> {
+    if let Err(error) = validate_api_token(app.as_ref(), headers) {
+        app.telemetry
+            .with_metrics(|telemetry| telemetry.inc_torii_contract_error(metric));
+        return Err(error);
+    }
+    let key = rate_limit_key(headers, Some(remote_ip), route, app.api_token_enforced());
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|telemetry| telemetry.inc_torii_contract_throttle(metric));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_account_recovery_policy_set(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::AccountRecoveryPolicySetDto>,
+) -> Result<AxResponse, Error> {
+    const METRIC: &str = "account_recovery_policy_set";
+    check_account_recovery_route_admission(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/accounts/recovery/policy/set",
+        METRIC,
+    )
+    .await?;
+    match crate::routing::handle_post_account_recovery_policy_set(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_account_recovery_propose(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::AccountRecoveryProposeDto>,
+) -> Result<AxResponse, Error> {
+    const METRIC: &str = "account_recovery_propose";
+    check_account_recovery_route_admission(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/accounts/recovery/propose",
+        METRIC,
+    )
+    .await?;
+    match crate::routing::handle_post_account_recovery_propose(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_account_recovery_approve(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::AccountRecoveryApproveDto>,
+) -> Result<AxResponse, Error> {
+    const METRIC: &str = "account_recovery_approve";
+    check_account_recovery_route_admission(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/accounts/recovery/approve",
+        METRIC,
+    )
+    .await?;
+    match crate::routing::handle_post_account_recovery_approve(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_account_recovery_finalize(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::AccountRecoveryFinalizeDto>,
+) -> Result<AxResponse, Error> {
+    const METRIC: &str = "account_recovery_finalize";
+    check_account_recovery_route_admission(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/accounts/recovery/finalize",
+        METRIC,
+    )
+    .await?;
+    match crate::routing::handle_post_account_recovery_finalize(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_account_recovery_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::AccountRecoveryStatusRequestDto>,
+) -> Result<AxResponse, Error> {
+    const METRIC: &str = "account_recovery_status";
+    check_account_recovery_route_admission(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/accounts/recovery/status",
+        METRIC,
+    )
+    .await?;
+    match crate::routing::handle_post_account_recovery_status(app.state.clone(), request).await {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|telemetry| telemetry.inc_torii_contract_error(METRIC));
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_asset_transfer_control_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -50118,6 +50304,27 @@ impl Torii {
             catalog_post(handler_post_multisig_proposals_resolve)
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_POLICY_SET_POST,
+            catalog_post(handler_post_account_recovery_policy_set),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_PROPOSE_POST,
+            catalog_post(handler_post_account_recovery_propose),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_APPROVE_POST,
+            catalog_post(handler_post_account_recovery_approve),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_FINALIZE_POST,
+            catalog_post(handler_post_account_recovery_finalize),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_STATUS_POST,
+            catalog_post(handler_post_account_recovery_status)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,

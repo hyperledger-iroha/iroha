@@ -50419,11 +50419,13 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
     assert!(
-        !state.time_trigger_clock_progress_required_fast(),
+        !state.time_trigger_clock_progress_required_fast(Duration::ZERO),
         "a state without time triggers must not require idle block production"
     );
     assert!(
-        !state.view().time_trigger_clock_progress_required(),
+        !state
+            .view()
+            .time_trigger_clock_progress_required(Duration::ZERO),
         "the snapshot helper must agree for a state without time triggers"
     );
 
@@ -50456,11 +50458,11 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let view = state.view();
     assert!(
-        state.time_trigger_clock_progress_required_fast(),
+        state.time_trigger_clock_progress_required_fast(Duration::ZERO),
         "an enabled time trigger must retain ledger-clock progress"
     );
     assert!(
-        view.time_trigger_clock_progress_required(),
+        view.time_trigger_clock_progress_required(Duration::ZERO),
         "the snapshot helper must retain ledger-clock progress"
     );
     assert_eq!(
@@ -50489,13 +50491,114 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
     }
     state_block2.commit()?;
     assert!(
-        !state.time_trigger_clock_progress_required_fast(),
+        !state.time_trigger_clock_progress_required_fast(Duration::ZERO),
         "a disabled time trigger must not keep producing idle blocks"
     );
     assert!(
-        !state.view().time_trigger_clock_progress_required(),
+        !state
+            .view()
+            .time_trigger_clock_progress_required(Duration::ZERO),
         "the snapshot helper must ignore disabled time triggers"
     );
+
+    Ok(())
+}
+
+#[test]
+fn time_trigger_clock_progress_requires_a_reachable_schedule() -> Result<()> {
+    const PARENT_TIME_MS: u64 = 10_000;
+
+    fn state_with_time_trigger(execution_time: ExecutionTime) -> Result<State> {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            PARENT_TIME_MS,
+            0,
+        );
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
+            Register::domain(Domain::new(domain_id))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            let trigger = Trigger::new(
+                "clock_progress_probe".parse()?,
+                Action::new(
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        "probe".to_owned(),
+                    ))],
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter::new(execution_time),
+                ),
+            );
+            Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
+            stx.apply();
+        }
+        state_block.commit()?;
+        Ok(state)
+    }
+
+    let cases = [
+        (
+            "stale one-shot",
+            ExecutionTime::Schedule(Schedule {
+                start_ms: 0,
+                period_ms: None,
+            }),
+            false,
+        ),
+        (
+            "due one-shot",
+            ExecutionTime::Schedule(Schedule {
+                start_ms: PARENT_TIME_MS,
+                period_ms: None,
+            }),
+            true,
+        ),
+        (
+            "future one-shot",
+            ExecutionTime::Schedule(Schedule {
+                start_ms: 20_000,
+                period_ms: None,
+            }),
+            true,
+        ),
+        (
+            "repeating",
+            ExecutionTime::Schedule(Schedule {
+                start_ms: 0,
+                period_ms: Some(60_000),
+            }),
+            true,
+        ),
+    ];
+    let parent_creation_time = Duration::from_millis(PARENT_TIME_MS);
+    for (label, execution_time, expected) in cases {
+        let state = state_with_time_trigger(execution_time)?;
+        assert_eq!(
+            state.time_trigger_clock_progress_required_fast(parent_creation_time),
+            expected,
+            "fast helper returned the wrong clock-progress decision for {label}"
+        );
+        assert_eq!(
+            state
+                .view()
+                .time_trigger_clock_progress_required(parent_creation_time),
+            expected,
+            "snapshot helper returned the wrong clock-progress decision for {label}"
+        );
+    }
 
     Ok(())
 }

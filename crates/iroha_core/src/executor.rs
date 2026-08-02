@@ -2083,6 +2083,9 @@ fn fee_sponsor_instruction_operation(
             MultisigInstructionBox::Cancel(cancel) => {
                 (FeeSponsorMultisigOperation::Cancel, cancel.account)
             }
+            MultisigInstructionBox::InvalidateOutstanding(invalidate) => {
+                (FeeSponsorMultisigOperation::Cancel, invalidate.account)
+            }
             MultisigInstructionBox::Register(register) => {
                 (FeeSponsorMultisigOperation::Register, register.account)
             }

@@ -66,6 +66,7 @@ use iroha_p2p::{
         NetworkActorAdmissionError, NetworkActorAdmissionRejection, NetworkActorAdmissionTicket,
         NetworkReplyFlushAck, NetworkReplyFlushAckStatus, NetworkReplyRoute,
         NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
+        NetworkReplyRoutesObservedMergeReceipt, NetworkReplyRoutesStrictMergeReceipt,
         NetworkReplySourceKey, ReliableProgressClass,
         message::{ClassifyTopic as _, ProgressReconstruction},
         reliable_progress_class,
@@ -8432,6 +8433,14 @@ fn native_amx_message_body(
 }
 
 impl ExactOutputRolloverClaim {
+    const fn accepts_superseded_reply_delivery(&self) -> bool {
+        matches!(
+            self,
+            Self::DurableCommitCertificateResponse { .. }
+                | Self::DurableCertifiedBodyResponse { .. }
+        )
+    }
+
     fn scope(&self) -> Option<ExactOutputCreationScope> {
         match self {
             Self::Exact => None,
@@ -8796,6 +8805,11 @@ struct ReplyTargetMergePlan {
     targets: Vec<ReplyTargetMerge>,
     reply_routes: NetworkReplyRoutes,
     ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
+}
+
+enum ReplyRouteMergeReceipt {
+    Strict(NetworkReplyRoutesStrictMergeReceipt),
+    Superseded(NetworkReplyRoutesObservedMergeReceipt),
 }
 
 #[derive(Debug)]
@@ -9513,7 +9527,7 @@ impl PendingExactFanout {
 
             let mut merged_routes = retained_routes.clone();
             match merged_routes.merge_with_receipt(&candidate_routes) {
-                Ok(receipt) => break receipt,
+                Ok(receipt) => break ReplyRouteMergeReceipt::Strict(receipt),
                 Err(NetworkReplyRouteError::Inactive) => {
                     // A candidate tenure may retire after the owned-transfer
                     // prune but before strict history merge reaches that member.
@@ -9539,9 +9553,26 @@ impl PendingExactFanout {
                     })?;
                 }
                 Err(NetworkReplyRouteError::Stale) => {
-                    return Err(
-                        "Sumeragi v2 outbound reply fanout contains a stale capability".to_owned(),
-                    );
+                    if !self.rollover_claim.accepts_superseded_reply_delivery() {
+                        return Err(
+                            "Sumeragi v2 outbound reply fanout contains a stale capability"
+                                .to_owned(),
+                        );
+                    }
+                    // A delayed authenticated request may materialize the same
+                    // immutable response after a newer delivery for its source
+                    // already owns that output. The stale capability must not
+                    // replace the retained writer, but supersession is not a
+                    // consensus invariant failure. Reconcile only this
+                    // classified case so fresh sibling routes and the bounded
+                    // ingress history survive; every other capability failure
+                    // remains fail-closed below.
+                    let receipt = merged_routes
+                        .merge_observed_with_receipt(&candidate_routes)
+                        .map_err(|error| {
+                            format!("invalid superseded Sumeragi v2 reply route history: {error}")
+                        })?;
+                    break ReplyRouteMergeReceipt::Superseded(receipt);
                 }
                 Err(error) => {
                     return Err(format!("invalid Sumeragi v2 reply route history: {error}"));
@@ -9559,9 +9590,15 @@ impl PendingExactFanout {
             match (&self.ingress_ownership, candidate_ownership) {
                 (Some(retained), Some(candidate)) => {
                     let mut retained = retained.clone();
-                    let Some(receipt_routes) =
-                        retained.merge_downstream_with_strict_receipt(candidate, merge_receipt)
-                    else {
+                    let receipt_routes = match merge_receipt {
+                        ReplyRouteMergeReceipt::Strict(receipt) => {
+                            retained.merge_downstream_with_strict_receipt(candidate, receipt)
+                        }
+                        ReplyRouteMergeReceipt::Superseded(receipt) => {
+                            retained.merge_downstream_with_observed_receipt(candidate, receipt)
+                        }
+                    };
+                    let Some(receipt_routes) = receipt_routes else {
                         return Err(
                             "Sumeragi v2 exact-output coalescing lost fair-ingress ownership"
                                 .to_owned(),
@@ -9570,12 +9607,18 @@ impl PendingExactFanout {
                     (receipt_routes, Some(retained))
                 }
                 (None, None) => {
-                    let receipt_routes = merge_receipt
-                        .into_output(&retained_routes, &candidate_routes)
-                        .ok_or_else(|| {
-                            "Sumeragi v2 exact-output route receipt changed its exact histories"
-                                .to_owned()
-                        })?;
+                    let receipt_routes = match merge_receipt {
+                        ReplyRouteMergeReceipt::Strict(receipt) => {
+                            receipt.into_output(&retained_routes, &candidate_routes)
+                        }
+                        ReplyRouteMergeReceipt::Superseded(receipt) => {
+                            receipt.into_output(&retained_routes, &candidate_routes)
+                        }
+                    }
+                    .ok_or_else(|| {
+                        "Sumeragi v2 exact-output route receipt changed its exact histories"
+                            .to_owned()
+                    })?;
                     (receipt_routes, None)
                 }
                 (Some(_), None) | (None, Some(_)) => {
@@ -20794,6 +20837,124 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn delayed_block_sync_reply_route_is_superseded_without_poisoning_output() {
+        let history = durable_history_fixture();
+        let mut service = successor_service_for_history_as(
+            Arc::clone(&history.kura),
+            &history.artifact,
+            &history.validators,
+            3,
+        );
+        service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+
+        let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CommitCertificateRequest(
+                wire::CommitCertificateRequest {
+                    protocol_version: wire::PROTOCOL_VERSION,
+                    chain_id: history.artifact.height_context.chain_id.clone(),
+                    context_id: history.artifact.context_id(),
+                    height: history.artifact.height,
+                    requester: history.requester.clone(),
+                    signature: vec![0xA5],
+                },
+            ),
+        ));
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut route_fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
+        let old_route = route_fixture.mint_via(history.requester.clone(), hub.clone());
+        let current_route = route_fixture.mint_via(history.requester.clone(), hub.clone());
+        let delayed_old_route = route_fixture
+            .redeliver(&old_route)
+            .expect("the retired connection can deliver one delayed occurrence");
+        assert_eq!(
+            delayed_old_route.source_update_from(&current_route),
+            Err(NetworkReplyRouteError::Stale)
+        );
+        let (current_routes, current_ownership) = fair_ingress_route_owner(
+            request.clone(),
+            history.requester.clone(),
+            hub.clone(),
+            current_route.clone(),
+        );
+        let (delayed_routes, delayed_ownership) =
+            fair_ingress_route_owner(request, history.requester.clone(), hub, delayed_old_route);
+
+        let guard = Arc::clone(&service.output_guard);
+        let operation = guard
+            .begin_fail_stop_operation()
+            .expect("current block-sync response owns a guarded operation");
+        service
+            .post_durable_history_response_on_reply_routes_with_permit(
+                history.requester.clone(),
+                current_routes,
+                current_ownership,
+                history.commit_response.clone(),
+                operation.permit(),
+            )
+            .expect("current block-sync response enters exact output");
+        operation.complete();
+
+        let (fifo_before, reservations_before, source_fifo_before) = {
+            let pending = service
+                .lock_pending_exact_output()
+                .expect("inspect retained current response");
+            assert_eq!(pending.fanouts.len(), 1);
+            let fanout = &pending.fanouts[0];
+            assert!(matches!(
+                &fanout.targets[0].route,
+                ExactTargetRoute::Reply(route) if route.same_delivery(&current_route)
+            ));
+            (
+                fanout.fifo_id,
+                pending.reservation_owner_counts.clone(),
+                pending.source_fifo_owners.clone(),
+            )
+        };
+
+        let operation = guard
+            .begin_fail_stop_operation()
+            .expect("delayed replay must not inherit a poisoned guard");
+        service
+            .post_durable_history_response_on_reply_routes_with_permit(
+                history.requester.clone(),
+                delayed_routes,
+                delayed_ownership,
+                history.commit_response.clone(),
+                operation.permit(),
+            )
+            .expect("delayed authenticated replay is consumed as superseded");
+        operation.complete();
+
+        assert!(!guard.restart_required());
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect response after delayed replay");
+        assert_eq!(pending.fanouts.len(), 1);
+        let fanout = &pending.fanouts[0];
+        assert_eq!(fanout.fifo_id, fifo_before);
+        assert!(matches!(
+            &fanout.targets[0].route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&current_route)
+        ));
+        assert_eq!(pending.reservation_owner_counts, reservations_before);
+        assert_eq!(pending.source_fifo_owners, source_fifo_before);
+        assert_eq!(
+            fanout
+                .ingress_ownership
+                .as_ref()
+                .expect("both block-sync admissions retain bounded history")
+                .admission_count,
+            2
+        );
+    }
+
+    #[test]
     fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() {
         let history = durable_history_fixture();
         let mut service = successor_service_for_history_as(
@@ -24836,6 +24997,243 @@ pub(super) mod tests {
                 "case={case}"
             );
         }
+    }
+
+    #[test]
+    fn closed_height_atomically_retires_serve_and_leader_ingress() {
+        let (service, keys) = fixture_with_block_payload();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let round = proposal.round;
+        let proposer = service.context.roster
+            [usize::try_from(proposal.proposer).expect("fixture proposer index fits usize")]
+        .validator
+        .clone();
+        let timeout_signer = service.context.roster[1].validator.clone();
+        let serve_via = service.context.roster[0].validator.clone();
+        let serve_request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let proposal_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(proposal),
+        ));
+        let timeout_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                round,
+                highest_prepare_qc: None,
+                signer: 1,
+                signature: vec![0x5A],
+            }),
+        ));
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
+        let ingress = FairV2Ingress::new(
+            128,
+            128 * 1024 * 1024,
+            64 * 1024 * 1024,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+        );
+        let roster = service
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        ingress
+            .configure_roster_for_context(
+                roster.iter().cloned(),
+                &service.context.chain_id,
+                service.context.da_layout,
+            )
+            .expect("configure production-shaped combined ingress");
+        ingress.require_certified_serve_gate();
+        ingress.require_leader_wire_lifecycle_gate();
+
+        let directory = TempDir::new().expect("temporary combined ingress gate");
+        let owner = [0xAB; 32];
+        let capacity =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                service.context.da_layout.max_chunk_count,
+            )
+            .expect("derive finite leader lifecycle capacity");
+        let recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            service.context.id(),
+            service.context.height,
+            owner,
+            0,
+            false,
+        );
+        let wal_path = directory.path().join("atomic-height-retirement.wal");
+        let recovery_roster = roster.clone();
+        let (leader_gate, restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &wal_path,
+                service.context.id(),
+                service.context.height,
+                owner,
+                roster,
+                capacity,
+                service.context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("open production-shaped leader lifecycle gate");
+        let serve_gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&command_tx.queue),
+        };
+        ingress
+            .bind_certified_serve_gate(serve_gate.clone())
+            .expect("bind exact Serve ingress gate");
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                Arc::clone(&leader_gate),
+                restore,
+                command_tx.queue.lifecycle_ordinals.clone(),
+                service.context.id(),
+                service.context.height,
+            )
+            .expect("bind leader gate to the same actor-global ordinal source");
+        ingress.open().expect("open combined production ingress");
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(proposal_message, Some(proposer),)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                timeout_message,
+                Some(timeout_signer),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(serve_request.request(), serve_via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(ingress.len(), 3);
+        assert!(
+            serve_gate
+                .selected_barrier()
+                .expect("inspect live Serve reservation")
+                .is_some(),
+            "the closed-height lanes include a live Serve RAII carrier"
+        );
+        let durable_ingress_ordinals = leader_gate
+            .ingress_scheduler_ordinals()
+            .expect("inspect retained productive carriers");
+        assert_eq!(
+            durable_ingress_ordinals.len(),
+            2,
+            "Proposal and TimeoutVote own independent durable lifecycles"
+        );
+        let scheduler_high_watermark = *durable_ingress_ordinals
+            .last()
+            .expect("two durable ingress owners have a high-watermark");
+
+        ingress.close();
+        ingress
+            .unbind_height_ingress_gates(&serve_gate, &leader_gate)
+            .expect("joint retirement cannot expose a carrierless Ingress record");
+
+        let state = ingress.state.lock();
+        assert_eq!(state.len, 0);
+        assert!(state.certified_serve_gate.is_none());
+        assert!(state.leader_wire_lifecycle_gate.is_none());
+        assert!(state.leader_wire_lifecycles.is_empty());
+        ingress.debug_assert_consistent(&state);
+        drop(state);
+        assert_eq!(
+            serve_gate
+                .selected_barrier()
+                .expect("inspect retired Serve reservation"),
+            None,
+            "joint lane retirement rolls back the live Serve RAII carrier"
+        );
+
+        assert_eq!(
+            leader_gate
+                .ingress_scheduler_ordinals()
+                .expect("detached finalized-height gate remains readable"),
+            durable_ingress_ordinals,
+            "detachment must not forge a backward durable lifecycle transition"
+        );
+        drop(leader_gate);
+        let same_height_recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            service.context.id(),
+            service.context.height,
+            owner,
+            round.view,
+            false,
+        );
+        let (dormant_gate, dormant_restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &wal_path,
+                service.context.id(),
+                service.context.height,
+                owner,
+                recovery_roster.clone(),
+                capacity,
+                service.context.da_layout.max_chunk_count,
+                same_height_recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("same-height restart normalizes detached active records");
+        assert_eq!(dormant_restore.records().len(), 2);
+        assert!(dormant_restore.records().iter().all(|record| {
+            record.status()
+                == super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
+        }));
+        assert_eq!(
+            dormant_restore.scheduler_ordinal_high_watermark(),
+            scheduler_high_watermark
+        );
+        assert_eq!(
+            dormant_gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("inspect same-height dormant selector"),
+            None,
+            "restart-dormant records own no physical selector turn"
+        );
+        drop(dormant_gate);
+
+        let decision_recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            service.context.id(),
+            service.context.height,
+            owner,
+            round.view,
+            true,
+        );
+        let (reconciled_gate, reconciled_restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &wal_path,
+                service.context.id(),
+                service.context.height,
+                owner,
+                recovery_roster,
+                capacity,
+                service.context.da_layout.max_chunk_count,
+                decision_recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("durable Decision retires finalized-height ingress records on replay");
+        assert!(reconciled_restore.records().is_empty());
+        assert_eq!(
+            reconciled_restore.scheduler_ordinal_high_watermark(),
+            scheduler_high_watermark,
+            "obsolete records leave the anti-ABA scheduler high-watermark intact"
+        );
+        assert_eq!(
+            reconciled_gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("inspect reconciled finalized-height gate"),
+            None
+        );
     }
 
     #[test]

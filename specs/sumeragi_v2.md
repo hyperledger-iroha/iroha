@@ -581,17 +581,17 @@ lane body and ownership sidecars but WSV commit did not finish, restart does not
 planning. Recovery verifies the canonical block hash, exact ownership sidecars, active route and
 incarnation, QC tag, committee, expected global leader, replay material, and applied-or-snapshot
 predecessor, then still runs the normal complete block validator. Any drift fails closed. Missing
-lane or AMX work is fetched or requeued, and an honest leader can still propose an empty heartbeat
-when no transaction work is ready.
+lane or AMX work is fetched or requeued, and after bounded deferral an honest leader can still
+propose an explicitly armed empty recovery heartbeat.
 
 Fresh global proposal production is workload-driven. The signed block cadence is the earliest
 view-zero proposal time, not an instruction to manufacture a body at every idle height. A leader
 defers before signing or encoding when the bounded queue snapshot, autonomous provider, and
-internal attachments contain no work. Internal work includes enabled time triggers which require
-ledger-clock progress, DA and pin material, NPoS effects, SCCP commitments, certified merge work,
-and autonomous lane payloads. An empty body therefore remains valid and available only when that
-internal work requires a carrier or the local recovery state explicitly arms a heartbeat after a
-bounded work deferral or candidate rejection.
+internal attachments contain no work. Internal work includes enabled, still-reachable time
+triggers which require ledger-clock progress, DA and pin material, previous-roster audit evidence,
+NPoS effects, SCCP commitments, certified merge work, and autonomous lane payloads. An empty body
+therefore remains valid and available only when that internal work requires a carrier or the local
+recovery state explicitly arms a heartbeat after a bounded work deferral or candidate rejection.
 
 Merge-committee certificates are likewise not applied out of band. A complete certificate is
 stored as a hash-addressed Kura sidecar bound to one global height, parent, and view. The matching

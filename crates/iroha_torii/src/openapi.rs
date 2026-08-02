@@ -185,6 +185,16 @@ fn tags_section() -> Value {
         ),
     );
 
+    let mut account_recovery = Map::new();
+    account_recovery.insert("name".into(), Value::String("Account Recovery".to_owned()));
+    account_recovery.insert(
+        "description".into(),
+        Value::String(
+            "Detached-signature, alias-bound regulated account recovery and terminal evidence."
+                .to_owned(),
+        ),
+    );
+
     let mut zk = Map::new();
     zk.insert("name".into(), Value::String("ZK".to_owned()));
     zk.insert(
@@ -442,6 +452,7 @@ fn tags_section() -> Value {
         Value::Object(streams),
         Value::Object(contracts),
         Value::Object(multisig),
+        Value::Object(account_recovery),
         Value::Object(zk),
         Value::Object(proofs),
         Value::Object(governance),
@@ -3396,7 +3407,7 @@ fn multisig_paths() -> Map {
         "/v1/multisig/propose".to_owned(),
         Value::Object(multisig_post_operation(
             "Propose a multisig instruction batch.",
-            "Resolve a multisig selector, wrap an instruction batch in a multisig proposal envelope, and optionally submit it.",
+            "Resolve a multisig selector, wrap an instruction batch in a multisig proposal envelope, and optionally submit it. A signer/threshold policy change that must cancel prior work prepends the owner-authorized `InvalidateOutstanding` custom payload before `ReplaceAccountController`; ordinary rekey continues to preserve proposals.",
             "#/components/schemas/MultisigProposeRequest",
             "#/components/schemas/MultisigResponse",
             "Multisig alias not found.",
@@ -3470,6 +3481,98 @@ fn multisig_paths() -> Map {
             "#/components/schemas/MultisigProposalsResolveRequest",
             "#/components/schemas/MultisigProposalResolveResponse",
             "Multisig alias or proposal not found.",
+        )),
+    );
+    paths
+}
+
+fn account_recovery_post_operation(
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Account Recovery".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(request_schema_ref)),
+    );
+    let mut responses = single_json_response(response_schema_ref);
+    responses.insert(
+        "400".to_owned(),
+        json_response("Invalid recovery payload.", error_schema_reference()),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(
+            "Stable account alias, policy, or request not found.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Recovery state, controller lineage, quorum, timelock, or terminal evidence conflict.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn account_recovery_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/accounts/recovery/policy/set".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Configure regulated account recovery.",
+            "Prepare or submit a caller-signed SetAccountRecoveryPolicy transaction. This application route accepts only three distinct weight-one Ed25519 guardians, quorum two, and an exact 72-hour timelock. Native multisig accounts configure the same instruction through /v1/multisig/propose.",
+            "#/components/schemas/AccountRecoveryPolicySetRequest",
+            "#/components/schemas/AccountRecoveryMutationResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/recovery/propose".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Propose regulated account recovery.",
+            "Prepare or submit an alias-bound ProposeAccountRecovery transaction signed by the active account or a configured guardian. The replacement must be a native Ed25519 multisig controller.",
+            "#/components/schemas/AccountRecoveryProposeRequest",
+            "#/components/schemas/AccountRecoveryMutationResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/recovery/approve".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Approve regulated account recovery.",
+            "Prepare or submit one guardian approval. Duplicate approvals remain idempotent by guardian subject and never increase weight.",
+            "#/components/schemas/AccountRecoveryApproveRequest",
+            "#/components/schemas/AccountRecoveryMutationResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/recovery/finalize".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Finalize regulated account recovery.",
+            "Prepare or submit guardian-triggered finalization after native 2-of-3 quorum and the full 72-hour ledger timelock. Finalization atomically terminalizes every outstanding native multisig proposal before rekeying the stable alias.",
+            "#/components/schemas/AccountRecoveryFinalizeRequest",
+            "#/components/schemas/AccountRecoveryMutationResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/recovery/status".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Read regulated account-recovery evidence.",
+            "Resolve the stable alias and return its current policy, request lifecycle, exact invalidated proposal hashes, and validated CANCELED or EXPIRED terminal records.",
+            "#/components/schemas/AccountRecoveryStatusRequest",
+            "#/components/schemas/AccountRecoveryStatusResponse",
         )),
     );
     paths
@@ -11364,6 +11467,7 @@ fn paths_section(enabled_features: EnabledFeatures<'_>) -> Map {
     paths.extend(proof_paths());
     paths.extend(contracts_paths());
     paths.extend(multisig_paths());
+    paths.extend(account_recovery_paths());
     paths.extend(controls_paths());
     paths.extend(zk_paths());
     paths.extend(governance_paths());
@@ -11547,6 +11651,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/da/pin-intents/prove"
                     | "/v1/da/pin-intents/verify"
                     | "/v1/domains/query"
+                    | "/v1/accounts/recovery/status"
                     | "/v1/multisig/proposals/query"
                     | "/v1/multisig/proposals/resolve"
                     | "/v1/multisig/spec"
@@ -28288,7 +28393,7 @@ fn openapi_schemas() -> Map {
         "MultisigProposeInstructionInput".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Structured JSON InstructionBox object. For native Norito, send the entire MultisigProposeRequest body as application/x-norito; the JSON instructions field does not accept per-instruction Norito blobs."
+            "description": "Structured JSON InstructionBox object. For native Norito, send the entire MultisigProposeRequest body as application/x-norito; the JSON instructions field does not accept per-instruction Norito blobs. Deliberate policy-change invalidation uses the custom payload documented by MultisigInvalidateOutstandingPayload."
         }),
     );
     schemas.insert(
@@ -28691,6 +28796,284 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas
+}
+
+#[inline(never)]
+fn insert_account_recovery_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "MultisigInvalidateOutstandingPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["InvalidateOutstanding"],
+            "additionalProperties": false,
+            "description": "Exact MultisigInstructionBox custom payload that atomically terminalizes every other outstanding proposal. It must execute as the target multisig account.",
+            "properties": {
+                "InvalidateOutstanding": {
+                    "type": "object",
+                    "required": ["account"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "account": { "type": "string", "minLength": 1 }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryPolicySetRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_alias", "signer_account_id", "fee_payment", "guardians", "quorum", "timelock_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "account_alias": { "type": "string", "minLength": 3, "maxLength": 512 },
+                "signer_account_id": { "type": "string", "minLength": 1 },
+                "public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "signature_b64": { "type": "string", "minLength": 88, "maxLength": 88 },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
+                "guardians": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "items": { "$ref": "#/components/schemas/AccountRecoveryGuardian" }
+                },
+                "quorum": { "type": "integer", "format": "uint16", "const": 2 },
+                "timelock_ms": { "type": "integer", "format": "uint64", "const": 259200000 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryGuardian".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account", "weight"],
+            "additionalProperties": false,
+            "properties": {
+                "account": { "type": "string", "minLength": 1 },
+                "weight": { "type": "integer", "format": "uint16", "const": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryMultisigMember".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["public_key", "weight"],
+            "additionalProperties": false,
+            "properties": {
+                "public_key": {
+                    "type": "string",
+                    "pattern": "^ed0120[0-9a-f]{64}$",
+                    "description": "Canonical Iroha Ed25519 public-key literal."
+                },
+                "weight": { "type": "integer", "format": "uint16", "const": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryMultisigPolicy".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "threshold", "members"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint8", "const": 1 },
+                "threshold": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 1,
+                    "description": "Must be 1 for one member, or between 2 and N for two or more members."
+                },
+                "members": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/AccountRecoveryMultisigMember" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryMultisigController".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "payload"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": { "const": "Multisig" },
+                "payload": { "$ref": "#/components/schemas/AccountRecoveryMultisigPolicy" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryPolicy".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["guardians", "quorum", "timelock_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "guardians": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/AccountRecoveryGuardian" }
+                },
+                "quorum": { "type": "integer", "format": "uint16", "const": 2 },
+                "timelock_ms": { "type": "integer", "format": "uint64", "const": 259200000 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryProposeRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_alias", "signer_account_id", "fee_payment", "new_controller"],
+            "additionalProperties": false,
+            "properties": {
+                "account_alias": { "type": "string", "minLength": 3, "maxLength": 512 },
+                "signer_account_id": { "type": "string", "minLength": 1 },
+                "public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "signature_b64": { "type": "string", "minLength": 88, "maxLength": 88 },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
+                "new_controller": {
+                    "$ref": "#/components/schemas/AccountRecoveryMultisigController",
+                    "description": "Native AccountController::Multisig JSON value with weight-one Ed25519 members."
+                }
+            }
+        }),
+    );
+    for name in [
+        "AccountRecoveryApproveRequest",
+        "AccountRecoveryFinalizeRequest",
+    ] {
+        schemas.insert(
+            name.to_owned(),
+            norito::json!({
+                "type": "object",
+                "required": ["account_alias", "signer_account_id", "fee_payment"],
+                "additionalProperties": false,
+                "properties": {
+                    "account_alias": { "type": "string", "minLength": 3, "maxLength": 512 },
+                    "signer_account_id": { "type": "string", "minLength": 1 },
+                    "public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                    "signature_b64": { "type": "string", "minLength": 88, "maxLength": 88 },
+                    "creation_time_ms": { "type": "integer", "format": "uint64" },
+                    "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" }
+                }
+            }),
+        );
+    }
+    schemas.insert(
+        "AccountRecoveryStatusRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_alias"],
+            "additionalProperties": false,
+            "properties": {
+                "account_alias": { "type": "string", "minLength": 3, "maxLength": 512 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryMutationResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "action", "account_alias", "resolved_active_account_id", "submitted", "creation_time_ms", "fee_payment"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "action": { "type": "string", "enum": ["SET_POLICY", "PROPOSE", "APPROVE", "FINALIZE"] },
+                "account_alias": { "type": "string" },
+                "resolved_active_account_id": { "type": "string" },
+                "submitted": { "type": "boolean" },
+                "tx_hash_hex": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                        { "type": "null" }
+                    ]
+                },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
+                "signing_message_b64": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 44, "maxLength": 44 },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryInvalidatedProposalEvidence".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proposal_id", "status", "terminal_at_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "status": { "type": "string", "enum": ["CANCELED", "EXPIRED"] },
+                "terminal_at_ms": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "active_account_id_at_proposal", "proposed_controller", "approvals", "invalidated_multisig_proposal_hashes", "proposed_by", "execute_after_ms", "status"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": { "$ref": "#/components/schemas/JsonValue" },
+                "active_account_id_at_proposal": { "type": "string", "minLength": 1 },
+                "proposed_controller": { "$ref": "#/components/schemas/AccountRecoveryMultisigController" },
+                "approvals": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": { "type": "string", "minLength": 1 }
+                },
+                "invalidated_multisig_proposal_hashes": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" }
+                },
+                "proposed_by": { "type": "string", "minLength": 1 },
+                "execute_after_ms": { "type": "integer", "format": "uint64" },
+                "status": { "$ref": "#/components/schemas/JsonValue" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryStatusResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_alias", "resolved_active_account_id", "invalidated_proposals", "invalidation_evidence_complete"],
+            "additionalProperties": false,
+            "properties": {
+                "account_alias": { "type": "string" },
+                "resolved_active_account_id": { "type": "string" },
+                "policy": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/AccountRecoveryPolicy" },
+                        { "type": "null" }
+                    ]
+                },
+                "request": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/AccountRecoveryRequest" },
+                        { "type": "null" }
+                    ]
+                },
+                "invalidated_proposals": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/AccountRecoveryInvalidatedProposalEvidence" }
+                },
+                "invalidation_evidence_complete": { "type": "boolean" }
+            }
+        }),
+    );
 }
 
 fn queue_error_snapshot_schema() -> Value {
@@ -29519,6 +29902,7 @@ fn canonical_request_security_schemes() -> Map {
 fn components_section() -> Value {
     let mut components = Map::new();
     let mut schemas = openapi_schemas();
+    insert_account_recovery_schemas(&mut schemas);
     privacy_capability_schemas(&mut schemas);
     schemas.insert("AxtErrorDetails".to_owned(), axt_error_details_schema());
     schemas.insert("FeeErrorDetails".to_owned(), fee_error_details_schema());
@@ -30067,6 +30451,137 @@ mod tests {
         assert!(
             reference_count > 0,
             "generated OpenAPI document unexpectedly contains no schema references"
+        );
+    }
+
+    #[test]
+    fn generated_openapi_freezes_regulated_account_recovery_and_multisig_invalidation() {
+        let document = generate_spec();
+        let cases = [
+            (
+                "/v1/accounts/recovery/policy/set",
+                "#/components/schemas/AccountRecoveryPolicySetRequest",
+                "#/components/schemas/AccountRecoveryMutationResponse",
+            ),
+            (
+                "/v1/accounts/recovery/propose",
+                "#/components/schemas/AccountRecoveryProposeRequest",
+                "#/components/schemas/AccountRecoveryMutationResponse",
+            ),
+            (
+                "/v1/accounts/recovery/approve",
+                "#/components/schemas/AccountRecoveryApproveRequest",
+                "#/components/schemas/AccountRecoveryMutationResponse",
+            ),
+            (
+                "/v1/accounts/recovery/finalize",
+                "#/components/schemas/AccountRecoveryFinalizeRequest",
+                "#/components/schemas/AccountRecoveryMutationResponse",
+            ),
+            (
+                "/v1/accounts/recovery/status",
+                "#/components/schemas/AccountRecoveryStatusRequest",
+                "#/components/schemas/AccountRecoveryStatusResponse",
+            ),
+        ];
+        for (path, request, response) in cases {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(operation_request_schema_ref(operation, path), request);
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                response
+            );
+        }
+
+        let schemas = component_schemas(&document);
+        let invalidation = schemas
+            .get("MultisigInvalidateOutstandingPayload")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("InvalidateOutstanding"))
+            .and_then(Value::as_object)
+            .expect("multisig invalidation payload schema");
+        assert_eq!(
+            invalidation
+                .get("required")
+                .and_then(Value::as_array)
+                .and_then(|required| required.first())
+                .and_then(Value::as_str),
+            Some("account")
+        );
+        let policy = schemas
+            .get("AccountRecoveryPolicySetRequest")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("regulated recovery policy properties");
+        assert_eq!(
+            policy
+                .get("guardians")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minItems")),
+            Some(&Value::from(3_u64))
+        );
+        assert_eq!(
+            policy
+                .get("guardians")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxItems")),
+            Some(&Value::from(3_u64))
+        );
+        assert_eq!(
+            policy
+                .get("quorum")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const")),
+            Some(&Value::from(2_u64))
+        );
+        assert_eq!(
+            policy
+                .get("timelock_ms")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const")),
+            Some(&Value::from(259_200_000_u64))
+        );
+
+        let evidence = schemas
+            .get("AccountRecoveryInvalidatedProposalEvidence")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("recovery proposal evidence properties");
+        assert_eq!(
+            evidence
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array),
+            Some(&vec![
+                Value::String("CANCELED".to_owned()),
+                Value::String("EXPIRED".to_owned()),
+            ])
+        );
+        assert_eq!(
+            evidence
+                .get("terminal_at_ms")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minimum")),
+            Some(&Value::from(1_u64))
+        );
+
+        let request = schemas
+            .get("AccountRecoveryRequest")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("account recovery request properties");
+        assert_eq!(
+            request
+                .get("invalidated_multisig_proposal_hashes")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("uniqueItems")),
+            Some(&Value::Bool(true))
         );
     }
 

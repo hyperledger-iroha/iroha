@@ -2518,7 +2518,9 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
                     .map(|proposal| proposal.instructions),
             ),
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => (None, None),
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => (None, None),
         };
         let mut nested_dataspaces = BTreeSet::new();
         if let Some(instructions) = instructions {
@@ -2887,7 +2889,9 @@ fn instruction_transaction_dataspace_target(
                     state_view,
                 )
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
 
@@ -3299,7 +3303,9 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     ledger_time_ms,
                 )
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
 
@@ -3877,7 +3883,9 @@ fn deferred_instruction_concrete_dataspace_targets(
                 }
                 Some(targets)
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
 
@@ -4004,7 +4012,9 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
                 multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
                     .map(|proposal| proposal.instructions)
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
 
         return match instructions {
@@ -4025,7 +4035,8 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
                 MultisigInstructionBox::Approve(_) => Some(BTreeSet::new()),
                 MultisigInstructionBox::Propose(_)
                 | MultisigInstructionBox::Register(_)
-                | MultisigInstructionBox::Cancel(_) => None,
+                | MultisigInstructionBox::Cancel(_)
+                | MultisigInstructionBox::InvalidateOutstanding(_) => None,
             },
         };
     }
@@ -4083,7 +4094,8 @@ fn same_transaction_multisig_proposal_targets(
             }
             MultisigInstructionBox::Approve(_)
             | MultisigInstructionBox::Register(_)
-            | MultisigInstructionBox::Cancel(_) => None,
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         })
         .collect()
 }
@@ -4133,7 +4145,8 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
             }
             MultisigInstructionBox::Approve(_)
             | MultisigInstructionBox::Register(_)
-            | MultisigInstructionBox::Cancel(_) => None,
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         })
         .collect()
 }
@@ -4146,7 +4159,8 @@ fn same_transaction_multisig_approve_route_target<'a>(
         MultisigInstructionBox::Approve(approve) => approve,
         MultisigInstructionBox::Propose(_)
         | MultisigInstructionBox::Register(_)
-        | MultisigInstructionBox::Cancel(_) => return None,
+        | MultisigInstructionBox::Cancel(_)
+        | MultisigInstructionBox::InvalidateOutstanding(_) => return None,
     };
     proposals.iter().find(|proposal| {
         proposal.account == approve.account
@@ -4406,7 +4420,9 @@ fn instruction_transaction_target_requires_universal_coordinator(
                     )
                 })
                 .map(|proposal| proposal.instructions),
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
         let Some(instructions) = instructions else {
             return false;
@@ -4551,7 +4567,9 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
                 multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
                     .map(|proposal| proposal.instructions)
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
         let Some(instructions) = instructions else {
             return false;
@@ -4989,7 +5007,9 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     if let Some(multisig) = multisig_instruction(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(_) | MultisigInstructionBox::Approve(_) => true,
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => false,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => false,
         };
     }
 

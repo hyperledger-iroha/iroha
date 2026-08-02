@@ -255,6 +255,9 @@ fn collect_multisig_account_activities(
         MultisigInstructionBox::Cancel(cancel) => {
             push_unique(out, &cancel.account, AccountActivityRole::Affected);
         }
+        MultisigInstructionBox::InvalidateOutstanding(invalidate) => {
+            push_unique(out, &invalidate.account, AccountActivityRole::Affected);
+        }
         MultisigInstructionBox::Propose(propose) => {
             push_unique(out, &propose.account, AccountActivityRole::Affected);
             for nested in &propose.instructions {

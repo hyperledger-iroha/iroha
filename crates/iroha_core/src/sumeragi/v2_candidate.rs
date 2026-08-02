@@ -470,7 +470,7 @@ impl V2CandidateAssembler {
             .bounded_pending_snapshot(&state_view, self.limits.max_queue_scan)
             .ok_or(CandidateError::RestartRequired)?;
         drop(state_view);
-        let mut pool = self.snapshot_routable_candidates(
+        let pool = self.snapshot_routable_candidates(
             request.queue,
             request.state,
             &request.attachments,
@@ -478,8 +478,6 @@ impl V2CandidateAssembler {
             exact_payload_limit,
             &mut report,
         )?;
-        canonicalize_records(&mut pool);
-
         let mut reserve = VecDeque::from(pool);
         let mut selected = Vec::with_capacity(self.limits.max_transactions.get());
         fill_selection(
@@ -494,6 +492,10 @@ impl V2CandidateAssembler {
         // of the at-most `max_queue_scan` inspected records.
         let max_attempts = self.limits.max_queue_scan.get().saturating_add(1);
         for _ in 0..max_attempts {
+            // Freeze FIFO membership before adopting the same canonical payload
+            // order used by `BlockBuilder`; routing contexts and work receipts
+            // are positional and must be prepared against that exact order.
+            canonicalize_records(&mut selected);
             let descriptors = selected
                 .iter()
                 .map(CandidateRecord::descriptor)
@@ -834,6 +836,7 @@ fn candidate_has_proposal_work(
         || attachments.time_trigger_clock_progress_required
         || attachments.da_commitments.is_some()
         || attachments.da_pin_intents.is_some()
+        || attachments.previous_roster_evidence.is_some()
         || attachments.npos_consensus_effects.is_some()
         || attachments.sccp_commitment_root.is_some()
         || attachments.certified_merge_carrier_header.is_some()
@@ -1449,7 +1452,7 @@ mod tests {
         ChainId,
         account::AccountId,
         block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        consensus::{VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
         nexus::{DataSpaceId, LaneId},
         peer::PeerId,
         transaction::TransactionBuilder,
@@ -1761,6 +1764,36 @@ mod tests {
             ..CandidateAttachments::default()
         };
         assert!(candidate_has_proposal_work(&[], &control, &prepared));
+
+        let parent_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
+        let validator_key = KeyPair::try_from_seed(vec![40; 32], Algorithm::Ed25519)
+            .expect("deterministic validator key");
+        let roster_evidence = CandidateAttachments {
+            previous_roster_evidence: Some(PreviousRosterEvidence {
+                height: 1,
+                block_hash: parent_hash,
+                validator_checkpoint: ValidatorSetCheckpoint::new(
+                    1,
+                    0,
+                    parent_hash,
+                    Hash::prehashed([0x12; 32]),
+                    Hash::prehashed([0x34; 32]),
+                    vec![PeerId::from(validator_key.public_key().clone())],
+                    vec![1],
+                    Vec::new(),
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    None,
+                ),
+                stake_snapshot: None,
+            }),
+            ..CandidateAttachments::default()
+        };
+        assert!(candidate_has_proposal_work(
+            &[],
+            &roster_evidence,
+            &prepared
+        ));
     }
 
     #[test]
@@ -1824,8 +1857,32 @@ mod tests {
             record(3, "first", 0),
             record(2, "second", 1),
         ];
-        canonicalize_records(&mut records);
-        assert!(records.windows(2).all(|window| {
+        records.sort_by(|left, right| right.entrypoint_hash.cmp(&left.entrypoint_hash));
+        for (source_ordinal, record) in records.iter_mut().enumerate() {
+            record.source_ordinal = source_ordinal;
+        }
+        let fifo_hashes = records
+            .iter()
+            .take(2)
+            .map(|record| record.entrypoint_hash)
+            .collect::<BTreeSet<_>>();
+        let mut reserve = VecDeque::from(records);
+        let mut selected = Vec::new();
+        let mut report = CandidateScanReport::default();
+        fill_selection(&mut selected, &mut reserve, 2, usize::MAX, &mut report);
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|record| record.entrypoint_hash)
+                .collect::<BTreeSet<_>>(),
+            fifo_hashes,
+            "canonical payload order must not change FIFO batch membership"
+        );
+        assert!(selected[0].entrypoint_hash > selected[1].entrypoint_hash);
+
+        canonicalize_records(&mut selected);
+        assert!(selected.windows(2).all(|window| {
             (window[0].entrypoint_hash, window[0].source_ordinal)
                 <= (window[1].entrypoint_hash, window[1].source_ordinal)
         }));

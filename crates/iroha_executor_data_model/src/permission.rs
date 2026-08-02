@@ -1251,7 +1251,7 @@ mod tests {
         );
         let malformed_global = iroha_data_model::permission::Permission::new(
             "CanReadAllLedgerData".into(),
-            norito::json!({"account": account.to_string()}),
+            norito::json!({"account": (account.to_string())}),
         );
         assert!(
             CanReadAllLedgerData::try_from(&malformed_global).is_err(),

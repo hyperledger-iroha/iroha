@@ -80,7 +80,7 @@ use iroha_data_model::{
             space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestExpired},
         },
         pipeline::{BlockEvent, MergeLedgerEvent, PipelineEventBox},
-        time::TimeEvent,
+        time::{ExecutionTime, TimeEvent, TimeEventFilter},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     executor::ExecutorDataModel,
@@ -12000,6 +12000,26 @@ pub struct StateQueryView<'state> {
     pub chain_id: iroha_data_model::ChainId,
 }
 
+fn time_trigger_action_requires_clock_progress(
+    action: &LoadedAction<TimeEventFilter>,
+    parent_creation_time: Duration,
+) -> bool {
+    if action.repeats.is_depleted() || !trigger_is_enabled(action.metadata()) {
+        return false;
+    }
+    if action.retry_state.is_some() {
+        return true;
+    }
+
+    match action.filter.0 {
+        ExecutionTime::PreCommit => true,
+        ExecutionTime::Schedule(schedule) => match schedule.period_ms {
+            Some(period_ms) => period_ms != 0,
+            None => u128::from(schedule.start_ms) >= parent_creation_time.as_millis(),
+        },
+    }
+}
+
 impl<'state> StateView<'state> {
     /// Returns the world view for this read-only snapshot.
     #[inline]
@@ -12054,14 +12074,15 @@ impl<'state> StateView<'state> {
         StateReadOnly::latest_block_hash(self)
     }
 
-    /// Return whether an enabled, non-depleted time trigger needs ledger-clock progress.
-    pub fn time_trigger_clock_progress_required(&self) -> bool {
+    /// Return whether an enabled, non-depleted time trigger remains reachable after
+    /// `parent_creation_time` and therefore needs ledger-clock progress.
+    pub fn time_trigger_clock_progress_required(&self, parent_creation_time: Duration) -> bool {
         self.world
             .triggers()
             .time_triggers()
             .iter()
             .any(|(_, action)| {
-                !action.repeats.is_depleted() && trigger_is_enabled(action.metadata())
+                time_trigger_action_requires_clock_progress(action, parent_creation_time)
             })
     }
 
@@ -29312,15 +29333,19 @@ impl State {
         block_proofs_for_entry_from_kura(&self.kura, block_height, entry_hash)
     }
 
-    /// Return whether an enabled, non-depleted time trigger needs ledger-clock progress.
+    /// Return whether an enabled, non-depleted time trigger remains reachable after
+    /// `parent_creation_time` and therefore needs ledger-clock progress.
     ///
     /// This avoids acquiring a full [`StateView`] on consensus hot paths that only need
     /// to decide whether an otherwise idle block is required for trigger scheduling.
     #[track_caller]
-    pub fn time_trigger_clock_progress_required_fast(&self) -> bool {
+    pub fn time_trigger_clock_progress_required_fast(
+        &self,
+        parent_creation_time: Duration,
+    ) -> bool {
         let world = self.world_view();
         world.triggers().time_triggers().iter().any(|(_, action)| {
-            !action.repeats.is_depleted() && trigger_is_enabled(action.metadata())
+            time_trigger_action_requires_clock_progress(action, parent_creation_time)
         })
     }
 
