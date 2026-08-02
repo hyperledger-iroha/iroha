@@ -22,10 +22,11 @@ use iroha_data_model::{
 };
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use iroha_schema::Ident;
+#[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
+use kaigi_zk::KAIGI_USAGE_BACKEND;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_ROOT_LIMBS, KAIGI_USAGE_BACKEND, roster_root_limb_values,
-    scalar_from_hash,
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_ROOT_LIMBS, roster_root_limb_values, scalar_from_hash,
 };
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use mv::storage::StorageReadOnly;

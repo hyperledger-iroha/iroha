@@ -21733,27 +21733,22 @@ mod tests {
             );
             assert!(!runtime.fail_closed);
 
-            let reducer_round = reducer::Round::new(manifest.round.height, manifest.round.view);
-            let reducer_subject =
-                reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
-            let reducer_tag_before_binding = runtime.driver.reducer.current_tag();
+            let reducer_tag_before_binding = runtime.driver.current_tag();
             let reducer_body_before_binding = runtime
                 .driver
-                .reducer
-                .body_state(reducer_round, reducer_subject);
+                .body_state_for_test(manifest.round, manifest.subject);
             runtime
                 .bind_validated_body(&manifest, &validated)
                 .expect("live validation establishes canonical commitment authority");
             assert_eq!(
-                runtime.driver.reducer.current_tag(),
+                runtime.driver.current_tag(),
                 reducer_tag_before_binding,
                 "wire-authority binding cannot retag the reducer"
             );
             assert_eq!(
                 runtime
                     .driver
-                    .reducer
-                    .body_state(reducer_round, reducer_subject),
+                    .body_state_for_test(manifest.round, manifest.subject),
                 reducer_body_before_binding,
                 "wire-authority binding cannot revive a reducer consumer"
             );

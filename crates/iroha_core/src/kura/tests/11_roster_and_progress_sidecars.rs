@@ -514,7 +514,7 @@
             "a symlink substitution must invalidate the descriptor-bound namespace"
         );
         assert!(
-            Kura::open_bound_progress_directory(kura.store_root(), &sidecar_dir).is_err(),
+            Kura::open_bound_progress_directory(&kura.store_root(), &sidecar_dir).is_err(),
             "a new binding must reject a symlinked progress directory"
         );
     }
