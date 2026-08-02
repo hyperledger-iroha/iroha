@@ -9344,7 +9344,7 @@ impl Queue {
                     self.wait_for_durability_transitions(&[tx_hash]);
                     continue;
                 }
-                match self.revalidated_durable_plan_claim_retry_locked(
+                let replacement = match self.revalidated_durable_plan_claim_retry_locked(
                     &tx,
                     &state_view,
                     &routing_plan,
@@ -9356,7 +9356,19 @@ impl Queue {
                                 == Some(binding.global_admission_identity())
                                 && existing.enqueue_timestamp_ms == binding.enqueue_timestamp_ms
                                 && existing.journal_record_digest == binding.journal_record_digest;
-                            if !exact_global_claim {
+                            if exact_global_claim {
+                                return Ok(QueuePushOutcome {
+                                    routing_decision: existing.routing_plan.coordinator_route(),
+                                    routing_plan: existing.routing_plan,
+                                    entrypoint_hash: existing.entrypoint_hash,
+                                    signed_transaction_hash: existing.signed_transaction_hash,
+                                    enqueue_timestamp_ms: existing.enqueue_timestamp_ms,
+                                    journal_record_digest: Some(existing.journal_record_digest),
+                                    admission_context: Some(existing.admission_context),
+                                    global_admission_identity: existing.global_admission_identity,
+                                });
+                            }
+                            if existing.global_admission_identity.is_some() {
                                 return Err(Failure {
                                     tx: tx.into(),
                                     err: Error::UnresolvedRoute {
@@ -9364,17 +9376,33 @@ impl Queue {
                                     },
                                 });
                             }
+
+                            // Transaction gossip may win the race with the ingress-authored
+                            // QueuePlan request at another authority. Such an owner has an exact
+                            // durable transaction/plan/context claim, but no global binding yet.
+                            // Promote that unbound claim by replacing its journal record with the
+                            // byte-exact ingress binding. An already globally bound claim is never
+                            // rewritten above, so same-entrypoint/different-binding retries still
+                            // fail closed.
+                            Some((
+                                existing,
+                                binding.admission_context.clone(),
+                                Some(binding.global_admission_identity()),
+                                binding.enqueue_timestamp_ms,
+                                Some(binding.journal_record_digest),
+                            ))
+                        } else {
+                            return Ok(QueuePushOutcome {
+                                routing_decision: existing.routing_plan.coordinator_route(),
+                                routing_plan: existing.routing_plan,
+                                entrypoint_hash: existing.entrypoint_hash,
+                                signed_transaction_hash: existing.signed_transaction_hash,
+                                enqueue_timestamp_ms: existing.enqueue_timestamp_ms,
+                                journal_record_digest: Some(existing.journal_record_digest),
+                                admission_context: Some(existing.admission_context),
+                                global_admission_identity: existing.global_admission_identity,
+                            });
                         }
-                        return Ok(QueuePushOutcome {
-                            routing_decision: existing.routing_plan.coordinator_route(),
-                            routing_plan: existing.routing_plan,
-                            entrypoint_hash: existing.entrypoint_hash,
-                            signed_transaction_hash: existing.signed_transaction_hash,
-                            enqueue_timestamp_ms: existing.enqueue_timestamp_ms,
-                            journal_record_digest: Some(existing.journal_record_digest),
-                            admission_context: Some(existing.admission_context),
-                            global_admission_identity: existing.global_admission_identity,
-                        });
                     }
                     Ok(None) if self.removed_hashes.contains_key(&tx_hash) => {
                         return Err(Failure {
@@ -9426,89 +9454,142 @@ impl Queue {
                                 },
                             });
                         };
-                        let transition = self
-                            .begin_durability_transition_locked([tx_hash])
-                            .expect("active durable retry was checked under the queue lock");
-                        drop(queue_guard);
 
-                        let journal_record_digest = match self.record_plan_journal_put_durable(
-                            &tx,
-                            &routing_plan,
-                            &current_context,
-                            existing.enqueue_timestamp_ms,
-                            existing.global_admission_identity.as_ref(),
-                            None,
-                            true,
-                        ) {
-                            Ok(Some(digest)) => digest,
-                            Ok(None) => {
+                        if let Some(binding) = expected_admission_binding {
+                            if existing.global_admission_identity.is_some() {
                                 return Err(Failure {
                                     tx: tx.into(),
-                                    err: Error::PlanJournalDurabilityRejected {
-                                        reason: "required durable claim replacement produced no journal digest"
-                                            .to_owned(),
+                                    err: Error::UnresolvedRoute {
+                                        reason: "existing durable queue-plan claim conflicts with the exact global admission binding".to_owned(),
                                     },
                                 });
                             }
-                            Err((error, indeterminate)) => {
-                                return Err(Failure {
-                                    tx: tx.into(),
-                                    err: if indeterminate {
-                                        Error::PlanJournalDurabilityIndeterminate {
-                                            transaction_hash: tx_hash,
-                                            reason: error.to_string(),
-                                        }
-                                    } else {
-                                        Error::PlanJournalDurabilityRejected {
-                                            reason: error.to_string(),
-                                        }
-                                    },
-                                });
-                            }
-                        };
-                        let queue_guard = self.push_remove_lock.lock();
-                        let claim_unchanged = self
-                            .durable_plan_claims
-                            .get(&tx_hash)
-                            .is_some_and(|claim| *claim.value() == existing)
-                            && self.txs.contains_key(&tx_hash);
-                        if !claim_unchanged {
-                            let reason =
-                                "durable claim ownership changed during its journal rollover";
-                            self.accepted_work_validation_fault
-                                .store(true, Ordering::Release);
-                            return Err(Failure {
-                                tx: tx.into(),
-                                err: Error::PlanJournalDurabilityIndeterminate {
-                                    transaction_hash: tx_hash,
-                                    reason: reason.to_owned(),
-                                },
-                            });
+                            Some((
+                                existing,
+                                current_context,
+                                Some(binding.global_admission_identity()),
+                                binding.enqueue_timestamp_ms,
+                                Some(binding.journal_record_digest),
+                            ))
+                        } else {
+                            let enqueue_timestamp_ms = existing.enqueue_timestamp_ms;
+                            let global_admission_identity =
+                                existing.global_admission_identity.clone();
+                            Some((
+                                existing,
+                                current_context,
+                                global_admission_identity,
+                                enqueue_timestamp_ms,
+                                None,
+                            ))
                         }
-                        let rebound = QueuePlanDurableClaimIndexEntry {
-                            entrypoint_hash: existing.entrypoint_hash,
-                            signed_transaction_hash: existing.signed_transaction_hash,
-                            routing_plan: existing.routing_plan,
-                            admission_context: current_context,
-                            global_admission_identity: existing.global_admission_identity,
-                            enqueue_timestamp_ms: existing.enqueue_timestamp_ms,
-                            journal_record_digest,
-                        };
-                        self.durable_plan_claims.insert(tx_hash, rebound.clone());
-                        drop(transition);
-                        drop(queue_guard);
-                        return Ok(QueuePushOutcome {
-                            routing_decision: rebound.routing_plan.coordinator_route(),
-                            routing_plan: rebound.routing_plan,
-                            entrypoint_hash: rebound.entrypoint_hash,
-                            signed_transaction_hash: rebound.signed_transaction_hash,
-                            enqueue_timestamp_ms: rebound.enqueue_timestamp_ms,
-                            journal_record_digest: Some(rebound.journal_record_digest),
-                            admission_context: Some(rebound.admission_context),
-                            global_admission_identity: rebound.global_admission_identity,
+                    }
+                };
+
+                let Some((
+                    existing,
+                    replacement_context,
+                    replacement_global_admission_identity,
+                    replacement_enqueue_timestamp_ms,
+                    expected_replacement_digest,
+                )) = replacement
+                else {
+                    unreachable!("durable retry exits or selects one exact replacement")
+                };
+                let transition = self
+                    .begin_durability_transition_locked([tx_hash])
+                    .expect("active durable retry was checked under the queue lock");
+                drop(queue_guard);
+
+                let journal_record_digest = match self.record_plan_journal_put_durable(
+                    &tx,
+                    &routing_plan,
+                    &replacement_context,
+                    replacement_enqueue_timestamp_ms,
+                    replacement_global_admission_identity.as_ref(),
+                    expected_replacement_digest,
+                    true,
+                ) {
+                    Ok(Some(digest)) => digest,
+                    Ok(None) => {
+                        return Err(Failure {
+                            tx: tx.into(),
+                            err: Error::PlanJournalDurabilityRejected {
+                                reason:
+                                    "required durable claim replacement produced no journal digest"
+                                        .to_owned(),
+                            },
                         });
                     }
+                    Err((error, indeterminate)) => {
+                        return Err(Failure {
+                            tx: tx.into(),
+                            err: if indeterminate {
+                                Error::PlanJournalDurabilityIndeterminate {
+                                    transaction_hash: tx_hash,
+                                    reason: error.to_string(),
+                                }
+                            } else {
+                                Error::PlanJournalDurabilityRejected {
+                                    reason: error.to_string(),
+                                }
+                            },
+                        });
+                    }
+                };
+                let queue_guard = self.push_remove_lock.lock();
+                let claim_unchanged = self
+                    .durable_plan_claims
+                    .get(&tx_hash)
+                    .is_some_and(|claim| *claim.value() == existing)
+                    && self.txs.contains_key(&tx_hash);
+                if !claim_unchanged {
+                    let reason = "durable claim ownership changed during its journal rollover";
+                    self.accepted_work_validation_fault
+                        .store(true, Ordering::Release);
+                    return Err(Failure {
+                        tx: tx.into(),
+                        err: Error::PlanJournalDurabilityIndeterminate {
+                            transaction_hash: tx_hash,
+                            reason: reason.to_owned(),
+                        },
+                    });
                 }
+                let rebound = QueuePlanDurableClaimIndexEntry {
+                    entrypoint_hash: existing.entrypoint_hash,
+                    signed_transaction_hash: existing.signed_transaction_hash,
+                    routing_plan: existing.routing_plan,
+                    admission_context: replacement_context,
+                    global_admission_identity: replacement_global_admission_identity,
+                    enqueue_timestamp_ms: replacement_enqueue_timestamp_ms,
+                    journal_record_digest,
+                };
+                self.durable_plan_claims.insert(tx_hash, rebound.clone());
+                self.tx_enqueued_at_ms
+                    .insert(tx_hash, replacement_enqueue_timestamp_ms);
+                let mut age_ring = self.queued_age_ring.lock();
+                if self.queued_tx_enqueued_at_ms.contains_key(&tx_hash) {
+                    self.queued_tx_enqueued_at_ms
+                        .insert(tx_hash, replacement_enqueue_timestamp_ms);
+                    age_ring.retain(|(hash, _)| *hash != tx_hash);
+                    age_ring.push_back((tx_hash, replacement_enqueue_timestamp_ms));
+                    age_ring
+                        .make_contiguous()
+                        .sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
+                }
+                drop(age_ring);
+                drop(transition);
+                drop(queue_guard);
+                return Ok(QueuePushOutcome {
+                    routing_decision: rebound.routing_plan.coordinator_route(),
+                    routing_plan: rebound.routing_plan,
+                    entrypoint_hash: rebound.entrypoint_hash,
+                    signed_transaction_hash: rebound.signed_transaction_hash,
+                    enqueue_timestamp_ms: rebound.enqueue_timestamp_ms,
+                    journal_record_digest: Some(rebound.journal_record_digest),
+                    admission_context: Some(rebound.admission_context),
+                    global_admission_identity: rebound.global_admission_identity,
+                });
             }
         }
         let context_required = match plan_journal_mode {
@@ -18718,6 +18799,165 @@ pub mod tests {
                 .len(),
             rollover_len
         );
+    }
+
+    #[test]
+    fn strict_global_admission_atomically_promotes_gossiped_unbound_claim() {
+        for advance_height in [false, true] {
+            let label = if advance_height {
+                "height-advanced"
+            } else {
+                "same-context"
+            };
+            let dir = tempfile::tempdir().expect("tempdir");
+            let journal_path = dir
+                .path()
+                .join(format!("strict-global-promotion-{label}.norito"));
+            let mut state = State::new(
+                world_with_test_domains(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut nexus = state.nexus_snapshot();
+            nexus.enabled = false;
+            state.set_nexus(nexus).expect("apply disabled Nexus state");
+            install_single_validator_topology_for_queue_test(&state, 0xBD);
+            seed_committed_height_for_queue_test(&state, 1);
+            let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_414));
+            let queue = Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                Arc::new(StaticRouter {
+                    lane: LaneId::SINGLE,
+                    dataspace: DataSpaceId::UNIVERSAL,
+                }),
+                &[],
+            );
+            queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install strict-global promotion journal");
+
+            let tx = accepted_tx_by_someone(&time_source);
+            register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+            let hash = tx.hash();
+            let plan = queue
+                .route_plan_with_state(&tx, &state)
+                .expect("resolve strict-global promotion route");
+            let original_context = queue
+                .plan_admission_context_with_state(&state, &plan)
+                .expect("capture unbound gossip context");
+            let unbound_claim = queue
+                .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                    tx.clone(),
+                    &state,
+                    plan.clone(),
+                    &original_context,
+                )
+                .expect("persist unbound gossiped claim");
+            assert_eq!(unbound_claim.global_admission_identity, None);
+            let fifo_before = {
+                let _queue_guard = queue.push_remove_lock.lock();
+                queue.fifo_snapshot_locked()
+            };
+
+            if advance_height {
+                seed_committed_height_for_queue_test(&state, 3);
+            }
+            let binding_context = queue
+                .plan_admission_context_with_state(&state, &plan)
+                .expect("capture exact ingress binding context");
+            assert_eq!(
+                binding_context == original_context,
+                !advance_height,
+                "fixture must exercise both exact retry and rollover promotion paths"
+            );
+            let binding_timestamp_ms = unbound_claim.enqueue_timestamp_ms.saturating_add(17);
+            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+                state.chain_id_ref(),
+                tx.entrypoint(),
+                &plan,
+                binding_context.clone(),
+                binding_timestamp_ms,
+            )
+            .expect("build exact global ingress binding");
+
+            let promoted = queue
+                .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                    tx.clone(),
+                    &state,
+                    plan.clone(),
+                    &binding,
+                )
+                .unwrap_or_else(|error| panic!("promote {label} unbound claim: {error:?}"));
+            assert_eq!(
+                crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+                    &promoted
+                ),
+                Ok(binding.clone()),
+                "promoted claim must reproduce every ingress-authored binding field"
+            );
+            assert_eq!(promoted.enqueue_timestamp_ms, binding_timestamp_ms);
+            assert_eq!(queue.active_len(), 1);
+            assert_eq!(queue.queued_len(), 1);
+            assert_eq!(
+                queue
+                    .tx_enqueued_at_ms
+                    .get(&hash)
+                    .map(|timestamp| *timestamp.value()),
+                Some(binding_timestamp_ms),
+                "queue timestamp index must move with the exact durable binding"
+            );
+            assert_eq!(
+                queue
+                    .queued_tx_enqueued_at_ms
+                    .get(&hash)
+                    .map(|timestamp| *timestamp.value()),
+                Some(binding_timestamp_ms),
+                "queued-age membership must move with the exact durable binding"
+            );
+            assert_eq!(
+                queue
+                    .queued_age_ring
+                    .lock()
+                    .iter()
+                    .filter(|(candidate, _)| *candidate == hash)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![(hash, binding_timestamp_ms)],
+                "promotion must replace the old gossip-age tuple exactly once"
+            );
+            let indexed_claim = queue
+                .durable_plan_claims
+                .get(&hash)
+                .expect("promoted durable claim index");
+            assert_eq!(indexed_claim.durable_admission(), promoted);
+            drop(indexed_claim);
+            let fifo_after = {
+                let _queue_guard = queue.push_remove_lock.lock();
+                queue.fifo_snapshot_locked()
+            };
+            assert_eq!(
+                fifo_after, fifo_before,
+                "promotion must retain the original FIFO ownership"
+            );
+            assert_eq!(
+                queue
+                    .plan_journal
+                    .lock()
+                    .as_ref()
+                    .expect("installed strict-global promotion journal")
+                    .replay()
+                    .expect("replay exact promoted journal record"),
+                vec![QueuePlanJournalRecordV4::new(
+                    tx.entrypoint().clone(),
+                    plan,
+                    binding_context,
+                    binding_timestamp_ms,
+                    Some(binding.global_admission_identity()),
+                )],
+                "only the exact global record may remain live after promotion"
+            );
+        }
     }
 
     #[test]

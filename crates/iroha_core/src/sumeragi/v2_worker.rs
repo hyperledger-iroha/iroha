@@ -15839,8 +15839,33 @@ impl ProductionV2Services {
         &self,
         message: &BlockMessage,
     ) -> Result<ExactOutputRolloverClaim, String> {
-        let Some((proposal_height, _)) = lane_output_identity(message) else {
-            return Err("Sumeragi v2 lane output has no typed lane identity".to_owned());
+        let (proposal_height, rollover_claim) = if let Some((proposal_height, _)) =
+            lane_output_identity(message)
+        {
+            (
+                proposal_height,
+                ExactOutputRolloverClaim::Lane(self.exact_output_scope()),
+            )
+        } else {
+            // Executable payload and NewView messages are authenticated lane
+            // transport, but they are not independently reconstructible lane
+            // consensus output. Keep them exact until actor admission instead
+            // of incorrectly requiring a durable lane-artifact witness.
+            let proposal_height = match message {
+                BlockMessage::LaneExecutablePayload(payload) => {
+                    payload.origin_proposal.descriptor.proposal_height
+                }
+                BlockMessage::LaneBlockNewViewVote(vote) => vote.body.proposal_height,
+                BlockMessage::LaneBlockNewViewCertificate(certificate) => {
+                    certificate.body.proposal_height
+                }
+                _ => {
+                    return Err(
+                        "Sumeragi v2 lane output has no typed lane transport identity".to_owned(),
+                    );
+                }
+            };
+            (proposal_height, ExactOutputRolloverClaim::Exact)
         };
         if proposal_height != self.context.height {
             return Err(format!(
@@ -15848,7 +15873,7 @@ impl ProductionV2Services {
                 self.context.height
             ));
         }
-        Ok(ExactOutputRolloverClaim::Lane(self.exact_output_scope()))
+        Ok(rollover_claim)
     }
 
     /// Retry every currently schedulable exact semantic-output target.
@@ -16585,6 +16610,9 @@ impl ProductionV2Services {
         if !matches!(
             message,
             BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneBlockNewViewVote(_)
+                | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneBlockCertificate(_)
@@ -16992,6 +17020,9 @@ impl ProductionV2Services {
         let rollover_claim = match &message {
             BlockMessage::V2(_) => ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
             BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneExecutablePayload(_)
+            | BlockMessage::LaneBlockNewViewVote(_)
+            | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::LaneBlockCertificate(_) => {
@@ -17033,6 +17064,9 @@ impl ProductionV2Services {
         let rollover_claim = match &message {
             BlockMessage::V2(_) => ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
             BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneExecutablePayload(_)
+            | BlockMessage::LaneBlockNewViewVote(_)
+            | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::LaneBlockCertificate(_) => {

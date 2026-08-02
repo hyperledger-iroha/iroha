@@ -6989,10 +6989,41 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             || proposal_round.view != reservation.tag.view()
             || !reservation.ownership.validate_exact()
             || !ownership.validate_exact()
-            || reservation.ownership.owner() != ownership.owner()
         {
             self.latch_fail_closed("Proposal fanout changed its active-view producer");
             return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+        }
+
+        if reservation.ownership.owner() != ownership.owner() {
+            let owner = ownership.owner();
+            let fresh_kind = self
+                .dormant_fresh_lifecycle_owners
+                .iter()
+                .find_map(|((kind, _), candidate)| (candidate == owner).then_some(*kind));
+            if owner.causal_origin().root_tag != reservation.tag {
+                self.latch_fail_closed("Proposal fanout changed its active-view producer");
+                return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+            }
+            match fresh_kind {
+                // Recovery can restore a durable Proposal signing request before
+                // live clocks mint the process-local producer reservation. Its
+                // eventual fanout is the original Proposal terminal, not a
+                // competing producer, so it consumes the reservation.
+                Some(RuntimeFreshRootKind::StartupRecovery) => {}
+                // Periodic control retransmission has its own scheduler owner.
+                // It neither creates nor completes the active view's one-shot
+                // local Proposal producer.
+                Some(RuntimeFreshRootKind::Retransmit) => return Ok(()),
+                Some(
+                    RuntimeFreshRootKind::Timeout
+                    | RuntimeFreshRootKind::HistoricalLockedRetransmit
+                    | RuntimeFreshRootKind::LocalProposalAdmission,
+                )
+                | None => {
+                    self.latch_fail_closed("Proposal fanout changed its active-view producer");
+                    return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
+                }
+            }
         }
         self.active_view_producer = None;
         Ok(())
@@ -12385,6 +12416,91 @@ mod tests {
             "the admission invariant remains fail-closed if preflight is bypassed"
         );
         assert!(runtime.fail_closed);
+    }
+
+    #[test]
+    fn replayed_proposal_fanout_consumes_the_live_producer_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xAA);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct replay runtime");
+        let replay_owner = runtime
+            .mint_fresh_lifecycle_owner(
+                initial,
+                CommandClass::Progress,
+                RuntimeFreshRootKind::StartupRecovery,
+                b"replayed-proposal-signature",
+            )
+            .expect("mint exact startup recovery owner");
+        let replay_ownership =
+            RuntimeEffectOwnership::fresh(replay_owner, RuntimeFreshRootKind::StartupRecovery);
+        runtime
+            .reconcile_active_view_producer(initial, true)
+            .expect("reserve live producer after replay work was restored");
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm clocks after replay restoration");
+
+        runtime
+            .complete_active_view_producer_after_proposal_fanout(proposal.round, &replay_ownership)
+            .expect("replayed original Proposal fanout consumes the live reservation");
+        assert!(runtime.active_view_producer.is_none());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn retransmitted_proposal_fanout_preserves_the_live_producer_reservation() {
+        let (context, keys) = authenticated_runtime_context();
+        let message = signed_runtime_proposal(&context, &keys, 0xAB);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload else {
+            panic!("runtime fixture must produce a Proposal")
+        };
+        let initial = EventTag::new(context.height, 0, Generation::new(1));
+        let start = Instant::now();
+        let (mut runtime, _) = SerializedV2Runtime::with_driver(
+            FakeDriver::new(initial),
+            start,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(8, 2, 2),
+            Vec::new(),
+        )
+        .expect("construct retransmit runtime");
+        runtime
+            .reconcile_active_view_producer(initial, true)
+            .expect("reserve live producer");
+        let retransmit_owner = runtime
+            .mint_fresh_lifecycle_owner(
+                initial,
+                CommandClass::Progress,
+                RuntimeFreshRootKind::Retransmit,
+                b"periodic-retransmit",
+            )
+            .expect("mint exact retransmit owner");
+        let retransmit_ownership =
+            RuntimeEffectOwnership::fresh(retransmit_owner, RuntimeFreshRootKind::Retransmit);
+        runtime
+            .arm_live_clocks(start)
+            .expect("arm clocks after producer reservation");
+
+        runtime
+            .complete_active_view_producer_after_proposal_fanout(
+                proposal.round,
+                &retransmit_ownership,
+            )
+            .expect("periodic Proposal fanout is not the live producer terminal");
+        assert!(runtime.active_view_producer.is_some());
+        assert!(!runtime.fail_closed);
     }
 
     #[test]

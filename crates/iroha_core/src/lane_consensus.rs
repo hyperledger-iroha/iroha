@@ -76,7 +76,13 @@ pub(crate) const MAX_LANE_EXECUTABLE_PAYLOAD_BYTES: usize =
 
 /// Resource budget for decoding one untrusted canonical payload frame.
 const AUTONOMOUS_LANE_PAYLOAD_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
-    MAX_LANE_EXECUTABLE_ENTRYPOINTS,
+    // The payload contains both bounded entrypoint vectors and legitimate byte
+    // blobs such as a full native smart-contract upload chunk. Entrypoint
+    // cardinality is validated semantically after decode; using that 4,096
+    // ceiling as the generic sequence limit incorrectly rejects a 64-KiB
+    // `Vec<u8>`. The nested payload-derived canonical limits remain the
+    // effective allocation/element bomb boundary.
+    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
     MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
     MAX_LANE_EXECUTABLE_ENTRYPOINTS * 256,
     MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES * 4,
