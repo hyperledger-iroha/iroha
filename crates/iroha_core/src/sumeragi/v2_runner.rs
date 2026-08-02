@@ -4318,7 +4318,7 @@ fn candidate_attachments(
         Default::default()
     };
     Ok(CandidateAttachments {
-        time_triggers_due: state.time_triggers_due_for_block_fast(round_header),
+        time_trigger_clock_progress_required: state.time_trigger_clock_progress_required_fast(),
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()

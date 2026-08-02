@@ -13848,6 +13848,17 @@ impl<'state> StateView<'state> {
         StateReadOnly::latest_block_hash(self)
     }
 
+    /// Return whether an enabled, non-depleted time trigger needs ledger-clock progress.
+    pub fn time_trigger_clock_progress_required(&self) -> bool {
+        self.world
+            .triggers()
+            .time_triggers()
+            .iter()
+            .any(|(_, action)| {
+                !action.repeats.is_depleted() && trigger_is_enabled(action.metadata())
+            })
+    }
+
     /// Check if any time triggers should fire for a block with the given header.
     pub fn time_triggers_due_for_block(&self, block_header: &BlockHeader) -> bool {
         let to = block_header.creation_time();
@@ -32007,6 +32018,18 @@ impl State {
         entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<BlockProofs, BlockProofError> {
         block_proofs_for_entry_from_kura(&self.kura, block_height, entry_hash)
+    }
+
+    /// Return whether an enabled, non-depleted time trigger needs ledger-clock progress.
+    ///
+    /// This avoids acquiring a full [`StateView`] on consensus hot paths that only need
+    /// to decide whether an otherwise idle block is required for trigger scheduling.
+    #[track_caller]
+    pub fn time_trigger_clock_progress_required_fast(&self) -> bool {
+        let world = self.world_view();
+        world.triggers().time_triggers().iter().any(|(_, action)| {
+            !action.repeats.is_depleted() && trigger_is_enabled(action.metadata())
+        })
     }
 
     /// Check if any time triggers should fire for a block with the given header.

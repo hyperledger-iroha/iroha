@@ -51565,6 +51565,14 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
+    assert!(
+        !state.time_trigger_clock_progress_required_fast(),
+        "a state without time triggers must not require idle block production"
+    );
+    assert!(
+        !state.view().time_trigger_clock_progress_required(),
+        "the snapshot helper must agree for a state without time triggers"
+    );
 
     let header1 = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block1 = state.block(header1);
@@ -51595,6 +51603,14 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
 
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let view = state.view();
+    assert!(
+        state.time_trigger_clock_progress_required_fast(),
+        "an enabled time trigger must retain ledger-clock progress"
+    );
+    assert!(
+        view.time_trigger_clock_progress_required(),
+        "the snapshot helper must retain ledger-clock progress"
+    );
     assert_eq!(
         state.time_triggers_due_for_block_fast(&header2),
         view.time_triggers_due_for_block(&header2),
@@ -51607,6 +51623,26 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
     assert!(
         view.time_triggers_due_for_block(&header2),
         "precommit triggers should be due for the next block"
+    );
+    drop(view);
+
+    let mut state_block2 = state.block(header2);
+    {
+        let mut stx = state_block2.transaction();
+        let enabled_key =
+            crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY.parse::<Name>()?;
+        SetKeyValue::trigger("precommit_probe".parse()?, enabled_key, Json::from(false))
+            .execute(&ALICE_ID, &mut stx)?;
+        stx.apply();
+    }
+    state_block2.commit()?;
+    assert!(
+        !state.time_trigger_clock_progress_required_fast(),
+        "a disabled time trigger must not keep producing idle blocks"
+    );
+    assert!(
+        !state.view().time_trigger_clock_progress_required(),
+        "the snapshot helper must ignore disabled time triggers"
     );
 
     Ok(())
