@@ -115,11 +115,19 @@ use sorafs_manifest::{
 use tiny_keccak::{Hasher as _, Sha3};
 
 #[cfg(test)]
-use iroha::data_model::soracloud::{
-    SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-    SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
-    SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-    SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+use iroha::data_model::{
+    nexus::{DataSpaceId, FeeDebitSource},
+    soracloud::{
+        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
+        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+        SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+    },
+    transaction::SignedTransaction,
+};
+#[cfg(test)]
+use iroha_torii_shared::{
+    FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
 };
 
 use crate::{Run, RunContext};
@@ -21387,6 +21395,7 @@ mod tests {
         SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
     use iroha_crypto::Algorithm;
+    use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
     use norito::json::Value;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use std::{
@@ -22206,17 +22215,11 @@ mod tests {
             .into_iter()
             .find(|request| request.method == "POST" && request.path == "/v1/sorafs/pin/register")
             .expect("captured pin registration");
-        let register_body: Value =
-            json::from_slice(&register_request.body).expect("decode pin registration");
-        let manifest_payload = register_body
-            .get("manifest_payload")
-            .and_then(Value::as_str)
-            .expect("pin registration manifest payload");
-        let manifest_bytes = base64::engine::general_purpose::STANDARD
-            .decode(manifest_payload)
-            .expect("decode registered manifest payload");
-        let published_manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
-            .expect("decode registered manifest");
+        let registration = mock_sorafs_pin_registration(&register_request)
+            .expect("decode native pin registration transaction");
+        let published_manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(&registration.manifest_payload)
+                .expect("decode registered manifest");
 
         let descriptor = chunker_registry::default_descriptor();
         let (plan, payload) =
@@ -22274,6 +22277,13 @@ mod tests {
         body: Vec<u8>,
     }
 
+    #[derive(Clone, Debug)]
+    struct MockSorafsPinRegistration {
+        manifest_payload: Vec<u8>,
+        manifest_digest_hex: String,
+        tx_hash_hex: String,
+    }
+
     struct MockHttpServer {
         base_url: String,
         address: String,
@@ -22308,35 +22318,63 @@ mod tests {
                                 continue;
                             }
                             let path = request.path.clone();
-                            let registered_manifest_digest =
-                                mock_sorafs_pin_register_digest(&request);
+                            let fee_quote_response = mock_fee_quote_response(&request);
+                            let pin_registration = mock_sorafs_pin_registration(&request);
+                            let is_pin_registration = request.method == "POST"
+                                && request.path == "/v1/sorafs/pin/register";
                             captured_requests
                                 .lock()
                                 .expect("lock captured requests")
                                 .push(request);
-                            let routed_response = routes.get(&path).cloned();
-                            let pin_registry_response = if routed_response.is_none() {
+                            let configured_response = routes.get(&path).cloned();
+                            let pin_registration_response = configured_response
+                                .as_ref()
+                                .filter(|_| is_pin_registration)
+                                .and_then(|_| pin_registration.as_ref())
+                                .map(mock_sorafs_pin_registration_response);
+                            let pin_registry_response = if configured_response.is_none()
+                                && fee_quote_response.is_none()
+                                && pin_registration_response.is_none()
+                            {
                                 mock_sorafs_pin_registry_response(&path, &registered_pin_manifests)
                             } else {
                                 None
                             };
-                            let request_matched =
-                                routed_response.is_some() || pin_registry_response.is_some();
-                            let response = routed_response.or(pin_registry_response).unwrap_or(
-                                MockHttpResponse {
-                                    content_type: "text/plain",
-                                    body: b"not found".to_vec(),
-                                },
-                            );
-                            let status = if request_matched {
-                                "200 OK"
-                            } else {
-                                "404 Not Found"
-                            };
-                            if status == "200 OK" {
-                                if let Some(digest) = registered_manifest_digest {
-                                    registered_pin_manifests.insert(digest);
-                                }
+                            let (response, status) =
+                                if let Some(response) = pin_registration_response {
+                                    (response, "202 Accepted")
+                                } else if configured_response.is_some()
+                                    && is_pin_registration
+                                    && pin_registration.is_none()
+                                {
+                                    (
+                                        MockHttpResponse {
+                                            content_type: "text/plain",
+                                            body: b"invalid pin registration transaction".to_vec(),
+                                        },
+                                        "400 Bad Request",
+                                    )
+                                } else if let Some(response) = configured_response {
+                                    (response, "200 OK")
+                                } else if let Some(response) = fee_quote_response {
+                                    (response, "200 OK")
+                                } else if let Some(response) = pin_registry_response {
+                                    (response, "200 OK")
+                                } else {
+                                    (
+                                        MockHttpResponse {
+                                            content_type: "text/plain",
+                                            body: b"not found".to_vec(),
+                                        },
+                                        "404 Not Found",
+                                    )
+                                };
+                            if status == "202 Accepted" {
+                                registered_pin_manifests.insert(
+                                    pin_registration
+                                        .expect("accepted pin registration was decoded")
+                                        .manifest_digest_hex,
+                                );
                             }
                             if let Err(error) = write!(
                                 stream,
@@ -22380,21 +22418,80 @@ mod tests {
         }
     }
 
-    fn mock_sorafs_pin_register_digest(request: &CapturedHttpRequest) -> Option<String> {
+    fn mock_fee_quote_response(request: &CapturedHttpRequest) -> Option<MockHttpResponse> {
+        if request.method != "POST" || request.path != iroha_torii_shared::uri::FEES_QUOTE {
+            return None;
+        }
+        let request: FeeQuoteRequest = json::from_slice(&request.body).ok()?;
+        let (debit_source, program_revision) = match request.payload.fee_payment.sponsor_program() {
+            Some((program_id, revision)) => (
+                FeeDebitSource::SponsorProgram(program_id.clone()),
+                Some(revision),
+            ),
+            None => (
+                FeeDebitSource::Account(request.payload.authority.clone()),
+                None,
+            ),
+        };
+        let response = FeeQuoteResponse {
+            intent: request.payload.fee_payment.clone(),
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 1,
+                next_block_height: 1,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            components: Vec::new(),
+            capacities: Vec::new(),
+            decision: FeeQuoteDecision::Accepted {
+                debit_source,
+                program_revision,
+            },
+        };
+        Some(MockHttpResponse {
+            content_type: "application/json",
+            body: json::to_vec(&response).ok()?,
+        })
+    }
+
+    fn mock_sorafs_pin_registration(
+        request: &CapturedHttpRequest,
+    ) -> Option<MockSorafsPinRegistration> {
         if request.method != "POST" || request.path != "/v1/sorafs/pin/register" {
             return None;
         }
-        let body: norito::json::Value = json::from_slice(&request.body).ok()?;
-        let manifest_payload = body.get("manifest_payload")?.as_str()?;
-        let manifest_bytes = base64::engine::general_purpose::STANDARD
-            .decode(manifest_payload)
-            .ok()?;
-        if base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != manifest_payload {
+        let transaction = SignedTransaction::decode_all_versioned(&request.body).ok()?;
+        transaction.verify_signature().ok()?;
+        let Executable::Instructions(instructions) = transaction.instructions() else {
             return None;
-        }
-        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).ok()?;
+        };
+        let [instruction] = instructions.as_ref() else {
+            return None;
+        };
+        let registration = instruction
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::sorafs::RegisterPinManifest>()?;
+        let manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(&registration.manifest_payload).ok()?;
         let digest = manifest.digest().ok()?;
-        Some(hex::encode(digest.as_bytes()))
+        Some(MockSorafsPinRegistration {
+            manifest_payload: registration.manifest_payload.clone(),
+            manifest_digest_hex: hex::encode(digest.as_bytes()),
+            tx_hash_hex: hex::encode(transaction.hash().as_ref()),
+        })
+    }
+
+    fn mock_sorafs_pin_registration_response(
+        registration: &MockSorafsPinRegistration,
+    ) -> MockHttpResponse {
+        MockHttpResponse {
+            content_type: "application/json",
+            body: json::to_vec(&norito::json!({
+                "status": "submitted",
+                "tx_hash_hex": (registration.tx_hash_hex.clone()),
+                "manifest_digest_hex": (registration.manifest_digest_hex.clone()),
+            }))
+            .expect("encode mock SoraFS pin registration response"),
+        }
     }
 
     fn mock_sorafs_pin_registry_response(
@@ -22423,6 +22520,41 @@ mod tests {
     }
 
     #[test]
+    fn mock_http_server_quotes_the_exact_requested_fee_intent() {
+        let server = MockHttpServer::start(BTreeMap::new());
+        let key_pair = soracloud_fixture_key_pair(0x49);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut config = crate::fallback_config();
+        config.account = authority.clone();
+        config.key_pair = key_pair;
+        config.torii_api_url = server.base_url.parse().expect("mock Torii URL");
+        let client = Client::new(config);
+        let requested_intent = FeePaymentIntent::authority(Vec::new(), None);
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                requested_intent.clone(),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+
+        let quote = client.quote_fees(&payload).expect("quote mock fees");
+
+        assert_eq!(quote.intent, requested_intent);
+        assert_eq!(quote.observation.route_dataspace_id, DataSpaceId::UNIVERSAL);
+        assert!(matches!(
+            quote.decision,
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(ref quoted_authority),
+                program_revision: None,
+            } if quoted_authority == &authority
+        ));
+        assert!(server.requests().iter().any(|request| {
+            request.method == "POST" && request.path == iroha_torii_shared::uri::FEES_QUOTE
+        }));
+    }
+
+    #[test]
     fn mock_http_server_helpers_track_sorafs_pin_registration_digest() {
         let manifest = ManifestBuilder::new()
             .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA1; 32]))
@@ -22445,19 +22577,37 @@ mod tests {
                 .expect("digest mock pin manifest")
                 .as_bytes(),
         );
-        let manifest_payload = base64::engine::general_purpose::STANDARD.encode(&manifest_bytes);
+        let key_pair = soracloud_fixture_key_pair(0x4A);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut config = crate::fallback_config();
+        config.account = authority;
+        config.key_pair = key_pair;
+        let client = Client::new(config);
+        let transaction = client
+            .try_build_transaction_from_items(
+                [iroha::data_model::isi::sorafs::RegisterPinManifest::new(
+                    manifest_bytes.clone(),
+                    42,
+                    None,
+                    None,
+                )],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build mock native pin registration transaction");
         let request = CapturedHttpRequest {
             method: "POST".to_owned(),
             path: "/v1/sorafs/pin/register".to_owned(),
-            body: json::to_vec(&norito::json!({
-                "manifest_payload": manifest_payload,
-            }))
-            .expect("encode mock register body"),
+            body: transaction.encode_versioned(),
         };
 
+        let registration =
+            mock_sorafs_pin_registration(&request).expect("decode mock registration transaction");
+        assert_eq!(registration.manifest_payload, manifest_bytes);
+        assert_eq!(registration.manifest_digest_hex, digest);
         assert_eq!(
-            mock_sorafs_pin_register_digest(&request).as_deref(),
-            Some(digest.as_str())
+            registration.tx_hash_hex,
+            hex::encode(transaction.hash().as_ref())
         );
 
         let mut registered_pin_manifests = BTreeSet::new();

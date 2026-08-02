@@ -18266,6 +18266,8 @@ pub(super) mod tests {
         admission.lifecycle_id
     }
 
+    // Scheduler-attempt telemetry is intentionally excluded: even a failed
+    // dequeue records that the fair-ingress queue received a service turn.
     #[derive(Debug, PartialEq, Eq)]
     struct FairIngressAccountingSnapshot {
         last_admission_ordinal: u64,
@@ -18275,7 +18277,6 @@ pub(super) mod tests {
         len: usize,
         bytes: usize,
         nonempty_since: Option<Instant>,
-        last_service_attempt_at: Option<Instant>,
         open: bool,
     }
 
@@ -18339,7 +18340,6 @@ pub(super) mod tests {
             len: state.len,
             bytes: state.bytes,
             nonempty_since: state.nonempty_since,
-            last_service_attempt_at: state.last_service_attempt_at,
             open: state.open,
         }
     }

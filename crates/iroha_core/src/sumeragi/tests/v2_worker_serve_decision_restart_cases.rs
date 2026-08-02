@@ -169,6 +169,8 @@
                     true
                 })
                 .expect_err("failed negative publication retains the prepared fair carrier");
+            fs::remove_dir(&temporary_state)
+                .expect("unblock prepared-carrier Decision publication");
             assert!(
                 error.contains("failed to create Sumeragi v2 Serve temporary state"),
                 "unexpected prepared-carrier persistence error: {error}"
@@ -247,8 +249,6 @@
                 "failed publication retains either the predecessor or reserved Serve admission"
             );
 
-            fs::remove_dir(&temporary_state)
-                .expect("unblock prepared-carrier Decision publication");
             if cancel_after_failure {
                 ingress.close();
                 ingress

@@ -2080,7 +2080,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_vk_id_pair_rejects_unsupported_backend_labels_and_preserves_colon_aliases() {
+    fn parse_vk_id_pair_rejects_unsupported_backend_aliases_and_accepts_registry_labels() {
         for literal in [
             " halo2/ipa:vk_transfer",
             "halo2/ipa :vk_transfer",
@@ -2096,6 +2096,7 @@ mod tests {
             "stark/fri/boi-audited:vk_transfer",
             "halo2/ipa:release-ready:vk_transfer",
             "halo2/ipa:tiny-add:vk_transfer",
+            "halo2/ipa:ivm-execution-v1:vk_ivm",
             "mock/dev:vk_transfer",
             "halo2/ipa:",
             "halo2/ipa:vk:shadow",
@@ -2106,9 +2107,9 @@ mod tests {
             );
         }
 
-        let parsed =
-            parse_vk_id_pair("halo2/ipa:ivm-execution-v1:vk_ivm").expect("colon alias vk id");
-        assert_eq!(parsed.backend.as_str(), "halo2/ipa:ivm-execution-v1");
+        let parsed = parse_vk_id_pair("halo2/pasta/ivm-execution-v1:vk_ivm")
+            .expect("canonical IVM execution vk id");
+        assert_eq!(parsed.backend.as_str(), "halo2/pasta/ivm-execution-v1");
         assert_eq!(parsed.name.as_str(), "vk_ivm");
 
         let parsed =
