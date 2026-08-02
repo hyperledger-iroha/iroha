@@ -31,7 +31,6 @@ pub(super) struct Figure9Layout {
     pub(super) issuer_signed_datetime: Range<usize>,
     pub(super) issuer_valid_from_datetime: Range<usize>,
     pub(super) issuer_valid_until_datetime: Range<usize>,
-    pub(super) birth_random: Range<usize>,
     pub(super) birth_date: Range<usize>,
 }
 
@@ -154,7 +153,6 @@ impl Figure9Layout {
             issuer_signed_datetime,
             issuer_valid_from_datetime,
             issuer_valid_until_datetime,
-            birth_random,
             birth_date,
         }
     }
@@ -277,7 +275,10 @@ mod tests {
             layout.issuer_valid_until_datetime.len(),
             VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1
         );
-        assert_eq!(layout.birth_random.len(), VEGA_MDL_BIRTH_RANDOM_BYTES_V1);
+        assert_eq!(
+            FIGURE9_BIRTH_RANDOM_RANGE.len(),
+            VEGA_MDL_BIRTH_RANDOM_BYTES_V1
+        );
         assert_eq!(layout.birth_date.len(), VEGA_MDL_FULL_DATE_TEXT_BYTES_V1);
         assert_eq!(layout.issuer_fixed.len(), layout.issuer_template.len());
         assert_eq!(layout.birth_fixed.len(), layout.birth_template.len());

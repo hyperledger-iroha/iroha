@@ -927,7 +927,7 @@ fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
 
     let authority = checked_contract_authority_fixture();
     let contract_address = ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &authority,
         3,
         DataSpaceId::UNIVERSAL,

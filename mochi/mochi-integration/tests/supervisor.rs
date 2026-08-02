@@ -61,7 +61,7 @@ async fn supervisor_reads_http_endpoints() -> Result<()> {
         }
         Err(err) => return Err(err.into()),
     };
-    let supervisor = build_supervisor(&temp, port, ProfilePreset::SinglePeer)?;
+    let supervisor = build_supervisor(&temp, port, ProfilePreset::FourPeerBft)?;
     let addr = peer_addr(&supervisor);
 
     let data = MockToriiData::default();
@@ -106,7 +106,7 @@ async fn supervisor_streams_receive_binary_frames() -> Result<()> {
         }
         Err(err) => return Err(err.into()),
     };
-    let supervisor = build_supervisor(&temp, port, ProfilePreset::SinglePeer)?;
+    let supervisor = build_supervisor(&temp, port, ProfilePreset::FourPeerBft)?;
     let addr = peer_addr(&supervisor);
 
     let data = MockToriiData::default();
@@ -162,7 +162,7 @@ async fn supervisor_replays_torii_fixture_streams() -> Result<()> {
         }
         Err(err) => return Err(err.into()),
     };
-    let supervisor = build_supervisor(&temp, port, ProfilePreset::SinglePeer)?;
+    let supervisor = build_supervisor(&temp, port, ProfilePreset::FourPeerBft)?;
     let addr = peer_addr(&supervisor);
 
     let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/torii_replay");
@@ -442,7 +442,7 @@ fn supervisor_allocates_ports_when_wrapping() -> Result<()> {
 
 #[test]
 fn supervisor_genesis_matches_peer_counts() -> Result<()> {
-    let presets = [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft];
+    let presets = [ProfilePreset::FourPeerBft];
 
     for preset in presets {
         let port = match reserve_port() {
@@ -491,7 +491,7 @@ fn supervisor_genesis_matches_peer_counts() -> Result<()> {
 
 #[test]
 fn supervisor_builder_cleans_preexisting_storage() -> Result<()> {
-    let presets = [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft];
+    let presets = [ProfilePreset::FourPeerBft];
 
     for preset in presets {
         let port = match reserve_port() {
@@ -547,7 +547,7 @@ fn supervisor_builder_cleans_preexisting_storage() -> Result<()> {
 
 #[test]
 fn supervisor_wipe_and_regenerate_resets_storage_and_genesis() -> Result<()> {
-    let presets = [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft];
+    let presets = [ProfilePreset::FourPeerBft];
 
     for preset in presets {
         let port = match reserve_port() {

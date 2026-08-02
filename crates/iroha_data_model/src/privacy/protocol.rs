@@ -3693,6 +3693,7 @@ pub enum PrivacyCompiledProfileCatalogRowValidationErrorV1 {
 /// discriminant order. This catalog is local build metadata, not committed
 /// governance state and not evidence that a protocol is live on any network.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[norito(schema_name = "iroha.privacy.compiled-profile-catalog.v1")]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

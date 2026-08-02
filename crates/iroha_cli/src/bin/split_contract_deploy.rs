@@ -704,7 +704,7 @@ mod tests {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            369,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -858,7 +858,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut metadata = Metadata::default();
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,

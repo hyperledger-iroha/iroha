@@ -1,8 +1,8 @@
 //! Fixed RNS arithmetic for the Jindo application rings.
 //!
-//! Both rings are `Z_q[X]/(X^256 + 1)`.  The two inner 53-bit primes and two
-//! outer 47-bit primes are pinned, prime, pairwise distinct, and congruent to
-//! one modulo 512.  Their pinned primitive 512th roots make negacyclic NTT
+//! Both rings are `Z_q[X]/(X^1024 + 1)`.  The two inner 46-bit primes and two
+//! outer 36-bit primes are pinned, prime, pairwise distinct, and congruent to
+//! one modulo 2048. Their pinned primitive 2048th roots make negacyclic NTT
 //! multiplication deterministic across every target without native-width
 //! overflow.
 
@@ -17,7 +17,7 @@ pub(crate) struct JindoPrimeModulusV1 {
 }
 
 impl JindoPrimeModulusV1 {
-    const fn new(modulus: u64, psi: u64) -> Self {
+    pub(crate) const fn new(modulus: u64, psi: u64) -> Self {
         Self { modulus, psi }
     }
 
@@ -26,16 +26,16 @@ impl JindoPrimeModulusV1 {
     }
 }
 
-/// Inner-commitment modulus `q` as two pinned 53-bit RNS primes.
+/// Inner-commitment modulus `q` from the current N=256, batch=4 reference profile.
 pub(crate) const JINDO_INNER_MODULI_V1: [JindoPrimeModulusV1; 2] = [
-    JindoPrimeModulusV1::new(9_007_199_254_740_481, 5_304_589_329_351_765),
-    JindoPrimeModulusV1::new(9_007_199_254_746_113, 469_272_423_371_168),
+    JindoPrimeModulusV1::new(70_368_744_067_073, 22_701_904_919_461),
+    JindoPrimeModulusV1::new(70_368_744_183_809, 12_022_014_596_385),
 ];
 
-/// Outer-commitment modulus `q_o` as two pinned 47-bit RNS primes.
+/// Outer-commitment modulus `q_o` from the same closed profile.
 pub(crate) const JINDO_OUTER_MODULI_V1: [JindoPrimeModulusV1; 2] = [
-    JindoPrimeModulusV1::new(140_737_488_357_377, 4_221_852_558_177),
-    JindoPrimeModulusV1::new(140_737_488_360_961, 54_241_512_517_934),
+    JindoPrimeModulusV1::new(48_591_984_641, 25_236_428_417),
+    JindoPrimeModulusV1::new(48_592_009_217, 4_690_178_537),
 ];
 
 /// One application-ring element in a fixed two-prime RNS basis.
@@ -131,7 +131,7 @@ impl JindoRnsPolynomialV1 {
         }
     }
 
-    /// Multiply in `Z_q[X]/(X^256 + 1)` using the pinned negacyclic NTT.
+    /// Multiply in `Z_q[X]/(X^1024 + 1)` using the pinned negacyclic NTT.
     pub(crate) fn mul(&self, rhs: &Self, moduli: [JindoPrimeModulusV1; 2]) -> Self {
         let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
         for (((out, left), right), prime) in residues
@@ -390,9 +390,9 @@ mod tests {
         ];
         for (index, prime) in all.into_iter().enumerate() {
             assert!(is_prime_64(prime.modulus), "modulus {index}");
-            assert_eq!((prime.modulus - 1) % 512, 0);
-            assert_eq!(pow_mod(prime.psi, 512, prime.modulus), 1);
-            assert_eq!(pow_mod(prime.psi, 256, prime.modulus), prime.modulus - 1);
+            assert_eq!((prime.modulus - 1) % 2048, 0);
+            assert_eq!(pow_mod(prime.psi, 2048, prime.modulus), 1);
+            assert_eq!(pow_mod(prime.psi, 1024, prime.modulus), prime.modulus - 1);
         }
         for left in 0..all.len() {
             for right in (left + 1)..all.len() {

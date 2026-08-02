@@ -11,22 +11,22 @@ use super::{
 
 /// Square of the exact pinned inner-response norm ceiling.
 ///
-/// The ceiling itself is `61_186_928_822_744_162_304`, the exact integer
+/// The ceiling itself is `26_726_985_705_641_897_984`, the exact integer
 /// represented by the selected parameter-search binary64 value.
 pub(crate) const JINDO_RESPONSE_NORM_SQUARED_BOUND_V1: [u64; 4] = [
-    0x96f6_da1b_e400_0000,
-    0x008d_67f8_726a_bd46,
-    0x0000_0000_0000_000b,
+    0x916f_f826_f100_0000,
+    0x1967_4b2b_1d7c_fdc7,
+    0x0000_0000_0000_0002,
     0x0000_0000_0000_0000,
 ];
 
 /// Square of the exact pinned outer-relation norm ceiling.
 ///
-/// The ceiling itself is `5_482_137_275_941_817_004_589_056`.
+/// The ceiling itself is `4_811_910_842_327_350_272`.
 pub(crate) const JINDO_DECOMPOSED_NORM_SQUARED_BOUND_V1: [u64; 4] = [
-    0x9000_0000_0000_0000,
-    0x21b8_9794_578f_bbfe,
-    0x0000_0014_904c_4e7f,
+    0x613e_e842_e210_0000,
+    0x116b_644b_ffff_ff5b,
+    0x0000_0000_0000_0000,
     0x0000_0000_0000_0000,
 ];
 

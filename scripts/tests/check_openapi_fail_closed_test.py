@@ -59,6 +59,12 @@ def test_openapi_version_and_signature_paths_reject_empty_specs() -> None:
 def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently() -> None:
     gate = OPENAPI_GATE.read_text(encoding="utf-8")
 
+    assert gate.count(
+        "node tools/openapi/scripts/verify-musubi-v1-contract.mjs"
+    ) == 1
+    assert gate.index(
+        "node tools/openapi/scripts/verify-musubi-v1-contract.mjs"
+    ) < gate.index("require_clean_checkout\n")
     assert "require_clean_checkout" in gate
     assert "EXPECTED_GENERATOR_COMMIT" not in gate
     assert gate.count(

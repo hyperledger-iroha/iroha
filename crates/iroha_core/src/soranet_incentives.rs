@@ -574,7 +574,7 @@ mod tests {
     fn default_policy() -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
             minimum_exit_bond: quantity(1_000),
-            bond_asset_id: AssetDefinitionId::new(
+            bond_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -588,7 +588,7 @@ mod tests {
         RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
             bonded_amount: quantity(amount),
-            bond_asset_id: AssetDefinitionId::new(
+            bond_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     fn skip_when_asset_mismatch() {
         let mut cfg = config();
-        cfg.policy.bond_asset_id = AssetDefinitionId::new(
+        cfg.policy.bond_asset_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("sora", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
@@ -828,7 +828,7 @@ mod tests {
             relay_id: [0xAA; 32],
             epoch: 11,
             beneficiary: sample_account("relay"),
-            payout_asset_id: AssetDefinitionId::new(
+            payout_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -866,7 +866,7 @@ mod tests {
             relay_id: [0xBB; 32],
             epoch: 21,
             beneficiary: sample_account("relay"),
-            payout_asset_id: AssetDefinitionId::new(
+            payout_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
@@ -909,7 +909,7 @@ mod tests {
             relay_id,
             epoch: 1,
             beneficiary: sample_account("overflow"),
-            payout_asset_id: AssetDefinitionId::new(
+            payout_asset_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),

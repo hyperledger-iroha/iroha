@@ -444,10 +444,10 @@ struct KuraRetainedSccpMessage {
     payload_bytes: Vec<u8>,
 }
 
-/// Immutable Kura-local block evidence retained before body eviction or finality publication.
+/// Legacy retained-record layout written before the merge-reference witness was added.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
-struct KuraRetainedBlockRecord {
+struct KuraRetainedBlockRecordV2 {
     /// Kura-local envelope version.
     format_version: u16,
     /// Exact canonical height also encoded in the file name and header.
@@ -464,11 +464,69 @@ struct KuraRetainedBlockRecord {
     sccp_archive: Vec<KuraRetainedSccpMessage>,
 }
 
+impl KuraRetainedBlockRecordV2 {
+    fn into_current(self) -> KuraRetainedBlockRecord {
+        KuraRetainedBlockRecord {
+            format_version: self.format_version,
+            height: self.height,
+            block_hash: self.block_hash,
+            block_header: self.block_header,
+            proposal_wire_hash: self.proposal_wire_hash,
+            executed_block_wire_hash: self.executed_block_wire_hash,
+            merge_reference: None,
+            sccp_archive: self.sccp_archive,
+        }
+    }
+
+    fn from_current(record: &KuraRetainedBlockRecord) -> Option<Self> {
+        (record.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
+            && record.merge_reference.is_none())
+        .then(|| Self {
+            format_version: record.format_version,
+            height: record.height,
+            block_hash: record.block_hash,
+            block_header: record.block_header,
+            proposal_wire_hash: record.proposal_wire_hash,
+            executed_block_wire_hash: record.executed_block_wire_hash,
+            sccp_archive: record.sccp_archive.clone(),
+        })
+    }
+}
+
+/// Immutable Kura-local block evidence retained before body eviction or finality publication.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct KuraRetainedBlockRecord {
+    /// Kura-local envelope version.
+    format_version: u16,
+    /// Exact canonical height also encoded in the file name and header.
+    height: u64,
+    /// Canonical hash stored in Kura's durable hash journal.
+    block_hash: HashOf<BlockHeader>,
+    /// Exact canonical header needed by later finality association.
+    block_header: BlockHeader,
+    /// Hash of the canonical resultless proposal wire authenticated by the subject.
+    proposal_wire_hash: Hash,
+    /// Hash of the complete result-bearing canonical `SignedBlock::encode_wire()` bytes.
+    executed_block_wire_hash: Hash,
+    /// Exact compact merge reference extracted while the canonical body was present.
+    ///
+    /// This immutable Kura-local witness lets a holder authorize bounded
+    /// historical sidecar service after local body eviction. Recipients still
+    /// verify the reference and merge QC against their own canonical block;
+    /// this field is local serving authority, not a standalone consensus
+    /// inclusion proof.
+    merge_reference: Option<CertifiedMergeLedgerReference>,
+    /// Successful outbound SCCP messages in exact commitment-index order.
+    sccp_archive: Vec<KuraRetainedSccpMessage>,
+}
+
 impl KuraRetainedBlockRecord {
     fn new(
         block_header: BlockHeader,
         proposal_wire_hash: Hash,
         executed_block_wire_hash: Hash,
+        merge_reference: Option<CertifiedMergeLedgerReference>,
         sccp_archive: Vec<KuraRetainedSccpMessage>,
     ) -> Self {
         Self {
@@ -478,8 +536,35 @@ impl KuraRetainedBlockRecord {
             block_header,
             proposal_wire_hash,
             executed_block_wire_hash,
+            merge_reference,
             sccp_archive,
         }
+    }
+
+    fn canonical_storage_bytes(&self) -> Vec<u8> {
+        KuraRetainedBlockRecordV2::from_current(self).map_or_else(
+            || self.encode(),
+            |legacy| legacy.encode(),
+        )
+    }
+
+    fn canonical_storage_encoded_len(&self) -> usize {
+        KuraRetainedBlockRecordV2::from_current(self).map_or_else(
+            || self.encoded_len(),
+            |legacy| legacy.encoded_len(),
+        )
+    }
+
+    fn is_legacy_upgrade_of(&self, legacy: &Self) -> bool {
+        self.format_version == RETAINED_BLOCK_RECORD_VERSION
+            && legacy.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
+            && legacy.merge_reference.is_none()
+            && self.height == legacy.height
+            && self.block_hash == legacy.block_hash
+            && self.block_header == legacy.block_header
+            && self.proposal_wire_hash == legacy.proposal_wire_hash
+            && self.executed_block_wire_hash == legacy.executed_block_wire_hash
+            && self.sccp_archive == legacy.sccp_archive
     }
 }
 

@@ -175,6 +175,8 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let beta_edge =
         fs::read_to_string(out_dir.join(beta_edge_config)).expect("read beta edge config");
     assert!(beta_edge.contains("name: sora-cache-version"));
+    assert!(beta_edge.contains("prometheus_listener: 127.0.0.1:19092"));
+    assert!(!beta_edge.contains("prometheus_listener: 0.0.0.0"));
     assert!(
         !beta_edge.contains("sora-denylist-version"),
         "retired local denylist header must not be required"
@@ -252,7 +254,7 @@ fn write_sample_srcv2(path: &Path) {
     .expect("mldsa keypair");
 
     let certificate = RelayCertificateV2 {
-        relay_id: [0x11; 32],
+        relay_id: signing_key.verifying_key().to_bytes(),
         identity_ed25519: signing_key.verifying_key().to_bytes(),
         identity_mldsa65: mldsa_keys.public_key.clone(),
         descriptor_commit: [0x22; 32],
@@ -265,9 +267,11 @@ fn write_sample_srcv2(path: &Path) {
         bandwidth_bytes_per_sec: 5_000_000,
         reputation_weight: 90,
         endpoints: vec![RelayEndpointV2 {
-            url: "soranet://relay.example:443".to_string(),
+            quic_multiaddr: "/dns/relay.example/udp/443/quic".to_string(),
+            tls_server_name: "relay.example".to_string(),
+            tls_spki_sha256: [0xA5; 32],
             priority: 1,
-            tags: vec!["norito-stream".into(), "doq".into()],
+            tags: vec!["doq".into(), "norito-stream".into()],
         }],
         capability_flags: RelayCapabilityFlagsV1::new(
             CapabilityToggle::Enabled,

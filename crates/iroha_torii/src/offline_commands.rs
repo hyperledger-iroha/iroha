@@ -373,6 +373,14 @@ fn validate_kagemusha_v4_topup_snapshot(
                 "Offline top-up asset has no confidential tree state.",
             )
         })?;
+    zk_state.validate_tree_integrity().map_err(|error| {
+        validation_owned(
+            "offline_confidential_state_invalid",
+            format!(
+                "Offline confidential tree is inconsistent with its persisted profile: {error}"
+            ),
+        )
+    })?;
     let shield_binding = zk_state.vk_shield.as_ref().ok_or_else(|| {
         validation(
             "offline_topup_shield_verifier_unavailable",
@@ -387,22 +395,19 @@ fn validate_kagemusha_v4_topup_snapshot(
             "Offline top-up proof does not use the asset-bound shield verifier.",
         ));
     }
-    let authoritative_initial_root =
-        iroha_core::zk::confidential_v2::compute_confidential_root_v2(&zk_state.commitments)
-            .map_err(|error| {
-                validation_owned(
-                    "offline_confidential_state_invalid",
-                    format!("Offline confidential tree is invalid: {error}"),
-                )
-            })?;
+    let authoritative_initial_root = zk_state.current_root().map_err(|error| {
+        validation_owned(
+            "offline_confidential_state_invalid",
+            format!("Offline confidential tree is invalid: {error}"),
+        )
+    })?;
     let authoritative_leaf_index = u32::try_from(zk_state.commitments.len()).map_err(|_| {
         validation(
             "offline_topup_tree_full",
             "Offline confidential tree position exceeds the protocol index.",
         )
     })?;
-    if authoritative_leaf_index
-        >= iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
+    if zk_state.commitments.len() >= zk_state.tree_profile.capacity()
         || zk_state
             .commitments
             .contains(&request.current_note.note_commitment)
@@ -417,15 +422,15 @@ fn validate_kagemusha_v4_topup_snapshot(
     }
     let mut commitments_after = zk_state.commitments.clone();
     commitments_after.push(request.current_note.note_commitment);
-    let authoritative_finalized_root =
-        iroha_core::zk::confidential_v2::compute_confidential_root_v2(&commitments_after).map_err(
-            |error| {
-                validation_owned(
-                    "offline_confidential_state_invalid",
-                    format!("Offline confidential tree is invalid after append: {error}"),
-                )
-            },
-        )?;
+    let authoritative_finalized_root = zk_state
+        .tree_profile
+        .compute_root(&commitments_after)
+        .map_err(|error| {
+            validation_owned(
+                "offline_confidential_state_invalid",
+                format!("Offline confidential tree is invalid after append: {error}"),
+            )
+        })?;
     if request.shield_evidence.initial_root != authoritative_initial_root
         || request.shield_evidence.finalized_root != authoritative_finalized_root
         || request.shield_evidence.leaf_index != authoritative_leaf_index
@@ -2065,8 +2070,13 @@ mod tests {
                 .parse()
                 .expect("canonical XOR asset definition id");
         let account = Account::new(issuer.authority.clone()).build(&issuer.authority);
-        let definition =
-            AssetDefinition::numeric(fee_asset_definition_id.clone()).build(&issuer.authority);
+        let definition = AssetDefinition::numeric(
+            fee_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&issuer.authority);
         let asset = Asset::new(
             AssetId::new(fee_asset_definition_id.clone(), issuer.authority.clone()),
             xor_balance,
@@ -2145,7 +2155,7 @@ mod tests {
             .parse()
             .expect("fixture chain id");
         let domain_id = DomainId::try_new("offline", "universal").expect("fixture domain id");
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             domain_id,
             "coordinator".parse().expect("fixture asset name"),
         );

@@ -195,7 +195,7 @@ mod tests {
     }
 
     fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("asset name"),
         )
@@ -289,7 +289,7 @@ mod tests {
     fn fee_and_minimums_roundtrip() {
         let mut minimums = BTreeMap::new();
         minimums.insert(
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
@@ -300,10 +300,11 @@ mod tests {
             max_implicit_creations_per_tx: None,
             max_implicit_creations_per_block: None,
             implicit_creation_fee: Some(ImplicitAccountCreationFee {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                ),
+                asset_definition_id:
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("wonderland", "universal").unwrap(),
+                        "rose".parse().unwrap(),
+                    ),
                 amount: Quantity::from(2_u32),
                 destination: ImplicitAccountFeeDestination::Burn,
             }),
@@ -319,14 +320,18 @@ mod tests {
             policy.implicit_creation_fee()
         );
         assert_eq!(
-            decoded.min_initial_amount_for(&iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap()
-            )),
-            policy.min_initial_amount_for(&iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap()
-            ))
+            decoded.min_initial_amount_for(
+                &iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap()
+                )
+            ),
+            policy.min_initial_amount_for(
+                &iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap()
+                )
+            )
         );
         assert_eq!(
             decoded.default_role_on_create(),

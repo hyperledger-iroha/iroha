@@ -307,6 +307,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     pub struct Unshield {
         /// Asset definition id.
         pub asset: AssetDefinitionId,
@@ -317,10 +318,6 @@ isi! {
         /// Spent nullifiers.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
         pub inputs: Vec<[u8; 32]>,
-        /// Optional private change note commitments.
-        #[norito(default)]
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub outputs: Vec<[u8; 32]>,
         /// Proof attachment for the unshield.
         pub proof: crate::proof::ProofAttachment,
         /// Optional recent Merkle root used during proof construction.
@@ -340,33 +337,11 @@ impl Unshield {
         proof: crate::proof::ProofAttachment,
         root_hint: Option<[u8; 32]>,
     ) -> Self {
-        Self::new_with_outputs(
-            asset,
-            to,
-            public_amount,
-            inputs,
-            Vec::new(),
-            proof,
-            root_hint,
-        )
-    }
-
-    /// Construct a new Unshield instruction with explicit private change outputs.
-    pub fn new_with_outputs(
-        asset: AssetDefinitionId,
-        to: AccountId,
-        public_amount: impl Into<Quantity>,
-        inputs: Vec<[u8; 32]>,
-        outputs: Vec<[u8; 32]>,
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-    ) -> Self {
         Self {
             asset,
             to,
             public_amount: public_amount.into(),
             inputs,
-            outputs,
             proof,
             root_hint,
         }
@@ -608,7 +583,6 @@ impl_zk_decode_from_slice!(Unshield {
     to: AccountId,
     public_amount: Quantity,
     inputs: Vec<[u8; 32]>,
-    outputs: Vec<[u8; 32]>,
     proof: crate::proof::ProofAttachment,
     root_hint: Option<[u8; 32]>,
 });
@@ -644,9 +618,20 @@ mod tests {
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
+    use norito::{codec::Encode, core::DecodeFromSlice};
 
     use super::*;
+
+    #[derive(Encode)]
+    struct StaleUnshieldWire {
+        asset: AssetDefinitionId,
+        to: AccountId,
+        public_amount: Quantity,
+        inputs: Vec<[u8; 32]>,
+        outputs: Vec<[u8; 32]>,
+        proof: ProofAttachment,
+        root_hint: Option<[u8; 32]>,
+    }
 
     #[test]
     fn election_shape_v1_enforces_option_and_tally_boundaries() {
@@ -703,7 +688,7 @@ mod tests {
     }
 
     fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             Name::from_str("xor").expect("asset name"),
         )
@@ -803,12 +788,11 @@ mod tests {
             proof.clone(),
             Some([0x14; 32]),
         ));
-        assert_slice_roundtrip(Unshield::new_with_outputs(
+        assert_slice_roundtrip(Unshield::new(
             asset,
             account(2),
             Quantity::from(500_u32),
             vec![[0x15; 32]],
-            vec![[0x16; 32]],
             proof.clone(),
             Some([0x17; 32]),
         ));
@@ -833,6 +817,24 @@ mod tests {
             tally: vec![1, 2, 3],
             tally_proof: proof,
         });
+    }
+
+    #[test]
+    fn unshield_rejects_retired_output_field_layout() {
+        let stale = StaleUnshieldWire {
+            asset: asset_definition_id(),
+            to: account(3),
+            public_amount: Quantity::from(7_u32),
+            inputs: vec![[0x31; 32]],
+            outputs: vec![[0x32; 32]],
+            proof: proof_attachment(),
+            root_hint: Some([0x33; 32]),
+        };
+
+        assert!(
+            Unshield::decode_from_slice(&stale.encode()).is_err(),
+            "the retired caller-supplied output field must fail closed"
+        );
     }
 
     #[cfg(feature = "json")]

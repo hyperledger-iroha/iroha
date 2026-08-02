@@ -45,11 +45,14 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
         let ad: AssetDefinition = AssetDefinition::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "coin".parse().unwrap(),
             ),
+            "coin".to_owned(),
             NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(&alice_id);
         let acc_a = Account::new(alice_id.clone()).build(&alice_id);
@@ -70,7 +73,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .with_instructions([Mint::asset_quantity(
             10_u32,
             AssetId::of(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "coin".parse().unwrap(),
                 ),
@@ -272,7 +275,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
     // Compare resulting asset balances (Alice's coin should be 10 in both states)
     let a_coin: AssetId = AssetId::of(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
@@ -318,10 +321,18 @@ fn run_block_and_events(
     }
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&fixture_owner);
-    let ad_id = AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-    let ad: AssetDefinition = AssetDefinition::new(ad_id.clone(), NumericSpec::default())
-        .with_name("rose".to_owned())
-        .build(&fixture_owner);
+    let ad_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "rose".parse().expect("asset name"),
+    );
+    let ad: AssetDefinition = AssetDefinition::new(
+        ad_id.clone(),
+        "rose".to_owned(),
+        NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&fixture_owner);
     let mut world_accounts: Vec<Account> = Vec::new();
     let mut assets: Vec<Asset> = Vec::new();
     for acc_id in &accounts {
@@ -373,10 +384,11 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     let chain_id = ChainId::from("chain");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
-    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let rose: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
 
@@ -518,7 +530,7 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
 fn events_snapshot_asset_definition_kv_match_between_modes() {
     let chain_id = ChainId::from("chain");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
-    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
@@ -555,7 +567,7 @@ fn owner_transfer_domain_and_asset_def_parity() {
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );

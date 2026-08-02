@@ -15,8 +15,8 @@ use iroha_data_model::{
     ChainId, Registrable,
     account::{Account, AccountId},
     block::{
-        BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire,
-        consensus_v2::finality::V2FinalityArtifact,
+        BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
+        consensus_v2 as wire, consensus_v2::finality::V2FinalityArtifact,
     },
     bridge::SccpOutboundMessageContextV1,
     domain::Domain,
@@ -62,6 +62,7 @@ struct CorruptedKuraRetainedBlockRecord {
     block_header: BlockHeader,
     proposal_wire_hash: Hash,
     executed_block_wire_hash: Hash,
+    merge_reference: Option<CertifiedMergeLedgerReference>,
     sccp_archive: Vec<CorruptedKuraRetainedSccpMessage>,
 }
 
@@ -320,12 +321,12 @@ impl StrictReplayFixture {
             nexus_amx_context_hash: Hash::new(b"strict replay fixture pending state"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 2 * 1024 * 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 2 * 1024 * 1024,
-                max_chunk_count: 1,
+                max_chunk_count: 2,
             },
             leader_seed: [0; 32],
         };
@@ -817,7 +818,7 @@ impl StrictReplayFixture {
         let retained_dir = blocks_dir.join("retained_blocks");
         std::fs::create_dir_all(&retained_dir).expect("create retained-block directory");
         let retained = CorruptedKuraRetainedBlockRecord {
-            format_version: 2,
+            format_version: 3,
             height: HEIGHT,
             block_hash: block.hash(),
             block_header: block.header(),
@@ -827,6 +828,7 @@ impl StrictReplayFixture {
             executed_block_wire_hash: block
                 .executed_block_wire_hash()
                 .expect("encode malformed-SCCP executed block"),
+            merge_reference: None,
             sccp_archive: Vec::new(),
         };
         std::fs::write(

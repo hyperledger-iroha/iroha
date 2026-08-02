@@ -274,7 +274,7 @@ mod tests {
     fn dummy_paths(root: &Path) -> NetworkPaths {
         NetworkPaths::from_root(
             root,
-            &NetworkProfile::from_preset(ProfilePreset::SinglePeer),
+            &NetworkProfile::from_preset(ProfilePreset::FourPeerBft),
         )
     }
 

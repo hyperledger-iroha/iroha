@@ -1282,7 +1282,7 @@ public final class NoritoCodecAdapterTests {
   }
 
   private static String sampleContractAddress() {
-    return "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
+    return "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
   }
 
   private static byte[] fill(final int value, final int length) {

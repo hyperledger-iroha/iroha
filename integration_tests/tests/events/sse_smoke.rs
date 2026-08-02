@@ -89,7 +89,7 @@ fn sse_smoke_scenarios() -> Result<()> {
 
         let trigger_id: TriggerId = "sse_smoke_trigger_exec".parse()?;
         let asset_id = AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "rose".parse()?,
             ),
@@ -105,7 +105,8 @@ fn sse_smoke_scenarios() -> Result<()> {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(ALICE_ID.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ));
         if sandbox::handle_result(
             client.submit_blocking(
@@ -166,7 +167,8 @@ fn sse_smoke_scenarios() -> Result<()> {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 TimeEventFilter::new(ExecutionTime::PreCommit),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         if sandbox::handle_result(
             client.submit_blocking(

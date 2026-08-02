@@ -242,13 +242,12 @@
             BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
         )
         .expect("open body store");
-        let task = BodyStoreTask {
-            id: EffectWorkId(91),
-            tag: tag(0),
-            manifest: fixture.manifest.clone(),
-            canonical_wire: Arc::from(fixture.body.clone()),
-            ownership: RuntimeEffectOwnership::fresh_for_test(tag(0), 91),
-        };
+        let task = BodyStoreTask::for_test(
+            91,
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+        );
         let durable = store
             .execute_store_task(&task)
             .expect("persist body before crash");
@@ -591,4 +590,3 @@
         assert_eq!(services.sign_tasks.len(), 1);
         assert_eq!(services.statuses.len(), 2);
     }
-

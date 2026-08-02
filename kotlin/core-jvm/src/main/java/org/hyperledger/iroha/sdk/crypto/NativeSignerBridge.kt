@@ -14,7 +14,7 @@ class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
-        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 1
+        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 2
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
 
@@ -147,7 +147,6 @@ class NativeSignerBridge private constructor() {
             val toBytes = textBytes(selected.to, "to")
             val publicAmountBytes = textBytes(selected.publicAmount, "publicAmount")
             val inputsBytes = flattenFixed32(selected.inputs)
-            val outputsBytes = flattenFixed32(selected.outputs)
             val proofJsonBytes = selected.proof.toNativeJson().toByteArray(StandardCharsets.UTF_8)
             val rootHintBytes = optionalBytes(selected.rootHint)
             val ttl = ttlValue(ttlMs)
@@ -166,7 +165,6 @@ class NativeSignerBridge private constructor() {
                     toBytes,
                     publicAmountBytes,
                     inputsBytes,
-                    outputsBytes,
                     proofJsonBytes,
                     rootHintBytes,
                     key,
@@ -353,7 +351,6 @@ class NativeSignerBridge private constructor() {
             to: ByteArray,
             publicAmount: ByteArray,
             inputs: ByteArray,
-            outputs: ByteArray,
             proofJson: ByteArray,
             rootHint: ByteArray,
             privateKey: ByteArray,

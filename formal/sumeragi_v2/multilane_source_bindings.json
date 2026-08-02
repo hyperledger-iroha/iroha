@@ -264,7 +264,7 @@
         {
           "path": "ci/run_native_amx_v2_grouped_sdk_parity.sh",
           "required_tokens": [
-            "readonly expected_negative_control_count=50",
+            "readonly expected_negative_control_count=51",
             "openapi|python|javascript|swift|kotlin|java)",
             "grouped Native AMX V2 negative controls must fail closed",
             "--suite-source-manifest-sha256"
@@ -275,7 +275,8 @@
           "required_tokens": [
             "\"format\": \"iroha-native-amx-v2-grouped\"",
             "\"rust_owner\": \"iroha_data_model::block::consensus\"",
-            "\"negative_controls\": ["
+            "\"negative_controls\": [",
+            "\"id\": \"manifest_leaf_hash_tampering\""
           ]
         }
       ]
@@ -290,14 +291,16 @@
           "path": "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
           "required_tokens": [
             "Pass `--check` to verify",
-            "native_amx_grouped::write_fixture(check_only)"
+            "native_amx_grouped::write_fixture(",
+            "output_dir",
+            "options.check_only"
           ]
         },
         {
           "path": "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
           "required_tokens": [
             "\"rust_owner\": \"iroha_data_model::block::consensus\"",
-            "pub fn write_fixture(check_only: bool)"
+            "pub fn write_fixture(path: &Path, check_only: bool)"
           ]
         },
         {
@@ -2120,9 +2123,12 @@
             "plan.application_block_hash",
             "plan.manifest_leaf_count",
             "mode.permits_retention_cleanup()",
+            "preflight_native_amx_participant_application_plan_under_publication_guard",
             "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "read_back_native_amx_plan_manifests_under_publication_guard",
+            "manifest_readback.authenticates",
             "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
-            "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+            "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
             "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
             "mode.requires_post_apply_metadata()",
             "NativeAmxParticipantApplicationPrepublicationToken::from_plan",
@@ -2173,20 +2179,26 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+          "symbol": "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
           "required_tokens": [
+            "validate_native_amx_participant_application_receipt_artifact",
             "manifest_artifact_hash",
+            "finality_artifact_hash",
             "native_amx_participant_receipt_matches_manifest_leaf",
+            "preflight.incoming",
+            "ensure_prune_recovery_not_required",
             "get_durable_block_hash",
             "require_active_lane_artifact",
             "native_amx_evidence_namespace_for_entry",
+            "preflight.current",
+            "validate_native_amx_prepublication_transition_locked",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE",
             "permit_retention_cleanup",
             "require_native_amx_evidence_prune_intent_absent_locked",
             "recover_native_amx_evidence_publication_temp_locked",
-            "discard_native_amx_latest_index_temp_locked",
             "read_native_amx_participant_application_manifest_from_paths_locked",
             "read_native_amx_participant_application_receipt_from_paths_locked",
-            "persist_native_amx_participant_receipt_latest_index_locked",
+            "persist_native_amx_participant_receipt_latest_index_from_reconstructed_inventory_locked",
             "progress_mutation_namespace_unchanged",
             "native_amx_evidence_tracked_bytes_locked"
           ]
@@ -2297,8 +2309,8 @@
             "regular_sidecar_metadata_for",
             "STRICT_INIT_MAX_BLOCK_BYTES",
             "native_amx_participant_evidence_retention",
-            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES",
-            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
+            "native_amx_participant_evidence_startup_bytes",
+            "native_amx_participant_evidence_file_bytes",
             "stable_sidecar_metadata_unchanged",
             "progress_mutation_namespace_unchanged"
           ]
@@ -2309,8 +2321,8 @@
           "symbol": "publish_native_amx_evidence_file_locked",
           "required_tokens": [
             "recover_native_amx_evidence_publication_temp_locked",
-            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
-            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES",
+            "native_amx_participant_evidence_file_bytes",
+            "native_amx_participant_evidence_startup_bytes",
             "publish_bound_noclobber_file_locked",
             "inventory_native_amx_evidence_files_locked",
             "validate_native_amx_evidence_file_locked",
@@ -2323,7 +2335,7 @@
           "symbol": "native_amx_evidence_prune_intent_max_bytes_for_retention",
           "required_tokens": [
             "native_amx_evidence_prune_intent_max_entries",
-            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
+            "pending_control_sidecar_bytes",
             "try_reserve_exact",
             "NativeAmxEvidencePruneIntentV1::VERSION",
             "norito::encode_canonical",
@@ -2425,7 +2437,7 @@
             "current.matches_receipt",
             "current.matches_manifest",
             "is not backed by its exact receipt or QC-authenticated manifest",
-            "persist_native_amx_participant_receipt_latest_index_locked",
+            "persist_native_amx_participant_receipt_latest_index_from_reconstructed_inventory_locked",
             "prune_native_amx_evidence_pairs_locked",
             "progress_mutation_namespace_unchanged",
             "update_disk_usage_delta"
@@ -2434,7 +2446,7 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "persist_native_amx_participant_receipt_latest_index_locked",
+          "symbol": "persist_native_amx_participant_receipt_latest_index_from_reconstructed_inventory_locked",
           "required_tokens": [
             "validate_native_amx_participant_receipt_latest_index",
             "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES",
@@ -2492,7 +2504,7 @@
           "required_tokens": [
             "parse_native_amx_evidence_path",
             "retained_record_limit",
-            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
+            "native_amx_participant_evidence_file_bytes",
             "regular_sidecar_metadata_for",
             "read_regular_sidecar_snapshot",
             "norito::decode_from_bytes",
@@ -2542,7 +2554,8 @@
             "store_block",
             "store_v2_finality_artifact",
             "prepublish_native_amx_participant_application_evidence",
-            "token.authenticates",
+            "native_amx_participant_frontier_markers",
+            "token.authenticates_state_frontiers",
             "apply_without_execution_with_verified_v2_finality",
             "state_block.commit"
           ]
@@ -2563,11 +2576,12 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
-          "symbol": "native_amx_participant_frontier_marker_payloads",
+          "symbol": "native_amx_participant_frontier_markers",
           "required_tokens": [
+            "native_amx_participant_application_role",
             "participant_settlement_hash",
             "source_count",
-            "encode_native_amx_participant_frontier_marker"
+            "previous_lane_block_descriptor_hash"
           ]
         },
         {
@@ -2575,6 +2589,8 @@
           "kind": "fn",
           "symbol": "stage_native_amx_participant_frontiers",
           "required_tokens": [
+            "native_amx_participant_frontier_markers",
+            "encode_native_amx_participant_frontier_marker",
             "stage_merge_lane_frontier_markers",
             "decode_exact_native_amx_participant_frontier_marker"
           ]

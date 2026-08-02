@@ -176,12 +176,14 @@ def test_native_prepublication_contract_rejects_removed_prepublication_call(
         ),
         (
             ".prepublish_native_amx_participant_application_evidence(",
-            "!token.authenticates("
-            "committed_block.as_ref(), &native_amx_manifest, artifact)",
+            "State::native_amx_participant_frontier_markers(",
         ),
         (
-            "!token.authenticates("
-            "committed_block.as_ref(), &native_amx_manifest, artifact)",
+            "State::native_amx_participant_frontier_markers(",
+            "token.authenticates_state_frontiers(",
+        ),
+        (
+            "token.authenticates_state_frontiers(",
             ".apply_without_execution_with_verified_v2_finality("
             "&committed_block, commit_topology)",
         ),
@@ -193,8 +195,9 @@ def test_native_prepublication_contract_rejects_removed_prepublication_call(
     ),
     ids=(
         "finality-before-prepublication",
-        "prepublication-before-readback-token",
-        "readback-token-before-wsv-stage",
+        "prepublication-before-state-frontier-projection",
+        "state-frontier-projection-before-readback-token",
+        "state-bound-readback-token-before-wsv-stage",
         "wsv-stage-before-wsv-commit",
     ),
 )
@@ -223,20 +226,32 @@ def test_native_prepublication_contract_rejects_apply_order_drift(
             "only_with_retention_policy_under_publication_guard(",
         ),
         (
+            "self.write_native_amx_participant_application_manifest_artifact_"
+            "with_retention_policy_under_publication_guard(",
+            "self.read_back_native_amx_plan_manifests_under_publication_guard(",
+        ),
+        (
+            "self.read_back_native_amx_plan_manifests_under_publication_guard(",
+            "self.write_native_amx_participant_application_receipt_artifact_"
+            "only_with_retention_policy_under_publication_guard(",
+        ),
+        (
             "self.write_native_amx_participant_application_receipt_artifact_"
             "only_with_retention_policy_under_publication_guard(",
             "self.write_native_amx_participant_receipt_latest_index_"
-            "under_publication_guard(",
+            "for_prepublication_under_publication_guard(",
         ),
         (
             "self.write_native_amx_participant_receipt_latest_index_"
-            "under_publication_guard(",
+            "for_prepublication_under_publication_guard(",
             "self.authenticate_native_amx_participant_application_"
             "prepublication_under_publication_guard(",
         ),
     ),
     ids=(
         "all-manifests-before-all-receipts",
+        "all-manifests-before-manifest-readback",
+        "manifest-readback-before-all-receipts",
         "all-receipts-before-all-latest-indexes",
         "all-latest-indexes-before-readback-auth",
     ),

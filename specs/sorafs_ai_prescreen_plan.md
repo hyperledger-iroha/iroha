@@ -148,14 +148,14 @@ counts, webhook response byte counts must be non-negative, and malformed
 byte-count evidence blocks the artifact before promotion can report ready.
 Duplicate notification delivery probes are rejected before promotion can report
 ready. Operator workflow route responses likewise require positive body-byte
-counts. Transparency publication
-artifacts also bind `probe_count`,
-`passed_probe_count`, and `source_entry_probe_count` to the unique canonical
-`probes[].source_kind` inventory, require source-entry probe coverage for every
-required transparency source kind, and reject duplicate or unknown source-entry
-probes before promotion can report ready. Transparency request byte counts must
-be positive and response byte counts must be non-negative for every source-entry
-probe.
+counts. Moderation transparency producer evidence binds `producer_count` to
+the unique canonical `producers[].source_kind` inventory, requires every
+reviewed moderation source kind, and rejects duplicate or unknown producers
+before promotion can report ready. Each producer must carry a canonical
+production service id, an `internal:*` producer route, a durable provenance
+digest, and a verified durable checkpoint. The evidence also requires
+`generic_public_ingress_absent=true`; no live generic source-entry probe is
+accepted as producer evidence.
 Commit/reveal executor artifacts also bind `artifact_count` and
 `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and
 require the reviewed executor bundle to cover `executor.env` and `run.sh`.
@@ -356,12 +356,12 @@ Implemented locally:
   typed committed events or submit exact caller-signed, one-instruction native
   transactions. Commit and reveal commands reject caller timestamps and juror
   identities that do not match the transaction authority.
-- `iroha::client` and `iroha sorafs transparency
-  cycles|explorer|tokens|source-entry` wrap the local transparency readback
-  and signed source-entry ingest endpoints. Operator tooling can list
-  published cycles, fetch a cycle or entry proof, read the local explorer
-  snapshot and proof-token issuance index, and submit typed source-entry JSON
-  for later transparency publication.
+- `iroha::client` and `iroha sorafs transparency cycles|explorer|tokens` wrap
+  local transparency readback. Operator tooling can list published cycles,
+  fetch a cycle or entry proof, and read the local explorer snapshot and
+  proof-token issuance index. Trusted in-process producers own source-entry
+  creation; no generic public source-kind-selected ingest endpoint or CLI
+  command exists.
 - `iroha::client` and `iroha sorafs appeals pricing
   config|status|quote` plus `iroha sorafs appeals finance` wrap the local
   appeal pricing, asset-lock deposit, settlement, reconciliation, and finance
@@ -490,7 +490,7 @@ The production service remains a staged rollout target:
 | AI runner | Executes approved models deterministically and emits model scores. | Deterministic integer `run-local` CLI, bounded loopback `runner-serve` HTTP mode, unary `runner-grpc-serve` gRPC foundation, supervised HTTP runner bundle, and `runner-canary` rollout evidence tooling exist. Torii now requires canonical signed results under the config-pinned governed policy; production signer packaging and deployed isolation evidence remain open. |
 | Committee orchestrator | Aggregates model outputs and yields `pass`, `quarantine`, or `escalate`. | Threshold schema, calibration report, local `committee-run` quorum aggregation, locked-manifest `committee-serve` HTTP aggregation, supervised committee bundle generation, and `committee-canary` tooling exist. Torii admits an aggregate only by reconstructing it from the complete bounded, unique, policy-authorized signed member set. |
 | Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records, chunked ChaCha20-Poly1305 payload envelopes, per-object DEKs, authenticated ranges, atomic recovery, role-gated object APIs, and rewrap are present. Standard `irohad` has a strict authenticated broker path for a deployment-owned wrapper, but no genuine PKCS#11/KMS backend or operator credential is checked in; `V1-BLOCK-AI-QUARANTINE-KMS-01` remains open. |
-| Moderation bridge | Hands escalations to appeal and transparency workflows. | Reviewed-quarantine appeal handoff, finalized-chain moderation projections/orchestration, caller-signed native moderation submission, juror notification planning, delivery manifests, outbox/webhook delivery CLI automation and transport canary tooling, commit/reveal coordination, supervised executor tooling, appeal pricing/deposit readback, and transparency readback/source-entry tooling exist; durable production boundary deployment and live rollout evidence remain gates. |
+| Moderation bridge | Hands escalations to appeal and transparency workflows. | Reviewed-quarantine appeal handoff, finalized-chain moderation projections/orchestration, caller-signed native moderation submission, juror notification planning, delivery manifests, outbox/webhook delivery CLI automation and transport canary tooling, commit/reveal coordination, supervised executor tooling, appeal pricing/deposit readback, transparency readback, and trusted in-process source producers exist; durable production boundary deployment and live rollout evidence remain gates. |
 
 ## Data Model
 
@@ -950,7 +950,8 @@ live governance-evidence rollout and production quarantine workflow.
   juror-plan, juror-notifications delivery/canary, commit-reveal-status, and
   caller-signed native executor paths.
 - Wire live quarantine/escalation producers into the shipped Governance DAG and
-  transparency source-entry tooling.
+  trusted in-process transparency producer boundary, then capture durable
+  producer-provenance evidence.
 - Add end-to-end tests covering ingest, quarantine, review, release, appeal, and
   transparency publication.
 - Update the portal and OpenAPI/operator docs only after the above commands and
@@ -1068,7 +1069,8 @@ Completed local foundations:
 - Provide `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` as a
   payload-free promotion gate over deployed runner, committee, operator
   workflow, juror notification transport, commit/reveal executor, moderation
-  transparency source-entry, Governance DAG, and end-to-end workflow evidence;
+  trusted moderation transparency producer, Governance DAG, and end-to-end
+  workflow evidence;
   cross-artifact runner/workflow binding failures are reflected on the
   offending artifacts in the emitted summary. The aggregate
   production-readiness gate rechecks those exported summary relationships before
@@ -1097,18 +1099,19 @@ Completed local foundations:
   rejecting unknown, swapped-path, mislabeled artifact names, malformed bundle
   metadata byte counts, invalid execution-summary byte counts, and
   commit/reveal/tally action totals that do not sum to `action_count`,
-  transparency publication artifacts require every required source-entry
-  probe, reject unknown source kinds, and validate request/response byte counts.
+  moderation transparency producer evidence requires every reviewed source
+  kind, rejects unknown or duplicate producers, requires canonical internal
+  producer identities/routes plus durable provenance and checkpoint evidence,
+  and proves that generic public ingress is absent.
   Transparency publication artifacts must explicitly set
-  `payload_bytes_included`, `private_payloads_included`, and
-  `response_bodies_included` to `false` before promotion can report ready.
+  `payload_bytes_included` and `private_payloads_included` to `false` before
+  promotion can report ready.
   AI pre-screen payload-safety artifacts must also explicitly set
   `payload_bytes_included` and `private_payloads_included` to `false` on
   operator workflow, juror notification transport, commit/reveal executor,
   transparency publication, Governance DAG, end-to-end workflow, and their
-  nested route, probe, artifact, and execution-summary records; executor
-  artifacts must set `private_payload_files_copied` to `false`, and
-  transparency probes must set `response_body_included` to `false` before
+  nested route, producer, artifact, and execution-summary records; executor
+  artifacts must set `private_payload_files_copied` to `false` before
   promotion can report ready.
   Governance DAG artifacts reject unknown
   producers and malformed `ai-prescreen-governance-edge-*` labels, and
@@ -1122,15 +1125,16 @@ Completed local foundations:
   schema and required payload fields for every SFM-4a evidence kind, and the
   runner validates the schema-closed collection plan, external evidence map,
   evidence contract, and command steps before dry-run output or live canaries.
-  It also rejects duplicate or unsupported `--source-entry` kinds before
-  dry-run output or live canaries.
+  It requires a pre-collected `--transparency-producer-evidence` artifact and
+  validates its schema, freshness, deployment context, durable provenance, and
+  absence of generic public ingress before dry-run output or live canaries.
 - Provide `scripts/build_sorafs_ai_prescreen_canary.py` as a fail-closed
   payload-free non-runner SFM-4a canary builder for operator workflow, juror
-  notification transport, commit/reveal executor, transparency publication,
-  Governance DAG, and end-to-end workflow artifacts. Runner and committee evidence
-  must come from their deployed live-probe commands (`runner-canary` and
-  `committee-canary`), because those commands bind the evidence to real service
-  responses rather than operator-supplied synthetic facts. The non-runner
+  notification transport, commit/reveal executor, Governance DAG, and
+  end-to-end workflow artifacts. Runner and committee evidence must come from
+  their deployed live-probe commands (`runner-canary` and `committee-canary`),
+  and transparency producer evidence must come from trusted internal producers;
+  the builder cannot synthesize any of those external facts. The non-runner
   builder requires reviewed deployment context, workflow digest bindings,
   and generated notification
   delivery labels in the `ai-prescreen-notification-delivery-*` production

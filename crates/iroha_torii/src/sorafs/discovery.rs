@@ -118,6 +118,93 @@ pub struct AdvertIngestResult {
     pub warnings: Vec<AdvertWarning>,
 }
 
+/// Immutable inputs needed to authenticate and normalize a provider advert.
+///
+/// A policy snapshot can be cloned while briefly holding the cache read lock,
+/// then used for signature and admission verification after that lock has been
+/// released. The resulting [`PreparedProviderAdvert`] is opaque, so the cache
+/// commit path cannot be reached with unverified wire data.
+#[derive(Debug, Clone)]
+pub struct ProviderAdvertValidationPolicy {
+    known_capabilities: Vec<CapabilityType>,
+    admission: Arc<AdmissionRegistry>,
+}
+
+/// Provider advert that passed structural, signature, capability, and
+/// admission-envelope validation against one cache policy snapshot.
+#[derive(Debug)]
+pub struct PreparedProviderAdvert {
+    advert: ProviderAdvertV1,
+    known_capabilities: Vec<CapabilityType>,
+    warnings: Vec<AdvertWarning>,
+    fingerprint: [u8; FINGERPRINT_LEN],
+    policy_capabilities: Vec<CapabilityType>,
+    policy_admission: Arc<AdmissionRegistry>,
+}
+
+impl ProviderAdvertValidationPolicy {
+    /// Validate an advert without acquiring or retaining the provider-cache lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AdvertError`] when the advert is malformed, expired,
+    /// unsigned, outside the configured capability policy, or not authorized
+    /// by its provider admission envelope.
+    pub fn prepare(
+        &self,
+        advert: ProviderAdvertV1,
+        now: u64,
+    ) -> Result<PreparedProviderAdvert, AdvertError> {
+        advert.validate_with_body(now)?;
+        if !advert.signature_strict {
+            return Err(AdvertError::SignaturePolicyDisabled);
+        }
+        verify_signature(&advert)?;
+
+        let unknown_capabilities = advert
+            .body
+            .capabilities
+            .iter()
+            .map(|tlv| tlv.cap_type)
+            .filter(|capability| !self.known_capabilities.contains(capability))
+            .collect::<Vec<_>>();
+        if !unknown_capabilities.is_empty() && !advert.allow_unknown_capabilities {
+            return Err(AdvertError::UnknownCapabilities {
+                capabilities: unknown_capabilities,
+            });
+        }
+
+        let known_capabilities = advert
+            .body
+            .capabilities
+            .iter()
+            .filter_map(|tlv| {
+                self.known_capabilities
+                    .contains(&tlv.cap_type)
+                    .then_some(tlv.cap_type)
+            })
+            .collect();
+        let provider_id = advert.body.provider_id;
+        let admission_entry = self
+            .admission
+            .entry(&provider_id)
+            .ok_or(AdvertError::AdmissionMissing { provider_id })?;
+        verify_advert_against_envelope(&advert, &admission_entry)
+            .map_err(|error| AdvertError::AdmissionFailed { provider_id, error })?;
+
+        let warnings = collect_warnings(&advert);
+        let fingerprint = fingerprint(&advert)?;
+        Ok(PreparedProviderAdvert {
+            advert,
+            known_capabilities,
+            warnings,
+            fingerprint,
+            policy_capabilities: self.known_capabilities.clone(),
+            policy_admission: Arc::clone(&self.admission),
+        })
+    }
+}
+
 /// Errors raised while loading or atomically updating the durable provider
 /// advert replay checkpoint.
 #[derive(Debug, Error)]
@@ -235,6 +322,9 @@ pub enum AdvertError {
     /// Torii requires signature verification for all remotely supplied adverts.
     #[error("provider advert disabled mandatory signature verification")]
     SignaturePolicyDisabled,
+    /// A prepared advert came from a different cache validation policy.
+    #[error("prepared provider advert does not match the active validation policy")]
+    ValidationPolicyChanged,
     /// A provider attempted to replace a newer advert with an older or
     /// conflicting advert.
     #[error(
@@ -874,61 +964,56 @@ impl ProviderAdvertCache {
         })
     }
 
-    /// Attempt to ingest a provider advert.
+    /// Snapshot the immutable validation policy for lock-free advert verification.
+    #[must_use]
+    pub fn validation_policy(&self) -> ProviderAdvertValidationPolicy {
+        ProviderAdvertValidationPolicy {
+            known_capabilities: self.known_capabilities.clone(),
+            admission: Arc::clone(&self.admission),
+        }
+    }
+
+    /// Atomically commit a provider advert that was authenticated outside the cache lock.
     ///
-    /// When the advert carries unknown capabilities and `allow_unknown_capabilities` is `false`,
-    /// the operation fails with [`AdvertError::UnknownCapabilities`]. When an advert validates
-    /// successfully, the cache stores the full advert but exposes only the capabilities recognised
-    /// by the allow-list.
+    /// The active policy identity, current-time validity, admission envelope,
+    /// replay high-water mark, and cache freshness are rechecked before any
+    /// mutation. Signature verification is deliberately absent from this
+    /// critical section and can only be represented by the opaque
+    /// [`PreparedProviderAdvert`] value.
     ///
     /// # Errors
     ///
-    /// Returns an [`AdvertError`] if mandatory signature verification fails,
-    /// the advert is not newer than the provider's cached advert, the advert
-    /// requests unknown capabilities without opting in, or the associated
-    /// admission record rejects the advert contents.
-    pub fn ingest(
+    /// Returns an [`AdvertError`] if the validation policy changed, the advert
+    /// expired while waiting to commit, its admission record no longer
+    /// matches, or replay/durability checks reject the update.
+    pub fn commit_prepared(
         &mut self,
-        advert: ProviderAdvertV1,
+        prepared: PreparedProviderAdvert,
         now: u64,
     ) -> Result<AdvertIngestResult, AdvertError> {
         if self.replay_checkpoint_poisoned {
             return Err(ReplayCheckpointError::Poisoned.into());
         }
+        if prepared.policy_capabilities != self.known_capabilities
+            || !Arc::ptr_eq(&prepared.policy_admission, &self.admission)
+        {
+            return Err(AdvertError::ValidationPolicyChanged);
+        }
+
+        let PreparedProviderAdvert {
+            advert,
+            known_capabilities,
+            warnings,
+            fingerprint,
+            policy_capabilities: _,
+            policy_admission: _,
+        } = prepared;
         advert.validate_with_body(now)?;
         let provider_id = advert.body.provider_id;
         let issued_at = advert.issued_at;
-        let warnings = collect_warnings(&advert);
-        verify_signature(&advert)?;
         if !advert.signature_strict {
             return Err(AdvertError::SignaturePolicyDisabled);
         }
-
-        let unknown_caps: Vec<CapabilityType> = advert
-            .body
-            .capabilities
-            .iter()
-            .map(|tlv| tlv.cap_type)
-            .filter(|cap_type| !self.known_capabilities.contains(cap_type))
-            .collect();
-        if !unknown_caps.is_empty() && !advert.allow_unknown_capabilities {
-            return Err(AdvertError::UnknownCapabilities {
-                capabilities: unknown_caps,
-            });
-        }
-
-        let filtered_caps: Vec<CapabilityType> = advert
-            .body
-            .capabilities
-            .iter()
-            .filter_map(|tlv| {
-                if self.known_capabilities.contains(&tlv.cap_type) {
-                    Some(tlv.cap_type)
-                } else {
-                    None
-                }
-            })
-            .collect();
 
         let admission_entry = self
             .admission
@@ -936,8 +1021,6 @@ impl ProviderAdvertCache {
             .ok_or(AdvertError::AdmissionMissing { provider_id })?;
         verify_advert_against_envelope(&advert, &admission_entry)
             .map_err(|error| AdvertError::AdmissionFailed { provider_id, error })?;
-
-        let fingerprint = fingerprint(&advert)?;
         let previous = self.by_provider.get(&provider_id).copied();
         if let Some(prev_fp) = previous {
             if prev_fp == fingerprint {
@@ -998,7 +1081,7 @@ impl ProviderAdvertCache {
         let record = AdvertRecord {
             fingerprint,
             advert,
-            known_capabilities: filtered_caps,
+            known_capabilities,
             warnings: warnings.clone(),
         };
         self.records.insert(fingerprint, record);

@@ -1459,7 +1459,8 @@ mod tests {
         );
         let domain = DomainId::try_new("wonderland", "universal").expect("canonical domain");
         let nft = NftId::new(domain.clone(), "n0".parse().expect("NFT name"));
-        let asset_definition = AssetDefinitionId::new(domain, "rose".parse().expect("asset name"));
+        let asset_definition =
+            AssetDefinitionId::derive_from_components(domain, "rose".parse().expect("asset name"));
         let nested_value = norito::json!({"inner": true});
         let nested_json = Json::from(nested_value.clone());
         let mut object = njson::Map::new();

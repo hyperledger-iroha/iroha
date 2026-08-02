@@ -11,6 +11,8 @@
 // are not used by the private embedded adapter, so its compilation cannot
 // observe their external consumers.
 #[allow(dead_code)]
+mod committee;
+#[allow(dead_code)]
 mod quorum;
 #[macro_use]
 mod refinement;
@@ -33,6 +35,11 @@ mod wal;
 const _: [(); refinement::MAX_EFFECTS_PER_STEP] =
     [(); iroha_config::parameters::defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP];
 
+#[allow(unused_imports)]
+pub(crate) use committee::{
+    Committee, CommitteeError, CommitteeRole, MAX_COMMITTEE_SIZE, MIN_COMMITTEE_SIZE,
+    ValidatorIndex,
+};
 pub(crate) use quorum::{Quorum, QuorumError};
 pub(crate) use reducer::{
     BodyState, DurableCommitReceipt, Effect, EquivocationKind, Event, IgnoreReason, Reducer,
@@ -56,6 +63,8 @@ pub(crate) use refinement::{
     IDENTITY_KIND_PEER, IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_REFERENCE_DIGEST,
     IDENTITY_KIND_REPLY_DELIVERY_ROUTE, IDENTITY_KIND_REPLY_PAYLOAD,
     IDENTITY_KIND_REPLY_SOURCE_KEY, IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
+    IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC, IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,
+    IDENTITY_KIND_RUNTIME_EFFECT, IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER,
     IDENTITY_KIND_SIDECAR_CHUNK, IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST,
     IDENTITY_KIND_SIDECAR_RESPONSE, IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE,
     IDENTITY_KIND_SIDECAR_SIBLING_STATE, IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE,
@@ -71,10 +80,11 @@ pub(crate) use refinement::{
     LEADER_WIRE_ADMISSION_COALESCE, LEADER_WIRE_ADMISSION_INSERT, LEADER_WIRE_ADMISSION_REACTIVATE,
     LEADER_WIRE_ADMISSION_REPLACE_TERMINAL, LEADER_WIRE_LIFECYCLE_ABSENT,
     LEADER_WIRE_LIFECYCLE_DORMANT, LEADER_WIRE_LIFECYCLE_INGRESS, LEADER_WIRE_LIFECYCLE_RUNTIME,
-    LEADER_WIRE_LIFECYCLE_TERMINAL, LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL, MAX_EFFECTS_PER_STEP,
-    ProductionApplicationTraceProjection, ProductionAppliedSuccessorTraceProjection,
-    ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
-    ProductionDurableBodyIdentityProjection, ProductionDurablePredecessorIdentityProjection,
+    LEADER_WIRE_LIFECYCLE_TERMINAL, LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL,
+    MAX_CAUSAL_SUCCESSORS_PER_COMMAND, MAX_EFFECTS_PER_STEP, ProductionApplicationTraceProjection,
+    ProductionAppliedSuccessorTraceProjection, ProductionDecisionIdentityProjection,
+    ProductionDecisionRecoveryTraceProjection, ProductionDurableBodyIdentityProjection,
+    ProductionDurablePredecessorIdentityProjection, ProductionEffectToCandidateTraceProjection,
     ProductionHistoricalBodyPipelineTraceProjection,
     ProductionHistoricalCertificateTraceProjection, ProductionInFlightReservationOwnerProjection,
     ProductionInFlightReservationTransitionProjection,
@@ -84,7 +94,17 @@ pub(crate) use refinement::{
     ProductionRecoveredSuccessorTraceProjection, ProductionReliableFlushApplicationProjection,
     ProductionReliableFlushTraceProjection, ProductionSuccessorPredecessorBindingProjection,
     ProductionSuccessorSnapshotProjection, ProductionSuccessorStartupLifecycleProjection,
-    ProductionTerminalApplicationWithoutSuccessorActivationProjection, SERVICE_CLASS_COMPLETION,
+    ProductionTerminalApplicationWithoutSuccessorActivationProjection,
+    RUNTIME_CANDIDATE_KIND_APPLY, RUNTIME_CANDIDATE_KIND_FETCH_BODY, RUNTIME_CANDIDATE_KIND_NONE,
+    RUNTIME_CANDIDATE_KIND_SIGN_PROPOSAL, RUNTIME_CANDIDATE_KIND_SIGN_TIMEOUT,
+    RUNTIME_CANDIDATE_KIND_SIGN_VOTE, RUNTIME_CANDIDATE_KIND_STORE_BODY,
+    RUNTIME_CANDIDATE_KIND_VALIDATE_BODY, RUNTIME_EFFECT_CAUSALITY_FRESH,
+    RUNTIME_EFFECT_CAUSALITY_INHERIT, RUNTIME_EFFECT_KIND_APPLY, RUNTIME_EFFECT_KIND_BROADCAST,
+    RUNTIME_EFFECT_KIND_ENTER_VIEW, RUNTIME_EFFECT_KIND_FETCH_BODY,
+    RUNTIME_EFFECT_KIND_OPAQUE_TEST, RUNTIME_EFFECT_KIND_REPORT_EQUIVOCATION,
+    RUNTIME_EFFECT_KIND_REPORT_INVALID_CERTIFIED_BODY, RUNTIME_EFFECT_KIND_SIGN_PROPOSAL,
+    RUNTIME_EFFECT_KIND_SIGN_TIMEOUT, RUNTIME_EFFECT_KIND_SIGN_VOTE,
+    RUNTIME_EFFECT_KIND_STORE_BODY, RUNTIME_EFFECT_KIND_VALIDATE_BODY, SERVICE_CLASS_COMPLETION,
     SERVICE_CLASS_NONE, SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, SUCCESSOR_AUTHORITY_APPLIED,
     SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
     SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP,
@@ -94,7 +114,7 @@ pub(crate) use refinement::{
     check_production_body_capacity_retirement_effective_lock_transition,
     check_production_body_ownership_effective_lock_transition,
     check_production_body_service_effective_lock_transition,
-    check_production_decision_recovery_transition,
+    check_production_decision_recovery_transition, check_production_effect_to_candidate_transition,
     check_production_historical_body_pipeline_transition,
     check_production_historical_certificate_transition,
     check_production_in_flight_reservation_transition,

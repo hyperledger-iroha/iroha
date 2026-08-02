@@ -1201,7 +1201,7 @@ mod tests {
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         let alice = (*ALICE_ID).clone();
         let bob = (*BOB_ID).clone();
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1556,7 +1556,7 @@ mod tests {
         let second_delta = TransferDeltaTranscript {
             from_account: (*BOB_ID).clone(),
             to_account: (*ALICE_ID).clone(),
-            asset_definition: AssetDefinitionId::new(
+            asset_definition: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "lily".parse().unwrap(),
             ),

@@ -1578,6 +1578,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetComposedRankDescentProperty",
     ): (
+        "/\\ AdequateLeaderProtectedPeriodicEpisodeClosureProperty("
+        "specification) "
         "/\\ AdequateLeaderTargetOccurrenceRankServiceProperty(specification) "
         "/\\ AdequateLeaderTargetProducerTransportOccurrenceClosureProperty( "
         "specification) "
@@ -2743,8 +2745,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2TimeoutViewProgressProofs",
         "TimeoutPhysicalControlPacketDependencyRank",
     ): (
-        "ExactDecisionTargetNeutralPacketDependencyRank( "
-        "TimeoutPhysicalControlSelectedPacket(item))"
+        "ExactDecisionTargetNeutralPacketDependencyRankForSnapshot( "
+        "snapshot, TimeoutPhysicalControlSelectedPacket(item))"
     ),
     (
         "SumeragiV2TimeoutViewProgressProofs",
@@ -2763,9 +2765,9 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ): "snapshot.predecessors",
     (
         "SumeragiV2TimeoutViewProgressProofs",
-        "TimeoutPhysicalControlFrozenProducerEpisodeBudget",
+        "TimeoutPhysicalControlFrozenProducerEpisodeRank",
     ): (
-        "ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)"
+        "ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)"
     ),
     (
         "SumeragiV2TimeoutViewProgressProofs",

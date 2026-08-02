@@ -1899,7 +1899,7 @@ mod tests {
         isi::InstructionBox,
         nexus::DataSpaceId,
         prelude::TransactionBuilder,
-        smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
+        smart_contract::ContractAddress,
         transaction::{
             DataTriggerSequence, Executable, ExecutionStep, IvmBytecode, IvmProved,
             SignedTransaction, TransactionEntrypoint, TransactionResultInner,
@@ -3193,7 +3193,7 @@ mod tests {
         let keypair = checked_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,

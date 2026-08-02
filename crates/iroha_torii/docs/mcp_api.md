@@ -284,33 +284,57 @@ submit-and-wait flows.
 
 ### Musubi Package Registry Tools
 
-Musubi is exposed through curated `iroha.musubi.*` tools and first-class Torii
-routes under `/v1/musubi/*`.
+Musubi V1 is exposed through curated `iroha.musubi.*` tools and typed `POST`
+routes under `/v1/musubi/queries/*` and `/v1/musubi/instructions/*`. Every tool
+accepts one `body` object containing the exact bounded Norito V1 request or
+instruction. Flat query shortcuts and the pre-release string package envelopes
+are not accepted.
 
 Read tools:
-- `iroha.musubi.search`: flat `query`, optional `namespace`,
-  `include_yanked`, `offset`, and `limit` fields.
-- `iroha.musubi.release.get`: `package = "namespace/name@version"`.
-- `iroha.musubi.package.releases`: `package = "namespace/name"` plus optional
-  `include_yanked`.
-- `iroha.musubi.package.versions`: `package = "namespace/name"`.
-- `iroha.musubi.alias.resolve`: `alias = "<short-name>"`.
+
+- `iroha.musubi.queries.exact_package`
+- `iroha.musubi.queries.exact_release`
+- `iroha.musubi.queries.resolver_index`
+- `iroha.musubi.queries.versions`
+- `iroha.musubi.queries.maintainers`
+- `iroha.musubi.queries.archive_locations`
+- `iroha.musubi.queries.archive_retention`
+- `iroha.musubi.queries.alias`
+- `iroha.musubi.queries.alias_history`
+- `iroha.musubi.queries.ordered_prefix`
+- `iroha.musubi.queries.search`
 
 Instruction-builder tools:
-- `iroha.musubi.instructions.publish_release`
-- `iroha.musubi.instructions.yank_release`
-- `iroha.musubi.instructions.set_alias`
-- `iroha.musubi.instructions.assert_release_exists`
+
+- `iroha.musubi.instructions.namespace_binding_register`
+- `iroha.musubi.instructions.archive_register`
+- `iroha.musubi.instructions.archive_location_add`
+- `iroha.musubi.instructions.archive_location_retire`
+- `iroha.musubi.instructions.release_publish`
+- `iroha.musubi.instructions.release_yank_set`
+- `iroha.musubi.instructions.package_metadata_set`
+- `iroha.musubi.instructions.package_member_invite`
+- `iroha.musubi.instructions.package_member_accept`
+- `iroha.musubi.instructions.package_member_invitation_revoke`
+- `iroha.musubi.instructions.package_member_set_role`
+- `iroha.musubi.instructions.package_member_remove`
+- `iroha.musubi.instructions.alias_register`
+- `iroha.musubi.instructions.package_recover`
+- `iroha.musubi.instructions.alias_retarget`
+- `iroha.musubi.instructions.artifact_takedown`
+- `iroha.musubi.instructions.registry_policy_set`
+- `iroha.musubi.instructions.release_digest_assert`
 
 The Musubi instruction builders are pre-signing helpers only. They never accept
 `authority`, `private_key`, or bearer-token material. Each returns `wire_id`,
-`instruction_base64`, `instruction_hex`, and an `instruction_json` preview. The
-caller must assemble and sign a transaction locally, then submit it with
-`iroha.transactions.submit_and_wait`.
-
-Musubi package names intentionally do not use a leading `@`. Use
-`namespace/name` and `namespace/name@version` literals such as
-`dex.universal/swap-core` and `dex.universal/swap-core@1.2.3`.
+`instruction_base64`, `instruction_hex`, and an `instruction_json` preview in a
+`musubi-instruction-envelope` version-1 document. The caller must assemble and
+sign a transaction locally, then submit it with `iroha.transactions.submit_and_wait`.
+Manifests and lockfiles normalize public namespace or permanent-alias input to
+the structural `MusubiPackageIdV1`. Exact Torii registry queries use that
+structural identity. `PublishMusubiReleaseV1` additionally carries the exact
+canonical namespace whose immutable binding authorizes a first package claim;
+the registry never infers it by scanning structural package identifiers.
 
 ## Tool Result Contract
 `tools/call` returns a JSON-RPC `result` object with MCP tool semantics:

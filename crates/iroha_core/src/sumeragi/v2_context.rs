@@ -648,6 +648,39 @@ pub(crate) fn finalized_next_epoch_snapshot(
         .epoch
         .checked_add(1)
         .ok_or(V2ContextBuildError::EpochOverflow)?;
+    let npos_params = if election.mode == wire::ConsensusMode::Npos {
+        Some(
+            super::v2_npos::committed_epoch_params(state.world()).map_err(|error| match error {
+                super::v2_npos::V2NposError::MissingCommittedParameters => {
+                    V2ContextBuildError::MissingNposParameters
+                }
+                _ => V2ContextBuildError::InvalidNposParameters,
+            })?,
+        )
+    } else {
+        None
+    };
+    let authenticated_npos_seed = if let Some(params) = npos_params {
+        let record = state
+            .world()
+            .vrf_epochs()
+            .get(&election.epoch)
+            .ok_or(V2ContextBuildError::MissingPreBoundaryVrfRecord)?;
+        Some(
+            super::v2_npos::authenticated_successor_seed(
+                chain_id,
+                election.epoch,
+                election.epoch_end_height,
+                election.leader_seed,
+                &election.roster,
+                params,
+                record,
+            )
+            .map_err(|_| V2ContextBuildError::InvalidPreBoundaryVrfRecord)?,
+        )
+    } else {
+        None
+    };
     let roster = match election.mode {
         wire::ConsensusMode::Permissioned => election.roster.clone(),
         wire::ConsensusMode::Npos => {
@@ -679,12 +712,9 @@ pub(crate) fn finalized_next_epoch_snapshot(
     let epoch_end_height = match election.mode {
         wire::ConsensusMode::Permissioned => u64::MAX,
         wire::ConsensusMode::Npos => {
-            let epoch_length = state
-                .world()
-                .sumeragi_npos_parameters()
-                .ok_or(V2ContextBuildError::MissingNposParameters)?
-                .epoch_length_blocks()
-                .get();
+            let epoch_length = npos_params
+                .expect("NPoS branch validates the committed schedule before snapshot construction")
+                .epoch_length_blocks;
             height
                 .checked_add(epoch_length)
                 .ok_or(V2ContextBuildError::HeightOverflow)?
@@ -697,9 +727,8 @@ pub(crate) fn finalized_next_epoch_snapshot(
             preimage.extend_from_slice(&height.to_le_bytes());
             Hash::new(preimage).into()
         }
-        wire::ConsensusMode::Npos => {
-            super::npos_seed_for_epoch_from_world(state.world(), chain_id, epoch)
-        }
+        wire::ConsensusMode::Npos => authenticated_npos_seed
+            .expect("NPoS branch authenticates the pre-boundary seed before roster selection"),
     };
     Ok(Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch,
@@ -739,6 +768,18 @@ pub(crate) enum V2ContextBuildError {
     /// NPoS boundary state omitted its finalized epoch parameters.
     #[error("Sumeragi v2 NPoS boundary is missing on-chain parameters")]
     MissingNposParameters,
+    /// NPoS boundary parameters do not reserve finalized pre-state after the
+    /// reveal cutoff.
+    #[error("Sumeragi v2 NPoS boundary has an invalid committed epoch schedule")]
+    InvalidNposParameters,
+    /// The finalized state before an NPoS boundary omitted its authenticated
+    /// current-epoch VRF record.
+    #[error("Sumeragi v2 NPoS boundary is missing its authenticated pre-boundary VRF record")]
+    MissingPreBoundaryVrfRecord,
+    /// The retained pre-boundary record is inconsistent with the frozen
+    /// epoch, roster, window schedule, or authenticated observations.
+    #[error("Sumeragi v2 NPoS boundary has an invalid authenticated VRF record")]
+    InvalidPreBoundaryVrfRecord,
     /// Exact NPoS voting-power extraction failed.
     #[error(transparent)]
     Stake(#[from] StrictV2StakeSnapshotError),
@@ -763,6 +804,7 @@ mod tests {
             DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneId, PublicLaneValidatorRecord,
             PublicLaneValidatorStatus,
         },
+        parameter::system::SumeragiNposParameters,
         peer::PeerId,
         prelude::{InstructionBox, TransactionBuilder},
     };
@@ -821,12 +863,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"genesis nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
         })
         .expect("valid genesis context")
@@ -957,12 +999,12 @@ mod tests {
                 nexus_amx_context_hash: Hash::new(b"signed genesis finality authority"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::Plain,
+                    encoding: wire::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0xA7; 32],
             };
@@ -1239,7 +1281,7 @@ mod tests {
 
     #[test]
     fn non_boundary_successor_copies_frozen_election_inputs_exactly() {
-        let parent_context = genesis(wire::ConsensusMode::Npos, &[7, 5, 3, 1], 3);
+        let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 3);
         let parent = artifact(parent_context.clone(), None);
         let successor = build_successor_height_context(&parent, Hash::new(b"next lanes"), None)
             .expect("successor context");
@@ -1254,8 +1296,8 @@ mod tests {
 
     #[test]
     fn boundary_successor_uses_only_the_finalized_next_epoch_snapshot() {
-        let parent_context = genesis(wire::ConsensusMode::Npos, &[7, 5, 3, 1], 1);
-        let next_roster = roster(&[2, 4, 6, 8]);
+        let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
+        let next_roster = roster(&[1, 1, 1, 1]);
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
             epoch: parent_context.epoch + 1,
             epoch_end_height: 5,
@@ -1277,13 +1319,13 @@ mod tests {
 
     #[test]
     fn successor_epoch_end_and_pops_come_only_from_the_authenticated_parent() {
-        let non_boundary = artifact(genesis(wire::ConsensusMode::Npos, &[4, 3, 2, 1], 3), None);
+        let non_boundary = artifact(genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 3), None);
         let unchanged = build_successor_height_context(&non_boundary, Hash::new(b"lanes"), None)
             .expect("non-boundary successor");
         assert_eq!(unchanged.epoch_end_height, 3);
         assert_eq!(unchanged.roster, non_boundary.height_context.roster);
 
-        let boundary_context = genesis(wire::ConsensusMode::Npos, &[4, 3, 2, 1], 1);
+        let boundary_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_pops = vec![vec![0x1A]; boundary_context.roster.len()];
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
             epoch: boundary_context.epoch + 1,
@@ -1422,7 +1464,45 @@ mod tests {
     }
 
     #[test]
-    fn permissioned_genesis_rejects_non_unit_power() {
+    fn npos_boundary_fails_closed_without_authenticated_pre_boundary_record() {
+        const BOUNDARY_HEIGHT: u64 = 7;
+        let chain_id = ChainId::from("v2-npos-missing-pre-boundary-record");
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let mut params = SumeragiNposParameters::default();
+            params.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch");
+            params.vrf_commit_window_blocks = 2;
+            params.vrf_reveal_window_blocks = 2;
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.commit();
+        }
+        let state = State::new_with_chain_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let view = state.view();
+        let election = FrozenElectionInputs {
+            epoch: 3,
+            epoch_end_height: BOUNDARY_HEIGHT,
+            mode: wire::ConsensusMode::Npos,
+            roster: roster(&[1, 1, 1, 1]),
+            leader_seed: [0x63; 32],
+        };
+
+        assert_eq!(
+            finalized_next_epoch_snapshot(&view, &chain_id, BOUNDARY_HEIGHT, &election),
+            Err(V2ContextBuildError::MissingPreBoundaryVrfRecord)
+        );
+    }
+
+    #[test]
+    fn genesis_rejects_non_unit_consensus_power() {
         let error = build_genesis_height_context(GenesisContextInputs {
             chain_id: "bad-permissioned-context".into(),
             election: FrozenElectionInputs {
@@ -1436,18 +1516,18 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
         })
-        .expect_err("permissioned power must be one");
+        .expect_err("consensus power must be one");
         assert!(matches!(
             error,
-            V2ContextBuildError::Wire(wire::ValidationError::PermissionedPowerNotOne)
+            V2ContextBuildError::Wire(wire::ValidationError::VotingPowerNotOne)
         ));
     }
 

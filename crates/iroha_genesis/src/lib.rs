@@ -706,14 +706,9 @@ pub mod genesis_instructions_json {
             .map_err(|err| {
                 json::Error::Message(format!("invalid base64 genesis instruction: {err}"))
             })?;
-        let archived = norito::from_bytes::<InstructionBox>(&bytes).map_err(|err| {
+        norito::decode_canonical::<InstructionBox>(&bytes).map_err(|err| {
             json::Error::Message(format!(
-                "failed to decode base64 genesis instruction: {err}"
-            ))
-        })?;
-        norito::core::NoritoDeserialize::try_deserialize(archived).map_err(|err| {
-            json::Error::Message(format!(
-                "failed to deserialize base64 genesis instruction: {err}"
+                "failed to decode canonical base64 genesis instruction: {err}"
             ))
         })
     }
@@ -1777,7 +1772,7 @@ pub mod genesis_instructions_json {
                 ALICE_ID.clone(),
                 "default".parse().expect("program name"),
             );
-            let fee_asset_id = AssetDefinitionId::new(
+            let fee_asset_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("universal", "universal").expect("domain"),
                 "xor".parse().expect("asset name"),
             );
@@ -1902,7 +1897,8 @@ pub mod genesis_instructions_json {
 
         #[test]
         fn value_to_instruction_accepts_base64_string_for_custom_instruction() {
-            let asset_definition_id = AssetDefinitionId::new(
+            super::super::init_instruction_registry();
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("zk", "universal").expect("domain"),
                 "xor".parse().expect("asset name"),
             );
@@ -1932,9 +1928,41 @@ pub mod genesis_instructions_json {
         }
 
         #[test]
+        fn base64_instruction_rejects_valid_noncanonical_norito_layout() {
+            super::super::init_instruction_registry();
+            let instruction = InstructionBox::from(Log::new(
+                Level::INFO,
+                "canonical genesis boundary".to_owned(),
+            ));
+            let canonical = norito::encode_canonical(&instruction)
+                .expect("encode canonical genesis instruction");
+            let canonical_value = Value::String(
+                base64::engine::general_purpose::STANDARD.encode(canonical.as_slice()),
+            );
+            value_to_instruction(canonical_value)
+                .expect("canonical base64 genesis instruction must decode");
+
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let alternate = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::core::to_bytes(&instruction)
+                    .expect("encode valid alternate-layout instruction")
+            };
+            assert_ne!(alternate, canonical);
+            let alternate_value = Value::String(
+                base64::engine::general_purpose::STANDARD.encode(alternate.as_slice()),
+            );
+
+            let error = value_to_instruction(alternate_value)
+                .expect_err("noncanonical base64 genesis instruction must be rejected");
+            assert!(error.to_string().contains("canonical"));
+        }
+
+        #[test]
         fn structured_genesis_rejects_negative_asset_mint_quantity() {
             let asset_id = AssetId::new(
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     "coin".parse().expect("asset name"),
                 ),
@@ -1955,8 +1983,10 @@ pub mod genesis_instructions_json {
             let account_id = ALICE_ID.clone();
             let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             let domain = Domain::new(domain_id.clone());
-            let asset_def_id: AssetDefinitionId =
-                AssetDefinitionId::new(domain_id.clone(), "coin".parse().unwrap());
+            let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "coin".parse().unwrap(),
+            );
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
             let asset_alias: AssetDefinitionAlias = "coin#wonderland.universal".parse().unwrap();
 
@@ -3488,6 +3518,79 @@ mod tests2 {
     }
 
     #[test]
+    fn explicit_creation_time_makes_signed_genesis_reproducible() {
+        init_instruction_registry();
+
+        let manifest = RawGenesisTransaction {
+            chain: ChainId::from("iroha:test:fixed-genesis-time"),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![RawGenesisTx::default(), RawGenesisTx::default()],
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
+            consensus_fingerprint: None,
+            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+            crypto: ManifestCrypto::default(),
+        };
+        let keypair = checked_genesis_fixture_keypair();
+        let batch_count = u64::try_from(
+            manifest
+                .clone()
+                .parse()
+                .expect("parse fixed-time genesis manifest")
+                .len(),
+        )
+        .expect("genesis transaction batch count fits into u64");
+        assert!(
+            batch_count > 0,
+            "a parsed genesis manifest must contain at least one transaction batch"
+        );
+        let sign = |manifest: RawGenesisTransaction| {
+            manifest
+                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                    &keypair,
+                    None,
+                    None,
+                    1_700_000_000_000,
+                )
+                .expect("sign genesis at fixed time")
+                .0
+                .encode_wire()
+                .expect("encode fixed-time genesis")
+        };
+
+        assert_eq!(sign(manifest.clone()), sign(manifest.clone()));
+        let last_representable_base = u64::MAX - batch_count;
+        let boundary = manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                &keypair,
+                None,
+                None,
+                last_representable_base,
+            )
+            .expect("the last representable explicit creation-time base must succeed");
+        assert_eq!(
+            boundary.0.header().creation_time().as_millis(),
+            u128::from(u64::MAX),
+            "the block timestamp must use the final representable millisecond"
+        );
+        let error = manifest
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                &keypair,
+                None,
+                None,
+                last_representable_base + 1,
+            )
+            .expect_err("overflowing explicit creation-time base must be rejected");
+        assert!(
+            error.to_string().contains("cannot represent"),
+            "unexpected overflow error: {error:#}"
+        );
+    }
+
+    #[test]
     fn build_and_sign_checked_genesis_transaction_signatures_verify() {
         init_instruction_registry();
 
@@ -4812,7 +4915,8 @@ impl RawGenesisTransaction {
     ///
     /// # Errors
     ///
-    /// Fails if `RawGenesisTransaction::parse` fails.
+    /// Fails if `RawGenesisTransaction::parse` fails or the transaction and
+    /// block timestamps cannot be represented in `u64` milliseconds.
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
         self.build_and_sign_with_da_proof_policies(genesis_key_pair, None)
     }
@@ -4866,16 +4970,52 @@ impl RawGenesisTransaction {
         da_proof_policies: Option<DaProofPolicyBundle>,
         confidential_policy_hash: Option<[u8; 32]>,
     ) -> Result<GenesisBlock> {
-        let chain = self.chain.clone();
-        let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
-        let instruction_batches = self.parse()?;
-
         let genesis_creation_base_ms: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .wrap_err("system clock is before UNIX_EPOCH")?
             .as_millis()
             .try_into()
             .wrap_err("current UNIX timestamp does not fit into u64 milliseconds")?;
+        self.build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+            genesis_key_pair,
+            da_proof_policies,
+            confidential_policy_hash,
+            genesis_creation_base_ms,
+        )
+    }
+
+    /// Build and sign genesis with explicit DA/confidential policy commitments
+    /// and a deterministic transaction creation-time base.
+    ///
+    /// Transaction `i` receives `creation_time_base_ms + i`; the genesis block
+    /// timestamp remains one millisecond after the final transaction.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `RawGenesisTransaction::parse` fails or the transaction and
+    /// block timestamps cannot be represented in `u64` milliseconds.
+    pub fn build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+        self,
+        genesis_key_pair: &KeyPair,
+        da_proof_policies: Option<DaProofPolicyBundle>,
+        confidential_policy_hash: Option<[u8; 32]>,
+        creation_time_base_ms: u64,
+    ) -> Result<GenesisBlock> {
+        let chain = self.chain.clone();
+        let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
+        let instruction_batches = self.parse()?;
+        let timestamp_span = u64::try_from(instruction_batches.len())
+            .wrap_err("genesis transaction count does not fit into u64")?;
+        creation_time_base_ms
+            .checked_add(timestamp_span)
+            .ok_or_else(|| {
+                eyre!(
+                    "genesis creation-time base {creation_time_base_ms} cannot represent \
+                     {} transactions and the block timestamp",
+                    instruction_batches.len()
+                )
+            })?;
+
         let mut transactions = Vec::new();
         for (tx_index, instructions) in instruction_batches.into_iter().enumerate() {
             #[cfg(debug_assertions)]
@@ -4893,10 +5033,12 @@ impl RawGenesisTransaction {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .with_instructions(instructions);
+            let tx_index =
+                u64::try_from(tx_index).expect("genesis transaction count validated above");
             builder.set_creation_time(Duration::from_millis(
-                genesis_creation_base_ms.saturating_add(
-                    u64::try_from(tx_index).expect("too many genesis transactions"),
-                ),
+                creation_time_base_ms
+                    .checked_add(tx_index)
+                    .expect("genesis timestamp span validated above"),
             ));
             let transaction = builder
                 .try_sign(genesis_key_pair.private_key())
@@ -5582,9 +5724,15 @@ impl GenesisDomainBuilder {
     /// Add [`AssetDefinition`] to this domain.
     pub fn asset(mut self, asset_name: Name, asset_spec: NumericSpec) -> Self {
         let asset_display_name = asset_name.to_string();
-        let asset_definition_id = AssetDefinitionId::new(self.domain_id.clone(), asset_name);
-        let asset_definition =
-            AssetDefinition::new(asset_definition_id, asset_spec).with_name(asset_display_name);
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(self.domain_id.clone(), asset_name);
+        let asset_definition = AssetDefinition::new(
+            asset_definition_id,
+            asset_display_name,
+            asset_spec,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        );
         self.current_tx_mut()
             .instructions
             .push(Register::asset_definition(asset_definition).into());
@@ -5747,12 +5895,13 @@ impl TryFrom<GenesisIvmAction> for Action {
     type Error = eyre::Report;
 
     fn try_from(value: GenesisIvmAction) -> Result<Self, Self::Error> {
-        Ok(Action::new(
+        Action::new(
             IvmBytecode::try_from(value.executable)?,
             value.repeats,
             value.authority,
             value.filter,
-        ))
+        )
+        .map_err(Into::into)
     }
 }
 
@@ -6992,13 +7141,15 @@ mod tests {
             );
             assert_eq!(
                 instructions[7],
-                Register::asset_definition(
-                    AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+                Register::asset_definition(AssetDefinition::numeric(
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                         DomainId::try_new("meadow", "universal").unwrap(),
-                        "hats".parse().unwrap()
-                    ),)
-                    .with_name("hats".to_owned())
-                )
+                        "hats".parse().unwrap(),
+                    ),
+                    "hats".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ))
                 .into()
             );
         }

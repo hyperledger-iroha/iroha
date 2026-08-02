@@ -19,32 +19,6 @@ scheduler high-watermarks remain retained.  This is separate from the
 durable leader-wire and Candidate-continuation Dormant states.
 ***************************************************************************)
 
-AsyncRecoveryExecutionInvariant ==
-  asyncRecoveryPhase = "Replaying" =>
-    /\ asyncOutstandingTags[asyncRecoveryNode] = {}
-    /\ AsyncServeIngressLifecycleOwnerIdentities(
-         asyncRecoveryNode) = {}
-    /\ SequenceHasUniqueValues(asyncRecoveryReplayQueue)
-    /\ SequenceSet(asyncRecoveryReplayQueue) \cap
-         ResponsiveReplayScheduledCandidates(asyncRecoveryNode) = {}
-
-(***************************************************************************
-Every restart authority remains the exact node/context/view/subject
-projection of a live historical PrepareQC source.  This is not a new durable
-write: responsive crash registration projects the pre-existing durable lock,
-and the transition removes the projection when that source is decided or
-superseded.  The separate handoff predicate below removes it only after the
-exact current-generation FetchBody owner is present in scheduler state.
-***************************************************************************)
-
-HistoricalLockRestartAuthoritySourceRetentionInvariant ==
-  \A authority \in asyncHistoricalLockRestartAuthorities:
-    HistoricalLockRestartAuthoritySource(authority)
-AsyncGstRecoveryPhaseInvariant ==
-  gst =>
-    asyncRecoveryPhase
-      \notin {"RestartRequired", "ReplayRequired", "Replaying"}
-
 THEOREM AsyncInitEstablishesSerializedBusyKernelInvariant ==
   \A initialContext:
     AsyncInitAt(initialContext) => AsyncSerializedBusyKernelInvariant
@@ -1081,23 +1055,6 @@ BY FS_CardinalityType, Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncOrdinaryIngressCarrierOwnershipInvariant
 
-AsyncStrongTypeInvariant ==
-  /\ StrongInductiveInvariant
-  /\ AsyncSchedulerTypeInvariant
-  /\ AsyncServiceActivationPairInvariant
-  /\ AsyncControlServiceStateTypeInvariant
-  /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
-  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
-  /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
-  /\ AsyncOrdinaryIngressCarrierOwnershipInvariant
-  /\ ReceivedTimeoutVotePoolInvariant
-  /\ AsyncRecoveryTypeInvariant
-  /\ AsyncRestartAuthorityInvariant
-  /\ AsyncRecoveryExecutionInvariant
-  /\ AsyncHistoricalLockRestartAuthorityTypeInvariant
-  /\ HistoricalLockRestartAuthoritySourceRetentionInvariant
-  /\ AsyncGstRecoveryPhaseInvariant
-  /\ AsyncSerializedBusyKernelInvariant
 
 THEOREM AsyncStrongTypeProjectsAsyncType ==
   AsyncStrongTypeInvariant => AsyncTypeInvariant
@@ -1139,8 +1096,12 @@ PROOF
              AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn,
              AsyncCandidateProducerContinuationLifecycleCoveredIn,
              AsyncRetransmitLifecycleOrdinal,
+             AsyncRetransmitLifecyclePhysicalCut,
              AsyncRetransmitLifecycleOwned,
              RetransmitDue, RetransmitTagPresent,
+             AsyncOlderCandidateLifecycleBlocksRetransmit,
+             AsyncEffectiveRetransmitLifecycleOrdinal,
+             AsyncEffectiveRetransmitLifecyclePhysicalCut,
              TimeoutDue, AsyncOlderRuntimeLifecycleBlocksTimeout,
              AsyncOlderRetransmitLifecycleBlocksTimeout,
              AsyncOlderCandidateLifecycleBlocksTimeout,
@@ -1265,8 +1226,12 @@ PROOF
              AsyncCandidateServiceTombstones,
              AsyncNextCandidateServiceOrdinal,
              AsyncRetransmitLifecycleOrdinal,
+             AsyncRetransmitLifecyclePhysicalCut,
              AsyncRetransmitLifecycleOwned,
              RetransmitDue, RetransmitTagPresent,
+             AsyncOlderCandidateLifecycleBlocksRetransmit,
+             AsyncEffectiveRetransmitLifecycleOrdinal,
+             AsyncEffectiveRetransmitLifecyclePhysicalCut,
              TimeoutDue, AsyncOlderRuntimeLifecycleBlocksTimeout,
              AsyncOlderRetransmitLifecycleBlocksTimeout,
              AsyncOlderCandidateLifecycleBlocksTimeout,
@@ -3803,8 +3768,10 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
    AsyncRetransmitFreshEpisodeConsumesSharedLifecycleOrdinal,
    AsyncRetransmitFreshEpisodeAdvancesSharedHighWatermark,
    AsyncRetransmitCompletedEpisodeClearsActiveOwner,
-   AsyncRetransmitCompletedEpisodeClearsOrReplacesDrainedOwner,
+   AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition,
    AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition,
+   AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal,
+   AsyncFreshServeReservationPrecedesSameStepRetransmitAllocation,
    AsyncSharedSchedulerHighWatermarkIsMonotone,
    FunctionalUpdatePreservesType,
    FS_Subset, FS_Image, FS_Union, FS_Interval,
@@ -3898,13 +3865,20 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncFreshServeIngressAdmissionsForNodeThisStep,
        AsyncFreshServeIngressAdmissionsAreSingularThisStep,
        AsyncFreshServeIngressSchedulerReservationMatchesIn,
+       AsyncFreshExactServeReservationThisStep,
+       AsyncExactServeClockFreezeBoundaryThisStep,
+       AsyncClockLifecycleFreezeBoundaryThisStep,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
        AsyncRetransmitLifecycleCanAcquireThisStep,
        AsyncRetransmitLifecycleConsumesFreshOrdinal,
+       AsyncRetransmitLifecycleFreshOrdinalForStep,
+       AsyncRetransmitLifecyclePhysicalCutForStep,
        AsyncRetransmitLifecycleResetThisStep,
        AsyncRetransmitLifecycleEpisodeCompletesThisStep,
+       AsyncRetransmitClockFreezeReady,
        AsyncRetransmitLifecycleOwned,
        AsyncRetransmitLifecycleOrdinal,
-       AsyncRetransmitClockCanAcquireAfter,
+       AsyncRetransmitLifecyclePhysicalCut,
        RetransmitDue, RetransmitDueAfter, RetransmitTagPresent,
        AsyncTimeoutClockDue, AsyncTimeoutClockDueAfter,
        AsyncTimeoutClockDueIn, TimeoutTagPresentIn,
@@ -3913,6 +3887,8 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncOlderRuntimeLifecycleBlocksTimeout,
        AsyncOlderRetransmitLifecycleBlocksTimeout,
        AsyncOlderCandidateLifecycleBlocksTimeout,
+       AsyncOlderCandidateLifecycleBlocksRetransmit,
+       AsyncRetransmitPriorityPrecedesCandidate,
        DirectRetransmitStep, DeferredRetransmitStep,
        AsyncTimeoutLifecycleNewOriginsForNodeIn,
        AsyncTimeoutLifecycleTransfersThisStep,
@@ -4299,7 +4275,11 @@ PROOF
       BY <2>1, SMT DEF AsyncCandidateTyped, AsyncCandidateSet
     <2> QED BY <2>1, <2>2
        DEF RetainedBodyRebindCandidate, CausalCandidate,
-           AsyncCandidateFrom, AsyncCandidateWithIdentity
+           AsyncCandidateFrom,
+           AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+           AsyncCandidateSuccessorSemanticPhase,
+           AsyncCandidateSuccessorProposalRound,
+           AsyncCandidateWithIdentityAndOrigin
   <1> QED BY <1>1
 
 THEOREM DeliverProposalSchedulesRetainedBodyRebind ==
@@ -4595,113 +4575,5 @@ THEOREM CommitFormationIsExactLockedRound ==
     CommitRoundAdmissible(node, roundView, subject)
       => LockedPrepareRound(node, roundView, subject)
 BY DEF CommitRoundAdmissible
-
-THEOREM HistoricalVoteAdmissionIsExactLockedCommit ==
-  \A node, vote:
-    (VoteRoundAdmissible(node, vote)
-      /\ vote.view # nodeView[node])
-      => /\ vote.phase = "Commit"
-         /\ LockedPrepareRound(node, vote.view, vote.subject)
-BY CommitVoteAdmissionIsExactLockedCommit
-
-THEOREM HistoricalCommitFormationIsExactLockedRound ==
-  \A node, roundView, subject:
-    (CommitRoundAdmissible(node, roundView, subject)
-      /\ roundView # nodeView[node])
-      => LockedPrepareRound(node, roundView, subject)
-BY CommitFormationIsExactLockedRound
-
-THEOREM HistoricalLockedCommitUsesProgressReserve ==
-  \A item:
-    HistoricalLockedCommitItem(item)
-      => DeliveryClass(item) = "Progress"
-BY DEF DeliveryClass
-
-(***************************************************************************
-Executing a scheduled historical BeginLockCommit may select a different
-valid Prepare QcRecord than the candidate's concrete evidence when both
-records have the same production CertificateRef.  The action persists the
-selected exact record, while progress ownership transfers by the stable
-Prepare reference.  StrongInductiveInvariant supplies the redundant
-`height = context.height` fact for both authenticated QCs; coordinate matching
-alone would not establish the full reference over the broad QcRecord carrier.
-***************************************************************************)
-THEOREM HistoricalBeginLockExecutionCreatesSameRefPending ==
-  \A node \in ValidatorIds, sourceQc \in QcRecordSet,
-     command \in AsyncCandidateSet:
-    /\ StrongInductiveInvariant
-    /\ HistoricalLockedPrepareForCommit(node, sourceQc)
-    /\ HistoricalBeginLockRecoveryCandidate(node, sourceQc, command)
-    /\ ExecuteCommand(command)
-    => \E request \in pendingLockCommit':
-         /\ request.node = node
-         /\ SamePrepareRecoveryRef(request.qc, sourceQc)
-PROOF
-  <1>1. ASSUME NEW node \in ValidatorIds,
-                NEW sourceQc \in QcRecordSet,
-                NEW command \in AsyncCandidateSet,
-                StrongInductiveInvariant,
-                HistoricalLockedPrepareForCommit(node, sourceQc),
-                HistoricalBeginLockRecoveryCandidate(
-                  node, sourceQc, command),
-                ExecuteCommand(command)
-         PROVE \E request \in pendingLockCommit':
-                 /\ request.node = node
-                 /\ SamePrepareRecoveryRef(request.qc, sourceQc)
-    <2>1. PICK selectedQc \in LockCommitQcValues:
-             /\ CommandMatches(command, command.node,
-                               selectedQc.view, selectedQc.subject)
-             /\ BeginLockCommit(command.node, selectedQc)
-      BY <1>1, IsaT(60)
-         DEF HistoricalBeginLockRecoveryCandidate,
-             ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand
-    <2>2. /\ command.node = node
-           /\ command.view = sourceQc.view
-           /\ command.subject = sourceQc.subject
-      BY <1>1 DEF HistoricalBeginLockRecoveryCandidate
-    <2>3. /\ selectedQc.context = context
-           /\ selectedQc.phase = "Prepare"
-           /\ pendingLockCommit' =
-                pendingLockCommit
-                  \cup {LockCommitWal(
-                          command.node, selectedQc,
-                          Vote(context, selectedQc.view, "Commit",
-                               selectedQc.subject, command.node))}
-      BY <2>1 DEF BeginLockCommit
-    <2>4. selectedQc \in prepareQCs
-      BY <1>1, <2>1, IsaT(90)
-         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
-             LineageInvariant, QcTransportBacked,
-             CertificatePhasesCorrect, LockCommitQcValues,
-             ReceivedQcValues, CurrentOpenPrepareForCommit,
-             HistoricalLockedPrepareForCommit,
-             HistoricalLockedPrepareSource, LockedPrepareRecoverySource,
-             BeginLockCommit
-    <2>5. /\ sourceQc.context = context
-           /\ sourceQc \in prepareQCs
-           /\ sourceQc.height = sourceQc.context.height
-           /\ selectedQc.height = selectedQc.context.height
-           /\ selectedQc \in QcRecordSet
-      BY <1>1, <2>4, IsaT(90)
-         DEF StrongInductiveInvariant, Safety, TypeInvariant,
-             ReducerProvenanceInvariant, CertificatesBackedByIntents,
-             HistoricalQcValid, HistoricalLockedPrepareForCommit,
-             HistoricalLockedPrepareSource, LockedPrepareRecoverySource
-    <2>6. SamePrepareRecoveryRef(selectedQc, sourceQc)
-      BY <1>1, <2>1, <2>2, <2>3, <2>5, SMT
-         DEF CommandMatches, SamePrepareRecoveryRef,
-             SameCertificateRef, CertificateRefOf
-    <2> DEFINE SelectedVote ==
-           Vote(context, selectedQc.view, "Commit",
-                selectedQc.subject, command.node)
-    <2> DEFINE SelectedRequest ==
-           LockCommitWal(command.node, selectedQc, SelectedVote)
-    <2>7. /\ SelectedRequest \in pendingLockCommit'
-           /\ SelectedRequest.node = node
-           /\ SamePrepareRecoveryRef(SelectedRequest.qc, sourceQc)
-      BY <2>2, <2>3, <2>6, Isa
-         DEF SelectedRequest, SelectedVote, LockCommitWal
-    <2> QED BY <2>7
-  <1> QED BY <1>1
 
 =============================================================================

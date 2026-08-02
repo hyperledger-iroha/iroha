@@ -94,7 +94,6 @@ mod compute;
 mod compute_harness;
 mod fastpq;
 mod gar;
-mod gar_bus;
 mod i3_bench_suite;
 mod i3_slo_harness;
 mod kagami_profiles;
@@ -318,10 +317,6 @@ enum CommandKind {
     },
     SoranetGarExport {
         options: gar::ExportOptions,
-        output: JsonTarget,
-    },
-    SoranetGarBus {
-        options: gar_bus::GarBusOptions,
         output: JsonTarget,
     },
     SoranetGatewayBilling {
@@ -1515,10 +1510,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SoranetGarExport { options, output } => {
             let summary = gar::export_receipts(options)?;
-            write_json_output(&summary, output)?;
-        }
-        CommandKind::SoranetGarBus { options, output } => {
-            let summary = gar_bus::publish_policy(options)?;
             write_json_output(&summary, output)?;
         }
         CommandKind::SoranetGatewayBilling { options } => {
@@ -5190,61 +5181,6 @@ where
                     pop_label,
                     markdown_out,
                     now_unix,
-                },
-                output,
-            })
-        }
-        "soranet-gar-bus" => {
-            let mut policy_path: Option<PathBuf> = None;
-            let mut output_dir: Option<PathBuf> = None;
-            let mut pop_label: Option<String> = None;
-            let mut json_out: Option<JsonTarget> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--policy" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --policy".into());
-                        };
-                        policy_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--out-dir" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --out-dir".into());
-                        };
-                        output_dir = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--pop" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --pop".into());
-                        };
-                        pop_label = Some(value);
-                    }
-                    "--json-out" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --json-out".into());
-                        };
-                        if path == "-" {
-                            json_out = Some(JsonTarget::Stdout);
-                        } else {
-                            json_out = Some(JsonTarget::File(normalize_path(Path::new(&path))?));
-                        }
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for soranet-gar-bus: {flag}").into());
-                    }
-                }
-            }
-            let policy_path = policy_path
-                .ok_or_else(|| "soranet-gar-bus requires --policy <path>".to_string())?;
-            let output_dir =
-                output_dir.unwrap_or_else(|| default_gar_bus_dir(pop_label.as_deref()));
-            let output = json_out.unwrap_or(JsonTarget::Stdout);
-            Ok(CommandKind::SoranetGarBus {
-                options: gar_bus::GarBusOptions {
-                    policy_path,
-                    output_dir,
-                    pop: pop_label,
                 },
                 output,
             })
@@ -14597,17 +14533,6 @@ fn default_gar_summary_path(pop_label: &str) -> PathBuf {
         .join("gar_receipts_summary.json")
 }
 
-fn default_gar_bus_dir(pop_label: Option<&str>) -> PathBuf {
-    let mut path = workspace_root()
-        .join("artifacts")
-        .join("soranet")
-        .join("gateway");
-    if let Some(pop) = pop_label {
-        path = path.join(pop);
-    }
-    path.join("gar_bus")
-}
-
 fn run_config_debug(path: &Path) -> Result<(), Box<dyn Error>> {
     println!("reading config {}", path.display());
     let reader = ConfigReader::new();
@@ -15110,12 +15035,6 @@ fn print_usage() {
     );
     eprintln!(
         "    Bundle GAR enforcement receipts and ACK files into a JSON summary (and optional Markdown). Defaults to artifacts/soranet/gateway/<pop>/gar_receipts*, using stdout when no pop/paths are supplied."
-    );
-    eprintln!(
-        "  cargo xtask soranet-gar-bus --policy <path> [--out-dir <path>] [--pop <label>] [--json-out <path|->]"
-    );
-    eprintln!(
-        "    Publish a GAR CDN policy payload to the file-based bus (writes JSON + Markdown into artifacts/soranet/gateway/<pop>/gar_bus by default)."
     );
     eprintln!(
         "  cargo xtask soranet-gateway-billing [--usage <path>] [--catalog <path>] [--guardrails <path>] [--output-dir <path>] [--payer <account>] [--treasury <account>] [--asset <definition>] [--allow-hard-cap]"

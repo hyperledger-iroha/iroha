@@ -232,25 +232,27 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun unshieldInstructionValidatesInputsOutputsAndProof() {
+    fun unshieldInstructionValidatesInputsAndProofWithExactShape() {
         val input = fill(0x20, 32)
-        val output = fill(0x21, 32)
         val root = fill(0x22, 32)
         val instruction = UnshieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setTo("bob")
             .setPublicAmount("0.25")
             .addInput(input)
-            .addOutput(output)
             .setProof(sampleProof())
             .setRootHint(root)
             .build()
 
         input[0] = 0
-        output[0] = 0
         root[0] = 0
         assertEquals("Unshield", instruction.arguments["action"])
         assertEquals("0.25", instruction.publicAmount)
+        assertEquals(
+            listOf("action", "asset", "to", "public_amount", "inputs", "proof", "root_hint"),
+            instruction.arguments.keys.toList(),
+        )
+        assertFalse(instruction.arguments.containsKey("outputs"))
         assertFailsWith<IllegalArgumentException> {
             UnshieldInstruction.builder().setPublicAmount("00.25")
         }
@@ -258,9 +260,7 @@ class ZkAssetInstructionsTest {
             UnshieldInstruction.builder().setPublicAmount("-0.25")
         }
         assertEquals(1, instruction.inputs.size)
-        assertEquals(1, instruction.outputs.size)
         assertEquals(0x20, instruction.inputs[0][0].toInt())
-        assertEquals(0x21, instruction.outputs[0][0].toInt())
         assertEquals(0x22, instruction.rootHint!![0].toInt())
 
         assertFailsWith<IllegalStateException> {
@@ -273,9 +273,6 @@ class ZkAssetInstructionsTest {
         }
         assertFailsWith<IllegalArgumentException> {
             UnshieldInstruction.builder().addInput(ByteArray(32))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            UnshieldInstruction.builder().addOutput(fill(1, 31))
         }
         assertFailsWith<IllegalArgumentException> {
             UnshieldInstruction.builder().setRootHint(fill(1, 31))
@@ -424,10 +421,10 @@ class ZkAssetInstructionsTest {
     @Test
     fun nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable() {
         assertEquals(21, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
-        assertEquals(1, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
+        assertEquals(2, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
         assertTrue(
             NativeSignerBridge.isNativeAvailable(),
-            "connect_norito_bridge ABI 21 native-signer contract revision 1 is required",
+            "connect_norito_bridge ABI 21 native-signer contract revision 2 is required",
         )
 
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
@@ -590,9 +587,19 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun unshieldFromArgumentsIsUnsupported() {
+    fun unshieldFromArgumentsRejectsStaleOutputBearingPayload() {
+        val staleArguments = linkedMapOf(
+            "action" to "Unshield",
+            "asset" to "rose#wonderland",
+            "to" to "bob",
+            "public_amount" to "1",
+            "inputs" to "20".repeat(32),
+            "outputs" to "21".repeat(32),
+            "proof" to sampleProof().toNativeJson(),
+            "root_hint" to "",
+        )
         assertFailsWith<UnsupportedOperationException> {
-            UnshieldInstruction.fromArguments(emptyMap())
+            UnshieldInstruction.fromArguments(staleArguments)
         }
     }
 

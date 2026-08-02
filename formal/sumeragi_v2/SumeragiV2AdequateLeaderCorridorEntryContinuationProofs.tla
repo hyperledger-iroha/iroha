@@ -191,29 +191,27 @@ AdequateLeaderAuthenticatedTcEpisodeIdentity(
    certificate |-> tc]
 
 AdequateLeaderAuthenticatedTcEpisodePhysicalOwners(target, tc) ==
-  {<<stage, source>>:
-    /\ stage \in 1..7
-    /\ source \in AsyncCurrentResponsiveVoters
-    /\ CASE stage = 1 ->
+  {stageOwner \in (1..7) \X AsyncCurrentResponsiveVoters:
+    CASE stageOwner[1] = 1 ->
               \/ TimeoutTcExactPersistCandidateOwner(
                    target, tc, tc.view)
               \/ TimeoutTcInstallWalOwner(target, tc, tc.view)
-       [] stage = 2 ->
+       [] stageOwner[1] = 2 ->
               \/ TimeoutTcImportedBeginCandidateOwner(
                    target, tc, tc.view)
               \/ TimeoutTcReceivedReducerOwner(target, tc, tc.view)
-       [] stage = 3 ->
+       [] stageOwner[1] = 3 ->
               TimeoutTcReducerCandidateOwner(
-                source, target, tc, tc.view)
-       [] stage = 4 ->
-              TimeoutTcIngressOwner(source, target, tc, tc.view)
-       [] stage = 5 ->
-              TimeoutTcPacketOwner(source, target, tc, tc.view)
-       [] stage = 6 ->
+                stageOwner[2], target, tc, tc.view)
+       [] stageOwner[1] = 4 ->
+              TimeoutTcIngressOwner(stageOwner[2], target, tc, tc.view)
+       [] stageOwner[1] = 5 ->
+              TimeoutTcPacketOwner(stageOwner[2], target, tc, tc.view)
+       [] stageOwner[1] = 6 ->
               TimeoutTcRetainedControlOwner(
-                source, target, tc, tc.view)
-       [] stage = 7 ->
-              TimeoutTcInstallWalOwner(source, tc, tc.view)}
+                stageOwner[2], target, tc, tc.view)
+       [] stageOwner[1] = 7 ->
+              TimeoutTcInstallWalOwner(stageOwner[2], tc, tc.view)}
 
 AdequateLeaderAuthenticatedTcEpisodeStageSet(target, tc) ==
   {stage \in 1..7:
@@ -856,14 +854,15 @@ BY SMT
 \* transition do not yet see an active receipt.  They are nevertheless
 \* strictly inside the newly recorded boundary by configured arithmetic.
 THEOREM AsyncFixedCorridorFirstArmRefreshesAreStrict ==
-  \A target \in AsyncFixedCorridorDeadlineNewTargets, item:
-    ModelConfiguration
-      => LET receipt ==
-               AsyncFixedCorridorDeadlineReceipt(
-                 target, context, nodeView[target], asyncNow)
-         IN /\ PacketForItem(item).deadline < receipt.deadline
-            /\ asyncNow + AsyncDeliveryBound < receipt.deadline
-            /\ asyncNow + AsyncRetransmitPeriod < receipt.deadline
+  \A item:
+    \A target \in AsyncFixedCorridorDeadlineNewTargets:
+      ModelConfiguration
+        => LET receipt ==
+                 AsyncFixedCorridorDeadlineReceipt(
+                   target, context, nodeView[target], asyncNow)
+           IN /\ PacketForItem(item).deadline < receipt.deadline
+              /\ asyncNow + AsyncDeliveryBound < receipt.deadline
+              /\ asyncNow + AsyncRetransmitPeriod < receipt.deadline
 BY AsyncFixedCorridorServiceBudgetDominatesRefreshPeriods, SMT
    DEF AsyncFixedCorridorDeadlineReceipt,
        PacketForItem, AsyncPacket
@@ -915,22 +914,22 @@ BY Isa
        AsyncFixedCorridorDeadlineReceipt
 
 THEOREM AdequateLeaderPersistInstallExitsOldCorridor ==
-  \A target \in ValidatorIds,
-     leaderContext \in ContextRecords,
-     leaderView \in Views,
-     startTime, deadline \in Nat,
-     command:
-    /\ AsyncStrongTypeInvariant
-    /\ AsyncFixedCorridorDeadlineReceiptInvariant
-    /\ AdequateLeaderFixedCorridorDeadlineSource(
-         target, leaderContext, leaderView, startTime, deadline)
-    /\ command.node
-         \in AdequateLeaderFrozenResponsiveRoster(leaderContext)
-    /\ AsyncNext
-    /\ ExecutePersistInstall(command)
-    => ~AdequateLeaderFixedCorridorDeadlineSource(
-          target, leaderContext, leaderView,
-          startTime, deadline)'
+  \A command:
+    \A target \in ValidatorIds,
+       leaderContext \in ContextRecords,
+       leaderView \in Views,
+       startTime, deadline \in Nat:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncFixedCorridorDeadlineReceiptInvariant
+      /\ AdequateLeaderFixedCorridorDeadlineSource(
+           target, leaderContext, leaderView, startTime, deadline)
+      /\ command.node
+           \in AdequateLeaderFrozenResponsiveRoster(leaderContext)
+      /\ AsyncNext
+      /\ ExecutePersistInstall(command)
+      => ~AdequateLeaderFixedCorridorDeadlineSource(
+            target, leaderContext, leaderView,
+            startTime, deadline)'
 BY ExecutePersistInstallAdvancesCertifiedView,
    IsaT(1800)
    DEF AdequateLeaderFixedCorridorDeadlineSource,
@@ -1488,16 +1487,16 @@ BY Isa
        TCMaximumProtectsReports, Ranks, Views, NoRank
 
 THEOREM AdequateLeaderSameRoundPersistStrictlyLowersUpgradeBudget ==
-  \A target \in ValidatorIds,
-     tc \in TcRecordSet,
-     command:
-    /\ AsyncStrongTypeInvariant
-    /\ StrictSameRoundTcUpgrade(target, tc)
-    /\ ExactPersistInstallTcCommand(target, tc, command)
-    /\ ExecutePersistInstall(command)
-    => /\ nodeView'[target] = nodeView[target]
-       /\ AdequateLeaderSameRoundUpgradeRemainingBudget(target)'
-            < AdequateLeaderSameRoundUpgradeRemainingBudget(target)
+  \A command:
+    \A target \in ValidatorIds,
+       tc \in TcRecordSet:
+      /\ AsyncStrongTypeInvariant
+      /\ StrictSameRoundTcUpgrade(target, tc)
+      /\ ExactPersistInstallTcCommand(target, tc, command)
+      /\ ExecutePersistInstall(command)
+      => /\ nodeView'[target] = nodeView[target]
+         /\ AdequateLeaderSameRoundUpgradeRemainingBudget(target)'
+              < AdequateLeaderSameRoundUpgradeRemainingBudget(target)
 BY ValidInstallSelectedRankDoesNotExceedTcView, IsaT(600)
    DEF AdequateLeaderSameRoundUpgradeRemainingBudget,
        ExactPersistInstallTcCommand,
@@ -1868,11 +1867,11 @@ BY Isa
        AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
 
 THEOREM AdequateLeaderResidentTcSkipStrictlyLowersExposureRank ==
-  \A target \in AsyncCurrentResponsiveVoters,
-     residentTcs \in SUBSET TcRecordSet,
-     residentOrigins \in SUBSET TimeoutVoteRecordSet,
-     tc \in residentTcs,
-     command:
+  \A command:
+    \A target \in AsyncCurrentResponsiveVoters,
+       residentTcs \in SUBSET TcRecordSet,
+       residentOrigins \in SUBSET TimeoutVoteRecordSet,
+       tc \in residentTcs:
     /\ AsyncStrongTypeInvariant
     /\ AsyncStrongTypeInvariant'
     /\ ViewDomain = Nat
@@ -1905,12 +1904,12 @@ BY ExecutePersistInstallAdvancesCertifiedView,
        TimeoutCertificateSemanticIdentity
 
 THEOREM AdequateLeaderResidentOriginSkipStrictlyLowersExposureRank ==
-  \A target \in AsyncCurrentResponsiveVoters,
-     residentTcs \in SUBSET TcRecordSet,
-     residentOrigins \in SUBSET TimeoutVoteRecordSet,
-     tc \in TcRecordSet,
-     vote \in residentOrigins,
-     command:
+  \A command:
+    \A target \in AsyncCurrentResponsiveVoters,
+       residentTcs \in SUBSET TcRecordSet,
+       residentOrigins \in SUBSET TimeoutVoteRecordSet,
+       tc \in TcRecordSet,
+       vote \in residentOrigins:
     /\ AsyncStrongTypeInvariant
     /\ AsyncStrongTypeInvariant'
     /\ ViewDomain = Nat
@@ -2237,23 +2236,20 @@ lemma above then excludes every formed TC at or above the synchronized view.
 The exit handoff also stores the original corridor authority receipt, so a
 nonresponsive candidate cannot masquerade as the exited target.
 
-TODO: provide `AdequateLeaderFixedCorridorDeadlineServiceProperty` directly
-from the existing service deadlines and frozen owner/stage ranks.  The proof
-must count each exact packet, I/O, deferred, runner, leader-wire, and
-producer-continuation episode and show that their cumulative clock charge is
-at most `AsyncFixedCorridorServiceBudget`.  The receipt is ghost-only and
-`AsyncTickEnabled` is unchanged.  The current qualitative finite-continuation
-provider has no theorem subsuming its rank under the configured numeric
-budget, so it cannot yet be used as this inequality.  Until that arithmetic
-bridge is proved, the conditional provider below is not a release promotion
-of the second ViewReach conjunct.  The numeric provider must additionally
-discharge
-`AdequateLeaderAuthorityBoundActiveReceiptDecisionCarryProperty`: receipt
-acquisition carries the exact frozen authority from the fresh self-leader
-arming boundary, and receipt service includes exact-target CommitQC
-dissemination.  The fresh-source deadline property alone has no past-time
-carrier for an arbitrary later target corridor and therefore cannot be used
-as that stronger interface.
+`SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs` now supplies
+`AdequateLeaderFixedCorridorDeadlineServiceProperty` from the exact packet,
+I/O, deferred, runner, leader-wire, producer-continuation, replacement, and
+global-blocker ranks.  Their additive clock charge is bounded by
+`AsyncFixedCorridorServiceBudget`; the receipt remains ghost-only and
+`AsyncTickEnabled` is unchanged.  That later module combines the freshly
+armed self-leader deadline with responsive Decision dissemination and is the
+release provider for the second ViewReach conjunct.
+
+The conditional interface below remains intentionally narrower and is not
+used as a release shortcut.  In particular, an arbitrary later target cannot
+recover past receipt acquisition from the fresh-source deadline alone;
+`AdequateLeaderAuthorityBoundActiveReceiptDecisionCarryProperty` would still
+be required by any consumer choosing that alternate interface.
 ***************************************************************************)
 
 AdequateLeaderTargetFrozenCorridorOpenGoal(

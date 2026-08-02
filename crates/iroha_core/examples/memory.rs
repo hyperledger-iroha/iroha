@@ -40,12 +40,12 @@ fn measure_accounts_in_world() {
 
 fn measure_assets_in_world() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         genesis_domain.id().clone(),
         "mandatory".parse().expect("valid asset name"),
     );
 
-    let assets = (0..N).map(|_| gen_asset(asset_definition_id.clone()));
+    let assets = (0..N).map(|_| gen_asset(genesis_domain.id(), asset_definition_id.clone()));
     let world = World::with_assets([], [], [], assets, []);
     done(world);
 }
@@ -113,8 +113,8 @@ mod util {
         Ok((account_id, key_pair))
     }
 
-    pub fn gen_asset(asset_definition: AssetDefinitionId) -> Asset {
-        let account_id = gen_account_in(asset_definition.domain()).0;
+    pub fn gen_asset(domain: &DomainId, asset_definition: AssetDefinitionId) -> Asset {
+        let account_id = gen_account_in(domain).0;
         let asset_id = AssetId::new(asset_definition, account_id);
         let value = next_synthetic_value();
         Asset::new(asset_id, value)

@@ -493,7 +493,7 @@
     ) -> TransactionEntrypoint {
         let chain_id = ChainId::from("kura-offline-operation-index");
         let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             domain_id,
             "cash".parse().expect("fixture asset definition name"),
         );
@@ -887,12 +887,12 @@
             nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x42; 32],
         };
@@ -2669,6 +2669,107 @@
             reopened
                 .kura_total_disk_usage_bytes()
                 .expect("exact usage after staged-restore restart")
+        );
+    }
+
+    #[test]
+    fn staged_v2_record_accepts_exact_published_v3_upgrade() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (current_bytes, retained_path) = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let mut generator = DummyBlocks::new();
+            let genesis = generator.next();
+            let mut entry = sample_merge_entry(1);
+            let carrier = next_merge_carrier(&mut generator, &mut entry);
+            kura.store_block(genesis).expect("store carrier parent");
+            kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
+                .expect("store merge carrier");
+            let blocks_dir = kura.active_blocks_dir.lock().clone();
+            let current =
+                Kura::prepare_retained_block_record(&blocks_dir, carrier.hash(), carrier.as_ref())
+                    .expect("prepare current retained record");
+            assert!(current.merge_reference.is_some());
+            let mut legacy_projection = current.clone();
+            legacy_projection.format_version = RETAINED_BLOCK_RECORD_VERSION_V2;
+            legacy_projection.merge_reference = None;
+            let legacy = KuraRetainedBlockRecordV2::from_current(&legacy_projection)
+                .expect("construct exact legacy retained layout");
+            let legacy_bytes = legacy.encode();
+            let current_bytes = current.encode();
+            let retained_directory = kura.retained_block_record_dir();
+            let retained_path = kura.retained_block_record_path(2);
+            std::fs::create_dir_all(&retained_directory)
+                .expect("create retained-record directory");
+
+            // Exercise the same-process error-reconciliation path first.
+            std::fs::write(&retained_path, &legacy_bytes).expect("write legacy retained record");
+            kura.refresh_total_disk_usage_bytes()
+                .expect("initialize accounting for legacy record");
+            {
+                let _canonical_guard = kura.canonical_chain_lock.lock();
+                let stage = kura
+                    .stage_retained_block_records_for_rewrite(&blocks_dir, 2)
+                    .expect("stage legacy retained record")
+                    .expect("legacy retained record exists");
+                std::fs::write(&retained_path, &current_bytes)
+                    .expect("publish exact current retained record");
+                kura.refresh_total_disk_usage_bytes()
+                    .expect("include concurrently published current record");
+                kura.reconcile_staged_retained_block_rewrite_after_error(&stage)
+                    .expect("accept exact legacy-to-current upgrade");
+            }
+            assert_eq!(
+                std::fs::read(&retained_path).expect("read reconciled retained record"),
+                current_bytes
+            );
+            assert!(!Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).exists());
+            assert_eq!(
+                kura.disk_usage_bytes()
+                    .expect("cached usage after exact upgrade reconciliation"),
+                kura.kura_total_disk_usage_bytes()
+                    .expect("exact usage after exact upgrade reconciliation")
+            );
+
+            // Recreate the publication interleaving and leave it for startup
+            // recovery, which must make the same monotonic-upgrade decision.
+            std::fs::write(&retained_path, &legacy_bytes)
+                .expect("restore legacy retained record for restart case");
+            kura.refresh_total_disk_usage_bytes()
+                .expect("refresh accounting before restart case");
+            {
+                let _canonical_guard = kura.canonical_chain_lock.lock();
+                let stage = kura
+                    .stage_retained_block_records_for_rewrite(&blocks_dir, 2)
+                    .expect("stage legacy retained record for restart")
+                    .expect("legacy retained record exists for restart");
+                std::fs::write(&retained_path, &current_bytes)
+                    .expect("publish exact current record before restart");
+                drop(stage);
+            }
+            assert!(Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).is_dir());
+            (current_bytes, retained_path)
+        };
+
+        let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("recover exact retained-record upgrade on startup");
+        assert_eq!(
+            std::fs::read(&retained_path).expect("read startup-recovered retained record"),
+            current_bytes
+        );
+        assert!(
+            !Kura::retained_block_rewrite_staging_dir_for(
+                &reopened.active_blocks_dir.lock().clone()
+            )
+            .exists()
+        );
+        assert_eq!(
+            reopened
+                .disk_usage_bytes()
+                .expect("cached usage after startup exact-upgrade recovery"),
+            reopened
+                .kura_total_disk_usage_bytes()
+                .expect("exact usage after startup exact-upgrade recovery")
         );
     }
 

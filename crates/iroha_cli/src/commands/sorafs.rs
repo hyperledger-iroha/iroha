@@ -1603,9 +1603,6 @@ pub enum TransparencyCommand {
     /// Submit privacy aggregate source events and trigger configured due publication.
     #[command(subcommand)]
     PrivacyAggregate(TransparencyPrivacyAggregateCommand),
-    /// Submit typed transparency source entries for later publication.
-    #[command(subcommand)]
-    SourceEntry(TransparencySourceEntryCommand),
 }
 
 impl Run for TransparencyCommand {
@@ -1618,7 +1615,6 @@ impl Run for TransparencyCommand {
             Self::Tokens(args) => args.run(context),
             Self::TokenIssuance(cmd) => cmd.run(context),
             Self::PrivacyAggregate(cmd) => cmd.run(context),
-            Self::SourceEntry(cmd) => cmd.run(context),
         }
     }
 }
@@ -2240,136 +2236,6 @@ impl TransparencyPrivacyAggregateCanaryArgs {
                 &evidence,
                 "transparency privacy aggregate canary evidence",
             )?;
-        }
-        context.print_data(&evidence)
-    }
-}
-
-#[derive(clap::Subcommand, Debug)]
-pub enum TransparencySourceEntryCommand {
-    /// Submit one typed source-entry JSON payload.
-    Submit(TransparencySourceEntrySubmitArgs),
-    /// Probe deployed source-entry producer routes.
-    Canary(TransparencySourceEntryCanaryArgs),
-}
-
-impl Run for TransparencySourceEntryCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            Self::Submit(args) => args.run(context),
-            Self::Canary(args) => args.run(context),
-        }
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct TransparencySourceEntrySubmitArgs {
-    /// Source kind accepted by Torii, for example `legal-hold-notice`.
-    #[arg(long = "source-kind", value_name = "TEXT")]
-    source_kind: String,
-    /// JSON payload path.
-    #[arg(long = "payload", value_name = "PATH")]
-    payload: PathBuf,
-}
-
-impl Run for TransparencySourceEntrySubmitArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_transparency_source_entry_json)
-    }
-}
-
-impl TransparencySourceEntrySubmitArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let source_kind = required_trimmed_text(&self.source_kind, "--source-kind")?;
-        let payload = load_transparency_source_entry_payload(&self.payload)?;
-        let client = context.client_from_config();
-        let response = submit(&client, &source_kind, &payload)?;
-        render_json_response_ok_or_accepted(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct TransparencySourceEntryCanaryArgs {
-    /// Source-entry canary probe in `source-kind=payload.json` form.
-    #[arg(long = "source-entry", value_name = "KIND=PATH")]
-    source_entries: Vec<String>,
-    /// Optional path where payload-free canary evidence JSON is written.
-    #[arg(long = "out", value_name = "PATH")]
-    out: Option<PathBuf>,
-}
-
-impl Run for TransparencySourceEntryCanaryArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_transparency_source_entry_json)
-    }
-}
-
-impl TransparencySourceEntryCanaryArgs {
-    fn run_with<C, F>(&self, context: &mut C, mut submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnMut(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let source_entries = parse_transparency_source_entry_canary_specs(&self.source_entries)?;
-        let client = context.client_from_config();
-        let mut probes = Vec::new();
-        for (source_kind, path) in &source_entries {
-            let payload = load_transparency_source_entry_payload(path)?;
-            let response = submit(&client, source_kind, &payload)?;
-            probes.push(transparency_source_entry_canary_probe_json(
-                source_kind,
-                path,
-                &payload,
-                response,
-            ));
-        }
-
-        let passed_count = probes
-            .iter()
-            .filter(|probe| {
-                probe
-                    .get("response_success")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            })
-            .count();
-        let mut evidence = Map::new();
-        evidence.insert(
-            "schema".into(),
-            Value::from("sorafs.transparency.source_entry.canary.v1"),
-        );
-        evidence.insert("source".into(), Value::from("iroha_cli"));
-        evidence.insert(
-            "status".into(),
-            Value::from(if passed_count == probes.len() {
-                "passed"
-            } else {
-                "failed"
-            }),
-        );
-        evidence.insert(
-            "probe_count".into(),
-            Value::from(u64::try_from(probes.len()).unwrap_or(u64::MAX)),
-        );
-        evidence.insert(
-            "passed_probe_count".into(),
-            Value::from(u64::try_from(passed_count).unwrap_or(u64::MAX)),
-        );
-        evidence.insert(
-            "source_entry_probe_count".into(),
-            Value::from(u64::try_from(source_entries.len()).unwrap_or(u64::MAX)),
-        );
-        evidence.insert("payload_bytes_included".into(), Value::Bool(false));
-        evidence.insert("private_payloads_included".into(), Value::Bool(false));
-        evidence.insert("response_bodies_included".into(), Value::Bool(false));
-        evidence.insert("probes".into(), Value::Array(probes));
-        let evidence = Value::Object(evidence);
-        if let Some(path) = &self.out {
-            write_json_artifact(path, &evidence, "transparency source-entry canary evidence")?;
         }
         context.print_data(&evidence)
     }
@@ -11172,72 +11038,6 @@ fn set_executable_if_supported(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_transparency_source_entry_payload(path: &Path) -> Result<Vec<u8>> {
-    load_sorafs_json_payload(path, "transparency source-entry")
-}
-
-fn parse_transparency_source_entry_canary_specs(
-    specs: &[String],
-) -> Result<Vec<(String, PathBuf)>> {
-    if specs.is_empty() {
-        return Err(eyre!(
-            "at least one --source-entry KIND=PATH probe is required"
-        ));
-    }
-    specs
-        .iter()
-        .map(|spec| {
-            let (source_kind, path) = spec
-                .split_once('=')
-                .ok_or_else(|| eyre!("--source-entry must use KIND=PATH form, got `{spec}`"))?;
-            let source_kind = required_trimmed_text(source_kind, "--source-entry source kind")?;
-            let path = required_trimmed_text(path, "--source-entry payload path")?;
-            Ok((source_kind, PathBuf::from(path)))
-        })
-        .collect()
-}
-
-fn transparency_source_entry_canary_probe_json(
-    source_kind: &str,
-    path: &Path,
-    payload: &[u8],
-    response: Response<Vec<u8>>,
-) -> Value {
-    let status = response.status();
-    let body = response.into_body();
-    let mut fields = Map::new();
-    fields.insert("source_kind".into(), Value::from(source_kind.to_string()));
-    fields.insert(
-        "payload_path".into(),
-        Value::from(path.display().to_string()),
-    );
-    fields.insert(
-        "request_bytes".into(),
-        Value::from(u64::try_from(payload.len()).unwrap_or(u64::MAX)),
-    );
-    fields.insert(
-        "request_body_blake3".into(),
-        Value::from(encode(blake3::hash(payload).as_bytes())),
-    );
-    fields.insert(
-        "response_status".into(),
-        Value::from(u64::from(status.as_u16())),
-    );
-    fields.insert("response_success".into(), Value::Bool(status.is_success()));
-    fields.insert(
-        "response_bytes".into(),
-        Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX)),
-    );
-    fields.insert(
-        "response_body_blake3".into(),
-        Value::from(encode(blake3::hash(&body).as_bytes())),
-    );
-    fields.insert("payload_bytes_included".into(), Value::Bool(false));
-    fields.insert("private_payloads_included".into(), Value::Bool(false));
-    fields.insert("response_body_included".into(), Value::Bool(false));
-    Value::Object(fields)
-}
-
 fn transparency_token_issuance_canary_probe_json(
     path: &Path,
     payload: &[u8],
@@ -14053,8 +13853,8 @@ enforce_admission = true
 
 [sorafs.gateway.rate_limit]
 max_requests = 120
-window = "60s"
-ban = "30s"
+window = {{ secs = 60, nanos = 0 }}
+ban = {{ secs = 30, nanos = 0 }}
 
 [sorafs.gateway.acme]
 enabled = true
@@ -14062,9 +13862,9 @@ account_email = "ops@example.com"
 directory_url = "https://acme-v02.api.letsencrypt.org/directory"
 hostnames = [{hosts}]
 dns_provider_id = "cloudflare-prod"
-renewal_window = "30d"
-retry_backoff = "30m"
-retry_jitter = "5m"
+renewal_window = {{ secs = 2592000, nanos = 0 }}
+retry_backoff = {{ secs = 1800, nanos = 0 }}
+retry_jitter = {{ secs = 300, nanos = 0 }}
 
 [sorafs.gateway.acme.challenges]
 dns01 = true
@@ -14417,12 +14217,42 @@ mod gateway_tests {
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("template command runs");
         let rendered = ctx.outputs().join("\n");
-        assert_sorafs_config_snippet_is_schema_valid(&rendered);
+        let config = assert_sorafs_config_snippet_is_schema_valid(&rendered);
+        assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
+        assert_eq!(config.gateway.rate_limit.ban, Some(Duration::from_secs(30)));
+        assert_eq!(
+            config.gateway.acme.renewal_window,
+            Duration::from_secs(30 * 24 * 60 * 60)
+        );
+        assert_eq!(
+            config.gateway.acme.retry_backoff,
+            Duration::from_secs(30 * 60)
+        );
+        assert_eq!(
+            config.gateway.acme.retry_jitter,
+            Duration::from_secs(5 * 60)
+        );
         assert!(rendered.contains("[sorafs.gateway]"));
         assert!(!rendered.contains("[torii.sorafs_gateway]"));
         assert!(rendered.contains("gateway-a.example.com"));
         assert!(rendered.contains("gateway-b.example.com"));
         assert!(!rendered.contains("denylist"));
+    }
+
+    #[test]
+    fn direct_mode_documentation_fixture_satisfies_config_schema() {
+        let fixture = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/documentation/sorafs_gateway_direct_mode.toml"
+        ));
+
+        let config = assert_sorafs_config_snippet_is_schema_valid(fixture);
+        assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
+        assert_eq!(
+            config.gateway.rate_limit.ban,
+            Some(Duration::from_secs(10 * 60))
+        );
+        assert!(config.gateway.direct_mode.is_some());
     }
 
     #[test]
@@ -15962,7 +15792,6 @@ fn moderation_quarantine_bridge_action_status(action: &str, required: bool) -> &
         "submit_native_appeal_intake" => "ready_for_caller_signed_native_appeal",
         "await_chain_sortition_activation" => "waiting_for_finalized_chain_activation",
         "submit_native_case_actions" => "waiting_for_native_commit_reveal_finalization",
-        "publish_transparency_source_entry" => "ready_for_transparency_source_entry",
         "release_complete" => "complete",
         _ => "operator_attention_required",
     }
@@ -16058,17 +15887,6 @@ fn moderation_quarantine_bridge_action_cli(
                 ])
             }
         }
-        "publish_transparency_source_entry" => command(&[
-            "iroha",
-            "sorafs",
-            "transparency",
-            "source-entry",
-            "submit",
-            "--source-kind",
-            "moderation-ballot-governance-event",
-            "--payload",
-            "<source-entry.json>",
-        ]),
         "release_complete" => command(&[
             "iroha",
             "sorafs",
@@ -19732,7 +19550,7 @@ mod tests {
         let directory_hash = [0xAB; 32];
         let preferred_kem_suite = MlKemSuite::MlKem1024;
         let certificate = RelayCertificateV2 {
-            relay_id: [0x11; 32],
+            relay_id: ed_public,
             identity_ed25519: ed_public,
             identity_mldsa65: vec![0x44; 1952],
             descriptor_commit: [0x22; 32],
@@ -19745,7 +19563,9 @@ mod tests {
             bandwidth_bytes_per_sec: 1_500_000,
             reputation_weight: 80,
             endpoints: vec![RelayEndpointV2 {
-                url: "soranet://pq.guard".to_string(),
+                quic_multiaddr: "/dns/pq.guard/udp/443/quic".to_string(),
+                tls_server_name: "pq.guard".to_string(),
+                tls_spki_sha256: [0xA5; 32],
                 priority: 0,
                 tags: vec![EndpointTag::NoritoStream.as_label().to_string()],
             }],
@@ -20225,7 +20045,7 @@ mod tests {
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
             "xor".parse().unwrap(),
         )
@@ -21863,230 +21683,6 @@ mod tests {
             !ctx.printed[0].contains("scheduler unavailable"),
             "canary evidence must not archive response bodies"
         );
-    }
-
-    #[test]
-    fn transparency_source_entry_submit_reads_json_payload() {
-        let mut file = NamedTempFile::new().expect("source entry file");
-        file.write_all(
-            &norito::json::to_vec(&norito::json!({
-                "event_id": "legal-hold-1",
-                "occurred_at_unix": 1_800_000_500_u64,
-                "subject": "case-401",
-                "payload_digest_hex": ("a1".repeat(32)),
-            }))
-            .expect("serialize source entry JSON"),
-        )
-        .expect("write source entry JSON");
-        let args = TransparencySourceEntrySubmitArgs {
-            source_kind: " legal-hold-notice ".to_string(),
-            payload: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-
-        args.run_with(&mut ctx, |_client, source_kind, payload| {
-            assert_eq!(source_kind, "legal-hold-notice");
-            let value: Value = norito::json::from_slice(payload).expect("payload is json");
-            assert_eq!(
-                value.get("event_id").and_then(Value::as_str),
-                Some("legal-hold-1")
-            );
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "accepted" }),
-                )?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"accepted\""));
-    }
-
-    #[test]
-    fn transparency_source_entry_submit_rejects_empty_payload() {
-        let file = NamedTempFile::new().expect("source entry file");
-        let args = TransparencySourceEntrySubmitArgs {
-            source_kind: "legal-hold-notice".to_string(),
-            payload: file.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-
-        let err = args
-            .run_with(&mut ctx, |_client, _, _| {
-                unreachable!("submit must not run")
-            })
-            .expect_err("empty payload must be rejected");
-        assert!(err.to_string().contains("source-entry payload"));
-        assert!(ctx.printed.is_empty());
-    }
-
-    #[test]
-    fn transparency_source_entry_canary_writes_payload_free_evidence() {
-        let legal_hold_file = write_json_file(&norito::json!({
-            "event_id": "legal-hold-1",
-            "occurred_at_unix": 1_800_000_500_u64,
-            "subject": "case-401",
-            "payload_digest_hex": ("a1".repeat(32)),
-        }));
-        let redaction_file = write_json_file(&norito::json!({
-            "event_id": "redaction-1",
-            "occurred_at_unix": 1_800_000_600_u64,
-            "target": "manifest:alpha",
-            "payload_digest_hex": ("b2".repeat(32)),
-        }));
-        let out_dir = TempDir::new().expect("source-entry canary evidence dir");
-        let out = out_dir.path().join("nested/evidence.json");
-        let args = TransparencySourceEntryCanaryArgs {
-            source_entries: vec![
-                format!(" legal-hold-notice = {} ", legal_hold_file.path().display()),
-                format!("redaction-notice={}", redaction_file.path().display()),
-            ],
-            out: Some(out.clone()),
-        };
-        let mut ctx = TestContext::new();
-        let mut submitted = Vec::new();
-
-        args.run_with(&mut ctx, |_client, source_kind, payload| {
-            submitted.push(source_kind.to_string());
-            let value: Value = norito::json::from_slice(payload).expect("source payload JSON");
-            assert!(value.get("event_id").is_some());
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "status": "accepted",
-                    "entry_id_hex": "must-not-leak"
-                }))?)
-                .unwrap())
-        })
-        .expect("source-entry canary should succeed");
-
-        assert_eq!(
-            submitted,
-            vec![
-                "legal-hold-notice".to_string(),
-                "redaction-notice".to_string()
-            ]
-        );
-        assert!(out.exists(), "canary evidence should be written");
-        assert_eq!(ctx.printed.len(), 1);
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            evidence.get("schema").and_then(Value::as_str),
-            Some("sorafs.transparency.source_entry.canary.v1")
-        );
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("passed")
-        );
-        assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            evidence.get("passed_probe_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            evidence
-                .get("source_entry_probe_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            evidence
-                .get("payload_bytes_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            evidence
-                .get("response_bodies_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            !ctx.printed[0].contains("case-401"),
-            "canary evidence must not include source payload fields"
-        );
-        assert!(
-            !ctx.printed[0].contains("must-not-leak"),
-            "canary evidence must not archive response bodies"
-        );
-    }
-
-    #[test]
-    fn transparency_source_entry_canary_records_failed_probe_without_body() {
-        let source_file = write_json_file(&norito::json!({
-            "event_id": "evidence-access-1",
-            "occurred_at_unix": 1_800_000_500_u64,
-            "subject": "case-401",
-            "payload_digest_hex": ("a1".repeat(32)),
-        }));
-        let args = TransparencySourceEntryCanaryArgs {
-            source_entries: vec![format!(
-                "evidence-access-summary={}",
-                source_file.path().display()
-            )],
-            out: None,
-        };
-        let mut ctx = TestContext::new();
-
-        args.run_with(&mut ctx, |_client, source_kind, _payload| {
-            assert_eq!(source_kind, "evidence-access-summary");
-            Ok(Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "error": "producer unavailable"
-                }))?)
-                .unwrap())
-        })
-        .expect("failed probe should still emit canary evidence");
-
-        assert_eq!(ctx.printed.len(), 1);
-        let evidence: Value =
-            norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("failed")
-        );
-        assert_eq!(
-            evidence.get("passed_probe_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert!(
-            !ctx.printed[0].contains("producer unavailable"),
-            "canary evidence must not archive response bodies"
-        );
-    }
-
-    #[test]
-    fn transparency_source_entry_canary_rejects_malformed_specs() {
-        let mut ctx = TestContext::new();
-        let empty_args = TransparencySourceEntryCanaryArgs {
-            source_entries: Vec::new(),
-            out: None,
-        };
-        let err = empty_args
-            .run_with(&mut ctx, |_client, _, _| {
-                unreachable!("submit must not run")
-            })
-            .expect_err("missing probes must be rejected");
-        assert!(err.to_string().contains("at least one --source-entry"));
-
-        let malformed_args = TransparencySourceEntryCanaryArgs {
-            source_entries: vec!["legal-hold-notice".to_string()],
-            out: None,
-        };
-        let err = malformed_args
-            .run_with(&mut ctx, |_client, _, _| {
-                unreachable!("submit must not run")
-            })
-            .expect_err("malformed probe must be rejected");
-        assert!(err.to_string().contains("KIND=PATH"));
-        assert!(ctx.printed.is_empty());
     }
 
     fn write_json_file(value: &Value) -> NamedTempFile {
@@ -26000,7 +25596,7 @@ mod tests {
         plan_file
     }
 
-    pub(super) fn assert_sorafs_config_snippet_is_schema_valid(snippet: &str) {
+    pub(super) fn assert_sorafs_config_snippet_is_schema_valid(snippet: &str) -> UserSorafsConfig {
         let mut root: toml::Table =
             toml::from_str(snippet).expect("generated snippet must parse as TOML");
         let sorafs = root
@@ -26018,7 +25614,7 @@ mod tests {
         ConfigReader::new()
             .with_toml_source(TomlSource::inline(sorafs))
             .read_and_complete::<UserSorafsConfig>()
-            .expect("generated snippet must satisfy the iroha_config SoraFS schema");
+            .expect("generated snippet must satisfy the iroha_config SoraFS schema")
     }
 
     #[test]

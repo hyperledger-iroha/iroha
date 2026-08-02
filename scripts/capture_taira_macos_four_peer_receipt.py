@@ -72,6 +72,7 @@ class RunningSupervisor:
     terminal_file: Path
     workdir: Path
     storage: Path
+    child_argv: tuple[str, ...]
 
 
 def _fail(message: str) -> NoReturn:
@@ -106,16 +107,14 @@ def _canonical(path: Path, label: str, *, directory: bool = False) -> Path:
     return path
 
 
-def _private_supervisor(path: Path, uid: int, gid: int) -> str:
+def _root_controlled_supervisor(path: Path) -> str:
     path = _canonical(path, "supervisor source")
-    info = path.lstat()
-    if (
-        info.st_uid != uid
-        or info.st_gid != gid
-        or info.st_nlink != 1
-        or stat.S_IMODE(info.st_mode) & 0o077
-    ):
-        _fail("supervisor source must be one owner-private runtime-user file")
+    try:
+        deploy.require_root_controlled_file(path, executable=False)
+    except deploy.DeploymentError as exc:
+        raise MacosFourPeerCaptureError(
+            "supervisor source must be one immutable root-controlled file"
+        ) from exc
     return stable_hash_path(path, max_size=4 * 1024 * 1024).sha256
 
 
@@ -337,7 +336,15 @@ def _start_supervisor(
             bundle.owner_uid, bundle.owner_gid, account.pw_name
         ),
     )
-    return RunningSupervisor(peer, process, pid_file, terminal_file, shadow, storage)
+    return RunningSupervisor(
+        peer,
+        process,
+        pid_file,
+        terminal_file,
+        shadow,
+        storage,
+        (str(binary), "--sora", "--config", str(peer.config)),
+    )
 
 
 def _terminal_check(running: Sequence[RunningSupervisor]) -> None:
@@ -348,17 +355,48 @@ def _terminal_check(running: Sequence[RunningSupervisor]) -> None:
             _fail(f"{item.peer.label} entered terminal-unhealthy state")
 
 
-def _read_child(item: RunningSupervisor, uid: int, gid: int) -> int:
-    return deploy.parse_pid_file(item.pid_file, uid, gid)
+def _read_child(
+    item: RunningSupervisor,
+    uid: int,
+    gid: int,
+    ops: deploy.SystemOps | None = None,
+) -> int:
+    """Return the one exact validator child owned by this known supervisor."""
+
+    if item.process.poll() is not None:
+        _fail(f"{item.peer.label} supervisor exited before child inspection")
+    inspector = ops or deploy.SystemOps()
+    pid = deploy.parse_pid_file(item.pid_file, uid, gid)
+    process = inspector.inspect_process(pid)
+    if (
+        process.ppid != item.process.pid
+        or process.uid != uid
+        or process.argv != item.child_argv
+    ):
+        _fail(f"{item.peer.label} validator child identity differs")
+    if inspector.child_pids(item.process.pid) != (pid,):
+        _fail(f"{item.peer.label} supervisor does not own exactly one child")
+    if deploy.parse_pid_file(item.pid_file, uid, gid) != pid:
+        _fail(f"{item.peer.label} validator PID changed during inspection")
+    repeated = inspector.inspect_process(pid)
+    if repeated != process:
+        _fail(f"{item.peer.label} validator child changed during inspection")
+    return pid
 
 
 def _wait_new_child(
-    item: RunningSupervisor, old_pid: int, uid: int, gid: int, deadline: float
+    item: RunningSupervisor,
+    old_pid: int,
+    uid: int,
+    gid: int,
+    deadline: float,
+    ops: deploy.SystemOps | None = None,
 ) -> int:
+    inspector = ops or deploy.SystemOps()
     while time.monotonic() < deadline:
         _terminal_check([item])
         try:
-            candidate = _read_child(item, uid, gid)
+            candidate = _read_child(item, uid, gid, inspector)
         except (FileNotFoundError, OSError, deploy.DeploymentError):
             time.sleep(0.25)
             continue
@@ -369,6 +407,24 @@ def _wait_new_child(
                 return candidate
         time.sleep(0.25)
     _fail(f"{item.peer.label} did not replace its terminated validator child")
+
+
+def _request_child_restart(
+    item: RunningSupervisor,
+    uid: int,
+    gid: int,
+    ops: deploy.SystemOps | None = None,
+) -> int:
+    """Ask the known supervisor to restart its exact inspected child."""
+
+    old_child = _read_child(item, uid, gid, ops)
+    try:
+        item.process.send_signal(signal.SIGUSR1)
+    except ProcessLookupError as exc:
+        raise MacosFourPeerCaptureError(
+            f"{item.peer.label} supervisor exited before restart request"
+        ) from exc
+    return old_child
 
 
 def _stop_supervisors(running: Sequence[RunningSupervisor]) -> None:
@@ -408,6 +464,7 @@ def _receipt(
     source: admission.SourceIdentity,
     bundle: deploy.BundlePlan,
     binary_sha256: str,
+    artifact_handoff_sha256: str,
     supervisor_sha256: str,
     restart_generation: str,
     start: deploy.FleetSample,
@@ -416,6 +473,7 @@ def _receipt(
 ) -> dict[str, object]:
     config_digests = {peer.slug: peer.config_sha256 for peer in bundle.peers}
     body: dict[str, object] = {
+        "artifact_handoff_sha256": artifact_handoff_sha256,
         "end": {"block_hash": end.block_hash, "height": end.height},
         "expires_at_unix": issued_at + MAX_RECEIPT_LIFETIME_SECONDS,
         "issued_at_unix": issued_at,
@@ -454,6 +512,7 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
         _fail("native release capture requires macOS arm64")
     source = admission.SourceIdentity(
         _commit(args.source_commit),
+        _commit(args.dpn_validator_release_commit),
         _sha256(args.cargo_lock_sha256, "Cargo.lock digest"),
         _sha256(args.workspace_source_manifest_sha256, "workspace source digest"),
     )
@@ -476,13 +535,16 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
         expected_reset_manifest_sha256=manifest_sha,
         expected_binary_sha256=binary_sha,
         expected_source_commit=source.commit,
+        expected_dpn_validator_release_commit=(
+            source.dpn_validator_release_commit
+        ),
         minimum_free_bytes=0,
         maximum_fsync_latency_ms=10_000,
     )
     if len(bundle.peers) != admission.PEER_COUNT:
         _fail("reset bundle must contain exactly four validators")
     supervisor = _canonical(args.supervisor, "supervisor source")
-    supervisor_sha = _private_supervisor(supervisor, bundle.owner_uid, bundle.owner_gid)
+    supervisor_sha = _root_controlled_supervisor(supervisor)
     deploy.validate_supervisor_python(deploy.DEFAULT_SUPERVISOR_PYTHON)
 
     installed_binary: Path | None = None
@@ -532,14 +594,18 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
         start = deploy.wait_for_fleet_sample(
             bundle,
             source.commit,
+            source.dpn_validator_release_commit,
             deadline,
             terminal_checker=lambda: _terminal_check(running),
         )
         prior = start
         for item in running:
             _terminal_check(running)
-            old_child = _read_child(item, bundle.owner_uid, bundle.owner_gid)
-            os.kill(old_child, signal.SIGTERM)
+            old_child = _request_child_restart(
+                item,
+                bundle.owner_uid,
+                bundle.owner_gid,
+            )
             restart_deadline = time.monotonic() + deploy.RESTART_PROOF_TIMEOUT_SECONDS
             _wait_new_child(
                 item,
@@ -551,6 +617,7 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
             prior = deploy.wait_for_advancement(
                 bundle,
                 source.commit,
+                source.dpn_validator_release_commit,
                 prior,
                 restart_deadline,
                 terminal_checker=lambda: _terminal_check(running),
@@ -628,6 +695,9 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
         source=source,
         bundle=bundle,
         binary_sha256=binary_sha,
+        artifact_handoff_sha256=_sha256(
+            args.artifact_handoff_sha256, "macOS build handoff digest"
+        ),
         supervisor_sha256=supervisor_sha,
         restart_generation=restart_generation,
         start=start,
@@ -645,6 +715,7 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
             view = view[written:]
         os.fsync(descriptor)
     return {
+        "artifact_handoff_sha256": receipt["artifact_handoff_sha256"],
         "end_height": end.height,
         "output": str(output),
         "peer_count": admission.PEER_COUNT,
@@ -659,8 +730,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--reset-bundle", type=Path, required=True)
     parser.add_argument("--validator-binary", type=Path, required=True)
+    parser.add_argument("--artifact-handoff-sha256", required=True)
     parser.add_argument("--supervisor", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--dpn-validator-release-commit", required=True)
     parser.add_argument("--cargo-lock-sha256", required=True)
     parser.add_argument("--workspace-source-manifest-sha256", required=True)
     parser.add_argument("--restart-generation", required=True)

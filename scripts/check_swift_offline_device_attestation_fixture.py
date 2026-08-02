@@ -107,6 +107,10 @@ def generator_command(generator: Path | None, cargo: str) -> list[str]:
         "--locked",
         "-p",
         "kotlin-fixture-gen",
+        "--features",
+        "dev-tools",
+        "--bin",
+        "kotlin-fixture-gen",
         "--",
         GENERATOR_SUBCOMMAND,
     ]

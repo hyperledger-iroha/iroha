@@ -291,7 +291,7 @@ public sealed class PrivacyExact12FixtureBundleV1 : IEquatable<PrivacyExact12Fix
         {
             var row = rows[index]
                 ?? throw new ArgumentException("Exact-12 rows must not contain null.", nameof(rows));
-            if ((int)row.ProtocolId != index)
+            if ((uint)row.ProtocolId != (uint)index)
             {
                 throw new ArgumentException(
                     $"Exact-12 row {index} is out of canonical protocol order.",

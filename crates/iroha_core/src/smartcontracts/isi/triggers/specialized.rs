@@ -40,26 +40,30 @@ pub struct SpecializedAction<F> {
 
 impl<F> SpecializedAction<F> {
     /// Construct a specialized action given `executable`, `repeats`, `authority` and `filter`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the filter authority conflicts with the action authority.
     pub fn new(
         executable: impl Into<Executable>,
         repeats: impl Into<Repeats>,
         authority: AccountId,
         filter: F,
-    ) -> Self
+    ) -> Result<Self, ActionValidationError>
     where
         F: EnsureTriggerAuthority,
     {
         let executable = executable.into();
         let repeats = repeats.into();
-        let filter = filter.ensure_trigger_authority(&authority).unwrap();
-        Self {
+        let filter = filter.ensure_trigger_authority(&authority)?;
+        Ok(Self {
             executable,
             repeats,
             authority,
             filter,
             retry_policy: None,
             metadata: Metadata::default(),
-        }
+        })
     }
 }
 
@@ -167,7 +171,7 @@ where
 #[cfg(feature = "json")]
 impl<F> json::JsonDeserialize for SpecializedAction<F>
 where
-    F: json::JsonDeserialize + EnsureTriggerAuthority,
+    F: json::JsonDeserialize + EnsureTriggerAuthority + Clone + Into<EventFilterBox>,
 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
@@ -232,31 +236,36 @@ where
         let retry_policy = retry_policy.unwrap_or(None);
         let metadata = metadata.ok_or_else(|| json::MapVisitor::missing_field("metadata"))?;
 
-        let mut action = Self::new(executable, repeats, authority, filter);
+        let mut action = Self::new(executable, repeats, authority, filter)
+            .map_err(|error| json::Error::Message(error.to_string()))?;
         action.retry_policy = retry_policy;
         action.metadata = metadata;
+        Action::try_from(action.clone())
+            .map_err(|error| json::Error::Message(error.to_string()))?;
         Ok(action)
     }
 }
-#[allow(clippy::fallible_impl_from)] // `SpecializedAction::new` already ensures the filter authority.
-impl<F> From<SpecializedAction<F>> for Action
+impl<F> TryFrom<SpecializedAction<F>> for Action
 where
-    F: Into<EventFilterBox> + EnsureTriggerAuthority,
+    F: Into<EventFilterBox>,
 {
-    fn from(value: SpecializedAction<F>) -> Self {
-        let filter = value
-            .filter
-            .ensure_trigger_authority(&value.authority)
-            .unwrap()
-            .into();
-        Action {
-            executable: value.executable,
-            repeats: value.repeats,
-            authority: value.authority,
+    type Error = ActionValidationError;
+
+    fn try_from(value: SpecializedAction<F>) -> Result<Self, Self::Error> {
+        let SpecializedAction {
+            executable,
+            repeats,
+            authority,
             filter,
-            retry_policy: value.retry_policy,
-            metadata: value.metadata,
+            retry_policy,
+            metadata,
+        } = value;
+        let mut action =
+            Action::new(executable, repeats, authority, filter)?.with_metadata(metadata);
+        if let Some(retry_policy) = retry_policy {
+            action = action.with_retry_policy(retry_policy)?;
         }
+        Ok(action)
     }
 }
 
@@ -569,6 +578,9 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "json")]
+    use std::num::{NonZeroU32, NonZeroU64};
+
+    #[cfg(feature = "json")]
     use iroha_crypto::{Algorithm, KeyPair};
     #[cfg(feature = "json")]
     use iroha_data_model::prelude::{
@@ -588,6 +600,71 @@ mod tests {
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
+    #[cfg(feature = "json")]
+    fn test_executable() -> Executable {
+        vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "trigger validation".to_owned(),
+        ))]
+        .into()
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn specialized_action_json_rejects_mismatched_authority() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let other = AccountId::new(checked_keypair().public_key().clone());
+        let invalid = SpecializedAction {
+            executable: test_executable(),
+            repeats: Repeats::Exactly(1),
+            authority,
+            filter: EventFilterBox::ExecuteTrigger(
+                ExecuteTriggerEventFilter::new().under_authority(other),
+            ),
+            retry_policy: None,
+            metadata: Metadata::default(),
+        };
+
+        let encoded = norito::json::to_json(&invalid).expect("serialize invalid action fixture");
+        let error = norito::json::from_json::<SpecializedAction<EventFilterBox>>(&encoded)
+            .expect_err("mismatched specialized action authority must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("ExecuteTrigger filter authority must match trigger owner"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn specialized_action_json_rejects_retry_on_non_scheduled_filter() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let invalid = SpecializedAction {
+            executable: test_executable(),
+            repeats: Repeats::Exactly(1),
+            authority,
+            filter: TimeEventFilter(ExecutionTime::PreCommit),
+            retry_policy: Some(TimeTriggerRetryPolicy {
+                max_retries: NonZeroU32::new(1).expect("non-zero retry count"),
+                retry_after_ms: NonZeroU64::new(10).expect("non-zero retry delay"),
+            }),
+            metadata: Metadata::default(),
+        };
+
+        let encoded = norito::json::to_json(&invalid).expect("serialize invalid retry fixture");
+        let error = norito::json::from_json::<SpecializedAction<TimeEventFilter>>(&encoded)
+            .expect_err("retry policy on a pre-commit action must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("retry policy is only supported for scheduled time-trigger actions"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

@@ -9,7 +9,8 @@ use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, queue::Queue,
     state::State,
 };
-use iroha_data_model::ChainId;
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{ChainId, block::BlockHeader};
 use iroha_primitives::addr::socket_addr;
 use nonzero_ext::nonzero;
 use tower::ServiceExt;
@@ -102,9 +103,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 others: iroha_primitives::unique_vec::UniqueVec::new(),
                 pops: std::collections::BTreeMap::new(),
             }),
-            default_account_domain_label: WithOrigin::inline(
-                iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned(),
-            ),
             chain_discriminant: WithOrigin::inline(
                 iroha_config::parameters::defaults::common::chain_discriminant(),
             ),
@@ -247,7 +245,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             public_key: checked_connect_key_fixture().public_key().clone(),
             file: None,
             manifest_json: None,
-            expected_hash: None,
+            expected_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"Connect gating test genesis trust anchor",
+            )),
         },
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
@@ -321,10 +321,13 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             require_api_token: false,
             api_tokens: Vec::new(),
             soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
+            privacy_bootle_lantern_issuer: None,
             api_fee_asset_id: None,
             api_fee_amount: None,
             api_fee_receiver: None,
-            api_allow_cidrs: Vec::new(),
+            api_rate_limit_bypass_cidrs: Vec::new(),
+            internal_api_trusted_cidrs:
+                iroha_config::parameters::defaults::torii::internal_api_trusted_cidrs(),
             peer_telemetry_urls: Vec::new(),
             peer_geo: A::ToriiPeerGeo::default(),
             debug_match_filters: false,
@@ -335,6 +338,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             preauth_rate_per_ip_per_sec: None,
             preauth_burst_per_ip: None,
             preauth_temp_ban: None,
+            preauth_ban_capacity:
+                iroha_config::parameters::defaults::torii::PREAUTH_BAN_CAPACITY,
             preauth_allow_cidrs: Vec::new(),
             preauth_scheme_limits: Vec::new(),
             api_high_load_tx_threshold: None,
@@ -763,11 +768,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             },
             stark: iroha_config::parameters::actual::Stark::default(),
             sccp: iroha_config::parameters::actual::Sccp::default(),
-            root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
             ballot_history_cap: iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
-            empty_root_on_empty:
-                iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
-            merkle_depth: iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_DEPTH,
             preverify_max_bytes: iroha_config::parameters::defaults::zk::preverify::MAX_BYTES,
             preverify_budget_bytes: iroha_config::parameters::defaults::zk::preverify::BUDGET_BYTES,
             proof_history_cap: iroha_config::parameters::defaults::zk::proof::RECORD_HISTORY_CAP,
@@ -984,9 +985,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             prover_stack_bytes: iroha_config::parameters::defaults::concurrency::PROVER_STACK_BYTES,
             sumeragi_stack_bytes:
                 iroha_config::parameters::defaults::concurrency::SUMERAGI_STACK_BYTES,
-            guest_stack_bytes: iroha_config::parameters::defaults::concurrency::GUEST_STACK_BYTES,
-            gas_to_stack_multiplier:
-                iroha_config::parameters::defaults::concurrency::GAS_TO_STACK_MULTIPLIER,
         },
         confidential: iroha_config::parameters::actual::Confidential {
             enabled: iroha_config::parameters::defaults::confidential::ENABLED,

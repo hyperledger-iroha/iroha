@@ -12,9 +12,6 @@ use thiserror::Error;
 
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
-/// Stable descriptor for the exact nonnative arithmetic chip.
-pub(crate) const ZK_X509_P256_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-air-v4-incompatible:16xu16-little-endian:32-coefficient-rows-per-operation:all-limbs-bit-ranged:canonical-a-b-c-by-fixed-modulus-subtraction:exact-schoolbook-mul-or-modular-add-or-modular-subtract:exact-256-bit-mul-quotient:boolean-add-sub-quotient:25-bit-biased-signed-carry-range-minus2pow24-to2pow24:canonical-builder-carry-under2pow22:integer-residue-under2pow43:verifier-preprocessed-numeric-fixed90:aggregate-aux1-zero:fixed-constraint-vector368-degree4:fixed-operation-topology:group-and-ecdsa-composition=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
-
 /// P-256 coordinate-field modulus in canonical big-endian form.
 pub(crate) const P256_BASE_MODULUS_BE_V1: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -42,8 +39,6 @@ pub(crate) const P256_ARITHMETIC_STARK_AUX_WIDTH_V1: usize = 1;
 pub(crate) const P256_ARITHMETIC_STARK_FIXED_WIDTH_V1: usize = 90;
 /// Exact fixed-width constraint inventory for one opened arithmetic row.
 pub(crate) const P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1: usize = 368;
-/// Maximum total degree in committed and verifier-preprocessed columns.
-pub(crate) const P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
 const LIMB_BITS: usize = 16;
 const CARRY_BITS: usize = 25;
 const CARRY_BIAS: i64 = 1 << 24;
@@ -364,11 +359,6 @@ impl P256ArithmeticStarkFixedProviderV1 {
             coefficient + 1 == P256_ARITHMETIC_ROWS_PER_OPERATION_V1,
         ));
         Ok(row)
-    }
-
-    /// Native row count.
-    pub(crate) const fn trace_size_v1(&self) -> usize {
-        self.trace_size
     }
 }
 

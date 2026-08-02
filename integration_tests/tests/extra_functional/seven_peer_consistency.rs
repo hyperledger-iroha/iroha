@@ -83,12 +83,18 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     let domain_id = DomainId::try_new(&domain_name, "universal")?;
     let (account_id, _kp) = gen_account_in(&domain_name);
     let create_account = Register::account(Account::new(account_id.clone()));
-    let asset_definition_id =
-        iroha_data_model::asset::AssetDefinitionId::new(domain_id.clone(), "xor".parse()?);
+    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "xor".parse()?,
+    );
     let create_asset_def = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::numeric(
+            __asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     });
 
     let mut submitter_client = submitter.client();

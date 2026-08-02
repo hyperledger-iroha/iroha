@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -19,6 +20,7 @@ COMMIT = "1" * 40
 FINGERPRINT = "2" * 64
 VERIFIER_SHA = "3" * 64
 SOURCE_SHA = "4" * 64
+DPN_COMMIT = "5" * 40
 
 
 def _evidence_root(tmp_path: Path) -> Path:
@@ -32,6 +34,24 @@ def _evidence_root(tmp_path: Path) -> Path:
             path.write_text(f"{SOURCE_SHA}\n", encoding="ascii")
         else:
             path.write_bytes(f"native-evidence-{index}\n".encode())
+    cargo_sha256 = hashlib.sha256(
+        (root / authority.EVIDENCE_PATHS["cargo_lock"]).read_bytes()
+    ).hexdigest()
+    provenance = {
+        "dpn_validator_release_commit": DPN_COMMIT,
+        "iroha_git_head": COMMIT,
+        "iroha_source_attested": True,
+        "iroha_source_bundle_provenance_sha256": "a" * 64,
+        "iroha_source_tree_sha256": "b" * 64,
+        "iroha_tracked_patch_sha256": "c" * 64,
+        "iroha_worktree_clean": False,
+        "schema_version": 1,
+        "validator_lock_sha256": cargo_sha256,
+        "workspace_source_manifest_sha256": SOURCE_SHA,
+    }
+    (
+        root / authority.EVIDENCE_PATHS["dpn_validator_build_provenance"]
+    ).write_bytes(contract.canonical_json_bytes(provenance))
     return root
 
 
@@ -69,6 +89,7 @@ def _args(
         return argparse.Namespace(
             evidence_root=str(root),
             commit=COMMIT,
+            dpn_validator_release_commit=DPN_COMMIT,
             signing_fingerprint=FINGERPRINT,
             native_verifier_sha256=VERIFIER_SHA,
             archive=None,
@@ -79,6 +100,7 @@ def _args(
     return argparse.Namespace(
         evidence_root=str(root),
         commit=COMMIT,
+        dpn_validator_release_commit=DPN_COMMIT,
         signing_fingerprint=FINGERPRINT,
         native_verifier_sha256=VERIFIER_SHA,
         archive=str(archive or _archive(tmp_path, root)),
@@ -97,6 +119,7 @@ def test_archive_authority_is_canonical_portable_and_exact12(tmp_path: Path) -> 
     assert decoded["schema"] == authority.SCHEMA
     assert decoded["schema_version"] == 1
     assert decoded["release_profile"] == "release"
+    assert decoded["dpn_validator_release_commit"] == DPN_COMMIT
     assert decoded["workspace_source_manifest_sha256"] == SOURCE_SHA
     assert decoded["exact12"] == {
         "protocol_count": 12,
@@ -120,6 +143,17 @@ def test_archive_authority_is_canonical_portable_and_exact12(tmp_path: Path) -> 
     assert authority.EVIDENCE_PATHS["x509_resource_json"] in artifact_paths
 
 
+def test_authority_rejects_dpn_only_provenance_mismatch(tmp_path: Path) -> None:
+    args = _args(tmp_path)
+    args.dpn_validator_release_commit = "6" * 40
+
+    with pytest.raises(
+        authority.TairaReleaseAuthorityError,
+        match="provenance release commit differs",
+    ):
+        authority.build_authority(args)
+
+
 def test_create_then_verify_rebuilds_exact_subject(tmp_path: Path) -> None:
     args = _args(tmp_path)
     output = tmp_path / "taira-exact12-release-authority-v1.json"
@@ -131,6 +165,8 @@ def test_create_then_verify_rebuilds_exact_subject(tmp_path: Path) -> None:
             args.evidence_root,
             "--commit",
             COMMIT,
+            "--dpn-validator-release-commit",
+            DPN_COMMIT,
             "--signing-fingerprint",
             FINGERPRINT,
             "--native-verifier-sha256",
@@ -151,6 +187,8 @@ def test_create_then_verify_rebuilds_exact_subject(tmp_path: Path) -> None:
             args.evidence_root,
             "--commit",
             COMMIT,
+            "--dpn-validator-release-commit",
+            DPN_COMMIT,
             "--signing-fingerprint",
             FINGERPRINT,
             "--native-verifier-sha256",
@@ -168,6 +206,8 @@ def test_create_then_verify_rebuilds_exact_subject(tmp_path: Path) -> None:
             args.evidence_root,
             "--commit",
             COMMIT,
+            "--dpn-validator-release-commit",
+            DPN_COMMIT,
             "--signing-fingerprint",
             FINGERPRINT,
             "--native-verifier-sha256",
@@ -257,7 +297,7 @@ def test_missing_symlink_hardlink_and_empty_evidence_fail_closed(
     target.symlink_to(alias)
     with pytest.raises(
         contract.ReleaseArtifactError,
-        match="symlink|symbolic links",
+        match="symlink|symbolic links|regular file",
     ):
         authority.build_authority(_args(tmp_path, evidence_root=root))
 
@@ -286,6 +326,8 @@ def test_source_archive_and_authority_mutations_are_rejected(tmp_path: Path) -> 
             args.evidence_root,
             "--commit",
             COMMIT,
+            "--dpn-validator-release-commit",
+            DPN_COMMIT,
             "--signing-fingerprint",
             FINGERPRINT,
             "--native-verifier-sha256",
@@ -303,6 +345,8 @@ def test_source_archive_and_authority_mutations_are_rejected(tmp_path: Path) -> 
         args.evidence_root,
         "--commit",
         COMMIT,
+        "--dpn-validator-release-commit",
+        DPN_COMMIT,
         "--signing-fingerprint",
         FINGERPRINT,
         "--native-verifier-sha256",
@@ -320,10 +364,11 @@ def test_source_archive_and_authority_mutations_are_rejected(tmp_path: Path) -> 
         Path(args.evidence_root)
         / authority.EVIDENCE_PATHS["receipt_json"]
     )
+    receipt_original = receipt.read_bytes()
     receipt.write_bytes(b"substituted evidence\n")
     assert authority.main(verify) == 1
 
-    receipt.write_bytes(b"native-evidence-7\n")
+    receipt.write_bytes(receipt_original)
     parsed = json.loads(output.read_text())
     parsed["unexpected"] = True
     output.write_text(
@@ -457,6 +502,8 @@ def test_image_authority_requires_exact_source_bound_registry_pair(
     (
         ("commit", "A" * 40),
         ("commit", "1" * 39),
+        ("dpn_validator_release_commit", "A" * 40),
+        ("dpn_validator_release_commit", "5" * 39),
         ("signing_fingerprint", "2" * 63),
         ("native_verifier_sha256", "g" * 64),
         ("image_manifest_digest", "sha256:" + "A" * 64),

@@ -19,7 +19,7 @@ final class TransactionParityFixturesTests: XCTestCase {
           "Batch": [
             {"Instruction": {"kind": "Grant", "arguments": {"action": "GrantPermission"}}},
             {"ContractCall": {
-              "contract_address": "tairac1example",
+              "contract_address": "irohac1example",
               "expected_code_hash": "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
               "entrypoint": "run",
               "arguments": [1, 2, 3, 4]

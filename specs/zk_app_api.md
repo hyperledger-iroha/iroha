@@ -21,10 +21,10 @@ ledger paths:
   `iroha_zkp_halo2::OpenVerifyEnvelope` format. It does not consult the
   verifying-key registry, does not enforce ledger circuit/schema policy, and is
   not a substitute for `iroha_core::zk::verify_backend_with_timing_guardrails`.
-  The generator vectors carried for transparent reproducibility must equal the
-  deterministic V1 derivation for the advertised curve and `n`; callers cannot
-  select another parameter set. The complete canonical parameter fingerprint
-  is absorbed into the opening transcript. Torii applies the configured total
+  The wire carries only a `(version, curve, n)` selector; the verifier derives
+  the deterministic V1 generators and callers cannot submit another parameter
+  set. The complete derived parameter fingerprint is absorbed into the opening
+  transcript. Torii applies the configured total
   body ceiling before decoding, then applies finite batch, per-envelope,
   curve-`k`, and transcript-label ceilings. The embedding API requires those
   limits explicitly; the no-limit Torii handler has been removed.
@@ -55,7 +55,7 @@ Endpoints:
  - `GET  /v1/zk/proofs/count` — return `{ count }` for the same filter set.
 - Proof endpoints enforce Torii’s dedicated guardrails:
   - Body limits: proof submission payloads exceeding `torii.proof_max_body_bytes` are rejected.
-  - Rate limit: `torii.proof_rate_per_minute` + `torii.proof_burst` (returns `429` + `Retry-After` using `torii.proof_retry_after_secs` unless `api_allow_cidrs` bypasses).
+  - Rate limit: `torii.proof_rate_per_minute` + `torii.proof_burst` (returns `429` + `Retry-After` using `torii.proof_retry_after_secs` unless `api_rate_limit_bypass_cidrs` bypasses rate limiting only).
   - Pagination: `torii.proof_max_list_limit` caps `limit`; larger requests fail with `CapacityLimit` (429).
   - Timeout: list/count handlers abort after `torii.proof_request_timeout_ms` wall-clock.
   - Egress throttling: proof fetches are shaped by `torii.proof_egress_bytes_per_sec` + `torii.proof_egress_burst_bytes`; throttled responses return `Retry-After` with the proof retry hint.
@@ -300,7 +300,7 @@ When the worker exhausts the byte or time budget, it stops scheduling new attach
 ## Security and Operations
 
 - The app API is subject to rate limits; limits are enforced per endpoint key. You can require an API token for app-facing endpoints via `require_api_token=true` and set `api_tokens`.
-- CIDR allowlist (`api_allow_cidrs`) can bypass rate limits for trusted origins.
+- CIDR allowlist (`api_rate_limit_bypass_cidrs`) can bypass rate limits for selected origins; it grants no authentication, internal-read, or routed-visibility privilege.
 - These endpoints do not change consensus outcomes. You can disable the prover worker (`zk_prover_enabled=false`) without impacting validation or execution.
 
 ## CLI Helpers

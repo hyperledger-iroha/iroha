@@ -283,10 +283,21 @@ inject_topology
 echo "[3/6] Sign genesis"
 $KAGAMI genesis sign "$BASE/genesis.json" \
   -o "$BASE/genesis.signed.nrt" \
+  --expected-hash-out "$BASE/genesis.expected_hash" \
   --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
   --expected-public-key "$GEN_PUB" \
   2>&1 | tee "$BASE/gen.sign.log"
 echo "Genesis public key: $GEN_PUB"
+if [[ "$(wc -l < "$BASE/genesis.expected_hash" | tr -d ' ')" -ne 1 ]] \
+  || [[ -n "$(tail -c 1 < "$BASE/genesis.expected_hash")" ]]; then
+  echo "Genesis expected-hash file must contain exactly one newline-terminated record." >&2
+  exit 1
+fi
+GENESIS_EXPECTED_HASH="$(cat "$BASE/genesis.expected_hash")"
+if [[ ! "$GENESIS_EXPECTED_HASH" =~ ^[0-9a-f]{63}[13579bdf]$ ]]; then
+  echo "Genesis expected hash is not one canonical marked lowercase hash." >&2
+  exit 1
+fi
 
 trusted_peers_literal() {
   printf '["%s@%s","%s@%s","%s@%s","%s@%s"]' \
@@ -336,6 +347,7 @@ identity_private_key = "${STREAM_SKS[$idx]}"
 [genesis]
 public_key = "$GEN_PUB"
 file = "$BASE/genesis.signed.nrt"
+expected_hash = "$GENESIS_EXPECTED_HASH"
 [kura]
 init_mode = "fast"
 store_dir = "$store_dir"

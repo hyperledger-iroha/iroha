@@ -5,9 +5,9 @@
 #     @scripts/examples/sorafs_transparency_rollout_collection.args.example \
 #     --dry-run
 #
-# Keep signing keys, bearer tokens, raw source-entry payloads, proof-token
-# frames, response bodies, and operator secrets in runtime-only files. This
-# example passes only the path to a runtime client config and payload-free
+# Keep signing keys, bearer tokens, raw source payloads, proof-token frames,
+# response bodies, and operator secrets in runtime-only files. This example
+# passes only the path to a runtime client config and payload-free
 # canary request files. The reserved .example origin is shape-only; use the
 # operator-reviewed production origin for a genuine collection.
 
@@ -33,20 +33,8 @@ artifacts/sorafs/transparency/production/rollout-summary.json
 50
 --timeout-secs
 30
---source-entry
-gar-enforcement-receipt=/runtime/sorafs/production/transparency/gar.json
---source-entry
-moderation-ballot-governance-event=/runtime/sorafs/production/transparency/moderation-ballot.json
---source-entry
-appeal-finance-report=/runtime/sorafs/production/transparency/appeal-report.json
---source-entry
-appeal-finance-settlement-receipt=/runtime/sorafs/production/transparency/appeal-settlement.json
---source-entry
-legal-hold-notice=/runtime/sorafs/production/transparency/legal-hold.json
---source-entry
-redaction-notice=/runtime/sorafs/production/transparency/redaction.json
---source-entry
-evidence-access-summary=/runtime/sorafs/production/transparency/evidence-access.json
+--source-entry-producer-evidence
+/runtime/sorafs/production/transparency/trusted-source-producers.json
 --privacy-source-event
 /runtime/sorafs/production/transparency/privacy-source-event.json
 --privacy-publish-due

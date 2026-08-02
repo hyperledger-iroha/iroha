@@ -246,6 +246,37 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
         }
     }
 
+    func testProtocolDiscriminantRequiresExactFourByteTagAndRejectsUnknownTag() throws {
+        let unknown = try mutateFirstRowProtocolField(Self.fixtureArchive) { payload, offset in
+            XCTAssertEqual(payload[offset], 4)
+            payload[offset + 1] = 12
+            payload[offset + 2] = 0
+            payload[offset + 3] = 0
+            payload[offset + 4] = 0
+        }
+        XCTAssertThrowsError(
+            try PrivacyExact12FixtureCodecV1.decodeCanonicalArchive(unknown)
+        ) { error in
+            XCTAssertEqual(
+                error as? PrivacyExact12FixtureCodecErrorV1,
+                .unknownProtocolDiscriminant(12)
+            )
+        }
+
+        for nonCanonicalLength in [UInt8(1), UInt8(3), UInt8(5)] {
+            let malformed = try mutateFirstRowProtocolField(
+                Self.fixtureArchive
+            ) { payload, offset in
+                XCTAssertEqual(payload[offset], 4)
+                payload[offset] = nonCanonicalLength
+            }
+            XCTAssertThrowsError(
+                try PrivacyExact12FixtureCodecV1.decodeCanonicalArchive(malformed),
+                "protocol tag length \(nonCanonicalLength) must reject"
+            )
+        }
+    }
+
     func testRowReorderAndProtocolSubstitutionRejectAtTypedBoundary() throws {
         let canonical = try PrivacyExact12FixtureCodecV1.decodeCanonicalArchive(
             Self.fixtureArchive
@@ -343,6 +374,21 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
             payload[6] ^= 1
         }
         try assertEncodingRejects(canonical, row: 0, replacement: copyRow(row, envelopeNorito: badEnvelope))
+
+        let badEngine = try reframe(
+            row.envelopeNorito,
+            typeName: "iroha.privacy.proof-envelope.v1",
+            payloadAlignment: 16
+        ) { payload in
+            // The third exact four-byte field is the native engine tag.
+            precondition(payload[10] == 4)
+            payload[11] = UInt8.max
+        }
+        try assertEncodingRejects(
+            canonical,
+            row: 0,
+            replacement: copyRow(row, envelopeNorito: badEngine)
+        )
 
         let badInstruction = try reframe(
             row.submitProofInstructionNorito,
@@ -495,6 +541,52 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
             payload: payload,
             flags: NoritoHeader.compactLen,
             payloadAlignment: payloadAlignment
+        )
+    }
+
+    private func mutateFirstRowProtocolField(
+        _ archive: Data,
+        mutate: (inout Data, Int) -> Void
+    ) throws -> Data {
+        let frame = try XCTUnwrap(noritoDecodeFrame(archive))
+        var payload = frame.payload
+        var cursor = 0
+        let versionLength = try readCompactLength(payload, cursor: &cursor)
+        cursor += versionLength
+        _ = try readCompactLength(payload, cursor: &cursor)
+        cursor += 8 // Exact12 row count is a canonical u64.
+        _ = try readCompactLength(payload, cursor: &cursor)
+        mutate(&payload, cursor)
+        return noritoEncode(
+            typeName: PrivacyExact12FixtureCodecV1.schemaName,
+            payload: payload,
+            flags: NoritoHeader.compactLen,
+            payloadAlignment: 8
+        )
+    }
+
+    private func readCompactLength(_ data: Data, cursor: inout Int) throws -> Int {
+        var value: UInt64 = 0
+        for byteIndex in 0..<10 {
+            guard cursor < data.count else {
+                throw PrivacyExact12FixtureCodecErrorV1.malformedArchive(
+                    "truncated test fixture length"
+                )
+            }
+            let byte = data[cursor]
+            cursor += 1
+            value |= UInt64(byte & 0x7f) << UInt64(byteIndex * 7)
+            if byte & 0x80 == 0 {
+                guard value <= UInt64(Int.max) else {
+                    throw PrivacyExact12FixtureCodecErrorV1.malformedArchive(
+                        "test fixture length overflow"
+                    )
+                }
+                return Int(value)
+            }
+        }
+        throw PrivacyExact12FixtureCodecErrorV1.malformedArchive(
+            "test fixture length exceeds ten bytes"
         )
     }
 

@@ -40,8 +40,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
     let alice_account = Account::new(alice_id.clone()).build(&alice_id);
     let bob_account = Account::new(bob_id.clone()).build(&bob_id);
-    let asset_definition_id = AssetDefinitionId::new(domain_id, "rose".parse()?);
-    let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&alice_id);
+    let asset_definition_id = AssetDefinitionId::derive_from_components(domain_id, "rose".parse()?);
+    let asset_definition = AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "rose".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&alice_id);
     let alice_asset_id = AssetId::new(asset_definition_id.clone(), alice_id.clone());
     let bob_asset_id = AssetId::new(asset_definition_id, bob_id.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(1_000_u32));

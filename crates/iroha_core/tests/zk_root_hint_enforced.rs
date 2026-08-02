@@ -77,10 +77,7 @@ fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_valida
             },
             stark: cfg::Stark::default(),
             sccp: cfg::Sccp::default(),
-            root_history_cap: 3,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
-            empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
-            merkle_depth: defaults::zk::ledger::EMPTY_ROOT_DEPTH,
             preverify_max_bytes: defaults::zk::preverify::MAX_BYTES,
             preverify_budget_bytes: defaults::zk::preverify::BUDGET_BYTES,
             proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
@@ -109,7 +106,7 @@ fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_valida
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
-            tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
+            tree_roots_history_len: nonzero!(3_usize),
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
             registry_max_vk_entries: defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
@@ -130,20 +127,23 @@ fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_valida
     let mut stx = block.transaction();
 
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("zkd", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("zkd", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let alice = checked_random_zk_root_hint_account_id();
 
     // Bootstrap domain/account/asset and mint, then enable ZK (Hybrid)
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(alice.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), alice.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(
@@ -169,7 +169,7 @@ fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_valida
     let mut stale_root = [0u8; 32];
     for i in 0..3u8 {
         let mut note = [0u8; 32];
-        note[0] = i;
+        note[0] = i + 1;
         let ib: InstructionBox = iroha_data_model::isi::zk::Shield::new(
             asset_def_id.clone(),
             alice.clone(),

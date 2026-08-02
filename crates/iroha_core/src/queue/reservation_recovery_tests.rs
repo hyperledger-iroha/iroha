@@ -1740,7 +1740,7 @@ fn fee_capacity_reservations_prevent_queue_oversubscription() {
         sponsor,
         "queue_capacity".parse().expect("valid program name"),
     );
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "universal").expect("valid fee domain"),
         "xor".parse().expect("valid asset name"),
     );
@@ -1824,7 +1824,7 @@ fn fee_reservation_refresh_moves_carried_transaction_to_current_block_window() {
     let (beneficiary, _) = gen_account_in("refresh_fee_beneficiary");
     let program_id =
         FeeSponsorProgramId::new(sponsor, "rollover".parse().expect("valid program name"));
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "universal").expect("valid fee domain"),
         "xor".parse().expect("valid asset name"),
     );
@@ -1904,15 +1904,14 @@ fn receipt_settled_queue_admission_rejects_authority_payer() {
     let (authority, keypair) = gen_account_in("receipt_fee_admission");
     let domain_id =
         DomainId::try_new("receipt_fee_admission", "universal").expect("receipt fee domain");
-    let fee_asset = AssetDefinitionId::new(
+    let fee_asset = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "xor".parse().expect("receipt fee asset name"),
     );
     let world = World::with(
         [Domain::new(domain_id).build(&authority)],
         [Account::new(authority.clone()).build(&authority)],
-        [AssetDefinition::numeric(fee_asset.clone())
-            .with_name("receipt fee XOR".to_owned())
+        [AssetDefinition::numeric(fee_asset.clone(), "receipt fee XOR".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
             .build(&authority)],
     );
     let state = State::new_for_testing(
@@ -1955,7 +1954,7 @@ fn authority_fee_reservations_prevent_overbooking_and_release_capacity() {
     let first_hash = accepted_tx_by_someone(&time_source).hash();
     let second_hash = accepted_tx_by_someone(&time_source).hash();
     let (authority, _) = gen_account_in("authority_fee_reservation");
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "universal").expect("valid fee domain"),
         "xor".parse().expect("valid asset name"),
     );
@@ -2038,11 +2037,11 @@ fn relay_spend_lease_reservation_maps_use_aggregate_per_asset_charges() {
     let program_id =
         FeeSponsorProgramId::new(sponsor, "relay_maps".parse().expect("valid program name"));
     let domain_id = DomainId::try_new("relay_lease_maps", "universal").expect("valid fee domain");
-    let shared_asset = AssetDefinitionId::new(
+    let shared_asset = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "shared".parse().expect("valid shared asset name"),
     );
-    let distinct_asset = AssetDefinitionId::new(
+    let distinct_asset = AssetDefinitionId::derive_from_components(
         domain_id,
         "distinct".parse().expect("valid distinct asset name"),
     );

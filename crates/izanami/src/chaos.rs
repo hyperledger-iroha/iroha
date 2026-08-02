@@ -2554,7 +2554,7 @@ fn make_network_builder(
                 ]),
             )
             .write(
-                ["torii", "api_allow_cidrs"],
+                ["torii", "api_rate_limit_bypass_cidrs"],
                 TomlValue::Array(vec![
                     TomlValue::String("127.0.0.0/8".into()),
                     TomlValue::String("::1/128".into()),
@@ -9221,7 +9221,7 @@ mod tests {
             uaid: None,
         };
         let asset = AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::parse_fully_qualified("chaosnet.universal").expect("domain id"),
                 "chaos_coin".parse().expect("asset name"),
             ),
@@ -11647,7 +11647,7 @@ mod tests {
     #[test]
     fn sumeragi_status_digest_tracks_v2_progress_and_lane_local_execution() {
         let start_json = norito::json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "height": 10,
             "view": 1,
             "phase": "Prepare",
@@ -11660,7 +11660,7 @@ mod tests {
             "last_committed_height": 9
         });
         let end_json = norito::json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "height": 13,
             "view": 4,
             "phase": "Commit",
@@ -11691,7 +11691,7 @@ mod tests {
         end.apply_json_extras(&end_json);
         let delta = end.delta_from(start);
 
-        assert_eq!(delta.protocol_version, 3);
+        assert_eq!(delta.protocol_version, 4);
         assert_eq!(delta.persisted_height, 13);
         assert_eq!(delta.persisted_view, 4);
         assert_eq!(delta.leader, 3);

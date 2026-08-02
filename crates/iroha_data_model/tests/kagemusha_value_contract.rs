@@ -10,7 +10,7 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendArtifactBindingV4,
         KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
         KagemushaRecursiveSpendInputBranchV2, KagemushaRecursiveSpendRedemptionIntentV4,
-        KagemushaRecursiveSpendSplitIntentV4, KagemushaRecursiveSpendStateBoundaryV2,
+        KagemushaRecursiveSpendSplitIntentV4, KagemushaRecursiveSpendStateBoundaryV5,
         KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
         KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
         KagemushaValidationError, kagemusha_confidential_amount_encoding_v2,
@@ -20,22 +20,22 @@ use iroha_data_model::{
 
 #[test]
 fn pasta_state_boundary_roundtrips_every_limb_without_field_reduction() {
-    let mut limbs = (0..iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2)
+    let mut limbs = (0..iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5)
         .map(|index| u32::try_from(index).expect("bounded state limb"))
         .collect::<Vec<_>>();
-    limbs[0] = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+    limbs[0] = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
     let boundary =
-        KagemushaRecursiveSpendStateBoundaryV2::new(limbs.clone()).expect("valid exact boundary");
+        KagemushaRecursiveSpendStateBoundaryV5::new(limbs.clone()).expect("valid exact boundary");
     assert_eq!(boundary.exact_state().expect("recover exact state"), limbs);
 
     for malformed_len in [0, limbs.len() - 1, limbs.len() + 1] {
-        assert!(KagemushaRecursiveSpendStateBoundaryV2::new(vec![1; malformed_len]).is_err());
+        assert!(KagemushaRecursiveSpendStateBoundaryV5::new(vec![1; malformed_len]).is_err());
     }
     let mut wrong_layout_limb = limbs.clone();
     wrong_layout_limb[0] =
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5
             .saturating_add(1);
-    assert!(KagemushaRecursiveSpendStateBoundaryV2::new(wrong_layout_limb).is_err());
+    assert!(KagemushaRecursiveSpendStateBoundaryV5::new(wrong_layout_limb).is_err());
 
     let mut wrong_version = boundary;
     wrong_version.layout_version = wrong_version.layout_version.saturating_add(1);
@@ -48,7 +48,7 @@ const TRANSFER: u128 = 6_250_000_000;
 const CHANGE: u128 = 4_500_000_000;
 
 fn asset() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("sbp", "universal").expect("fixture domain"),
         "pkr".parse().expect("fixture asset name"),
     )

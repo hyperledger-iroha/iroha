@@ -88,7 +88,8 @@ THEOREM InstallSchedulesAuthorizedCommitResignBeforeProposal ==
 BY Isa DEF CommandSuccessors, InstallCommandSuccessors,
            InstallLockedFetchSuccessors, InstallCommitSignSuccessors,
            InstallCommitSignSuccessor,
-           AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+           AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+           AsyncCandidateWithIdentityAndOrigin,
            NoItemCandidate, AsyncCandidate
 
 THEOREM InstallAdvancesDeliveryTag ==

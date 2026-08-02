@@ -179,7 +179,7 @@ fn validate_minimal_exact_prepare_quorum(
     let quorum = matching[0];
     ensure!(
         is_minimal_exact_prepare_quorum(quorum, &snapshot.height_context, expected),
-        "validator {} reached the PrepareQC reference without the exact minimal count-and-power quorum: pool={quorum:?}, context={:?}",
+        "validator {} reached the PrepareQC reference without the exact minimal equal-vote quorum: pool={quorum:?}, context={:?}",
         snapshot.peer,
         snapshot.height_context,
     );
@@ -330,6 +330,7 @@ fn validate_locked_commit_progress_witness(
                 SumeragiV2LivenessBlocker::CommitQuorumMissing
                     | SumeragiV2LivenessBlocker::TimeoutCertificateMissing
                     | SumeragiV2LivenessBlocker::SchedulerStarvation
+                    | SumeragiV2LivenessBlocker::SuccessorActivationPending
                     | SumeragiV2LivenessBlocker::LocalControlPending
             ),
             "validator {} misclassified an exact validated locked-Commit delay as {blocker:?}",
@@ -2162,7 +2163,7 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
                     signed_power,
                     artifact.height_context.quorum.total_power,
                 ),
-            "recovered CommitQC lacked the exact four-validator count-and-power quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
+            "recovered CommitQC lacked the exact four-validator equal-vote quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
             artifact.commit_qc.signers,
             artifact.height_context.quorum,
         );
@@ -4505,7 +4506,7 @@ fn validate_exact_finality_proof(
             signed_power,
             artifact.height_context.quorum.total_power,
         ),
-        "{} returned a finality artifact without the exact count-and-power Commit quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
+        "{} returned a finality artifact without the exact equal-vote Commit quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
         peer.mnemonic(),
         commit_qc.signers,
         artifact.height_context.quorum,
@@ -4548,7 +4549,7 @@ fn validate_exact_prepare_signers_against_frozen_context(
             signed_power,
             context.quorum.total_power,
         ),
-        "exact held Prepare envelopes do not satisfy the frozen count-and-power quorum: signers={exact_signers:?}, signed_power={signed_power}, quorum={:?}",
+        "exact held Prepare envelopes do not satisfy the frozen equal-vote quorum: signers={exact_signers:?}, signed_power={signed_power}, quorum={:?}",
         context.quorum,
     );
     let matching = snapshot
@@ -5251,7 +5252,7 @@ fn validate_v2_status_set(
                     )
                     .expect("non-empty frozen roster has a quorum threshold")
                 && snapshot.height_context.quorum.total_power > 0,
-            "{} reported a malformed frozen count-and-power quorum: {:?}",
+            "{} reported a malformed frozen equal-vote quorum: {:?}",
             snapshot.peer,
             snapshot.height_context,
         );
@@ -5299,7 +5300,7 @@ fn validate_v2_status_set(
                 );
                 ensure!(
                     left.height_context == right.height_context,
-                    "{} and {} disagree on the frozen count-and-power context for height {}",
+                    "{} and {} disagree on the frozen equal-vote context for height {}",
                     left.peer,
                     right.peer,
                     left.height,

@@ -23,7 +23,7 @@ own hardware-attestation requirement.
   bundles.
 - The candidate record, standalone Norito manifest, finality roster, exact
   eight KRV4 artifacts, exact 33-file scenario, and independently reviewed
-  dirty-source closure.
+  clean signed source closure (empty tracked diff and no untracked files).
 - All inputs and output parents are real, owner-private paths outside the
   repository. Signing keys remain runtime-only.
 
@@ -111,7 +111,7 @@ It must also bind:
 - distinct process IDs and launch nonces;
 - the same physical device, boot session, install identity, app identity,
   test identity, and native artifact identity;
-- source commit, dirty source-tree hash, and nonzero reviewed-closure digest;
+- signed source commit, exact clean source-tree hash, and nonzero reviewed-closure digest;
 - the candidate record, Norito manifest, finality roster, scenario inventory,
   and ordered eight-artifact inventory;
 - the fixed 6 GiB RSS ceiling;

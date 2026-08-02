@@ -906,9 +906,7 @@ fn print_cli_usage() {
         "  --workspace-root <path>      Workspace root; Mochi stores runtime state under .mochi/sandbox."
     );
     println!("  --data-root <path>           Override the supervisor data root.");
-    println!(
-        "  --profile <single-peer|four-peer-bft|{{ peer_count = 3, consensus_mode = \"permissioned\" }}>"
-    );
+    println!("  --profile <four-peer-bft|{{ peer_count = 7, consensus_mode = \"permissioned\" }}>");
     println!("                               Choose a preset or custom profile table.");
     println!("  --config <path>              Load overrides from a specific config file.");
     println!("  --torii-start <port>         Override the base Torii port.");
@@ -1026,6 +1024,9 @@ fn write_session_metadata_file(
         "mcp_url": (session.mcp_url.clone()),
         "account_id": (session.account_id.clone()),
         "private_key": (session.private_key.clone()),
+        "onboarding_credential_id": (session.onboarding_credential_id.clone()),
+        "onboarding_signer_file": (session.onboarding_signer_file.display().to_string()),
+        "onboarding_token_file": (session.onboarding_token_file.display().to_string()),
         "mcp_protocol_version": (mcp_probe.protocol_version.clone()),
         "mcp_toolset_version": (mcp_probe.toolset_version.clone()),
         "mcp_tool_count": (mcp_probe.tool_count),
@@ -1739,6 +1740,7 @@ impl ComposerTemplate {
             ComposerTemplate::RegisterAssetDefinitionLily => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAssetDefinition;
                 app.composer_asset_definition_id = "4jAY5UbAxnGPt31CkijmAsqXP4o4".to_owned();
+                app.composer_asset_definition_name = "lily".to_owned();
                 app.composer_asset_definition_mintable = Mintable::Infinitely;
                 app.composer_mintability_tokens = 1;
                 app.last_info = Some("Loaded asset definition registration template.".to_owned());
@@ -2397,6 +2399,7 @@ struct MochiApp {
     composer_destination_account: String,
     composer_account_id: String,
     composer_asset_definition_id: String,
+    composer_asset_definition_name: String,
     composer_asset_definition_mintable: Mintable,
     composer_mintability_tokens: u32,
     composer_role_id: String,
@@ -2501,7 +2504,7 @@ impl Default for FirstRunWizardState {
             open: false,
             completed: false,
             workspace_input: String::new(),
-            preset: ProfilePreset::SinglePeer,
+            preset: ProfilePreset::FourPeerBft,
             enable_nexus: false,
         }
     }
@@ -2541,7 +2544,7 @@ fn prepare_supervisor_with_overrides(
     let mut builder = if let Some(profile) = overrides.profile.clone() {
         SupervisorBuilder::with_profile(profile)
     } else {
-        SupervisorBuilder::new(ProfilePreset::SinglePeer)
+        SupervisorBuilder::new(ProfilePreset::FourPeerBft)
     };
 
     if let Some(cfg) = config.as_ref() {
@@ -2658,6 +2661,7 @@ impl MochiApp {
             composer_destination_account: String::new(),
             composer_account_id: String::new(),
             composer_asset_definition_id: String::new(),
+            composer_asset_definition_name: String::new(),
             composer_asset_definition_mintable: Mintable::Infinitely,
             composer_mintability_tokens: 1,
             composer_role_id: String::new(),
@@ -2866,12 +2870,12 @@ mod cli_tests {
     fn parse_cli_profile_inline_table_sets_custom_profile() {
         let args = vec![
             OsString::from("--profile"),
-            OsString::from("{ peer_count = 3, consensus_mode = \"permissioned\" }"),
+            OsString::from("{ peer_count = 7, consensus_mode = \"permissioned\" }"),
         ];
         let parsed = parse_cli_overrides_from(args).expect("parse CLI");
         let profile = parsed.overrides.profile.expect("profile override");
         assert_eq!(profile.preset, None);
-        assert_eq!(profile.topology.peer_count, 3);
+        assert_eq!(profile.topology.peer_count, 7);
         assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
     }
 
@@ -3467,7 +3471,7 @@ impl MochiApp {
     fn selected_quickstart_preset(&self, supervisor: &Supervisor) -> ProfilePreset {
         parse_profile_preset(self.settings_profile_input.trim())
             .or(supervisor.profile().preset)
-            .unwrap_or(ProfilePreset::SinglePeer)
+            .unwrap_or(ProfilePreset::FourPeerBft)
     }
 
     fn set_quickstart_preset(&mut self, preset: ProfilePreset) {
@@ -5686,7 +5690,7 @@ impl MochiApp {
             self.first_run_wizard.preset = supervisor
                 .profile()
                 .preset
-                .unwrap_or(ProfilePreset::SinglePeer);
+                .unwrap_or(ProfilePreset::FourPeerBft);
             self.first_run_wizard.enable_nexus = supervisor
                 .nexus_config_overrides()
                 .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
@@ -5736,7 +5740,7 @@ impl MochiApp {
             .supervisor
             .as_ref()
             .map(|supervisor| supervisor.profile().clone())
-            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::SinglePeer));
+            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::FourPeerBft));
         let mut builder = SupervisorBuilder::with_profile(profile);
         if let Some(cfg) = self.bundle_config.as_ref() {
             builder = cfg.config.apply_to(builder);
@@ -5897,7 +5901,7 @@ impl MochiApp {
             .supervisor
             .as_ref()
             .map(|supervisor| supervisor.profile().clone())
-            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::SinglePeer));
+            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::FourPeerBft));
         let effective_profile = if let Some(parsed) = profile_override.as_ref() {
             if let Some(preset) = parsed.profile.preset {
                 let mut profile = NetworkProfile::from_preset(preset);
@@ -6263,7 +6267,7 @@ impl MochiApp {
             .supervisor
             .as_ref()
             .map(|supervisor| supervisor.profile().clone())
-            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::SinglePeer));
+            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::FourPeerBft));
         let paths = mochi_core::config::NetworkPaths::from_root(base_root, &profile);
         let peer_alias = self
             .supervisor
@@ -6914,12 +6918,12 @@ impl MochiApp {
                             {
                                 supervisor
                                     .and_then(|runtime| runtime.profile().preset)
-                                    .unwrap_or(ProfilePreset::SinglePeer)
+                                    .unwrap_or(ProfilePreset::FourPeerBft)
                             } else {
                                 parse_profile_preset(&self.settings_profile_input)
-                                    .unwrap_or(ProfilePreset::SinglePeer)
+                                    .unwrap_or(ProfilePreset::FourPeerBft)
                             };
-                            for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
+                            for preset in [ProfilePreset::FourPeerBft] {
                                 let selected = selected_profile == preset;
                                 if ui
                                     .add(Button::selectable(selected, preset.label()))
@@ -6972,7 +6976,7 @@ impl MochiApp {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.settings_profile_input)
                                         .hint_text(
-                                            "single-peer | four-peer-bft | { peer_count = 3, consensus_mode = \"permissioned\" }",
+                                            "four-peer-bft | { peer_count = 7, consensus_mode = \"permissioned\" }",
                                         ),
                                 );
                                 ui.small(
@@ -7624,7 +7628,7 @@ impl MochiApp {
                 ui.add_space(10.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Preset").small().color(palette.text_muted));
-                    for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
+                    for preset in [ProfilePreset::FourPeerBft] {
                         let selected = selected_preset == preset;
                         let button = Button::selectable(selected, preset.label())
                             .fill(if selected {
@@ -7649,7 +7653,7 @@ impl MochiApp {
                 ui.add_space(8.0);
                 ui.small(match selected_preset {
                     ProfilePreset::SinglePeer => {
-                        "Single Peer is the solo sandbox: the fastest loop for UI work, schema changes, and transaction debugging."
+                        "The historical Single Peer name now launches the mandatory four-validator committee."
                     }
                     ProfilePreset::FourPeerBft => {
                         "Four Peer BFT is the quorum playground: closer to validator reality for failover, committee, and consensus-path debugging."
@@ -10718,6 +10722,10 @@ impl MochiApp {
                 ui.text_edit_singleline(&mut self.composer_asset_definition_id);
             });
             ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut self.composer_asset_definition_name);
+            });
+            ui.horizontal(|ui| {
                 ui.label("Mintable");
                 ComboBox::from_id_salt("mochi_composer_mintable_selector")
                     .selected_text(Self::mintable_label(
@@ -11393,8 +11401,15 @@ impl MochiApp {
                         Some("Asset definition identifier is required.".to_owned());
                     return;
                 }
+                let name = self.composer_asset_definition_name.trim().to_owned();
+                self.composer_asset_definition_name = name.clone();
+                if name.is_empty() {
+                    self.composer_error = Some("Asset definition name is required.".to_owned());
+                    return;
+                }
                 InstructionDraft::register_asset_definition_from_input(
                     &definition,
+                    &name,
                     self.composer_asset_definition_mintable,
                 )
             }
@@ -13714,6 +13729,13 @@ mod tests {
             mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
             account_id: Some("alice@wonderland".to_owned()),
             private_key: Some("deadbeef".to_owned()),
+            onboarding_credential_id: "local-dev".to_owned(),
+            onboarding_signer_file: PathBuf::from(
+                "/tmp/workspace/.mochi/sandbox/single-peer/runtime/onboarding-signer.key",
+            ),
+            onboarding_token_file: PathBuf::from(
+                "/tmp/workspace/.mochi/sandbox/single-peer/runtime/onboarding.token",
+            ),
         };
 
         let inputs = bootstrap_inputs_from_session(&session);
@@ -13747,6 +13769,13 @@ mod tests {
             mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
             account_id: Some("alice@wonderland".to_owned()),
             private_key: Some("deadbeef".to_owned()),
+            onboarding_credential_id: "local-dev".to_owned(),
+            onboarding_signer_file: temp
+                .path()
+                .join(".mochi/sandbox/single-peer/runtime/onboarding-signer.key"),
+            onboarding_token_file: temp
+                .path()
+                .join(".mochi/sandbox/single-peer/runtime/onboarding.token"),
         };
 
         let written = write_bootstrap_files_for_session(temp.path(), &session)
@@ -13771,6 +13800,67 @@ mod tests {
                 .join(".mochi/generated/kotlin/MochiConnect.kt")
                 .exists()
         );
+    }
+
+    #[test]
+    fn session_metadata_exposes_only_safe_onboarding_identifiers_and_paths() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let token_file = temp.path().join("runtime/onboarding.token");
+        let signer_file = temp.path().join("runtime/onboarding-signer.key");
+        let session = SupervisorSessionInfo {
+            profile_slug: "four-peer-bft".to_owned(),
+            chain_id: "mochi-local".to_owned(),
+            sandbox_root: temp.path().join("four-peer-bft"),
+            workspace_root: Some(temp.path().to_path_buf()),
+            peer_alias: "peer0".to_owned(),
+            api_base: "http://127.0.0.1:8080".to_owned(),
+            torii_url: "http://127.0.0.1:8080".to_owned(),
+            mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
+            account_id: Some("local-admin".to_owned()),
+            private_key: Some("existing-local-client-key".to_owned()),
+            onboarding_credential_id: "local-dev".to_owned(),
+            onboarding_signer_file: signer_file.clone(),
+            onboarding_token_file: token_file.clone(),
+        };
+        let session_path = temp.path().join("session.json");
+        write_session_metadata_file(
+            &session_path,
+            temp.path(),
+            &session,
+            true,
+            &local_mcp_probe_fixture(),
+        )
+        .expect("write session metadata");
+
+        let payload: Value =
+            json::from_slice(&fs::read(&session_path).expect("read generated session metadata"))
+                .expect("parse session metadata");
+        let payload = payload.as_object().expect("session metadata object");
+        assert_eq!(
+            payload
+                .get("onboarding_credential_id")
+                .and_then(Value::as_str),
+            Some("local-dev")
+        );
+        assert_eq!(
+            payload
+                .get("onboarding_signer_file")
+                .and_then(Value::as_str),
+            Some(signer_file.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            payload.get("onboarding_token_file").and_then(Value::as_str),
+            Some(token_file.to_string_lossy().as_ref())
+        );
+        for forbidden in [
+            "onboarding_token",
+            "onboarding_token_hash",
+            "onboarding_token_digest",
+            "onboarding_signer",
+            "onboarding_private_key",
+        ] {
+            assert!(!payload.contains_key(forbidden));
+        }
     }
 
     #[test]
@@ -16267,7 +16357,7 @@ mod tests {
         app.settings_p2p_port_input = "16000".to_owned();
         app.settings_chain_id_input = "custom-chain".to_owned();
         app.settings_profile_input =
-            "{ peer_count = 3, consensus_mode = \"permissioned\" }".to_owned();
+            "{ peer_count = 7, consensus_mode = \"permissioned\" }".to_owned();
         app.settings_nexus_enabled = true;
         app.settings_nexus_lane_count_input = "2".to_owned();
         app.settings_nexus_lane_catalog_input =
@@ -16311,7 +16401,7 @@ mod tests {
         assert_eq!(bundle.config.chain_id.as_deref(), Some("custom-chain"));
         let profile = bundle.config.profile.as_ref().expect("profile config");
         assert_eq!(profile.preset, None);
-        assert_eq!(profile.topology.peer_count, 3);
+        assert_eq!(profile.topology.peer_count, 7);
         assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
         let nexus = bundle.config.nexus.as_ref().expect("nexus config");
         assert_eq!(
@@ -16377,7 +16467,7 @@ mod tests {
         assert_eq!(round_trip.config.chain_id.as_deref(), Some("custom-chain"));
         let round_trip_profile = round_trip.config.profile.expect("profile config");
         assert_eq!(round_trip_profile.preset, None);
-        assert_eq!(round_trip_profile.topology.peer_count, 3);
+        assert_eq!(round_trip_profile.topology.peer_count, 7);
         assert_eq!(
             round_trip_profile.consensus_mode,
             SumeragiConsensusMode::Permissioned
@@ -16443,7 +16533,7 @@ mod tests {
     }
 
     #[test]
-    fn default_app_uses_single_peer_profile() {
+    fn default_app_uses_four_peer_profile() {
         if !super::socket_bind_available() {
             eprintln!("Skipping default app supervisor test due to socket restrictions");
             return;
@@ -16470,8 +16560,8 @@ mod tests {
 
         assert_eq!(
             supervisor.profile().topology.peer_count,
-            1,
-            "default topology must match single peer preset"
+            4,
+            "default topology must match the four-peer BFT preset"
         );
         assert_eq!(supervisor.chain_id(), "mochi-local");
         assert!(app.last_error.is_none());

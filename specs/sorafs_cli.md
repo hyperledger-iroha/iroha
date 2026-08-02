@@ -530,14 +530,19 @@ sorafs_cli por status \
   --torii-url https://torii.local \
   --manifest 7bb2c8d6a01de9d6264d3525ec6c9f6c2ec6fb6ef1d9d88edb8a94ff4b8f9d31 \
   --status=failed \
-  --limit=20
+  --limit=20 \
+  --max-bytes=4194304
 ```
 
 The command queries `GET /v1/sorafs/por/status` and prints either a terse table
 (`--format=table`, the default) or the raw Norito JSON (`--format=json`). Status
 filters accept the canonical labels (`pending`, `verified`, `failed`,
 `repaired`, `forced`) and the CLI validates the manifest/provider digests before
-dispatching the request so typos fail fast in CI.
+dispatching the request so typos fail fast in CI. When another page exists the
+CLI prints `next_cursor=...`; pass that exact opaque value back with `--cursor`
+and the same filters. The cursor binds the filter and coordinator generation,
+so substitution or intervening mutation fails instead of silently skipping
+records.
 
 ### Challenge authority
 
@@ -556,13 +561,15 @@ sorafs_cli por export \
   --torii-url https://torii.local \
   --start-epoch=1714000 \
   --end-epoch=1714800 \
-  --out artifacts/por_export.parquet
+  --limit=1000 \
+  --max-bytes=4194304 \
+  --out artifacts/por_export.norito
 ```
 
-`por export` streams the Parquet artefact produced by
-`GET /v1/sorafs/por/export` to disk and prints the number of bytes written,
-making it easy to wire into nightly governance or observability jobs. Start/end
-epochs are optional; omit them to fetch the most recent window.
+`por export` writes one bounded Norito `PorStatusExportPageV1` produced by
+`GET /v1/sorafs/por/export` and prints the number of bytes written. Start/end
+epochs are optional but must be supplied together. Continue with the returned
+opaque cursor and the exact same range when another page exists.
 
 ### Render weekly PoR health reports
 

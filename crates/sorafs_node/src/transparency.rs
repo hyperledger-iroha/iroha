@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::moderation::ModerationEvidenceViewerAuditReport;
+use crate::{GovernanceSubmissionProvenanceV1, moderation::ModerationEvidenceViewerAuditReport};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::sorafs::proof_token::{
@@ -821,6 +821,8 @@ pub struct PrivacyAggregateSourceEvent {
     pub metrics: Vec<PrivacyAggregateSourceMetric>,
     /// Governed policy digest associated with this event.
     pub policy_digest: [u8; 32],
+    /// Server-derived canonical account and ingress that admitted this event.
+    pub provenance: Option<GovernanceSubmissionProvenanceV1>,
 }
 
 impl std::fmt::Debug for PrivacyAggregateSourceEvent {
@@ -841,6 +843,11 @@ impl PrivacyAggregateSourceEvent {
         require_nonzero32("population_digest", &self.population_digest)?;
         require_nonzero32("subject_digest", &self.subject_digest)?;
         require_nonzero32("policy_digest", &self.policy_digest)?;
+        if self.provenance.as_ref().is_some_and(|provenance| {
+            provenance.origin() != crate::GovernanceSubmissionOriginV1::PrivacyAggregateSourceEvent
+        }) {
+            return Err(PrivacyAggregateWorkerError::InvalidSourceEventProvenance);
+        }
         validate_source_metrics(&self.metrics)
     }
 
@@ -854,6 +861,17 @@ impl PrivacyAggregateSourceEvent {
         hasher.update(&self.population_digest);
         hasher.update(&self.subject_digest);
         hasher.update(&self.policy_digest);
+        match &self.provenance {
+            Some(provenance) => {
+                hasher.update(&[1, provenance.origin().tag()]);
+                let account_bytes = provenance.publisher_account().encode();
+                hasher.update(&(account_bytes.len() as u64).to_le_bytes());
+                hasher.update(&account_bytes);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
         hasher.update(&(self.metrics.len() as u64).to_le_bytes());
         for metric in &self.metrics {
             hash_text(&mut hasher, &metric.key);
@@ -4600,6 +4618,9 @@ pub enum PrivacyAggregateWorkerError {
     /// A source event does not bind the active governed policy.
     #[error("privacy aggregate source event does not match the governed policy")]
     PolicyDigestMismatch,
+    /// A source event carries provenance belonging to another authenticated ingress.
+    #[error("privacy aggregate source event carries mismatched authenticated provenance")]
+    InvalidSourceEventProvenance,
     /// One subject was assigned to more than one population in a single cycle.
     #[error("privacy aggregate subject spans multiple population buckets in one cycle")]
     SubjectPopulationOverlap,
@@ -4783,6 +4804,7 @@ fn build_population_aggregate(
         generated_at_unix: context.cycle_end_unix,
         population_label: population.label,
         population_digest: population.digest,
+        source_commitment: context.private_source_digest,
         privacy: config.privacy,
         noise_source,
         metrics: published_metrics,
@@ -5151,18 +5173,7 @@ pub(crate) fn canonical_private_source_digest(
     }
     hasher.update(&(ordered.len() as u64).to_le_bytes());
     for event in ordered {
-        hash_text(&mut hasher, &event.event_id);
-        hasher.update(&event.occurred_at_unix.to_le_bytes());
-        hash_text(&mut hasher, &event.population_label);
-        hasher.update(&event.population_digest);
-        hasher.update(&event.subject_digest);
-        hasher.update(&event.policy_digest);
-        hasher.update(&(event.metrics.len() as u64).to_le_bytes());
-        for metric in &event.metrics {
-            hash_text(&mut hasher, &metric.key);
-            hash_text(&mut hasher, &metric.unit);
-            hasher.update(&metric.value.to_le_bytes());
-        }
+        hasher.update(&event.canonical_digest()?);
     }
     Ok(*hasher.finalize().as_bytes())
 }
@@ -6336,6 +6347,7 @@ mod tests {
                 unit: "count".to_string(),
             }],
             policy_digest: [0xC0; 32],
+            provenance: None,
         }
     }
 
@@ -7514,6 +7526,58 @@ mod tests {
             Err(PrivacyAggregateWorkerError::MissingDigest {
                 field: "subject_digest",
             })
+        );
+    }
+
+    #[test]
+    fn privacy_source_event_rejects_provenance_from_another_ingress() {
+        let mut event = privacy_event("event-a", 110);
+        event.provenance = Some(GovernanceSubmissionProvenanceV1::new(
+            gar_operator_account(),
+            crate::GovernanceSubmissionOriginV1::AppealFinanceReport,
+        ));
+
+        assert_eq!(
+            event.validate(),
+            Err(PrivacyAggregateWorkerError::InvalidSourceEventProvenance)
+        );
+    }
+
+    #[test]
+    fn public_source_commitment_binds_authenticated_event_provenance() {
+        let config = privacy_config();
+        let mut event = privacy_event("event-a", 110);
+        event.provenance = Some(GovernanceSubmissionProvenanceV1::new(
+            gar_operator_account(),
+            crate::GovernanceSubmissionOriginV1::PrivacyAggregateSourceEvent,
+        ));
+        let source_commitment =
+            canonical_private_source_digest(100, 200, &config, std::slice::from_ref(&event))
+                .expect("authenticated source set hashes");
+        let aggregate = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            &config,
+            Some(privacy_prf_input([0x5A; 32])),
+            std::slice::from_ref(&event),
+        )
+        .expect("authenticated source set aggregates")
+        .pop()
+        .expect("one population aggregate");
+        assert_eq!(aggregate.source_commitment, source_commitment);
+
+        let mut without_provenance = event;
+        without_provenance.provenance = None;
+        let changed_commitment = canonical_private_source_digest(
+            100,
+            200,
+            &config,
+            std::slice::from_ref(&without_provenance),
+        )
+        .expect("unattributed source set hashes");
+        assert_ne!(
+            changed_commitment, source_commitment,
+            "authenticated ingress identity must be part of the public source commitment"
         );
     }
 

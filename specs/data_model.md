@@ -94,7 +94,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 ### Triggers and Events
 - `TriggerId { name: Name }` and `Trigger { id, action: action::Action }`.
 - `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, retry_policy, metadata }`.
-  - Construction: `Action::try_new(...)` is the fallible constructor for SDK and runtime paths; `Action::new(...)` remains an infallible convenience wrapper and panics on invalid trigger filters.
+  - Construction: `Action::new(...)` is the single fallible constructor and returns `ActionValidationError` when the filter is forbidden, a filter-bound authority conflicts with the action authority, or retry-policy constraints are violated. `with_retry_policy(...)` is fallible for the same reason; there is no generally available infallible constructor.
   - `Repeats`: `Indefinitely` or `Exactly(u32)`; ordering and depletion utilities included.
   - `retry_policy`: optional scheduled-time-trigger retry settings; non-scheduled triggers reject retry policies.
   - Safety: `TriggerCompleted` cannot be used as an action’s filter (validated during (de)serialization).
@@ -184,8 +184,9 @@ a node advertising any other data-model version before submission.
   - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, `committed_fragment_count`, and `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
 - Utilities: `presigned`, fallible `set_transaction_results(...)` and `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
 - Legacy payload transaction caches decoded from wire entrypoints must be hydrated explicitly with `BlockPayload::hydrate_legacy_transaction_cache_from_entrypoints()`.
-- Merkle roots: transaction entrypoints and results are committed via Merkle trees; result Merkle root is placed into the block header.
-- Block inclusion proofs (`BlockProofs`) expose both entry/result Merkle proofs and the `fastpq_transcripts` map so off-chain provers can fetch the transfer deltas associated with a transaction hash.
+- Merkle commitments bind each application-tree root to its exact non-zero leaf count. Raw typed leaf hashes and internal nodes are separated by the stable `iroha:merkle:leaf:v1\0` and `iroha:merkle:internal:v1\0` domains; the result root is placed into the block header.
+- Serialized Merkle trees carry only a V1 hash-scheme discriminant and at most 65,536 canonical leaf-node hashes. Internal nodes and roots are derived caches: decoders rebuild them deterministically and do not accept the retired full-node-vector layout.
+- Block inclusion proofs (`BlockProofs`) expose block identity, the authenticated executed-block wire hash, exact entry/result root-and-count commitments, both proofs, and the `fastpq_transcripts` map. The entry commitment covers the full executed-entrypoint order (including scheduled entrypoints), so entry and result proof indices and leaf counts must match. `TrustedBlockProofAnchor::from_untrusted_finality_artifact` verifies the complete Sumeragi-v2 finality artifact and its exact header association before deriving an anchor from the `CommitQC` execution commitment. Verifiers must compare the requested entry hash and index, every commitment value, and the exact FASTPQ transcript projection with that target-specific anchor; values copied from the proof response are not a trust anchor.
 - `ExecWitness` messages (streamed via Torii and piggy-backed on consensus gossip) now include both `fastpq_transcripts` and prover-ready `fastpq_batches: Vec<FastpqTransitionBatch>` with embedded `public_inputs` (dsid, slot, roots, perm_root, tx_set_hash), so external provers can ingest canonical FASTPQ rows without re-encoding transcripts.
 
 ## Queries

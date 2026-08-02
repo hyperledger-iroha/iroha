@@ -18,6 +18,7 @@ use iroha_data_model::{
         AliasAttestation, AliasEvent, AliasIndex, AliasRecord, AliasRecordedEvent, AliasTarget,
     },
     alias_setup::{AccountAliasName, ResolvedAccountAliasV1},
+    asset::ResolvedAssetDefinitionAliasV1,
     domain::DomainId,
     name::Name,
     nexus::DataSpaceId,
@@ -25,6 +26,9 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
+};
+use iroha_executor_data_model::permission::asset_definition::{
+    AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
 };
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
@@ -334,6 +338,82 @@ pub fn authority_can_manage_account_alias_scope(
         .into(),
     };
     authority_has_permission(world, authority, &permission)
+}
+
+/// Return `true` when `authority` holds the asset-definition-alias capability for `alias`.
+///
+/// An exact alias-and-definition grant is checked first. A qualified alias otherwise requires its
+/// exact domain scope, while a dataspace-root alias requires only its exact dataspace scope.
+/// Account-alias permissions are intentionally not consulted.
+pub fn authority_can_manage_asset_definition_alias(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    alias: &iroha_data_model::asset::AssetDefinitionAlias,
+    dataspace: DataSpaceId,
+    domain: Option<&DomainId>,
+) -> bool {
+    let exact: Permission = CanManageAssetDefinitionAlias {
+        scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
+            alias.clone(),
+            dataspace,
+            asset_definition_id.clone(),
+        )),
+    }
+    .into();
+    if authority_has_permission(world, authority, &exact) {
+        return true;
+    }
+
+    let scoped: Permission = match domain {
+        Some(domain) => CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Domain(domain.clone()),
+        }
+        .into(),
+        None => CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Dataspace(dataspace),
+        }
+        .into(),
+    };
+    authority_has_permission(world, authority, &scoped)
+}
+
+/// Return whether an exact asset-definition-alias permission targets a live binding.
+///
+/// This is a Core storage invariant, independent from whichever executor authorizes the grant.
+/// Non-asset-alias permissions and wider asset-alias scopes pass unchanged. An exact permission
+/// must pin the current catalog entry and the exact definition currently bound to the alias. A
+/// binding whose grace window elapsed is not a valid grant root even if cleanup has not run yet.
+pub(crate) fn asset_definition_alias_permission_targets_active_binding(
+    world: &impl WorldReadOnly,
+    permission: &Permission,
+    now_ms: u64,
+) -> bool {
+    if permission.name() != "CanManageAssetDefinitionAlias" {
+        return true;
+    }
+    let Ok(permission) = CanManageAssetDefinitionAlias::try_from(permission) else {
+        return false;
+    };
+    match permission.scope {
+        AssetDefinitionAliasPermissionScope::Alias(alias) => {
+            alias.matches_catalog(world.dataspace_catalog())
+                && alias.parent_domain().is_ok()
+                && world
+                    .asset_definition_alias_bindings()
+                    .get(&alias.asset_definition_id)
+                    .is_some_and(|binding| {
+                        binding.alias == alias.canonical_name
+                            && !binding.is_grace_expired_at(now_ms)
+                    })
+                && world
+                    .asset_definitions()
+                    .get(&alias.asset_definition_id)
+                    .is_some()
+        }
+        AssetDefinitionAliasPermissionScope::Domain(_)
+        | AssetDefinitionAliasPermissionScope::Dataspace(_) => true,
+    }
 }
 
 /// Metric categories emitted by the alias service.

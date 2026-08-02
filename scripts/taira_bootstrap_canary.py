@@ -36,6 +36,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from taira_faucet_canary import solve_puzzle  # noqa: E402
+import taira_constants  # noqa: E402
 
 
 AccountAddress = None
@@ -53,8 +54,8 @@ if IROHA_PYTHON_ADDRESS.exists():
         AccountAddress = None
 
 
-DEFAULT_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
-DEFAULT_CHAIN_DISCRIMINANT = 369
+DEFAULT_CHAIN_ID = taira_constants.CHAIN_ID
+DEFAULT_CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 DEFAULT_DOMAIN = "universal"
 DEFAULT_ALIAS_PREFIX = "taira-rollout-canary"
 DEFAULT_TIME_TO_LIVE_MS = 120_000

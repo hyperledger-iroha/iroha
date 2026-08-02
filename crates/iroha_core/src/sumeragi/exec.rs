@@ -440,7 +440,7 @@ pub fn parent_state_from_witness(w: &ExecWitness) -> Hash {
 mod tests {
     use std::{num::NonZeroU64, time::Duration};
 
-    use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId,
         account::AccountId,
@@ -1163,12 +1163,15 @@ mod tests {
             HashOf::<MerkleTree<wire::NativeAmxApplicationManifestLeafV1>>::from_untyped_unchecked(
                 manifest.root(),
             );
+        let manifest_leaf_count = NonZeroU64::new(u64::from(manifest.count()))
+            .expect("fixture manifest must be non-empty");
+        let commitment = MerkleTreeCommitment::new(typed_root, manifest_leaf_count);
         for (index, entry) in manifest.entries().iter().enumerate() {
             let proof = manifest
                 .proof(u32::try_from(index).expect("fixture proof index fits u32"))
                 .expect("manifest inclusion proof");
             assert!(
-                proof.verify(&HashOf::new(&entry.leaf), &typed_root, 32),
+                proof.verify(&HashOf::new(&entry.leaf), &commitment),
                 "canonical route leaf must verify against the committed root"
             );
         }
@@ -1176,11 +1179,11 @@ mod tests {
             HashOf::<MerkleTree<wire::NativeAmxApplicationManifestLeafV1>>::from_untyped_unchecked(
                 Hash::new(b"forged Native AMX manifest root"),
             );
+        let forged_commitment = MerkleTreeCommitment::new(forged_root, manifest_leaf_count);
         assert!(
             !manifest.proof(0).expect("first manifest proof").verify(
                 &HashOf::new(&manifest.entries()[0].leaf),
-                &forged_root,
-                32,
+                &forged_commitment,
             ),
             "the canonical proof must reject a substituted QC root"
         );
@@ -1188,11 +1191,10 @@ mod tests {
         wire_identity_tampered_leaf.executed_block_wire_hash =
             Hash::new(b"forged Native AMX executed block wire");
         assert!(
-            !manifest.proof(0).expect("first manifest proof").verify(
-                &HashOf::new(&wire_identity_tampered_leaf),
-                &typed_root,
-                32,
-            ),
+            !manifest
+                .proof(0)
+                .expect("first manifest proof")
+                .verify(&HashOf::new(&wire_identity_tampered_leaf), &commitment,),
             "the committed proof must reject an executed-wire identity substitution"
         );
 

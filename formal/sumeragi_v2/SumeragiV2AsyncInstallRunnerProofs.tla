@@ -56,11 +56,14 @@ PROOF
            /\ CausalCandidate(commandClass, kind, command).commitmentIdentity =
                 command.commitmentIdentity
       BY DEF CausalCandidate, AsyncCandidateFrom,
-             AsyncCandidateWithIdentity, AsyncCandidateDomain
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateSuccessorSemanticPhase,
+             AsyncCandidateSuccessorProposalRound,
+             AsyncCandidateWithIdentityAndOrigin,
+             AsyncCandidateDomain
     <2> QED BY <1>1, <2>1, <2>2, SMT
          DEF AsyncCandidateTyped, AsyncEvidenceSet
   <1> QED BY <1>1
-
 THEOREM NonInstallCommandSuccessorsTypedAndOwned ==
   \A command:
     /\ AsyncTypeInvariant
@@ -74,11 +77,12 @@ BY CausalCandidateFromTypedCommand, SMTT(120)
        PersistDecisionRecoverySuccessor, PersistDecisionRecoveryKind,
        PersistDecisionBody, PersistDecisionValidationHeld,
        PersistDecisionRequest, PersistDecisionRequests,
-       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncCandidateWithIdentityAndOrigin,
        AsyncQueueTyped, AsyncCausalQueueOwnership,
        AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
        SequenceSet
-
 THEOREM ExecutedInstallSuccessorIsTypedAndOwned ==
   \A command:
     /\ StrongInductiveInvariant
@@ -145,15 +149,17 @@ PROOF
            /\ Successor.item = NoAsyncItem
       BY Isa
          DEF Successor, InstallProposalSuccessor,
-             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin,
              AsyncCandidateDomain,
              AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds
     <2> QED BY <2>1, <2>4, <2>5, <2>6, <2>7, SMT
          DEF Successor, InstallProposalSuccessor,
-             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateSuccessorProposalRound,
+             AsyncCandidateWithIdentityAndOrigin,
              AsyncCandidateTyped
   <1> QED BY <1>1
-
 THEOREM ExecutedInstallProposalSuccessorMatchesPostState ==
   \A command:
     /\ StrongInductiveInvariant
@@ -216,10 +222,10 @@ PROOF
       BY <1>1, <2>1, <2>2, <2>3, SMTT(30), Isa
          DEF InstallProposalSubject, AsyncProposalSubject
     <2> QED BY <2>3, <2>4, Isa
-         DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
-             AsyncCandidateWithIdentity
+         DEF InstallProposalSuccessor,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin
   <1> QED BY <1>1
-
 THEOREM ExecutedInstallCommitSignSuccessorIsTypedAndOwned ==
   \A command:
     /\ StrongInductiveInvariant
@@ -234,7 +240,9 @@ BY SMTT(120), Isa
    DEF InstallCommitSignSuccessor, InstallCommitSignRequests,
        ActiveLockedCommitSignRequestsAfterInstall,
        ExactLockedCommitIntents, VoteSign, VoteSignSet,
-       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncCandidateWithIdentityAndOrigin,
        AsyncCandidateTyped, AsyncEvidenceSet,
        AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
        StrongInductiveInvariant, Safety, TypeInvariant,
@@ -254,7 +262,9 @@ BY SMTT(120), Isa
    DEF InstallLockedFetchSuccessor,
        InstallResultingLockedPrepareQCs, InstallRequests,
        HistoricalLockedPrepareRecoveryProvenance,
-       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncCandidateWithIdentityAndOrigin,
        AsyncCandidateTyped, AsyncEvidenceSet,
        AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
        StrongInductiveInvariant, Safety, TypeInvariant,
@@ -281,7 +291,8 @@ THEOREM ExecutedInstallLockedFetchSuccessorMatchesPostState ==
           /\ successor.consumerGeneration = generation'[command.node]
 BY ExecutedInstallProposalSuccessorMatchesPostState, Isa
    DEF InstallLockedFetchSuccessor, InstallProposalSuccessor,
-       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateWithIdentityAndOrigin
 
 THEOREM ExecutedInstallCommitSignSuccessorMatchesPostState ==
   \A command:
@@ -297,7 +308,8 @@ THEOREM ExecutedInstallCommitSignSuccessorMatchesPostState ==
           /\ successor.consumerGeneration = generation'[command.node]
 BY ExecutedInstallProposalSuccessorMatchesPostState, Isa
    DEF InstallCommitSignSuccessor, InstallProposalSuccessor,
-       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateWithIdentityAndOrigin
 
 THEOREM ExecutedCommandSuccessorsTypedAndOwned ==
   \A command:
@@ -465,7 +477,10 @@ BY Isa
        PersistDecisionRecoverySuccessor, PersistDecisionRecoveryKind,
        PersistDecisionBody, PersistDecisionValidationHeld,
        PersistDecisionRequest,
-       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorSemanticPhase,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncCandidateWithIdentityAndOrigin,
        RetainedBodyRebindCandidate, CausalCandidate, NoItemCandidate,
        AsyncCandidate, SequenceHasUniqueValues, SequenceSet
 

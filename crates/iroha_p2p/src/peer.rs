@@ -363,6 +363,8 @@ impl SoranetHandshakeConfig {
             relay_capabilities: self.relay_capabilities.as_slice(),
             kem_id: self.kem_id,
             sig_id: self.sig_id,
+            transport_alpn: b"iroha-p2p/1",
+            tls_server_name: "iroha-quic",
             resume_hash: self
                 .resume_hash
                 .as_ref()
@@ -15529,7 +15531,7 @@ mod state {
             let (client_finish, secrets) = match client_handle_relay_hello(
                 client_state,
                 &relay_hello,
-                &key_pair,
+                expected_peer_id.public_key(),
                 &runtime_params,
                 &mut rng,
             ) {

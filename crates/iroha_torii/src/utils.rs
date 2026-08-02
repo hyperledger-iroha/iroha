@@ -2546,7 +2546,7 @@ pub mod extractors {
             let key_pair = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
                 .expect("derive offline-ingress fixture key");
             let authority = AccountId::new(key_pair.public_key().clone());
-            let definition = AssetDefinitionId::new(
+            let definition = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("offline", "universal").expect("fixture domain"),
                 "ingress".parse().expect("fixture asset name"),
             );
@@ -2617,15 +2617,15 @@ pub mod extractors {
                     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
-                    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+                    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+                    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KagemushaPastaCycleParityV1,
                     KagemushaPastaCycleProofEnvelopeV4, KagemushaRecursiveSpendBranchClaimV2,
                     KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendOperationVectorV4,
                     KagemushaRecursiveSpendProofV4, KagemushaRecursiveSpendPublicStatementV4,
                     KagemushaRecursiveSpendRedemptionIntentV4,
-                    KagemushaRecursiveSpendStateBoundaryV2,
+                    KagemushaRecursiveSpendStateBoundaryV5,
                     KagemushaRecursiveSpendTopUpAnchorRefV2,
                     KagemushaUnshieldPublicInputsBindingV2,
                     kagemusha_recursive_spend_verifier_key_id_v4,
@@ -2662,8 +2662,8 @@ pub mod extractors {
                 artifact_binding: binding.clone(),
                 verifier_key_id: verifier_key_id.clone(),
             };
-            let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-            state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+            let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+            state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
             let bundle = KagemushaRecursiveSpendBundleV4 {
                 statement,
                 operation: KagemushaRecursiveSpendOperationVectorV4 {
@@ -2689,7 +2689,7 @@ pub mod extractors {
                         step_ep_circuit_params_sha256: [0x56; 32],
                         step_eq_verifier_key_sha256: [0x57; 32],
                         step_ep_verifier_key_sha256: [0x58; 32],
-                        state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
+                        state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)
                             .expect("fixture state boundary"),
                         proof: ProofBox::new(
                             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),

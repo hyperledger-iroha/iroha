@@ -96,7 +96,7 @@ fn query_load_domain_id() -> DomainId {
 }
 
 fn query_load_asset_definition_id(index: usize) -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         query_load_domain_id(),
         format!("coin{index}")
             .parse()
@@ -131,7 +131,7 @@ fn query_load_contract_authority_id(index: usize) -> AccountId {
 const CONTRACT_ACTIVITY_CHAIN_ID: &str = "query-load-contract-activity";
 const CONTRACT_ACTIVITY_BASE_TIMESTAMP_MS: u64 = 1_710_000_000_000;
 const CONTRACT_ACTIVITY_MATCH_ALIAS: &str = "dlmm_router";
-const CONTRACT_ACTIVITY_MATCH_ADDRESS: &str = "tairac1queryloadcontractdlmmrouter";
+const CONTRACT_ACTIVITY_MATCH_ADDRESS: &str = "irohac1queryloadcontractdlmmrouter";
 const CONTRACT_ACTIVITY_MATCH_ENTRYPOINT: &str = "route_swap";
 
 struct QueryLoadFixture {
@@ -152,7 +152,7 @@ fn contract_activity_metadata(index: usize) -> Metadata {
         Json::new(if matching {
             CONTRACT_ACTIVITY_MATCH_ADDRESS.to_owned()
         } else {
-            format!("tairac1queryloadcontractnoise{}", index % 16)
+            format!("irohac1queryloadcontractnoise{}", index % 16)
         }),
     );
     metadata.insert(
@@ -281,9 +281,13 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
     for index in 0..profile.assets_per_account {
         let definition_id = query_load_asset_definition_id(index);
         definitions.push(
-            AssetDefinition::numeric(definition_id.clone())
-                .with_name(format!("Coin {index}"))
-                .build(&authority),
+            AssetDefinition::numeric(
+                definition_id.clone(),
+                format!("Coin {index}"),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&authority),
         );
         definition_ids.push(definition_id);
     }

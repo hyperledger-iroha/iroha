@@ -79,6 +79,18 @@ async fn zk_verify_batch_endpoint_accepts_json_b64_vec() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(statuses.len(), 2);
-    assert_eq!(statuses[0].as_bool(), Some(true));
-    assert_eq!(statuses[1].as_bool(), Some(false));
+    assert_eq!(
+        statuses[0]
+            .get("status")
+            .and_then(norito::json::Value::as_str),
+        Some("verified")
+    );
+    assert_eq!(
+        statuses[1]
+            .get("status")
+            .and_then(norito::json::Value::as_str),
+        Some("invalid")
+    );
+    assert!(statuses[0].get("code").is_none());
+    assert!(statuses[1].get("code").is_none());
 }

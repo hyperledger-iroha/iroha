@@ -73,7 +73,7 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
     let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let wonderland_domain: DomainId =
         DomainId::try_new("wonderland", "universal").expect("wonderland domain id");
-    let rose_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+    let rose_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("rose asset"),
         "rose".parse().expect("rose asset"),
     );
@@ -142,7 +142,7 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
         }
 
         let asset_id = AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),

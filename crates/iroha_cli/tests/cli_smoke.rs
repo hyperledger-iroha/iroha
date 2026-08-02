@@ -65,7 +65,7 @@ const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
 
 fn xor_asset_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     )
@@ -979,7 +979,7 @@ fn gov_deploy_meta_outputs_metadata_stub() {
             "deploy",
             "meta",
             "--contract-address",
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         ])
         .output()
         .expect("failed to execute iroha app gov deploy meta");
@@ -993,7 +993,7 @@ fn gov_deploy_meta_outputs_metadata_stub() {
         norito::json::from_str(stdout.trim()).expect("parse deploy meta output");
     assert_eq!(
         value.get("gov_contract_address").and_then(|v| v.as_str()),
-        Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
+        Some("irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw")
     );
     assert!(
         value.get("gov_manifest_approvers").is_none(),
@@ -1020,7 +1020,7 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
             "deploy",
             "meta",
             "--contract-address",
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         ])
         .args(["--approver", validator.as_str(), "--approver", bob.as_str()])
         .output()
@@ -1082,7 +1082,7 @@ fn gov_propose_deploy_against_mock() {
 
     let code_hash = "00".repeat(32);
     let abi_hash = "11".repeat(32);
-    let contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 
     let summary = command()
         .arg("--config")
@@ -2742,7 +2742,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     let code_bytes = b"mock-contract-code";
     let abi_bytes = b"mock-contract-abi";
     let code_hash = CryptoHash::new(code_bytes);
@@ -4198,7 +4198,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
         mock.base_url(),
         &norito::json!({
             "status": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "node_fingerprint": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
                 "build_fingerprint": "hash:1212121212121212121212121212121212121212121212121212121212121213#E183",
                 "config_fingerprint": "hash:1313131313131313131313131313131313131313131313131313131313131313#9CE1",

@@ -22,7 +22,7 @@ application = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
 # opt-in so non-network crypto consumers do not acquire an async runtime.
 soranet-record-io = ["dep:tokio"]
 # Cryptography required by consensus and canonical node identities.
-consensus = ["std", "rand", "bls", "bls-multi-pairing"]
+consensus = ["std", "rand", "bls"]
 # Complete shipping node surface.
 node-crypto = ["application", "consensus"]
 std = []
@@ -47,8 +47,6 @@ bls = ["bls-backend-w3f", "dep:blstrs", "dep:group", "dep:pairing"]
 bls-backend-blstrs = ["bls", "dep:blstrs", "dep:group", "dep:subtle", "dep:pairing", "dep:w3f-bls"]
 # Baseline backend (enabled when bls is set and bls-backend-blstrs is NOT set)
 bls-backend-w3f = ["bls", "dep:w3f-bls"]
-# Optional: enable single pairing-product for multi-message aggregates via blstrs
-bls-multi-pairing = ["dep:blstrs", "dep:group", "dep:subtle", "dep:pairing"]
 # Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
 #ffi_import = ["iroha_ffi", "iroha_primitives/ffi_import"]
 

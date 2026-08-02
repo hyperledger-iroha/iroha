@@ -133,7 +133,7 @@
               "epoch_length_blocks": 3600,
               "evidence_horizon_blocks": 7200,
               "finality_margin_blocks": 8,
-              "max_validators": 128,
+              "max_validators": 31,
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
               "min_nomination_bond": "1",
@@ -220,11 +220,21 @@
               }
             }
           }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanReadAllLedgerData"
+              }
+            }
+          }
         }
       ],
       "ivm_triggers": [],
       "topology": []
     }
   ],
-  "wire_protocol_version": 3
+  "wire_protocol_version": 4
 }

@@ -50,6 +50,34 @@ pub struct BlockVerificationReport {
 pub struct CarVerifier;
 
 impl CarVerifier {
+    /// Verifies that `car_bytes` are the exact canonical CARv2 encoding of
+    /// `plan` and returns statistics derived from the retained archive.
+    ///
+    /// Unlike [`Self::verify_full_car_with_plan`], this entry point does not
+    /// require a manifest. It is intended for callers that already retain and
+    /// authenticate the complete build plan alongside the archive.
+    pub fn verify_canonical_car_with_plan(
+        plan: &CarBuildPlan,
+        car_bytes: &[u8],
+    ) -> Result<CarWriteStats, CarVerifyError> {
+        let parsed = ParsedCar::parse(car_bytes)?;
+        validate_plan(plan, &parsed)?;
+        ensure_plan_offsets(plan)?;
+
+        let mut canonical_car = CanonicalCarComparator::new(car_bytes);
+        let mut payload_reader = parsed.payload_reader();
+        let stats = CarStreamingWriter::new(plan)
+            .write_from_reader(&mut payload_reader, &mut canonical_car)
+            .map_err(CarVerifyError::CanonicalCar)?;
+        if stats.root_cids != parsed.roots() {
+            return Err(CarVerifyError::PlanRootMismatch);
+        }
+        if !canonical_car.matches_exactly() {
+            return Err(CarVerifyError::NonCanonicalCar);
+        }
+        Ok(stats)
+    }
+
     /// Verifies a canonical single-file `dag-scope=full` CAR response against
     /// the supplied manifest.
     ///
@@ -645,6 +673,8 @@ pub enum CarVerifyError {
     ManifestCarDigestMismatch,
     #[error("manifest root CID mismatch")]
     ManifestRootMismatch,
+    #[error("CAR root CID does not match the canonical supplied plan")]
+    PlanRootMismatch,
     #[error("block CAR root CID does not match the canonical requested range root")]
     BlockRootMismatch,
     #[error("CAR contains non-canonical DAG, index, header, or trailing bytes")]
@@ -1478,6 +1508,42 @@ mod tests {
             CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car_bytes).expect("verify");
         assert_eq!(report.stats.chunk_count, plan.chunks.len());
         assert_eq!(report.chunk_store.payload_len(), plan.content_length);
+    }
+
+    #[test]
+    fn canonical_car_verification_with_retained_plan_succeeds() {
+        let payload = sample_payload();
+        let plan = CarBuildPlan::single_file(&payload).expect("plan");
+        let mut car = Vec::new();
+        let expected = CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+
+        let actual = CarVerifier::verify_canonical_car_with_plan(&plan, &car)
+            .expect("retained plan and CAR must verify");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn canonical_car_verification_rejects_substituted_plan_identity() {
+        let payload = sample_payload();
+        let mut plan = CarBuildPlan::single_file(&payload).expect("plan");
+        let mut car = Vec::new();
+        CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+        plan.payload_digest = blake3_hash(b"substituted payload identity");
+
+        let error = CarVerifier::verify_canonical_car_with_plan(&plan, &car)
+            .expect_err("a substituted plan identity must fail");
+
+        assert!(matches!(
+            error,
+            CarVerifyError::CanonicalCar(CarWriteError::PayloadDigestMismatch)
+        ));
     }
 
     #[test]

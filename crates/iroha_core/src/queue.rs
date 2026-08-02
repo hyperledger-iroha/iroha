@@ -984,89 +984,6 @@ pub struct LaneQueueReservationReplaySummary {
     pub completed_releases: usize,
 }
 
-/// Exact proposal-slot identity shared by one autonomous reservation group.
-///
-/// This identity deliberately excludes transaction-dependent fields. Every live reservation
-/// carrying these exact lifecycle and proposal coordinates belongs to the same immutable group
-/// for restart classification, including when journal compaction has flattened the original
-/// atomic `PutBatch` frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct LaneQueueReservationGroupIdentityV1 {
-    /// Coordinator lane that owns the group.
-    pub(crate) lane_id: LaneId,
-    /// Coordinator dataspace that owns the group.
-    pub(crate) dataspace_id: DataSpaceId,
-    /// Exact active incarnation of the coordinator lane.
-    pub(crate) lane_incarnation: Hash,
-    /// Global height at which this incarnation was validated.
-    pub(crate) proposal_height: u64,
-    /// Lane-local proposal height.
-    pub(crate) lane_block_height: u64,
-    /// Lane-local proposal view.
-    pub(crate) lane_block_view: u64,
-    /// Stable leader/session owner identity.
-    pub(crate) reservation_owner_hash: Hash,
-    /// Stable provisional proposal-slot identity.
-    pub(crate) proposal_identity_hash: Hash,
-}
-
-impl LaneQueueReservationGroupIdentityV1 {
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn from_key(key: &LaneQueueReservationKeyV2) -> Self {
-        Self {
-            lane_id: key.lane_id,
-            dataspace_id: key.dataspace_id,
-            lane_incarnation: key.lane_incarnation,
-            proposal_height: key.proposal_height,
-            lane_block_height: key.lane_block_height,
-            lane_block_view: key.lane_block_view,
-            reservation_owner_hash: key.reservation_owner_hash,
-            proposal_identity_hash: key.proposal_identity_hash,
-        }
-    }
-}
-
-/// One complete live queue owner captured for restart classification.
-///
-/// The record keeps the durable FIFO identity and exact QueuePlan claim alongside the reservation
-/// key. A classifier therefore never needs to consult mutable queue indexes after taking a
-/// snapshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
-    /// Exact durable reservation identity.
-    pub(crate) key: LaneQueueReservationKeyV2,
-    /// Exact proposal-slot group reconstructed from the reservation identity.
-    pub(crate) group: LaneQueueReservationGroupIdentityV1,
-    /// Original queue admission timestamp persisted in both journals.
-    pub(crate) enqueue_timestamp_ms: u64,
-    /// Original durable global FIFO ordinal.
-    pub(crate) fifo_ordinal: u64,
-    /// Complete exact QueuePlan claim that authorized reservation ownership.
-    pub(crate) durable_admission: QueuePlanDurableAdmissionV2,
-}
-
-/// Complete FIFO-ordered membership of one exact autonomous proposal slot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct LaneQueueReservationReconciliationGroupV1 {
-    /// Exact lifecycle and proposal-slot identity.
-    pub(crate) identity: LaneQueueReservationGroupIdentityV1,
-    /// Complete reservation membership in original global FIFO order.
-    pub(crate) ordered_keys: Vec<LaneQueueReservationKeyV2>,
-}
-
-/// Immutable, self-contained queue input for restart reservation classification.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct LaneQueueReservationReconciliationSnapshotV1 {
-    /// Every live reservation in original durable global FIFO order.
-    pub(crate) ordered_records: Vec<LaneQueueReservationReconciliationRecordV1>,
-    /// Every exact proposal group, ordered by its first FIFO member.
-    pub(crate) ordered_groups: Vec<LaneQueueReservationReconciliationGroupV1>,
-}
-
 /// Reservation substrate failure.
 #[derive(Debug, Error)]
 pub enum LaneQueueReservationError {
@@ -1106,40 +1023,6 @@ pub enum LaneQueueReservationError {
     ReleaseConflict {
         /// Digest of the requested exact Kura retirement.
         retirement_hash: Hash,
-    },
-    /// A live reservation has no exact durable QueuePlan claim after startup replay.
-    #[error("live lane queue reservation {hash} has no durable QueuePlan claim")]
-    ReconciliationMissingDurableClaim {
-        /// Queue identity whose claim is absent.
-        hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
-    },
-    /// A live reservation and its indexed durable QueuePlan claim disagree.
-    #[error(
-        "live lane queue reservation {hash} has a mismatched durable QueuePlan claim: {reason}"
-    )]
-    ReconciliationDurableClaimMismatch {
-        /// Queue identity whose claim is inconsistent.
-        hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
-        /// Exact failed cross-binding.
-        reason: String,
-    },
-    /// Two distinct live reservations claim the same durable FIFO position.
-    #[error(
-        "live lane queue reservations {first_hash} and {second_hash} share durable FIFO ordinal {ordinal}"
-    )]
-    ReconciliationDuplicateFifoOrdinal {
-        /// Duplicated durable ordinal.
-        ordinal: u64,
-        /// First queue identity observed at the ordinal.
-        first_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
-        /// Conflicting queue identity observed at the ordinal.
-        second_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
-    },
-    /// A live record's durable FIFO identity disagrees with the queue's immutable FIFO index.
-    #[error("live lane queue reservation {hash} has an inconsistent durable FIFO identity")]
-    ReconciliationFifoOrderMismatch {
-        /// Queue identity whose FIFO owner is missing or inconsistent.
-        hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
     },
     /// Reservation journal I/O or recovery failed.
     #[error("lane queue reservation journal failed: {0}")]
@@ -4503,171 +4386,6 @@ impl Queue {
         keys
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn reconciliation_record_from_durable_claim(
-        record: &LaneQueueReservationRecordV5,
-        claim: &QueuePlanDurableClaimIndexEntry,
-    ) -> Result<LaneQueueReservationReconciliationRecordV1, LaneQueueReservationError> {
-        let key = record.key;
-        let mismatch =
-            |reason: String| LaneQueueReservationError::ReconciliationDurableClaimMismatch {
-                hash: key.signed_transaction_hash,
-                reason,
-            };
-        let durable_admission = claim.durable_admission();
-        let binding = claim.global_admission_binding().map_err(mismatch)?;
-        if durable_admission.entrypoint_hash != key.entrypoint_hash {
-            return Err(mismatch(
-                "entrypoint identity differs from the reservation key".to_owned(),
-            ));
-        }
-        if durable_admission.routing_plan.digest() != key.routing_plan_digest {
-            return Err(mismatch(
-                "routing-plan digest differs from the reservation key".to_owned(),
-            ));
-        }
-        if durable_admission.routing_plan.coordinator_leg() != key.coordinator_leg {
-            return Err(mismatch(
-                "coordinator leg differs from the reservation key".to_owned(),
-            ));
-        }
-        if durable_admission.enqueue_timestamp_ms != record.enqueue_timestamp_ms {
-            return Err(mismatch(
-                "enqueue timestamp differs from the durable reservation record".to_owned(),
-            ));
-        }
-        let Some(coordinator_context) = durable_admission.context.route_incarnations.first() else {
-            return Err(mismatch(
-                "admission context omits the coordinator route".to_owned(),
-            ));
-        };
-        if coordinator_context.leg != key.coordinator_leg
-            || coordinator_context.lane_incarnation != key.lane_incarnation
-        {
-            return Err(mismatch(
-                "coordinator route/incarnation differs from the reservation key".to_owned(),
-            ));
-        }
-        if durable_admission.context.proposal_height > key.proposal_height {
-            return Err(mismatch(
-                "admission proposal height is newer than the reservation proposal height"
-                    .to_owned(),
-            ));
-        }
-        if binding.canonical_hash() != key.queue_plan_admission_binding_hash {
-            return Err(mismatch(
-                "global admission binding differs from the reservation key".to_owned(),
-            ));
-        }
-        Ok(LaneQueueReservationReconciliationRecordV1 {
-            key,
-            group: LaneQueueReservationGroupIdentityV1::from_key(&key),
-            enqueue_timestamp_ms: record.enqueue_timestamp_ms,
-            fifo_ordinal: record.fifo_order.ordinal,
-            durable_admission,
-        })
-    }
-
-    /// Capture every live reservation and its exact durable QueuePlan claim for restart
-    /// classification.
-    ///
-    /// Records are returned in original durable global FIFO order, independent of reservation
-    /// digest order. Proposal groups contain the complete matching key set in that same order and
-    /// are themselves ordered by their first FIFO member. The transition and queue locks make the
-    /// clone atomic with respect to every ownership, FIFO, and claim mutation; no queue or journal
-    /// state is changed by this observer.
-    ///
-    /// # Errors
-    /// Returns a typed durability, journal-installation, record, claim, FIFO, or group-consistency
-    /// error instead of exposing a partial snapshot.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn lane_reservation_reconciliation_snapshot(
-        &self,
-    ) -> Result<LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationError> {
-        if self.transaction_selection_durability_faulted() {
-            return Err(LaneQueueReservationError::DurabilityFault);
-        }
-        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
-        let _queue_guard = self.push_remove_lock.lock();
-        if self.transaction_selection_durability_faulted() {
-            return Err(LaneQueueReservationError::DurabilityFault);
-        }
-        if self.lane_reservation_journal.lock().is_none() {
-            return Err(LaneQueueReservationError::JournalNotInstalled);
-        }
-
-        let store = self.lane_reservations.lock();
-        let mut ordered_records = Vec::with_capacity(store.live_by_hash.len());
-        for record in store.live_by_hash.values() {
-            record
-                .validate()
-                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
-            self.validate_live_reservation_against_queue(record)?;
-            let hash = record.key.signed_transaction_hash;
-            if self
-                .fifo_order_by_hash
-                .get(&hash)
-                .is_none_or(|fifo_order| *fifo_order.value() != record.fifo_order)
-            {
-                return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
-            }
-            let claim = self
-                .durable_plan_claims
-                .get(&hash)
-                .ok_or(LaneQueueReservationError::ReconciliationMissingDurableClaim { hash })?;
-            ordered_records.push(Self::reconciliation_record_from_durable_claim(
-                record,
-                claim.value(),
-            )?);
-        }
-        drop(store);
-
-        ordered_records
-            .sort_by_key(|record| (record.fifo_ordinal, record.key.signed_transaction_hash));
-        for records in ordered_records.windows(2) {
-            if records[0].fifo_ordinal == records[1].fifo_ordinal {
-                return Err(
-                    LaneQueueReservationError::ReconciliationDuplicateFifoOrdinal {
-                        ordinal: records[0].fifo_ordinal,
-                        first_hash: records[0].key.signed_transaction_hash,
-                        second_hash: records[1].key.signed_transaction_hash,
-                    },
-                );
-            }
-        }
-
-        let mut group_indexes = BTreeMap::new();
-        let mut ordered_groups = Vec::<LaneQueueReservationReconciliationGroupV1>::new();
-        for record in &ordered_records {
-            let group_index = match group_indexes.get(&record.group).copied() {
-                Some(index) => index,
-                None => {
-                    let index = ordered_groups.len();
-                    group_indexes.insert(record.group, index);
-                    ordered_groups.push(LaneQueueReservationReconciliationGroupV1 {
-                        identity: record.group,
-                        ordered_keys: Vec::new(),
-                    });
-                    index
-                }
-            };
-            let group = &mut ordered_groups[group_index];
-            group.ordered_keys.push(record.key);
-            if group.ordered_keys.len() > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS {
-                return Err(LaneQueueReservationError::InvalidIdentity(format!(
-                    "lane queue reconciliation group {:?} exceeds the maximum {} reservations",
-                    group.identity,
-                    crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
-                )));
-            }
-        }
-
-        Ok(LaneQueueReservationReconciliationSnapshotV1 {
-            ordered_records,
-            ordered_groups,
-        })
-    }
-
     /// Return whether durable replay state proves that an exact committed group
     /// no longer has queue ownership or an unfinished crash barrier.
     ///
@@ -6251,7 +5969,11 @@ impl Queue {
         self.durable_plan_claims.remove(&hash);
         self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
         self.remove_transaction_locked(transaction, routing_plan, None);
-        self.removed_hashes.insert(hash, ());
+        // FIFO filtering above is synchronous, so no stale hash remains for
+        // `pop_from_queue` to skip. Retry rejection is authoritative in the
+        // globally committed admission registry and the durable plan-journal
+        // tombstone; retaining the hash here would create an unbounded,
+        // unreachable process-lifetime marker.
         Ok(())
     }
 
@@ -13683,30 +13405,6 @@ impl Queue {
         removed
     }
 
-    /// Check that the user adhered to the maximum transaction per user limit and increment their transaction count.
-    #[cfg(test)]
-    fn check_and_increase_per_user_tx_count(&self, account_id: &AccountId) -> Result<(), Error> {
-        match self.txs_per_user.entry(account_id.clone()) {
-            Entry::Vacant(vacant) => {
-                vacant.insert(1);
-            }
-            Entry::Occupied(mut occupied) => {
-                let txs = *occupied.get();
-                if txs >= self.capacity_per_user.get() {
-                    warn!(
-                        max_txs_per_user = self.capacity_per_user,
-                        %account_id,
-                        "Account reached maximum allowed number of transactions in the queue per user"
-                    );
-                    return Err(Error::MaximumTransactionsPerUser);
-                }
-                *occupied.get_mut() += 1;
-            }
-        }
-
-        Ok(())
-    }
-
     fn decrease_per_user_tx_count(&self, account_id: &AccountId) {
         let Entry::Occupied(mut occupied) = self.txs_per_user.entry(account_id.clone()) else {
             warn!(
@@ -16748,7 +16446,7 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator_primary,
             0,
             DataSpaceId::UNIVERSAL,
@@ -16912,7 +16610,7 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -16995,7 +16693,7 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -17088,14 +16786,14 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             1,
             DataSpaceId::UNIVERSAL,
@@ -17255,14 +16953,14 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             1,
             DataSpaceId::UNIVERSAL,
@@ -17432,7 +17130,7 @@ pub mod tests {
         let mut world = world_with_test_domains();
         let (validator, keypair) = gen_account_in("wonderland");
         let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &validator,
             7,
             DataSpaceId::UNIVERSAL,
@@ -17474,7 +17172,7 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let instruction_contract_address =
             iroha_data_model::smart_contract::ContractAddress::derive(
-                iroha_data_model::account::address::chain_discriminant(),
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
                 &validator,
                 8,
                 DataSpaceId::UNIVERSAL,
@@ -20619,16 +20317,20 @@ pub mod tests {
             DomainId::try_new("wonderland", "universal").expect("policy domain id");
         let policy_domain = Domain::new(policy_domain_id.clone()).build(&policy_authority);
         let policy_account = Account::new(policy_authority.clone()).build(&policy_authority);
-        let policy_asset_definition_id = AssetDefinitionId::new(
+        let policy_asset_definition_id = AssetDefinitionId::derive_from_components(
             policy_domain_id,
             "replayzkpolicy".parse().expect("policy asset name"),
         );
-        let policy_asset_definition = AssetDefinition::numeric(policy_asset_definition_id.clone())
-            .with_name(policy_asset_definition_id.name().to_string())
-            .confidential_policy(
-                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-            )
-            .build(&policy_authority);
+        let policy_asset_definition = AssetDefinition::numeric(
+            policy_asset_definition_id.clone(),
+            "replayzkpolicy".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+        )
+        .build(&policy_authority);
         let mut world = World::with([policy_domain], [policy_account], [policy_asset_definition]);
         let mut zk_state = crate::state::ZkAssetState::default();
         zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
@@ -22000,10 +21702,28 @@ pub mod tests {
         );
         assert!(expired.is_empty());
         assert!(
-            fixture.queue.removed_hashes.contains_key(&hash),
-            "exact conflict rejection must leave a stale-FIFO removal marker"
+            !fixture.queue.removed_hashes.contains_key(&hash),
+            "exact conflict rejection removed its FIFO hash synchronously"
         );
         fixture.assert_terminally_removed();
+
+        let retry_plan = fixture
+            .queue
+            .route_plan_with_state(&fixture.transaction, &fixture.state)
+            .expect("resolve the unchanged retry route");
+        fixture
+            .queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                fixture.transaction.clone(),
+                &fixture.state,
+                retry_plan,
+                &fixture.binding,
+            )
+            .expect_err("the authoritative conflicting registry must reject an exact retry");
+        assert!(
+            fixture.queue.removed_hashes.is_empty(),
+            "conflict retry rejection must not recreate a process-lifetime tombstone"
+        );
     }
 
     #[test]
@@ -22411,7 +22131,7 @@ pub mod tests {
         );
 
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"proposal-gas-contract-code"),
@@ -23593,14 +23313,20 @@ pub mod tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
         let account = Account::new(authority_id.clone()).build(&authority_id);
-        let asset_def_id =
-            AssetDefinitionId::new(domain_id, "zkqueuepolicy".parse().expect("asset name"));
-        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-            .with_name(asset_def_id.name().to_string())
-            .confidential_policy(
-                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-            )
-            .build(&authority_id);
+        let asset_def_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "zkqueuepolicy".parse().expect("asset name"),
+        );
+        let asset_definition = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "zkqueuepolicy".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+        )
+        .build(&authority_id);
         let mut world = World::with([domain], [account], [asset_definition]);
         let mut zk_state = crate::state::ZkAssetState::default();
         zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
@@ -27304,11 +27030,17 @@ pub mod tests {
             DomainId::try_new("queue_fee_drift", "universal").expect("fee drift domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let fee_asset =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("fee drift asset name"));
-        let definition = AssetDefinition::numeric(fee_asset.clone())
-            .with_name("queue fee drift XOR".to_owned())
-            .build(&authority);
+        let fee_asset = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "xor".parse().expect("fee drift asset name"),
+        );
+        let definition = AssetDefinition::numeric(
+            fee_asset.clone(),
+            "queue fee drift XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let payer_asset_id = AssetId::new(fee_asset.clone(), authority.clone());
         let payer_asset = Asset::new(payer_asset_id.clone(), Quantity::from(10_u32));
         let world = World::with_assets([domain], [account], [definition], [payer_asset], []);

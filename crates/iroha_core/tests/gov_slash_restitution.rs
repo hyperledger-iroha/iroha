@@ -38,7 +38,13 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(&alice_id);
     let receiver_account =
         iroha_data_model::account::Account::new(receiver_id.clone()).build(&alice_id);
-    let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
+    let asset_def = AssetDefinition::numeric(
+        def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
         Quantity::from(1_000_u64),
@@ -152,10 +158,11 @@ fn lock_slash_restitute(
 #[test]
 fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
     let (receiver_id, _) = gen_account_in("wonderland");
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
     let state = setup_state(&def_id, &receiver_id);
     let alice_id = ALICE_ID.clone();
     let referendum_id = "rid-slash";

@@ -111,10 +111,11 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("zkd", "universal").unwrap(),
-        "zcoin".parse().unwrap(),
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("zkd", "universal").unwrap(),
+            "zcoin".parse().unwrap(),
+        );
     let owner = checked_random_zk_shield_transfer_audit_account_id();
     let note = note_fixture(&asset_def_id, 0x21, 0x31, b"audit-transfer-input", 100);
     let vk_record = transfer_vk_record();
@@ -127,10 +128,12 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
             owner.clone(),
         )
         .into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "zcoin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         verifying_keys::RegisterVerifyingKey {

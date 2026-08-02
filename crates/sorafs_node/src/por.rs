@@ -23,7 +23,8 @@ use rand_chacha::ChaCha20Rng;
 use sorafs_car::PorMerkleTree;
 use sorafs_manifest::{
     por::{
-        AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorChallengeValidationError, PorProofV1,
+        AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_VERSION_V1, PorChallengeOutcome,
+        PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError, PorProofV1,
         PorProofValidationError, derive_challenge_id, derive_challenge_seed,
     },
     repair::{
@@ -45,7 +46,8 @@ const SAMPLE_MULTIPLIER_METADATA_KEY: &str = "profile.sample_multiplier";
 const SAMPLE_MULTIPLIER_DEFAULT_KEY: &str = "default";
 const DEFAULT_SAMPLE_MULTIPLIER: u16 = 1;
 const MAX_SAMPLE_MULTIPLIER: u16 = 4;
-const DEFAULT_TRACKER_ENTRY_LIMIT: usize = 65_536;
+const DEFAULT_TRACKER_ENTRY_LIMIT: usize =
+    iroha_config::parameters::defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX;
 
 /// Domain separator for a failed PoR challenge's exactly-once repair source.
 pub const POR_REPAIR_SOURCE_ID_DOMAIN_V1: &[u8] = b"sorafs.por.repair-source.v1";
@@ -157,7 +159,7 @@ pub fn canonical_por_failure_repair_report_v1(
 #[error("PoR repair handoff failed: {0}")]
 pub struct PorRepairHandoffError(pub String);
 
-/// Durable native repair handoff required before a failed PoR verdict commits.
+/// Idempotent native repair handoff used to drain the durable failed-verdict outbox.
 pub trait PorRepairHandoff: Send + Sync + std::fmt::Debug {
     /// Enqueue the canonical failed-PoR report exactly once and return its
     /// chain-authoritative task identity.
@@ -721,8 +723,82 @@ struct FinalizedChallengeStateV1 {
     verdict: AuditVerdictV1,
     stats: PorVerdictStats,
     repair_task_id: Option<[u8; 32]>,
+    repair_handoff_acknowledged: bool,
     reputation_sequence: u64,
     reputation_terminal: PorTerminalOutcomeV1,
+}
+
+impl ChallengeState {
+    fn to_status(&self) -> PorChallengeStatusV1 {
+        PorChallengeStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: self.challenge.challenge_id,
+            manifest_digest: self.challenge.manifest_digest,
+            provider_id: self.challenge.provider_id,
+            epoch_id: self.challenge.epoch_id,
+            drand_round: self.challenge.drand_round,
+            status: if self.proof_digest.is_some() {
+                PorChallengeOutcome::ProofSubmitted
+            } else {
+                PorChallengeOutcome::AwaitingProof
+            },
+            sample_count: self.challenge.sample_count,
+            forced: self.challenge.forced,
+            issued_at: self.challenge.issued_at,
+            responded_at: self.proof_submitted_at,
+            proof_digest: self.proof_digest,
+            repair_task_id: None,
+            failure_reason: None,
+            verifier_latency_ms: None,
+        }
+    }
+}
+
+impl FinalizedChallengeStateV1 {
+    fn to_status(&self) -> PorChallengeStatusV1 {
+        let mut status = self.state.to_status();
+        status.status = match self.verdict.outcome {
+            AuditOutcomeV1::Success => PorChallengeOutcome::Verified,
+            AuditOutcomeV1::Failed => PorChallengeOutcome::Failed,
+            AuditOutcomeV1::Repaired => PorChallengeOutcome::Repaired,
+        };
+        status.repair_task_id = self.repair_task_id;
+        if self.verdict.outcome != AuditOutcomeV1::Success {
+            status
+                .failure_reason
+                .clone_from(&self.verdict.failure_reason);
+        }
+        status
+    }
+
+    fn pending_repair_work(&self) -> Result<Option<PorPendingRepairWorkV1>, PorTrackerError> {
+        let Some(repair_task_id) = self.repair_task_id else {
+            return Ok(None);
+        };
+        if self.repair_handoff_acknowledged {
+            return Ok(None);
+        }
+        let failed_samples = u16::try_from(self.stats.failed_samples)
+            .map_err(|_| PorTrackerError::InvalidFailedSampleCount)?;
+        let intent = PorFailedRepairIntentV1 {
+            manifest_digest: self.verdict.manifest_digest,
+            provider_id: self.verdict.provider_id,
+            challenge_id: self.verdict.challenge_id,
+            failed_samples,
+            proof_digest: self.verdict.proof_digest,
+            decided_at_unix: self.verdict.decided_at,
+        };
+        intent
+            .validate()
+            .map_err(PorTrackerError::RepairIntentInvalid)?;
+        if intent.repair_task_id() != repair_task_id {
+            return Err(PorTrackerError::RepairTaskIdMismatch);
+        }
+        Ok(Some(PorPendingRepairWorkV1 {
+            intent,
+            repair_task_id,
+        }))
+    }
 }
 
 /// Pinned identity and verification policy for a finalized-PoR replay archive.
@@ -1368,9 +1444,12 @@ pub trait PorFinalizedReplayArchiveV1: Send + Sync + std::fmt::Debug {
 struct PorTrackerState {
     pending: HashMap<[u8; 32], ChallengeState>,
     finalized: HashMap<[u8; 32], FinalizedChallengeStateV1>,
+    compacted_statuses: HashMap<[u8; 32], PorChallengeStatusV1>,
+    status_generation: u64,
     last_reputation_sequence: u64,
     acknowledged_reputation_terminal: Option<PorReputationTerminalAckV1>,
     replay_archive_receipt: Option<PorFinalizedReplayArchiveReceiptV1>,
+    latest_status_removals: Vec<[u8; 32]>,
     entry_limit: usize,
 }
 
@@ -1379,9 +1458,12 @@ impl Default for PorTrackerState {
         Self {
             pending: HashMap::new(),
             finalized: HashMap::new(),
+            compacted_statuses: HashMap::new(),
+            status_generation: 1,
             last_reputation_sequence: 0,
             acknowledged_reputation_terminal: None,
             replay_archive_receipt: None,
+            latest_status_removals: Vec::new(),
             entry_limit: DEFAULT_TRACKER_ENTRY_LIMIT,
         }
     }
@@ -1392,9 +1474,152 @@ impl Default for PorTrackerState {
 pub(crate) struct PorTrackerCheckpointV1 {
     pending: Vec<ChallengeState>,
     finalized: Vec<FinalizedChallengeStateV1>,
+    compacted_statuses: Vec<PorChallengeStatusV1>,
+    status_generation: u64,
     last_reputation_sequence: u64,
     acknowledged_reputation_terminal: Option<PorReputationTerminalAckV1>,
     replay_archive_receipt: Option<PorFinalizedReplayArchiveReceiptV1>,
+}
+
+/// Bounded authoritative PoR status snapshot exported by the node checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PorStatusAuthoritySnapshotV1 {
+    /// Non-zero generation advanced by every committed lifecycle mutation.
+    pub generation: u64,
+    /// Exact status history in strictly increasing challenge-id order.
+    pub statuses: Vec<PorChallengeStatusV1>,
+}
+
+/// One node-authoritative PoR status record after a durable lifecycle operation.
+///
+/// The update is emitted while the node's auxiliary-checkpoint transaction is
+/// still serialized. Torii can therefore advance its rebuildable indexes by one
+/// exact generation without cloning or sorting the complete retained history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PorStatusAuthorityUpdateV1 {
+    /// Non-zero generation visible in the durable node checkpoint.
+    pub generation: u64,
+    /// Exact retained status affected by the lifecycle operation.
+    pub status: PorChallengeStatusV1,
+    /// Terminal statuses retired from the bounded local projection by the same
+    /// durable generation.
+    pub removed_challenge_ids: Vec<[u8; 32]>,
+}
+
+/// Durable effect of a failed PoR lifecycle mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PorMutationDispositionV1 {
+    /// Validation or admission failed before authoritative state changed.
+    NoMutation,
+    /// An in-memory mutation was restored to its exact pre-call checkpoint.
+    RolledBack,
+    /// The durable checkpoint may contain the mutation, so reconciliation is required.
+    CommitUncertain,
+    /// Restoring the exact pre-call checkpoint failed.
+    RollbackFailed,
+}
+
+impl PorMutationDispositionV1 {
+    /// Whether a rebuildable Torii projection must be invalidated.
+    #[must_use]
+    pub const fn invalidates_projection(self) -> bool {
+        matches!(self, Self::CommitUncertain | Self::RollbackFailed)
+    }
+}
+
+/// Typed PoR mutation failure carrying its exact durable-state disposition.
+#[derive(Debug, Error)]
+#[error("{error}")]
+pub struct PorMutationFailureV1 {
+    error: PorTrackerError,
+    disposition: PorMutationDispositionV1,
+}
+
+impl PorMutationFailureV1 {
+    pub(crate) const fn new(error: PorTrackerError, disposition: PorMutationDispositionV1) -> Self {
+        Self { error, disposition }
+    }
+
+    /// Construct a failure that did not mutate authoritative state.
+    #[must_use]
+    pub const fn no_mutation(error: PorTrackerError) -> Self {
+        Self::new(error, PorMutationDispositionV1::NoMutation)
+    }
+
+    /// Return the durable effect of the failed call.
+    #[must_use]
+    pub const fn disposition(&self) -> PorMutationDispositionV1 {
+        self.disposition
+    }
+
+    /// Recover the original tracker error for compatibility-only callers.
+    #[must_use]
+    pub fn into_tracker_error(self) -> PorTrackerError {
+        self.error
+    }
+}
+
+/// One failed-verdict repair intent retained until its durable handoff is acknowledged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PorPendingRepairWorkV1 {
+    /// Canonical repair intent derived from the retained verdict.
+    pub intent: PorFailedRepairIntentV1,
+    /// Deterministic chain-authoritative repair task identity.
+    pub repair_task_id: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PorChallengeRecordOutcomeV1 {
+    Inserted,
+    ExactReplay(PorChallengeStatusV1),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PorProofRecordOutcomeV1 {
+    Inserted,
+    ExactReplay(PorChallengeStatusV1),
+}
+
+/// Outcome of durably acknowledging one failed-verdict repair handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PorRepairHandoffAckOutcomeV1 {
+    /// Pending work was acknowledged by this call.
+    Advanced,
+    /// The exact acknowledgement was already retained.
+    ExactReplay,
+}
+
+/// Result of reconciling one durable failed-verdict repair outbox entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PorRepairReconcileOutcomeV1 {
+    /// No repair handoff remains pending.
+    Idle,
+    /// One exact repair handoff was admitted and durably acknowledged.
+    Reconciled {
+        /// Exact work retained by the authoritative PoR checkpoint.
+        work: PorPendingRepairWorkV1,
+        /// Durable acknowledgement result.
+        acknowledgement: PorRepairHandoffAckOutcomeV1,
+    },
+}
+
+/// Failure while reconciling the durable failed-verdict repair outbox.
+#[derive(Debug, Error)]
+pub enum PorRepairReconcileErrorV1 {
+    /// Reading or acknowledging the node checkpoint failed.
+    #[error("PoR repair checkpoint failure: {0}")]
+    Tracker(#[from] PorTrackerError),
+    /// The durable repair admission boundary rejected the exact work.
+    #[error(transparent)]
+    Handoff(#[from] PorRepairHandoffError),
+    /// The repair boundary returned an identity other than the deterministic one.
+    #[error("PoR repair handoff returned task {actual:?}; expected {expected:?}")]
+    TaskIdMismatch {
+        /// Deterministic identity retained in the node checkpoint.
+        expected: [u8; 32],
+        /// Identity returned by the repair admission boundary.
+        actual: [u8; 32],
+    },
 }
 
 #[cfg(test)]
@@ -1466,11 +1691,12 @@ pub enum PorReputationTerminalAckOutcomeV1 {
     ExactReplay,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PorVerdictTransitionV1 {
     pub(crate) stats: PorVerdictStats,
     pub(crate) repair_task_id: Option<[u8; 32]>,
     pub(crate) reputation_work: PorReputationTerminalWorkV1,
+    pub(crate) authority_status: PorChallengeStatusV1,
     pub(crate) newly_finalized: bool,
 }
 
@@ -1496,18 +1722,39 @@ impl PorTracker {
     pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
         Self {
             inner: Arc::new(RwLock::new(PorTrackerState {
-                entry_limit: entry_limit.max(1),
+                entry_limit: entry_limit.clamp(1, DEFAULT_TRACKER_ENTRY_LIMIT),
                 ..PorTrackerState::default()
             })),
             metrics: Arc::new(PorProtocolMetrics::default()),
         }
     }
 
+    fn next_status_generation(state: &PorTrackerState) -> Result<u64, PorTrackerError> {
+        state
+            .status_generation
+            .checked_add(1)
+            .ok_or(PorTrackerError::StatusGenerationExhausted)
+    }
+
+    fn validate_authority_status(status: &PorChallengeStatusV1) -> Result<(), PorTrackerError> {
+        status
+            .validate()
+            .map_err(|error| PorTrackerError::InvalidAuthorityStatus(error.to_string()))
+    }
+
+    fn oldest_compacted_status_id(state: &PorTrackerState) -> Option<[u8; 32]> {
+        state
+            .compacted_statuses
+            .values()
+            .min_by_key(|status| (status.issued_at, status.challenge_id))
+            .map(|status| status.challenge_id)
+    }
+
     /// Register a new PoR challenge.
     pub(crate) fn record_challenge(
         &self,
         challenge: &PorChallengeV1,
-    ) -> Result<(), PorTrackerError> {
+    ) -> Result<PorChallengeRecordOutcomeV1, PorTrackerError> {
         self.record_challenge_with_archive_option(challenge, None, None)
     }
 
@@ -1517,7 +1764,7 @@ impl PorTracker {
         challenge: &PorChallengeV1,
         replay_archive: &dyn PorFinalizedReplayArchiveV1,
         proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
-    ) -> Result<(), PorTrackerError> {
+    ) -> Result<PorChallengeRecordOutcomeV1, PorTrackerError> {
         self.record_challenge_with_archive_option(
             challenge,
             Some(replay_archive),
@@ -1530,7 +1777,7 @@ impl PorTracker {
         challenge: &PorChallengeV1,
         replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
         proof_bounds: Option<PorFinalizedReplayArchiveProofBoundsV1>,
-    ) -> Result<(), PorTrackerError> {
+    ) -> Result<PorChallengeRecordOutcomeV1, PorTrackerError> {
         if let Err(error) = challenge.validate() {
             if matches!(
                 error,
@@ -1544,9 +1791,12 @@ impl PorTracker {
             return Err(PorTrackerError::ChallengeInvalid(error));
         }
         let mut state = self.inner.write().expect("por tracker poisoned");
+        state.latest_status_removals.clear();
         if let Some(finalized) = state.finalized.get(&challenge.challenge_id) {
             return if finalized.state.challenge == *challenge {
-                Ok(())
+                Ok(PorChallengeRecordOutcomeV1::ExactReplay(
+                    finalized.to_status(),
+                ))
             } else {
                 Err(PorTrackerError::ChallengeConflict)
             };
@@ -1588,7 +1838,9 @@ impl PorTracker {
                     )?;
                     validate_replay_archive_record(&readback.record)?;
                     return if readback.record.finalized.state.challenge == *challenge {
-                        Ok(())
+                        Ok(PorChallengeRecordOutcomeV1::ExactReplay(
+                            readback.record.finalized.to_status(),
+                        ))
                     } else {
                         Err(PorTrackerError::ChallengeConflict)
                     };
@@ -1602,49 +1854,83 @@ impl PorTracker {
                 }
             }
         }
+        let inserted_state = ChallengeState {
+            challenge: challenge.clone(),
+            proof_digest: None,
+            proof_submitted_at: None,
+        };
+        Self::validate_authority_status(&inserted_state.to_status())?;
+        let retained_count = state
+            .pending
+            .len()
+            .checked_add(state.finalized.len())
+            .and_then(|count| count.checked_add(state.compacted_statuses.len()))
+            .ok_or_else(|| {
+                PorTrackerError::InvalidCheckpoint(
+                    "PoR retained status count overflowed".to_owned(),
+                )
+            })?;
+        let retired_status = (!state.pending.contains_key(&challenge.challenge_id)
+            && retained_count >= state.entry_limit)
+            .then(|| Self::oldest_compacted_status_id(&state))
+            .flatten();
         if !state.pending.contains_key(&challenge.challenge_id)
-            && state.pending.len() >= state.entry_limit
+            && retained_count >= state.entry_limit
+            && retired_status.is_none()
         {
             return Err(PorTrackerError::PendingRetentionExhausted {
                 limit: state.entry_limit,
             });
         }
-        let entry = state.pending.entry(challenge.challenge_id);
-        match entry {
+        let next_generation = if state.pending.contains_key(&challenge.challenge_id) {
+            None
+        } else {
+            Some(Self::next_status_generation(&state)?)
+        };
+        let replay_status = match state.pending.entry(challenge.challenge_id) {
             std::collections::hash_map::Entry::Vacant(vacant) => {
-                vacant.insert(ChallengeState {
-                    challenge: challenge.clone(),
-                    proof_digest: None,
-                    proof_submitted_at: None,
-                });
-                self.metrics
-                    .challenges_total
-                    .fetch_add(1, Ordering::Relaxed);
-                self.metrics
-                    .seed_bindings_validated
-                    .fetch_add(1, Ordering::Relaxed);
-                if challenge.forced {
-                    self.metrics
-                        .forced_challenges
-                        .fetch_add(1, Ordering::Relaxed);
-                } else {
-                    debug_assert!(
-                        challenge.vrf_output.is_some() && challenge.vrf_proof.is_some(),
-                        "validated non-forced PoR challenge must carry a VRF bundle"
-                    );
-                    self.metrics.vrf_challenges.fetch_add(1, Ordering::Relaxed);
-                }
-                Ok(())
+                vacant.insert(inserted_state);
+                None
             }
             std::collections::hash_map::Entry::Occupied(occupied) => {
                 // Allow idempotent replays of the same challenge but reject mismatched payloads.
                 if occupied.get().challenge == *challenge {
-                    Ok(())
+                    Some(occupied.get().to_status())
                 } else {
-                    Err(PorTrackerError::ChallengeConflict)
+                    return Err(PorTrackerError::ChallengeConflict);
                 }
             }
+        };
+        if let Some(status) = replay_status {
+            state.latest_status_removals.clear();
+            return Ok(PorChallengeRecordOutcomeV1::ExactReplay(status));
         }
+        state.latest_status_removals.clear();
+        if let Some(retired_status) = retired_status {
+            let removed = state.compacted_statuses.remove(&retired_status);
+            debug_assert!(removed.is_some());
+            state.latest_status_removals.push(retired_status);
+        }
+        state.status_generation =
+            next_generation.expect("vacant PoR challenge advanced its generation");
+        self.metrics
+            .challenges_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .seed_bindings_validated
+            .fetch_add(1, Ordering::Relaxed);
+        if challenge.forced {
+            self.metrics
+                .forced_challenges
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            debug_assert!(
+                challenge.vrf_output.is_some() && challenge.vrf_proof.is_some(),
+                "validated non-forced PoR challenge must carry a VRF bundle"
+            );
+            self.metrics.vrf_challenges.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(PorChallengeRecordOutcomeV1::Inserted)
     }
 
     /// Register a PoR proof response authenticated by provider admission.
@@ -1652,69 +1938,158 @@ impl PorTracker {
         &self,
         proof: &PorProofV1,
         admitted_provider_key: &[u8],
-    ) -> Result<(), PorTrackerError> {
+    ) -> Result<PorProofRecordOutcomeV1, PorTrackerError> {
+        self.record_proof_with_archive_option(proof, admitted_provider_key, None, None)
+    }
+
+    /// Register or exactly replay a PoR proof with authenticated archive lookup.
+    pub(crate) fn record_proof_with_archive_and_bounds(
+        &self,
+        proof: &PorProofV1,
+        admitted_provider_key: &[u8],
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+        proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+    ) -> Result<PorProofRecordOutcomeV1, PorTrackerError> {
+        self.record_proof_with_archive_option(
+            proof,
+            admitted_provider_key,
+            Some(replay_archive),
+            Some(proof_bounds),
+        )
+    }
+
+    fn record_proof_with_archive_option(
+        &self,
+        proof: &PorProofV1,
+        admitted_provider_key: &[u8],
+        replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
+        proof_bounds: Option<PorFinalizedReplayArchiveProofBoundsV1>,
+    ) -> Result<PorProofRecordOutcomeV1, PorTrackerError> {
         proof.validate().map_err(PorTrackerError::ProofInvalid)?;
         proof
             .verify_signature_for_provider(admitted_provider_key)
             .map_err(PorTrackerError::ProofSignatureInvalid)?;
         let mut tracker = self.inner.write().expect("por tracker poisoned");
-        let state = tracker
-            .pending
-            .get_mut(&proof.challenge_id)
-            .ok_or(PorTrackerError::UnknownChallenge)?;
-        ensure_match(
-            proof.manifest_digest,
-            state.challenge.manifest_digest,
-            PorTrackerError::MismatchManifest,
-        )?;
-        ensure_match(
-            proof.provider_id,
-            state.challenge.provider_id,
-            PorTrackerError::MismatchProvider,
-        )?;
-        if proof.samples.len() != usize::from(state.challenge.sample_count) {
-            return Err(PorTrackerError::SampleCountMismatch {
-                expected: state.challenge.sample_count,
-                actual: u16::try_from(proof.samples.len()).unwrap_or(u16::MAX),
-            });
+        tracker.latest_status_removals.clear();
+        let proof_digest = proof.proof_digest();
+        if let Some(state) = tracker.pending.get(&proof.challenge_id) {
+            validate_proof_against_challenge(proof, state)?;
+            if let Some(retained_digest) = state.proof_digest {
+                if retained_digest == proof_digest
+                    && state.proof_submitted_at == Some(proof.submitted_at)
+                {
+                    return Ok(PorProofRecordOutcomeV1::ExactReplay(state.to_status()));
+                }
+                return Err(PorTrackerError::DuplicateProof);
+            }
+            let mut prospective = state.clone();
+            prospective.proof_digest = Some(proof_digest);
+            prospective.proof_submitted_at = Some(proof.submitted_at);
+            Self::validate_authority_status(&prospective.to_status())?;
+            let next_generation = Self::next_status_generation(&tracker)?;
+            let latency_ms = proof
+                .submitted_at
+                .saturating_sub(state.challenge.issued_at)
+                .saturating_mul(1_000);
+            tracker.pending.insert(proof.challenge_id, prospective);
+            self.metrics.proofs_accepted.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .proof_latency_samples
+                .fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .proof_latency_total_ms
+                .fetch_add(latency_ms, Ordering::Relaxed);
+            self.metrics
+                .proof_latency_max_ms
+                .fetch_max(latency_ms, Ordering::Relaxed);
+            tracker.status_generation = next_generation;
+            return Ok(PorProofRecordOutcomeV1::Inserted);
         }
-        if !proof
-            .samples
-            .iter()
-            .map(|sample| sample.sample_index)
-            .eq(state.challenge.sample_indices.iter().copied())
-        {
-            return Err(PorTrackerError::SampleIndicesMismatch);
+        if let Some(finalized) = tracker.finalized.get(&proof.challenge_id) {
+            validate_proof_against_challenge(proof, &finalized.state)?;
+            return if finalized.state.proof_digest == Some(proof_digest)
+                && finalized.state.proof_submitted_at == Some(proof.submitted_at)
+            {
+                Ok(PorProofRecordOutcomeV1::ExactReplay(finalized.to_status()))
+            } else {
+                Err(PorTrackerError::DuplicateProof)
+            };
         }
-        if proof.submitted_at < state.challenge.issued_at
-            || proof.submitted_at > state.challenge.deadline_at
-        {
-            return Err(PorTrackerError::ProofOutsideChallengeWindow {
-                submitted_at: proof.submitted_at,
-                issued_at: state.challenge.issued_at,
-                deadline_at: state.challenge.deadline_at,
-            });
+        if let Some(status) = tracker.compacted_statuses.get(&proof.challenge_id) {
+            ensure_match(
+                proof.manifest_digest,
+                status.manifest_digest,
+                PorTrackerError::MismatchManifest,
+            )?;
+            ensure_match(
+                proof.provider_id,
+                status.provider_id,
+                PorTrackerError::MismatchProvider,
+            )?;
+            return if status.proof_digest == Some(proof_digest)
+                && status.responded_at == Some(proof.submitted_at)
+            {
+                Ok(PorProofRecordOutcomeV1::ExactReplay(status.clone()))
+            } else {
+                Err(PorTrackerError::DuplicateProof)
+            };
         }
-        if state.proof_digest.is_some() {
-            return Err(PorTrackerError::DuplicateProof);
+        if let Some(latest_archive_receipt) = tracker.replay_archive_receipt {
+            let replay_archive = replay_archive.ok_or(PorTrackerError::ReplayArchiveRequired)?;
+            replay_archive
+                .check_readiness()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            let binding = replay_archive
+                .binding()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            if binding != latest_archive_receipt.binding {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+            let proof_bounds =
+                proof_bounds.ok_or(PorTrackerError::ReplayArchiveProofLimitExceeded)?;
+            let lookup = replay_archive
+                .lookup(proof.challenge_id, latest_archive_receipt, proof_bounds)
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            replay_archive
+                .check_readiness()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?;
+            if replay_archive
+                .binding()
+                .map_err(PorTrackerError::ReplayArchiveExternal)?
+                != binding
+            {
+                return Err(PorTrackerError::ReplayArchiveBindingMismatch);
+            }
+            match lookup {
+                PorFinalizedReplayArchiveLookupV1::Found(readback) => {
+                    readback.validate_at_checkpoint(
+                        binding,
+                        latest_archive_receipt,
+                        proof_bounds,
+                    )?;
+                    validate_replay_archive_record(&readback.record)?;
+                    let retained = &readback.record.finalized.state;
+                    validate_proof_against_challenge(proof, retained)?;
+                    return if retained.proof_digest == Some(proof_digest)
+                        && retained.proof_submitted_at == Some(proof.submitted_at)
+                    {
+                        Ok(PorProofRecordOutcomeV1::ExactReplay(
+                            readback.record.finalized.to_status(),
+                        ))
+                    } else {
+                        Err(PorTrackerError::DuplicateProof)
+                    };
+                }
+                PorFinalizedReplayArchiveLookupV1::Absent(absence) => {
+                    absence.validate_at_checkpoint(
+                        binding,
+                        proof.challenge_id,
+                        latest_archive_receipt,
+                    )?;
+                }
+            }
         }
-        state.proof_digest = Some(proof.proof_digest());
-        state.proof_submitted_at = Some(proof.submitted_at);
-        let latency_ms = proof
-            .submitted_at
-            .saturating_sub(state.challenge.issued_at)
-            .saturating_mul(1_000);
-        self.metrics.proofs_accepted.fetch_add(1, Ordering::Relaxed);
-        self.metrics
-            .proof_latency_samples
-            .fetch_add(1, Ordering::Relaxed);
-        self.metrics
-            .proof_latency_total_ms
-            .fetch_add(latency_ms, Ordering::Relaxed);
-        self.metrics
-            .proof_latency_max_ms
-            .fetch_max(latency_ms, Ordering::Relaxed);
-        Ok(())
+        Err(PorTrackerError::UnknownChallenge)
     }
 
     /// Return the current process-local PoR protocol telemetry snapshot.
@@ -1731,27 +2106,17 @@ impl PorTracker {
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
     ) -> Result<PorVerdictStats, PorTrackerError> {
-        self.record_verdict_with(verdict, trusted_auditor_keys, auditor_threshold, |intent| {
-            Ok(intent.repair_task_id())
-        })
-        .map(|transition| transition.stats)
+        self.record_verdict_durable(verdict, trusted_auditor_keys, auditor_threshold)
+            .map(|transition| transition.stats)
     }
 
-    /// Finalise a challenge only after any required native repair handoff succeeds.
-    ///
-    /// The tracker write lock remains held while the callback runs. This makes
-    /// the in-memory state transition atomic with a fallible durable side
-    /// effect such as native repair admission: callback failures leave the
-    /// challenge and proof available for a safe retry. Exact terminal replays
-    /// return the retained task identity without invoking the handoff again.
-    pub(crate) fn record_verdict_with(
+    /// Finalise a challenge and retain deterministic repair work in the
+    /// authoritative checkpoint for post-commit reconciliation.
+    pub(crate) fn record_verdict_durable(
         &self,
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
-        enqueue_failed_repair: impl FnOnce(
-            &PorFailedRepairIntentV1,
-        ) -> Result<[u8; 32], PorRepairHandoffError>,
     ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
         self.record_verdict_with_archive_option(
             verdict,
@@ -1759,8 +2124,20 @@ impl PorTracker {
             auditor_threshold,
             None,
             None,
-            enqueue_failed_repair,
         )
+    }
+
+    #[cfg(test)]
+    fn record_verdict_with(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+        _retired_precommit_handoff: impl FnOnce(
+            &PorFailedRepairIntentV1,
+        ) -> Result<[u8; 32], PorRepairHandoffError>,
+    ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
+        self.record_verdict_durable(verdict, trusted_auditor_keys, auditor_threshold)
     }
 
     /// Finalise or replay a verdict against an authenticated compacted archive
@@ -1769,16 +2146,13 @@ impl PorTracker {
     /// The archive is consulted only when the challenge no longer exists in
     /// local pending/finalized state. Its live binding and signed readback must
     /// match the checkpoint-pinned archive before an exact replay is returned.
-    pub(crate) fn record_verdict_with_archive_and_bounds(
+    pub(crate) fn record_verdict_durable_with_archive_and_bounds(
         &self,
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
         replay_archive: &dyn PorFinalizedReplayArchiveV1,
         proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
-        enqueue_failed_repair: impl FnOnce(
-            &PorFailedRepairIntentV1,
-        ) -> Result<[u8; 32], PorRepairHandoffError>,
     ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
         self.record_verdict_with_archive_option(
             verdict,
@@ -1786,7 +2160,27 @@ impl PorTracker {
             auditor_threshold,
             Some(replay_archive),
             Some(proof_bounds),
-            enqueue_failed_repair,
+        )
+    }
+
+    #[cfg(test)]
+    fn record_verdict_with_archive_and_bounds(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+        replay_archive: &dyn PorFinalizedReplayArchiveV1,
+        proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
+        _retired_precommit_handoff: impl FnOnce(
+            &PorFailedRepairIntentV1,
+        ) -> Result<[u8; 32], PorRepairHandoffError>,
+    ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
+        self.record_verdict_durable_with_archive_and_bounds(
+            verdict,
+            trusted_auditor_keys,
+            auditor_threshold,
+            replay_archive,
+            proof_bounds,
         )
     }
 
@@ -1797,9 +2191,6 @@ impl PorTracker {
         auditor_threshold: usize,
         replay_archive: Option<&dyn PorFinalizedReplayArchiveV1>,
         proof_bounds: Option<PorFinalizedReplayArchiveProofBoundsV1>,
-        enqueue_failed_repair: impl FnOnce(
-            &PorFailedRepairIntentV1,
-        ) -> Result<[u8; 32], PorRepairHandoffError>,
     ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
         verdict
             .validate()
@@ -1808,6 +2199,7 @@ impl PorTracker {
             .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
             .map_err(PorTrackerError::VerdictSignatureInvalid)?;
         let mut tracker = self.inner.write().expect("por tracker poisoned");
+        tracker.latest_status_removals.clear();
         if let Some(finalized) = tracker.finalized.get(&verdict.challenge_id) {
             if finalized.verdict != *verdict {
                 return Err(PorTrackerError::VerdictConflict);
@@ -1816,9 +2208,15 @@ impl PorTracker {
                 stats: finalized.stats,
                 repair_task_id: finalized.repair_task_id,
                 reputation_work: retained_reputation_work(finalized)?,
+                authority_status: finalized.to_status(),
                 newly_finalized: false,
             });
         }
+        let next_generation = tracker
+            .pending
+            .contains_key(&verdict.challenge_id)
+            .then(|| Self::next_status_generation(&tracker))
+            .transpose()?;
         let Some(state) = tracker.pending.get(&verdict.challenge_id) else {
             let Some(latest_archive_receipt) = tracker.replay_archive_receipt else {
                 return Err(PorTrackerError::UnknownChallenge);
@@ -1868,6 +2266,7 @@ impl PorTracker {
                 stats: readback.record.finalized.stats,
                 repair_task_id: readback.record.finalized.repair_task_id,
                 reputation_work: readback.record.reputation_work()?,
+                authority_status: readback.record.finalized.to_status(),
                 newly_finalized: false,
             });
         };
@@ -1892,16 +2291,18 @@ impl PorTracker {
                 proof_digest: verdict.proof_digest,
                 decided_at_unix: verdict.decided_at,
             };
-            intent.validate().map_err(PorTrackerError::RepairHandoff)?;
+            intent
+                .validate()
+                .map_err(PorTrackerError::RepairIntentInvalid)?;
             Some(intent)
         } else {
             None
         };
         let expected_repair_task_id =
             failed_repair_intent.map(PorFailedRepairIntentV1::repair_task_id);
-        // Projection is validated before any external repair handoff. An
-        // unrepresentable terminal therefore cannot consume a challenge or
-        // create an orphaned repair side effect.
+        // Projection and deterministic repair work are validated before the
+        // authoritative checkpoint transition. External handoff occurs only
+        // after this state is durable and is acknowledged by a later checkpoint.
         let reputation_terminal = por_reputation_terminal_from_retained_v1(
             state,
             verdict,
@@ -1913,35 +2314,31 @@ impl PorTracker {
             state.challenge.provider_id,
             reputation_terminal,
         )?;
-        let repair_task_id = if let Some(intent) = failed_repair_intent {
-            let task_id = enqueue_failed_repair(&intent).map_err(PorTrackerError::RepairHandoff)?;
-            if Some(task_id) != expected_repair_task_id {
-                return Err(PorTrackerError::RepairTaskIdMismatch);
-            }
-            Some(task_id)
-        } else {
-            None
+        let repair_task_id = expected_repair_task_id;
+        let finalized = FinalizedChallengeStateV1 {
+            state: state.clone(),
+            verdict: verdict.clone(),
+            stats,
+            repair_task_id,
+            repair_handoff_acknowledged: repair_task_id.is_none(),
+            reputation_sequence,
+            reputation_terminal,
         };
-        let finalized = tracker
+        let authority_status = finalized.to_status();
+        Self::validate_authority_status(&authority_status)?;
+        tracker
             .pending
             .remove(&verdict.challenge_id)
             .expect("validated PoR challenge must remain while write lock is held");
-        tracker.finalized.insert(
-            verdict.challenge_id,
-            FinalizedChallengeStateV1 {
-                state: finalized,
-                verdict: verdict.clone(),
-                stats,
-                repair_task_id,
-                reputation_sequence,
-                reputation_terminal,
-            },
-        );
+        tracker.finalized.insert(verdict.challenge_id, finalized);
         tracker.last_reputation_sequence = reputation_sequence;
+        tracker.status_generation =
+            next_generation.expect("new PoR verdict advanced its status generation");
         Ok(PorVerdictTransitionV1 {
             stats,
             repair_task_id,
             reputation_work,
+            authority_status,
             newly_finalized: true,
         })
     }
@@ -1953,13 +2350,226 @@ impl PorTracker {
         pending.sort_by_key(|state| state.challenge.challenge_id);
         let mut finalized = tracker.finalized.values().cloned().collect::<Vec<_>>();
         finalized.sort_by_key(|state| state.state.challenge.challenge_id);
+        let mut compacted_statuses = tracker
+            .compacted_statuses
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        compacted_statuses.sort_by_key(|status| status.challenge_id);
         PorTrackerCheckpointV1 {
             pending,
             finalized,
+            compacted_statuses,
+            status_generation: tracker.status_generation,
             last_reputation_sequence: tracker.last_reputation_sequence,
             acknowledged_reputation_terminal: tracker.acknowledged_reputation_terminal,
             replay_archive_receipt: tracker.replay_archive_receipt,
         }
+    }
+
+    /// Export the complete bounded status history owned by this tracker.
+    pub(crate) fn status_authority_snapshot(
+        &self,
+    ) -> Result<PorStatusAuthoritySnapshotV1, PorTrackerError> {
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        if tracker.status_generation == 0 {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR status generation is zero".to_owned(),
+            ));
+        }
+        let total = tracker
+            .pending
+            .len()
+            .checked_add(tracker.finalized.len())
+            .and_then(|value| value.checked_add(tracker.compacted_statuses.len()))
+            .ok_or_else(|| {
+                PorTrackerError::InvalidCheckpoint("PoR status history length overflow".to_owned())
+            })?;
+        if total > tracker.entry_limit {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR status history exceeds its retention bound".to_owned(),
+            ));
+        }
+        let mut statuses = Vec::with_capacity(total);
+        statuses.extend(tracker.pending.values().map(ChallengeState::to_status));
+        statuses.extend(
+            tracker
+                .finalized
+                .values()
+                .map(FinalizedChallengeStateV1::to_status),
+        );
+        statuses.extend(tracker.compacted_statuses.values().cloned());
+        statuses.sort_by_key(|status| status.challenge_id);
+        if statuses
+            .windows(2)
+            .any(|pair| pair[0].challenge_id >= pair[1].challenge_id)
+        {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR status history contains duplicate or unordered challenge ids".to_owned(),
+            ));
+        }
+        for status in &statuses {
+            status.validate().map_err(|error| {
+                PorTrackerError::InvalidCheckpoint(format!(
+                    "invalid authoritative PoR status projection: {error}"
+                ))
+            })?;
+        }
+        Ok(PorStatusAuthoritySnapshotV1 {
+            generation: tracker.status_generation,
+            statuses,
+        })
+    }
+
+    /// Return one exact status and generation without materializing history.
+    pub(crate) fn status_authority_update(
+        &self,
+        challenge_id: [u8; 32],
+    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        if tracker.status_generation == 0 {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR status generation is zero".to_owned(),
+            ));
+        }
+
+        let pending = tracker
+            .pending
+            .get(&challenge_id)
+            .map(ChallengeState::to_status);
+        let finalized = tracker
+            .finalized
+            .get(&challenge_id)
+            .map(FinalizedChallengeStateV1::to_status);
+        let compacted = tracker.compacted_statuses.get(&challenge_id).cloned();
+        let retained_copies = usize::from(pending.is_some())
+            .checked_add(usize::from(finalized.is_some()))
+            .and_then(|count| count.checked_add(usize::from(compacted.is_some())))
+            .ok_or_else(|| {
+                PorTrackerError::InvalidCheckpoint(
+                    "PoR status ownership count overflowed".to_owned(),
+                )
+            })?;
+        if retained_copies != 1 {
+            return if retained_copies == 0 {
+                Err(PorTrackerError::UnknownChallenge)
+            } else {
+                Err(PorTrackerError::InvalidCheckpoint(
+                    "PoR status exists in multiple lifecycle stores".to_owned(),
+                ))
+            };
+        }
+        let status = pending
+            .or(finalized)
+            .or(compacted)
+            .expect("exactly one retained PoR status was counted");
+        status.validate().map_err(|error| {
+            PorTrackerError::InvalidCheckpoint(format!(
+                "invalid authoritative PoR status update: {error}"
+            ))
+        })?;
+        Ok(PorStatusAuthorityUpdateV1 {
+            generation: tracker.status_generation,
+            status,
+            removed_challenge_ids: tracker.latest_status_removals.clone(),
+        })
+    }
+
+    /// Build a same-generation no-op projection update for an exact replay.
+    ///
+    /// A replay may name a status still retained locally or a terminal whose
+    /// full source record is authenticated by the checkpoint-pinned archive
+    /// after rolling projection retention retired it.
+    pub(crate) fn status_authority_replay_update(
+        &self,
+        status: PorChallengeStatusV1,
+    ) -> Result<PorStatusAuthorityUpdateV1, PorTrackerError> {
+        Self::validate_authority_status(&status)?;
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        if tracker.status_generation == 0 {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR status generation is zero".to_owned(),
+            ));
+        }
+        let retained = tracker
+            .pending
+            .get(&status.challenge_id)
+            .map(ChallengeState::to_status)
+            .or_else(|| {
+                tracker
+                    .finalized
+                    .get(&status.challenge_id)
+                    .map(FinalizedChallengeStateV1::to_status)
+            })
+            .or_else(|| {
+                tracker
+                    .compacted_statuses
+                    .get(&status.challenge_id)
+                    .cloned()
+            });
+        match retained {
+            Some(retained) if retained != status => {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "exact PoR replay status differs from retained authority".to_owned(),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                if tracker.replay_archive_receipt.is_none()
+                    || matches!(
+                        status.status,
+                        PorChallengeOutcome::AwaitingProof | PorChallengeOutcome::ProofSubmitted
+                    )
+                {
+                    return Err(PorTrackerError::InvalidCheckpoint(
+                        "exact PoR replay is absent from retained or archived terminal authority"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(PorStatusAuthorityUpdateV1 {
+            generation: tracker.status_generation,
+            status,
+            removed_challenge_ids: Vec::new(),
+        })
+    }
+
+    /// Return the oldest failed-verdict repair intent not yet acknowledged.
+    pub(crate) fn next_pending_repair_work(
+        &self,
+    ) -> Result<Option<PorPendingRepairWorkV1>, PorTrackerError> {
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        let mut pending = tracker
+            .finalized
+            .values()
+            .filter(|state| state.repair_task_id.is_some() && !state.repair_handoff_acknowledged)
+            .collect::<Vec<_>>();
+        pending.sort_by_key(|state| state.reputation_sequence);
+        pending
+            .first()
+            .map_or(Ok(None), |state| state.pending_repair_work())
+    }
+
+    /// Acknowledge the exact retained failed-verdict repair handoff.
+    pub(crate) fn acknowledge_repair_handoff(
+        &self,
+        challenge_id: [u8; 32],
+        repair_task_id: [u8; 32],
+    ) -> Result<PorRepairHandoffAckOutcomeV1, PorTrackerError> {
+        let mut tracker = self.inner.write().expect("por tracker poisoned");
+        let finalized = tracker
+            .finalized
+            .get_mut(&challenge_id)
+            .ok_or(PorTrackerError::UnknownChallenge)?;
+        if finalized.repair_task_id != Some(repair_task_id) {
+            return Err(PorTrackerError::RepairTaskIdMismatch);
+        }
+        if finalized.repair_handoff_acknowledged {
+            return Ok(PorRepairHandoffAckOutcomeV1::ExactReplay);
+        }
+        finalized.repair_handoff_acknowledged = true;
+        Ok(PorRepairHandoffAckOutcomeV1::Advanced)
     }
 
     /// Return the exact next retained PoR terminal awaiting reputation admission.
@@ -2000,6 +2610,22 @@ impl PorTracker {
         tracker
             .last_reputation_sequence
             .saturating_sub(acknowledged)
+    }
+
+    /// Return history keys whose live lifecycle or delivery work is not yet archived.
+    pub(crate) fn protected_history_keys(&self) -> HashSet<([u8; 32], [u8; 32])> {
+        let tracker = self.inner.read().expect("por tracker poisoned");
+        tracker
+            .pending
+            .values()
+            .map(|state| (state.challenge.manifest_digest, state.challenge.provider_id))
+            .chain(tracker.finalized.values().map(|state| {
+                (
+                    state.state.challenge.manifest_digest,
+                    state.state.challenge.provider_id,
+                )
+            }))
+            .collect()
     }
 
     /// Advance the delivery cursor for the exact next retained terminal.
@@ -2147,6 +2773,12 @@ impl PorTracker {
                 for (challenge_id, finalized) in &tracker.finalized {
                     if finalized.reputation_sequence > restored_sequence
                         && finalized.reputation_sequence <= current.reputation_sequence()
+                        && !finalized.repair_handoff_acknowledged
+                    {
+                        return Err(PorTrackerError::RepairHandoffPendingCompaction);
+                    }
+                    if finalized.reputation_sequence > restored_sequence
+                        && finalized.reputation_sequence <= current.reputation_sequence()
                         && by_sequence
                             .insert(
                                 finalized.reputation_sequence,
@@ -2266,13 +2898,24 @@ impl PorTracker {
                 "PoR replay state changed during startup archive reconciliation".to_owned(),
             ));
         }
-        for (challenge_id, _) in local_prefix {
+        if local_prefix
+            .iter()
+            .any(|(challenge_id, _)| tracker.compacted_statuses.contains_key(challenge_id))
+        {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR replay prefix overlaps compacted status history".to_owned(),
+            ));
+        }
+        for (challenge_id, record) in local_prefix {
+            let status = record.finalized.to_status();
             if tracker.finalized.remove(&challenge_id).is_none() {
                 return Err(PorTrackerError::InvalidCheckpoint(
                     "PoR replay prefix disappeared during startup archive reconciliation"
                         .to_owned(),
                 ));
             }
+            let replaced = tracker.compacted_statuses.insert(challenge_id, status);
+            debug_assert!(replaced.is_none());
         }
         tracker.replay_archive_receipt = Some(current);
         Ok(true)
@@ -2311,6 +2954,7 @@ impl PorTracker {
             return Err(PorTrackerError::ReplayArchiveBindingMismatch);
         }
         let original_finalized = tracker.finalized.clone();
+        let original_compacted_statuses = tracker.compacted_statuses.clone();
         let original_receipt = tracker.replay_archive_receipt;
         let result = (|| {
             let acknowledged = tracker
@@ -2337,6 +2981,10 @@ impl PorTracker {
                             "acknowledged PoR archive prefix is not locally contiguous".to_owned(),
                         )
                     })?;
+                if !finalized.repair_handoff_acknowledged {
+                    return Err(PorTrackerError::RepairHandoffPendingCompaction);
+                }
+                let status = finalized.to_status();
                 let record = PorFinalizedReplayArchiveRecordV1::from_finalized(finalized);
                 validate_replay_archive_record(&record)?;
                 let previous_head = tracker
@@ -2347,6 +2995,15 @@ impl PorTracker {
                     .map_err(PorTrackerError::ReplayArchiveExternal)?;
                 receipt.validate_record(binding, &record, Some(previous_head))?;
                 tracker.finalized.remove(&challenge_id);
+                if tracker
+                    .compacted_statuses
+                    .insert(challenge_id, status)
+                    .is_some()
+                {
+                    return Err(PorTrackerError::InvalidCheckpoint(
+                        "PoR replay compaction duplicated status history".to_owned(),
+                    ));
+                }
                 tracker.replay_archive_receipt = Some(receipt);
                 compacted = compacted
                     .checked_add(1)
@@ -2385,6 +3042,7 @@ impl PorTracker {
         })();
         if result.is_err() {
             tracker.finalized = original_finalized;
+            tracker.compacted_statuses = original_compacted_statuses;
             tracker.replay_archive_receipt = original_receipt;
         }
         result
@@ -2405,6 +3063,33 @@ impl PorTracker {
             return Err(PorTrackerError::FinalizedRetentionExhausted {
                 limit: tracker.entry_limit,
             });
+        }
+        let status_count = checkpoint
+            .pending
+            .len()
+            .checked_add(checkpoint.finalized.len())
+            .and_then(|value| value.checked_add(checkpoint.compacted_statuses.len()))
+            .ok_or_else(|| {
+                PorTrackerError::InvalidCheckpoint("PoR status history length overflow".to_owned())
+            })?;
+        if status_count > tracker.entry_limit {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR status history exceeds its retention bound".to_owned(),
+            ));
+        }
+        let minimum_generation = u64::try_from(status_count)
+            .map_err(|_| {
+                PorTrackerError::InvalidCheckpoint(
+                    "PoR status history length is not representable".to_owned(),
+                )
+            })?
+            .checked_add(1)
+            .ok_or(PorTrackerError::StatusGenerationExhausted)?;
+        let status_generation = checkpoint.status_generation;
+        if status_generation < minimum_generation {
+            return Err(PorTrackerError::InvalidCheckpoint(
+                "PoR status generation is below its retained-history floor".to_owned(),
+            ));
         }
         let last_reputation_sequence = checkpoint.last_reputation_sequence;
         let acknowledged_reputation_terminal = checkpoint.acknowledged_reputation_terminal;
@@ -2435,6 +3120,11 @@ impl PorTracker {
                     "proof submission timestamp falls outside its challenge window".to_owned(),
                 ));
             }
+            Self::validate_authority_status(&state.to_status()).map_err(|error| {
+                PorTrackerError::InvalidCheckpoint(format!(
+                    "pending state has no valid authoritative projection: {error}"
+                ))
+            })?;
             let challenge_id = state.challenge.challenge_id;
             if previous_pending_id.is_some_and(|previous| previous >= challenge_id) {
                 return Err(PorTrackerError::InvalidCheckpoint(
@@ -2499,6 +3189,11 @@ impl PorTracker {
                     "finalized verdict repair task identity is inconsistent".to_owned(),
                 ));
             }
+            if expected_task_id.is_none() && !finalized_state.repair_handoff_acknowledged {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "non-failed PoR verdict retained a pending repair handoff".to_owned(),
+                ));
+            }
             let expected_terminal = por_reputation_terminal_from_retained_v1(
                 &finalized_state.state,
                 &finalized_state.verdict,
@@ -2512,6 +3207,11 @@ impl PorTracker {
                 ));
             }
             retained_reputation_work(&finalized_state)?;
+            Self::validate_authority_status(&finalized_state.to_status()).map_err(|error| {
+                PorTrackerError::InvalidCheckpoint(format!(
+                    "finalized state has no valid authoritative projection: {error}"
+                ))
+            })?;
             reputation_sequences.push(finalized_state.reputation_sequence);
             let challenge_id = finalized_state.state.challenge.challenge_id;
             if previous_finalized_id.is_some_and(|previous| previous >= challenge_id) {
@@ -2530,6 +3230,37 @@ impl PorTracker {
             return Err(PorTrackerError::InvalidCheckpoint(
                 "challenge id appears in both pending and finalized state".to_owned(),
             ));
+        }
+        let mut compacted_statuses = HashMap::with_capacity(checkpoint.compacted_statuses.len());
+        let mut previous_compacted_id = None;
+        for status in checkpoint.compacted_statuses {
+            status.validate().map_err(|error| {
+                PorTrackerError::InvalidCheckpoint(format!("invalid compacted PoR status: {error}"))
+            })?;
+            if matches!(
+                status.status,
+                PorChallengeOutcome::AwaitingProof | PorChallengeOutcome::ProofSubmitted
+            ) {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "compacted PoR status is not terminal".to_owned(),
+                ));
+            }
+            if previous_compacted_id.is_some_and(|previous| previous >= status.challenge_id) {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "compacted PoR statuses must be strictly ordered by challenge id".to_owned(),
+                ));
+            }
+            previous_compacted_id = Some(status.challenge_id);
+            if pending.contains_key(&status.challenge_id)
+                || finalized.contains_key(&status.challenge_id)
+                || compacted_statuses
+                    .insert(status.challenge_id, status)
+                    .is_some()
+            {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "challenge id appears more than once in PoR status history".to_owned(),
+                ));
+            }
         }
         reputation_sequences.sort_unstable();
         let finalized_count = u64::try_from(reputation_sequences.len()).map_err(|_| {
@@ -2600,9 +3331,12 @@ impl PorTracker {
         }
         tracker.pending = pending;
         tracker.finalized = finalized;
+        tracker.compacted_statuses = compacted_statuses;
+        tracker.status_generation = status_generation;
         tracker.last_reputation_sequence = last_reputation_sequence;
         tracker.acknowledged_reputation_terminal = acknowledged_reputation_terminal;
         tracker.replay_archive_receipt = replay_archive_receipt;
+        tracker.latest_status_removals.clear();
         Ok(())
     }
 
@@ -2727,6 +3461,10 @@ fn validate_replay_archive_record(
         return Err(PorTrackerError::InvalidReplayArchiveRecord);
     }
     retained_reputation_work(finalized)?;
+    finalized
+        .to_status()
+        .validate()
+        .map_err(|_| PorTrackerError::InvalidReplayArchiveRecord)?;
     record.record_digest()?;
     Ok(())
 }
@@ -2898,6 +3636,46 @@ fn ensure_match<T: Eq>(left: T, right: T, err: PorTrackerError) -> Result<(), Po
     if left == right { Ok(()) } else { Err(err) }
 }
 
+fn validate_proof_against_challenge(
+    proof: &PorProofV1,
+    state: &ChallengeState,
+) -> Result<(), PorTrackerError> {
+    ensure_match(
+        proof.manifest_digest,
+        state.challenge.manifest_digest,
+        PorTrackerError::MismatchManifest,
+    )?;
+    ensure_match(
+        proof.provider_id,
+        state.challenge.provider_id,
+        PorTrackerError::MismatchProvider,
+    )?;
+    if proof.samples.len() != usize::from(state.challenge.sample_count) {
+        return Err(PorTrackerError::SampleCountMismatch {
+            expected: state.challenge.sample_count,
+            actual: u16::try_from(proof.samples.len()).unwrap_or(u16::MAX),
+        });
+    }
+    if !proof
+        .samples
+        .iter()
+        .map(|sample| sample.sample_index)
+        .eq(state.challenge.sample_indices.iter().copied())
+    {
+        return Err(PorTrackerError::SampleIndicesMismatch);
+    }
+    if proof.submitted_at < state.challenge.issued_at
+        || proof.submitted_at > state.challenge.deadline_at
+    {
+        return Err(PorTrackerError::ProofOutsideChallengeWindow {
+            submitted_at: proof.submitted_at,
+            issued_at: state.challenge.issued_at,
+            deadline_at: state.challenge.deadline_at,
+        });
+    }
+    Ok(())
+}
+
 /// Errors returned by [`PorTracker`].
 #[derive(Debug, Error)]
 pub enum PorTrackerError {
@@ -2935,9 +3713,21 @@ pub enum PorTrackerError {
         /// Configured entry ceiling.
         limit: usize,
     },
+    /// Every bounded ingestion-history entry still owns unarchived lifecycle work.
+    #[error("PoR ingestion history retention exhausted by live work (limit {limit})")]
+    HistoryRetentionExhausted {
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// Monotonic status generation cannot advance without wrapping.
+    #[error("PoR status generation exhausted")]
+    StatusGenerationExhausted,
     /// Durable tracker checkpoint is malformed or internally inconsistent.
     #[error("invalid PoR tracker checkpoint: {0}")]
     InvalidCheckpoint(String),
+    /// A lifecycle mutation could not produce a valid authoritative status.
+    #[error("invalid derived PoR authority status: {0}")]
+    InvalidAuthorityStatus(String),
     /// Durable auxiliary runtime checkpoint could not be committed.
     #[error("PoR runtime checkpoint failed: {0}")]
     RuntimeCheckpoint(String),
@@ -3016,12 +3806,15 @@ pub enum PorTrackerError {
     /// Failed-sample count could not be represented by the canonical repair schema.
     #[error("failed PoR sample count exceeds the canonical repair schema")]
     InvalidFailedSampleCount,
-    /// Durable native repair admission failed.
-    #[error(transparent)]
-    RepairHandoff(#[from] PorRepairHandoffError),
+    /// Retained failed-verdict fields cannot form a canonical repair intent.
+    #[error("invalid retained PoR repair intent: {0}")]
+    RepairIntentInvalid(#[source] PorRepairHandoffError),
     /// The handoff returned an identifier other than the deterministic native task id.
     #[error("PoR repair handoff returned a mismatched native task id")]
     RepairTaskIdMismatch,
+    /// A finalized record cannot be compacted before its repair outbox is acknowledged.
+    #[error("PoR repair handoff must be acknowledged before replay compaction")]
+    RepairHandoffPendingCompaction,
     /// Whole-second source time cannot be represented canonically in milliseconds.
     #[error("PoR reputation timestamp `{field}` overflows milliseconds")]
     ReputationTimestampOverflow {
@@ -4035,7 +4828,7 @@ mod tests {
             .expect("record proof");
         assert!(matches!(
             tracker.record_proof(&proof, &sample_provider_key()),
-            Err(PorTrackerError::DuplicateProof)
+            Ok(PorProofRecordOutcomeV1::ExactReplay(_))
         ));
 
         let mut forced = next_challenge(&challenge, 1);
@@ -4268,7 +5061,7 @@ mod tests {
     }
 
     #[test]
-    fn tracker_refuses_pending_and_finalized_retention_exhaustion() {
+    fn tracker_refuses_bounded_status_history_exhaustion() {
         let tracker = PorTracker::with_entry_limit(1);
         let first = sample_challenge();
         let second = next_challenge(&first, 1);
@@ -4289,20 +5082,10 @@ mod tests {
                 1,
             )
             .unwrap();
-        tracker.record_challenge(&second).unwrap();
-        let proof = sample_proof(&second);
-        tracker
-            .record_proof(&proof, &sample_provider_key())
-            .unwrap();
         assert!(matches!(
-            tracker.record_verdict(
-                &sample_verdict(&second, proof.proof_digest()),
-                &sample_auditor_keys(),
-                1,
-            ),
-            Err(PorTrackerError::FinalizedRetentionExhausted { limit: 1 })
+            tracker.record_challenge(&second),
+            Err(PorTrackerError::PendingRetentionExhausted { limit: 1 })
         ));
-        assert!(tracker.contains_challenge(&second.challenge_id));
         let retained = tracker
             .next_reputation_terminal_work()
             .unwrap()
@@ -4311,16 +5094,67 @@ mod tests {
             .acknowledge_reputation_terminal(retained.sequence, retained.work_digest)
             .expect("acknowledge retained terminal");
         assert!(matches!(
-            tracker.record_verdict(
-                &sample_verdict(&second, proof.proof_digest()),
-                &sample_auditor_keys(),
-                1,
-            ),
-            Err(PorTrackerError::FinalizedRetentionExhausted { limit: 1 })
+            tracker.record_challenge(&second),
+            Err(PorTrackerError::PendingRetentionExhausted { limit: 1 })
         ));
         assert!(
-            tracker.contains_challenge(&second.challenge_id),
-            "V1 never prunes finalized replay protection, even after acknowledgement"
+            !tracker.contains_challenge(&second.challenge_id),
+            "acknowledgement does not erase bounded historical status"
+        );
+    }
+
+    #[test]
+    fn status_generation_overflow_fails_before_each_lifecycle_mutation() {
+        let challenge_tracker = PorTracker::default();
+        challenge_tracker
+            .inner
+            .write()
+            .expect("tracker lock")
+            .status_generation = u64::MAX;
+        let challenge = sample_challenge();
+        assert!(matches!(
+            challenge_tracker.record_challenge(&challenge),
+            Err(PorTrackerError::StatusGenerationExhausted)
+        ));
+        assert!(!challenge_tracker.contains_challenge(&challenge.challenge_id));
+
+        let proof_tracker = PorTracker::default();
+        proof_tracker.record_challenge(&challenge).unwrap();
+        proof_tracker
+            .inner
+            .write()
+            .expect("tracker lock")
+            .status_generation = u64::MAX;
+        let proof = sample_proof(&challenge);
+        assert!(matches!(
+            proof_tracker.record_proof(&proof, &sample_provider_key()),
+            Err(PorTrackerError::StatusGenerationExhausted)
+        ));
+        assert_eq!(proof_tracker.proof_digest(&challenge.challenge_id), None);
+
+        let verdict_tracker = PorTracker::default();
+        verdict_tracker.record_challenge(&challenge).unwrap();
+        verdict_tracker
+            .inner
+            .write()
+            .expect("tracker lock")
+            .status_generation = u64::MAX;
+        let mut verdict = sample_verdict(&challenge, [0; 32]);
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.proof_digest = None;
+        verdict.failure_reason = Some("deadline elapsed".to_owned());
+        verdict.decided_at = challenge.deadline_at;
+        resign_sample_verdict(&mut verdict);
+        assert!(matches!(
+            verdict_tracker.record_verdict_durable(&verdict, &sample_auditor_keys(), 1),
+            Err(PorTrackerError::StatusGenerationExhausted)
+        ));
+        assert!(verdict_tracker.contains_challenge(&challenge.challenge_id));
+        assert!(
+            verdict_tracker
+                .next_pending_repair_work()
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -4368,6 +5202,51 @@ mod tests {
                 1,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn tracker_projects_each_first_release_proof_lifecycle_stage() {
+        let tracker = PorTracker::with_entry_limit(2);
+        let challenge = sample_challenge();
+        tracker.record_challenge(&challenge).unwrap();
+        let awaiting = tracker.status_authority_snapshot().unwrap();
+        assert_eq!(
+            awaiting.statuses[0].status,
+            PorChallengeOutcome::AwaitingProof
+        );
+        assert!(awaiting.statuses[0].proof_digest.is_none());
+
+        let proof = sample_proof(&challenge);
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .unwrap();
+        let submitted = tracker.status_authority_snapshot().unwrap();
+        assert_eq!(
+            submitted.statuses[0].status,
+            PorChallengeOutcome::ProofSubmitted
+        );
+        assert_eq!(
+            submitted.statuses[0].proof_digest,
+            Some(proof.proof_digest())
+        );
+
+        let restored = PorTracker::with_entry_limit(2);
+        restored.restore_checkpoint(tracker.checkpoint()).unwrap();
+        assert_eq!(
+            restored.status_authority_snapshot().unwrap().statuses[0].status,
+            PorChallengeOutcome::ProofSubmitted
+        );
+        restored
+            .record_verdict(
+                &sample_verdict(&challenge, proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            restored.status_authority_snapshot().unwrap().statuses[0].status,
+            PorChallengeOutcome::Verified
+        );
     }
 
     #[test]
@@ -4489,6 +5368,14 @@ mod tests {
         let after_compaction = tracker.checkpoint();
         assert!(after_compaction.finalized.is_empty());
         assert!(after_compaction.replay_archive_receipt.is_some());
+        let status_after_compaction = tracker
+            .status_authority_snapshot()
+            .expect("compacted status remains queryable");
+        assert_eq!(status_after_compaction.statuses.len(), 1);
+        assert_eq!(
+            status_after_compaction.statuses[0].status,
+            PorChallengeOutcome::Verified
+        );
 
         // Simulate a crash after the external append but before the node
         // checkpoint. Restoring the old checkpoint must drive an exact append
@@ -4562,14 +5449,75 @@ mod tests {
             Err(PorTrackerError::VerdictConflict)
         ));
 
+        assert!(matches!(
+            restored.record_proof_with_archive_and_bounds(
+                &proof,
+                &sample_provider_key(),
+                &archive,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Ok(PorProofRecordOutcomeV1::ExactReplay(_))
+        ));
+
         let fresh = next_challenge(&challenge, 1);
-        restored
-            .record_challenge_with_archive_and_bounds(
-                &fresh,
+        assert_eq!(
+            restored
+                .record_challenge_with_archive_and_bounds(
+                    &fresh,
+                    &archive,
+                    PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+                )
+                .expect("rolling retention admits a replacement"),
+            PorChallengeRecordOutcomeV1::Inserted
+        );
+        let fresh_update = restored
+            .status_authority_update(fresh.challenge_id)
+            .expect("replacement has one exact authority delta");
+        assert_eq!(
+            fresh_update.removed_challenge_ids,
+            vec![challenge.challenge_id]
+        );
+        assert_eq!(
+            restored
+                .status_authority_snapshot()
+                .expect("bounded projection remains queryable")
+                .statuses
+                .iter()
+                .map(|status| status.challenge_id)
+                .collect::<Vec<_>>(),
+            vec![fresh.challenge_id]
+        );
+
+        let archived_status = match restored
+            .record_proof_with_archive_and_bounds(
+                &proof,
+                &sample_provider_key(),
                 &archive,
                 PorFinalizedReplayArchiveProofBoundsV1::production_default(),
             )
-            .expect("authenticated absence permits a fresh challenge after compaction");
+            .expect("retired archived proof remains exactly replayable")
+        {
+            PorProofRecordOutcomeV1::ExactReplay(status) => status,
+            PorProofRecordOutcomeV1::Inserted => panic!("archived replay cannot insert"),
+        };
+        let replay_update = restored
+            .status_authority_replay_update(archived_status)
+            .expect("archived replay produces a same-generation projection no-op");
+        assert_eq!(replay_update.generation, fresh_update.generation);
+        assert!(replay_update.removed_challenge_ids.is_empty());
+
+        let mut conflicting_proof = proof.clone();
+        conflicting_proof.samples[0].chunk_digest[0] ^= 1;
+        resign_sample_proof(&mut conflicting_proof);
+        assert!(matches!(
+            restored.record_proof_with_archive_and_bounds(
+                &conflicting_proof,
+                &sample_provider_key(),
+                &archive,
+                PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+            ),
+            Err(PorTrackerError::DuplicateProof)
+        ));
 
         let mut tampered_acknowledgement = after_compaction.clone();
         tampered_acknowledgement
@@ -5266,7 +6214,7 @@ mod tests {
     }
 
     #[test]
-    fn tracker_callback_failure_is_atomic_and_retryable() {
+    fn failed_verdict_commits_before_repair_handoff_and_remains_pending() {
         let tracker = PorTracker::default();
         let challenge = sample_challenge();
         let proof = sample_proof(&challenge);
@@ -5279,29 +6227,20 @@ mod tests {
         verdict.failure_reason = Some("proof verification failed".to_owned());
         resign_sample_verdict(&mut verdict);
 
-        let error = tracker
-            .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
-                Err(PorRepairHandoffError(
-                    "injected durable-handoff failure".to_owned(),
-                ))
-            })
-            .expect_err("injected callback failure must abort transition");
-        assert!(matches!(error, PorTrackerError::RepairHandoff(_)));
-        assert!(tracker.contains_challenge(&challenge.challenge_id));
-        assert_eq!(
-            tracker.proof_digest(&challenge.challenge_id),
-            Some(proof.proof_digest())
-        );
-
-        tracker
-            .record_verdict(&verdict, &sample_auditor_keys(), 1)
-            .expect("verdict must succeed after durable store recovers");
+        let transition = tracker
+            .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
+            .expect("verdict commits independently of repair admission");
+        assert!(!tracker.contains_challenge(&challenge.challenge_id));
+        let pending = tracker
+            .next_pending_repair_work()
+            .expect("read durable repair work")
+            .expect("failed verdict retains repair work");
+        assert_eq!(Some(pending.repair_task_id), transition.repair_task_id);
+        assert_eq!(pending.intent.challenge_id, challenge.challenge_id);
     }
 
     #[test]
-    fn failed_verdict_exact_replay_reuses_native_task_without_handoff() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
+    fn failed_verdict_exact_replay_reuses_durable_pending_task() {
         let tracker = PorTracker::default();
         let challenge = sample_challenge();
         tracker.record_challenge(&challenge).unwrap();
@@ -5311,38 +6250,35 @@ mod tests {
         verdict.decided_at = challenge.deadline_at;
         verdict.failure_reason = Some("provider missed the challenge".to_owned());
         resign_sample_verdict(&mut verdict);
-        let handoff_calls = AtomicUsize::new(0);
-
         let first = tracker
-            .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |intent| {
-                handoff_calls.fetch_add(1, Ordering::Relaxed);
-                Ok(intent.repair_task_id())
-            })
+            .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
             .expect("initial failed verdict");
         let replay = tracker
-            .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
-                panic!("exact replay must not call the durable handoff")
-            })
+            .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
             .expect("exact failed verdict replay");
 
         assert!(first.newly_finalized);
         assert!(!replay.newly_finalized);
         assert_eq!(replay.repair_task_id, first.repair_task_id);
-        assert_eq!(handoff_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            tracker
+                .next_pending_repair_work()
+                .expect("read pending repair")
+                .map(|work| work.repair_task_id),
+            first.repair_task_id
+        );
 
         let mut conflicting = verdict.clone();
         conflicting.failure_reason = Some("different terminal reason".to_owned());
         resign_sample_verdict(&mut conflicting);
         assert!(matches!(
-            tracker.record_verdict_with(&conflicting, &sample_auditor_keys(), 1, |_| panic!(
-                "conflicting replay must not call the handoff"
-            ),),
+            tracker.record_verdict_durable(&conflicting, &sample_auditor_keys(), 1),
             Err(PorTrackerError::VerdictConflict)
         ));
     }
 
     #[test]
-    fn failed_verdict_rejects_mismatched_handoff_task_id() {
+    fn failed_verdict_rejects_mismatched_handoff_acknowledgement() {
         let tracker = PorTracker::default();
         let challenge = sample_challenge();
         tracker.record_challenge(&challenge).unwrap();
@@ -5353,11 +6289,58 @@ mod tests {
         verdict.failure_reason = Some("provider missed the challenge".to_owned());
         resign_sample_verdict(&mut verdict);
 
+        tracker
+            .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
+            .expect("failed verdict commits with pending repair work");
         assert!(matches!(
-            tracker.record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| Ok([0xFF; 32])),
+            tracker.acknowledge_repair_handoff(challenge.challenge_id, [0xFF; 32]),
             Err(PorTrackerError::RepairTaskIdMismatch)
         ));
-        assert!(tracker.contains_challenge(&challenge.challenge_id));
+        assert!(tracker.next_pending_repair_work().unwrap().is_some());
+    }
+
+    #[test]
+    fn failed_verdict_cannot_compact_before_repair_handoff_acknowledgement() {
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        tracker.record_challenge(&challenge).unwrap();
+        let mut verdict = sample_verdict(&challenge, [0x11; 32]);
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.proof_digest = None;
+        verdict.decided_at = challenge.deadline_at;
+        verdict.failure_reason = Some("provider missed the challenge".to_owned());
+        resign_sample_verdict(&mut verdict);
+        let transition = tracker
+            .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
+            .expect("commit failed verdict");
+        tracker
+            .acknowledge_reputation_terminal(
+                transition.reputation_work.sequence,
+                transition.reputation_work.work_digest,
+            )
+            .expect("acknowledge reputation terminal");
+        let archive = MemoryReplayArchive::new(0xA1);
+        assert!(matches!(
+            tracker.compact_acknowledged_with_replay_archive(&archive, archive.binding, 1),
+            Err(PorTrackerError::RepairHandoffPendingCompaction)
+        ));
+        let repair = tracker
+            .next_pending_repair_work()
+            .unwrap()
+            .expect("repair handoff remains pending");
+        tracker
+            .acknowledge_repair_handoff(challenge.challenge_id, repair.repair_task_id)
+            .expect("acknowledge exact repair handoff");
+        assert_eq!(
+            tracker
+                .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
+                .expect("compact after all handoffs are durable"),
+            1
+        );
+        let statuses = tracker.status_authority_snapshot().unwrap().statuses;
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].status, PorChallengeOutcome::Failed);
+        assert_eq!(statuses[0].repair_task_id, Some(repair.repair_task_id));
     }
 
     #[test]

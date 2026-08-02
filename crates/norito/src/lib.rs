@@ -2915,6 +2915,69 @@ pub mod json {
         }
 
         #[test]
+        fn iterative_skip_enforces_structural_nesting_limit() {
+            let at_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
+            );
+            Parser::new(&at_limit)
+                .skip_value()
+                .expect("iterative skip must accept JSON nesting at the limit");
+
+            let over_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH)
+            );
+            assert!(matches!(
+                Parser::new(&over_limit).skip_value(),
+                Err(Error::NestingDepthExceeded {
+                    depth,
+                    limit: MAX_JSON_VALUE_NESTING_DEPTH,
+                    context: "JSON value",
+                }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
+            ));
+        }
+
+        #[test]
+        fn tape_walker_skip_reuses_strict_bounded_value_walk() {
+            let at_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
+            );
+            let mut walker = TapeWalker::new(&at_limit);
+            walker
+                .skip_value()
+                .expect("fast skip must accept JSON nesting at the limit");
+            assert_eq!(walker.raw_pos(), at_limit.len());
+
+            let over_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH)
+            );
+            let mut walker = TapeWalker::new(&over_limit);
+            assert!(matches!(
+                walker.skip_value(),
+                Err(Error::NestingDepthExceeded {
+                    depth,
+                    limit: MAX_JSON_VALUE_NESTING_DEPTH,
+                    context: "JSON value",
+                }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
+            ));
+
+            for malformed in ["[}", r#"{"key":]}"#, "[1 2]", r#"{"key":1,"key":2}"#] {
+                let mut walker = TapeWalker::new(malformed);
+                assert!(
+                    walker.skip_value().is_err(),
+                    "fast skip accepted malformed JSON {malformed:?}"
+                );
+            }
+        }
+
+        #[test]
         fn strict_validator_accounts_for_an_enclosing_document_depth() {
             let root_depth = 4;
             let wrappers = MAX_JSON_VALUE_NESTING_DEPTH - root_depth;
@@ -7924,108 +7987,15 @@ pub mod json {
                 let (byte, line, col) = pos_from_offset(self.input, self.raw.min(bytes.len()));
                 return Err(Error::UnexpectedEof { byte, line, col });
             }
-            match bytes[self.raw] {
-                b'{' => {
-                    if let Some((off, b'{')) = self.peek_struct()
-                        && off != self.raw
-                    {
-                        self.sync_to_raw(off);
-                    }
-                    let _ = self.next_struct();
-                    let mut depth: i32 = 1;
-                    while let Some((off, ch)) = self.next_struct() {
-                        match ch {
-                            b'{' | b'[' => depth += 1,
-                            b'}' | b']' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    self.raw = off + 1;
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    if depth != 0 {
-                        let (byte, line, col) =
-                            pos_from_offset(self.input, self.raw.min(bytes.len()));
-                        return Err(Error::WithPos {
-                            msg: "unclosed object",
-                            byte,
-                            line,
-                            col,
-                        });
-                    }
-                    Ok(())
-                }
-                b'[' => {
-                    if let Some((off, b'[')) = self.peek_struct()
-                        && off != self.raw
-                    {
-                        self.sync_to_raw(off);
-                    }
-                    let _ = self.next_struct();
-                    let mut depth: i32 = 1;
-                    while let Some((off, ch)) = self.next_struct() {
-                        match ch {
-                            b'{' | b'[' => depth += 1,
-                            b'}' | b']' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    self.raw = off + 1;
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    if depth != 0 {
-                        let (byte, line, col) =
-                            pos_from_offset(self.input, self.raw.min(bytes.len()));
-                        return Err(Error::WithPos {
-                            msg: "unclosed array",
-                            byte,
-                            line,
-                            col,
-                        });
-                    }
-                    Ok(())
-                }
-                b'"' => {
-                    let (open_off, ch1) = self.next_struct().ok_or_else(|| {
-                        let (byte, line, col) =
-                            pos_from_offset(self.input, self.raw.min(bytes.len()));
-                        Error::UnexpectedEof { byte, line, col }
-                    })?;
-                    if ch1 != b'"' || open_off != self.raw {
-                        let (byte, line, col) = pos_from_offset(self.input, open_off);
-                        return Err(Error::WithPos {
-                            msg: "bad string",
-                            byte,
-                            line,
-                            col,
-                        });
-                    }
-                    let (close_off, ch2) = self.next_struct().ok_or_else(|| {
-                        let (byte, line, col) =
-                            pos_from_offset(self.input, self.raw.min(bytes.len()));
-                        Error::UnexpectedEof { byte, line, col }
-                    })?;
-                    if ch2 != b'"' {
-                        let (byte, line, col) = pos_from_offset(self.input, close_off);
-                        return Err(Error::UnterminatedString { byte, line, col });
-                    }
-                    self.raw = close_off + 1;
-                    Ok(())
-                }
-                _ => {
-                    let s = self.input;
-                    let mut p = Parser::new_at(s, self.raw);
-                    p.skip_value()?;
-                    self.sync_to_raw(p.position());
-                    Ok(())
-                }
-            }
+            // Reuse the iterative parser walk so an unknown value cannot use
+            // mismatched delimiters, malformed container syntax, duplicate
+            // keys, or an unbounded skipped subtree. `TapeWalker` does not
+            // currently track its enclosing structural depth, so this applies
+            // the nesting ceiling to the value rooted at `raw`.
+            let mut parser = Parser::new_at(self.input, self.raw);
+            parser.skip_value()?;
+            self.sync_to_raw(parser.position());
+            Ok(())
         }
 
         /// Return the last read key slice (without quotes), borrowed from input.
@@ -10052,9 +10022,24 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
     )
 }
 
-/// Decode an object from Norito-encoded bytes (compressed or not),
-/// scoping decode layout flags to this call.
+/// Decode an object from Norito-encoded bytes (compressed or not) under a
+/// payload-derived resource budget.
+///
+/// The default budget is derived from the complete frame length, so a short
+/// input cannot force an allocation proportional only to an attacker-declared
+/// uncompressed length. Callers with a narrower schema limit, or trusted
+/// compressed data whose legitimate expansion exceeds the default envelope,
+/// can use [`decode_from_bytes_with_limits`] with an explicit budget.
 pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    with_decode_limits(canonical_decode_limits(bytes.len()), || {
+        decode_from_bytes_inner(bytes)
+    })
+}
+
+fn decode_from_bytes_inner<T>(bytes: &[u8]) -> Result<T, Error>
 where
     for<'de> T: NoritoDeserialize<'de>,
 {
@@ -10075,9 +10060,10 @@ where
 /// Decode a Norito archive with explicit per-value and cumulative resource
 /// limits.
 ///
-/// This is the production-facing counterpart to [`decode_from_bytes`] for
-/// untrusted payloads whose semantic collection limits are known by the host.
-/// Nested bounded decodes inherit the stricter of the inner and outer limits.
+/// This enters the private decoder directly rather than recursively invoking
+/// [`decode_from_bytes`], so a caller can provide a larger, still-finite budget
+/// for trusted high-compression data. Nested bounded decodes continue to
+/// inherit the stricter of the inner and outer limits.
 ///
 /// # Errors
 ///
@@ -10086,7 +10072,7 @@ pub fn decode_from_bytes_with_limits<T>(bytes: &[u8], limits: DecodeLimits) -> R
 where
     for<'de> T: NoritoDeserialize<'de>,
 {
-    with_decode_limits(limits, || decode_from_bytes(bytes))
+    with_decode_limits(limits, || decode_from_bytes_inner(bytes))
 }
 
 /// Decode one exact canonical V1 frame under payload-derived resource limits.

@@ -68,7 +68,7 @@ fn remittance_batch() -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     annotate_inputs(&mut batch, 23);
     let domain = DomainId::try_new("remit", "universal").expect("domain id");
-    let asset_definition = AssetDefinitionId::new(
+    let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("remit", "universal").unwrap(),
         "xor".parse().unwrap(),
     );

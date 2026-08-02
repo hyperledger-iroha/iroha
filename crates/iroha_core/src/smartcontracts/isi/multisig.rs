@@ -472,6 +472,26 @@ fn rekey_account_id(
     new_account: &AccountId,
     home_domain: Option<&iroha_data_model::domain::DomainId>,
 ) -> Result<(), InstructionExecutionError> {
+    if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
+        state_transaction,
+        old_account,
+    ) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: it is retained native escrow or VPN lease custody"
+            )
+            .into(),
+        ));
+    }
+    if crate::smartcontracts::isi::vpn::is_active_vpn_client(state_transaction, old_account) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: it funds an active operator-signed VPN lease"
+            )
+            .into(),
+        ));
+    }
+
     if state_transaction.world.accounts.get(new_account).is_some() {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("account `{new_account}` already exists").into(),
@@ -1346,19 +1366,26 @@ fn replace_account_id_in_governance(
         .map(|(id, _)| id.clone())
         .collect();
     for lock_id in lock_ids {
-        if let Some(locks) = state_transaction.world.governance_locks.get_mut(&lock_id) {
-            let mut updated = BTreeMap::new();
-            for (account, mut record) in std::mem::take(&mut locks.locks) {
-                let key = if account == *old {
-                    new.clone()
-                } else {
-                    account
-                };
-                replace_account_id(&mut record.owner, old, new);
-                updated.insert(key, record);
-            }
-            locks.locks = updated;
+        let Some(mut locks) = state_transaction
+            .world
+            .governance_locks
+            .get(&lock_id)
+            .cloned()
+        else {
+            continue;
+        };
+        let mut updated = BTreeMap::new();
+        for (account, mut record) in std::mem::take(&mut locks.locks) {
+            let key = if account == *old {
+                new.clone()
+            } else {
+                account
+            };
+            replace_account_id(&mut record.owner, old, new);
+            updated.insert(key, record);
         }
+        locks.locks = updated;
+        state_transaction.world.put_governance_locks(lock_id, locks);
     }
 
     let slash_ids: Vec<_> = state_transaction
@@ -3414,7 +3441,7 @@ mod tests {
         let code_hash = ivm::contract_code_hash(&code);
         let bytecode = IvmBytecode::from_compiled(code.clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -3854,11 +3881,13 @@ mod tests {
                 Account::new(signer1_id.clone()).build(&signer1_id),
                 Account::new(signer2_id.clone()).build(&signer1_id),
             ],
-            [
-                AssetDefinition::numeric(payment_asset_definition_id.clone())
-                    .with_name("xor".to_owned())
-                    .build(&signer1_id),
-            ],
+            [AssetDefinition::numeric(
+                payment_asset_definition_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&signer1_id)],
         );
         seed_default_namespace_policies(&mut world);
         assert!(
@@ -5685,6 +5714,64 @@ mod tests {
     }
 
     #[test]
+    fn governance_lock_owner_rekey_keeps_expiry_index_exact() {
+        use crate::state::{GovernanceLockRecord, GovernanceLocksForReferendum};
+
+        let state = State::new_with_chain(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-governance-lock-index-rekey"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let old_account = new_account_id(&checked_keypair());
+        let new_account = new_account_id(&checked_keypair());
+        let referendum_id = "rekeyed-governance-lock".to_owned();
+        let expiry_height = 42;
+        let mut locks = GovernanceLocksForReferendum::default();
+        locks.locks.insert(
+            old_account.clone(),
+            GovernanceLockRecord {
+                owner: old_account.clone(),
+                amount: Quantity::one(),
+                slashed: Quantity::zero(),
+                expiry_height,
+                direction: 0,
+                duration_blocks: 1,
+                custody: None,
+            },
+        );
+        state_transaction
+            .world
+            .put_governance_locks(referendum_id.clone(), locks);
+
+        replace_account_id_in_governance(&mut state_transaction, &old_account, &new_account);
+
+        let locks = state_transaction
+            .world
+            .governance_locks
+            .get(&referendum_id)
+            .expect("rekeyed lock set");
+        assert!(locks.locks.get(&old_account).is_none());
+        assert_eq!(
+            locks
+                .locks
+                .get(&new_account)
+                .expect("rekeyed governance lock")
+                .owner,
+            new_account,
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .governance_lock_expiry_index
+                .get(&expiry_height),
+            Some(&BTreeSet::from([(referendum_id, new_account)])),
+        );
+    }
+
+    #[test]
     fn rekey_account_id_updates_subject_domain_indexes() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -5753,10 +5840,14 @@ mod tests {
         let new_account = new_account_id(&checked_keypair());
         let counterparty = new_account_id(&checked_keypair());
         let domain_id = DomainId::try_new("fx", "universal").expect("domain id");
-        let source_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "source".parse().expect("asset name"));
-        let destination_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "destination".parse().expect("asset name"));
+        let source_asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "source".parse().expect("asset name"),
+        );
+        let destination_asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "destination".parse().expect("asset name"),
+        );
         let settlement_id: iroha_data_model::isi::settlement::SettlementId =
             "fx_rekey_receipt".parse().expect("settlement id");
         let receipt = SettlementReceipt {
@@ -5851,10 +5942,11 @@ mod tests {
         let valid_lane = iroha_data_model::nexus::LaneId::new(8);
         let malformed_lane = iroha_data_model::nexus::LaneId::new(9);
         let active = iroha_data_model::nexus::PublicLaneValidatorStatus::Active;
-        let reward_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("multisig", "universal").expect("reward asset domain"),
-            "reward".parse().expect("reward asset name"),
-        );
+        let reward_asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("multisig", "universal").expect("reward asset domain"),
+                "reward".parse().expect("reward asset name"),
+            );
         let old_reward_asset = iroha_data_model::asset::AssetId::new(
             reward_asset_definition.clone(),
             old_account.clone(),
@@ -6065,14 +6157,18 @@ mod tests {
         );
 
         let asset_def_id: iroha_data_model::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
                 "rose".parse().unwrap(),
             );
         Register::asset_definition({
             let __asset_definition_id = asset_def_id.clone();
-            iroha_data_model::asset::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            iroha_data_model::asset::AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .execute(&old_account, &mut state_transaction)
         .expect("register asset definition");
@@ -7034,6 +7130,7 @@ seiyaku TriggerDispatch {
                 multisig_id.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata),
         );
 
@@ -7752,6 +7849,7 @@ seiyaku TriggerDispatch {
                     .for_trigger(trigger_id.clone())
                     .under_authority(multisig_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata),
         );
         Register::trigger(trigger)

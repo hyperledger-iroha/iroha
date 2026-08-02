@@ -279,11 +279,11 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            let charge_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "usd".parse()?,
             );
-            let plan_id: AssetDefinitionId = AssetDefinitionId::new(
+            let plan_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "usage_plan".parse()?,
             );
@@ -305,10 +305,12 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let charge_def_id = charge_def_id.clone();
                 move || {
                     client.submit_blocking(
-                        Register::asset_definition(
-                            AssetDefinition::numeric(charge_def_id.clone())
-                                .with_name(charge_def_id.name().to_string()),
-                        ),
+                        Register::asset_definition(AssetDefinition::numeric(
+                            charge_def_id.clone(),
+                            "usd".to_owned(),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
                             None,
@@ -322,10 +324,12 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let plan_id = plan_id.clone();
                 move || {
                     client.submit_blocking(
-                        Register::asset_definition(
-                            AssetDefinition::numeric(plan_id.clone())
-                                .with_name(plan_id.name().to_string()),
-                        ),
+                        Register::asset_definition(AssetDefinition::numeric(
+                            plan_id.clone(),
+                            "usage_plan".to_owned(),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
                             None,
@@ -467,7 +471,8 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(usage_trigger_id.clone())
                     .under_authority(provider.clone()),
-            );
+            )
+            .expect("trigger action fixture satisfies validation invariants");
             spawn_blocking({
                 let client = client.clone();
                 let usage_trigger_id = usage_trigger_id.clone();
@@ -531,6 +536,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 provider.clone(),
                 TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
             spawn_blocking({
                 let client = client.clone();
@@ -612,11 +618,11 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            let charge_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "usd_fixed".parse()?,
             );
-            let plan_id: AssetDefinitionId = AssetDefinitionId::new(
+            let plan_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "fixed_plan".parse()?,
             );
@@ -633,10 +639,12 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let charge_def_id = charge_def_id.clone();
                 move || {
                     client.submit_blocking(
-                        Register::asset_definition(
-                            AssetDefinition::numeric(charge_def_id.clone())
-                                .with_name(charge_def_id.name().to_string()),
-                        ),
+                        Register::asset_definition(AssetDefinition::numeric(
+                            charge_def_id.clone(),
+                            "usd_fixed".to_owned(),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
                             None,
@@ -650,10 +658,12 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let plan_id = plan_id.clone();
                 move || {
                     client.submit_blocking(
-                        Register::asset_definition(
-                            AssetDefinition::numeric(plan_id.clone())
-                                .with_name(plan_id.name().to_string()),
-                        ),
+                        Register::asset_definition(AssetDefinition::numeric(
+                            plan_id.clone(),
+                            "fixed_plan".to_owned(),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
                             None,
@@ -802,6 +812,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 provider.clone(),
                 TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
             spawn_blocking({
                 let client = client.clone();
@@ -880,11 +891,11 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            let charge_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "usd_retry".parse()?,
             );
-            let plan_id: AssetDefinitionId = AssetDefinitionId::new(
+            let plan_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "retry_plan".parse()?,
             );
@@ -902,10 +913,12 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let charge_def_id = charge_def_id.clone();
                 move || {
                     client.submit_blocking(
-                        Register::asset_definition(
-                            AssetDefinition::numeric(charge_def_id.clone())
-                                .with_name(charge_def_id.name().to_string()),
-                        ),
+                        Register::asset_definition(AssetDefinition::numeric(
+                            charge_def_id.clone(),
+                            "usd_retry".to_owned(),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
                             None,
@@ -919,10 +932,12 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let plan_id = plan_id.clone();
                 move || {
                     client.submit_blocking(
-                        Register::asset_definition(
-                            AssetDefinition::numeric(plan_id.clone())
-                                .with_name(plan_id.name().to_string()),
-                        ),
+                        Register::asset_definition(AssetDefinition::numeric(
+                            plan_id.clone(),
+                            "retry_plan".to_owned(),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
                             None,
@@ -1049,6 +1064,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 provider.clone(),
                 TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
             spawn_blocking({
                 let client = client.clone();

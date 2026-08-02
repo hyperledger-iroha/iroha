@@ -10,8 +10,7 @@ pub use iroha_data_model::account::{
     AccountAddressSource, ParsedAccountId,
     address::{
         AccountAddress, AccountAddressError, AccountAddressErrorCode, AddressDomainKind,
-        DefaultDomainLabelError, chain_discriminant, default_domain_name, set_chain_discriminant,
-        set_default_domain_name,
+        DEFAULT_DOMAIN_NAME, chain_discriminant, set_chain_discriminant,
     },
 };
 

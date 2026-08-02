@@ -4,10 +4,10 @@ import { blake3 } from "@noble/hashes/blake3";
 import { AccountAddress } from "./address.js";
 import { verifyEd25519 } from "./crypto.browser.js";
 import {
+  CONTRACT_ADDRESS_HRP,
   CONTRACT_ADDRESS_V1_VERSION,
-  contractAddressHrp,
   encodeContractAddressBech32m,
-  requireContractAddressForChain,
+  parseCanonicalContractAddress,
 } from "./contractAddress.js";
 import {
   buildCommitContractDeploymentInstruction,
@@ -35,6 +35,7 @@ const CONTRACT_ADDRESS_DOMAIN = Buffer.from(
   "utf8",
 );
 const CONTRACT_ADDRESS_HASH_BYTES = 20;
+const CHAIN_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/u;
 const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#[0-9A-F]{4}$/u;
 const CURRENT_IVM_ABI_VERSION = 1;
 const CURRENT_DATA_MODEL_VERSION = 4;
@@ -71,6 +72,19 @@ function requireExactString(value, context) {
   ) {
     throw new TypeError(
       `${context} must be a non-empty exact NFC string without control characters`,
+    );
+  }
+  return value;
+}
+
+function requireCanonicalChainId(value) {
+  if (
+    typeof value !== "string" ||
+    !CHAIN_ID_PATTERN.test(value) ||
+    Buffer.byteLength(value, "utf8") > 128
+  ) {
+    throw new TypeError(
+      "chainId must be an exact canonical ASCII ChainId of at most 128 bytes",
     );
   }
   return value;
@@ -248,6 +262,12 @@ function u16Be(value) {
   return output;
 }
 
+function u32Be(value) {
+  const output = Buffer.allocUnsafe(4);
+  output.writeUInt32BE(Number(value));
+  return output;
+}
+
 function u64Be(value) {
   const output = Buffer.allocUnsafe(8);
   output.writeBigUInt64BE(value);
@@ -288,11 +308,14 @@ function authorityDetails(authority, expectedDiscriminant) {
 
 /** Derive the exact current V1 Bech32m contract address locally. */
 export function deriveContractAddress({
+  chainId,
   chainDiscriminant,
   authority,
   deployNonce,
   dataspaceId,
 }) {
+  const canonicalChainId = requireCanonicalChainId(chainId);
+  const chainIdBytes = Buffer.from(canonicalChainId, "ascii");
   const discriminant = normalizeUnsigned(
     chainDiscriminant,
     U16_MAX,
@@ -303,9 +326,11 @@ export function deriveContractAddress({
   const authorityInfo = authorityDetails(authority, discriminant);
   const preimage = Buffer.concat([
     CONTRACT_ADDRESS_DOMAIN,
-    u16Be(discriminant),
+    u16Be(BigInt(chainIdBytes.length)),
+    chainIdBytes,
     u64Be(dataspace),
     u64Be(nonce),
+    u32Be(BigInt(authorityInfo.canonicalBytes.length)),
     authorityInfo.canonicalBytes,
   ]);
   const digest = Buffer.from(blake3(preimage));
@@ -314,7 +339,7 @@ export function deriveContractAddress({
     u64Be(dataspace),
     digest.subarray(0, CONTRACT_ADDRESS_HASH_BYTES),
   ]);
-  return encodeContractAddressBech32m(contractAddressHrp(discriminant), payload);
+  return encodeContractAddressBech32m(CONTRACT_ADDRESS_HRP, payload);
 }
 
 /**
@@ -746,7 +771,7 @@ export async function deploySmartContractBrowser(options) {
       "deployment options require feePayment or a feePaymentForStep callback",
     );
   }
-  const chainId = requireExactString(source.chainId, "chainId");
+  const chainId = requireCanonicalChainId(source.chainId);
   const chainDiscriminant = normalizeUnsigned(
     source.chainDiscriminant,
     U16_MAX,
@@ -782,9 +807,8 @@ export async function deploySmartContractBrowser(options) {
     },
   );
   if (state.previousContractAddress !== null) {
-    const previous = requireContractAddressForChain(
+    const previous = parseCanonicalContractAddress(
       state.previousContractAddress,
-      chainDiscriminant,
       "previousContractAddress",
     );
     if (previous.dataspaceId !== state.dataspaceId) {
@@ -794,6 +818,7 @@ export async function deploySmartContractBrowser(options) {
     }
   }
   const contractAddress = deriveContractAddress({
+    chainId,
     chainDiscriminant,
     authority: authority.literal,
     deployNonce: state.deployNonce,

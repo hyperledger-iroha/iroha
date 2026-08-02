@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn contract_call_json_emits_canonical_arguments() {
-        let address = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
+        let address = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
         let call = ContractInvocation {
             contract_address: address.parse().expect("contract address"),
             expected_code_hash: Hash::new(b"history-contract-code"),

@@ -43,7 +43,6 @@ use iroha_data_model::{
         },
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorSetCheckpoint},
-    da::commitment::DaCommitmentBundle,
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,
@@ -520,15 +519,13 @@ impl V2ProgressObservation {
 /// View and reducer generation are deliberately absent. A timeout certificate
 /// may replace volatile pools and the durable locked Commit intent may then
 /// reconstruct exactly the same partial quorum. Only a strictly greater
-/// protocol stage or count/power component advances this rank, so that cycle
-/// cannot refresh the height-wide watchdog indefinitely.
+/// protocol stage or equal-vote signer component advances this rank, so that
+/// cycle cannot refresh the height-wide watchdog indefinitely.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct V2HeightProgressRank {
     stage: u8,
     prepare_signers: u32,
-    prepare_power: u64,
     commit_signers: u32,
-    commit_power: u64,
 }
 
 impl V2HeightProgressRank {
@@ -564,12 +561,10 @@ impl V2HeightProgressRank {
         for quorum in &status.liveness.prepare_quorums {
             rank.stage = rank.stage.max(5);
             rank.prepare_signers = rank.prepare_signers.max(quorum.signer_count);
-            rank.prepare_power = rank.prepare_power.max(quorum.signed_power);
         }
         for quorum in &status.liveness.commit_quorums {
             rank.stage = rank.stage.max(8);
             rank.commit_signers = rank.commit_signers.max(quorum.signer_count);
-            rank.commit_power = rank.commit_power.max(quorum.signed_power);
         }
         for intent in &status.liveness.outbound_intents {
             rank.stage = rank.stage.max(match intent.kind {
@@ -589,23 +584,17 @@ impl V2HeightProgressRank {
     fn absorb(&mut self, next: Self) -> bool {
         let advanced = next.stage > self.stage
             || next.prepare_signers > self.prepare_signers
-            || next.prepare_power > self.prepare_power
-            || next.commit_signers > self.commit_signers
-            || next.commit_power > self.commit_power;
+            || next.commit_signers > self.commit_signers;
         self.stage = self.stage.max(next.stage);
         self.prepare_signers = self.prepare_signers.max(next.prepare_signers);
-        self.prepare_power = self.prepare_power.max(next.prepare_power);
         self.commit_signers = self.commit_signers.max(next.commit_signers);
-        self.commit_power = self.commit_power.max(next.commit_power);
         advanced
     }
 
     fn strictly_advances(self, previous: Self) -> bool {
         self.stage > previous.stage
             || self.prepare_signers > previous.prepare_signers
-            || self.prepare_power > previous.prepare_power
             || self.commit_signers > previous.commit_signers
-            || self.commit_power > previous.commit_power
     }
 }
 
@@ -1536,7 +1525,6 @@ fn stage_is_pending(stage: SumeragiV2LocalWorkStage) -> bool {
 
 fn quorum_is_complete(quorum: &SumeragiV2VoteQuorumStatus) -> bool {
     quorum.signer_count >= quorum.min_signers
-        && u128::from(quorum.signed_power) * 3 > u128::from(quorum.total_power) * 2
 }
 
 fn queue_is_starved(queue: &SumeragiV2QueueStatus) -> bool {
@@ -1627,6 +1615,13 @@ fn classify_v2_liveness_blocker(
             && (status.locked_prepare_qc.is_some() || status.highest_prepare_qc.is_some()))
     {
         return SumeragiV2LivenessBlocker::BodyUnavailable;
+    }
+
+    if status.phase == SumeragiV2StatusPhase::PendingApply
+        && status.body_state == SumeragiV2BodyState::Applied
+        && work.application == SumeragiV2LocalWorkStage::Complete
+    {
+        return SumeragiV2LivenessBlocker::SuccessorActivationPending;
     }
 
     if status.phase == SumeragiV2StatusPhase::PendingApply || stage_is_pending(work.application) {
@@ -1943,6 +1938,7 @@ fn relevant_quorum_context(
         | SumeragiV2LivenessBlocker::BodyUnavailable
         | SumeragiV2LivenessBlocker::SchedulerStarvation
         | SumeragiV2LivenessBlocker::ApplicationPending
+        | SumeragiV2LivenessBlocker::SuccessorActivationPending
         | SumeragiV2LivenessBlocker::LocalControlPending => None,
     }
 }
@@ -3239,8 +3235,8 @@ mod v2_liveness_watchdog_tests {
         );
         assert_eq!(
             during_startup.liveness.blocker,
-            Some(SumeragiV2LivenessBlocker::ApplicationPending),
-            "successor-owned overlays must not erase the predecessor watchdog deadline"
+            Some(SumeragiV2LivenessBlocker::SuccessorActivationPending),
+            "durably applied predecessor status must expose successor activation, not application, as the remaining blocker"
         );
 
         let mut successor = status();
@@ -6486,26 +6482,16 @@ fn lane_block_sessions_slot() -> &'static Mutex<Vec<SumeragiLaneBlockSessionStat
 type LaneRelayKey = (
     iroha_data_model::nexus::LaneId,
     iroha_data_model::nexus::DataSpaceId,
+    Hash,
     u64,
-    HashOf<BlockHeader>,
-    Option<HashOf<DaCommitmentBundle>>,
-    Option<Hash>,
-    HashOf<LaneBlockCommitment>,
-    u64,
-    Option<[u8; 32]>,
 );
 
 fn lane_relay_key(envelope: &LaneRelayEnvelope) -> LaneRelayKey {
     (
         envelope.lane_id,
         envelope.dataspace_id,
+        envelope.lane_incarnation,
         envelope.block_height,
-        envelope.block_header.hash(),
-        envelope.da_commitment_hash,
-        envelope.lane_block_descriptor_hash,
-        envelope.settlement_hash,
-        envelope.rbc_bytes_total,
-        envelope.manifest_root,
     )
 }
 
@@ -6546,6 +6532,21 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
         .iter()
         .position(|candidate| lane_relay_key(candidate) == key)
     {
+        if !storage[existing].same_finality_effect(&envelope) {
+            let err = LaneRelayError::ConflictingRelay {
+                lane: envelope.lane_id,
+                height: envelope.block_height,
+            };
+            record_relay_error(&err);
+            iroha_logger::warn!(
+                lane_id = %envelope.lane_id,
+                dataspace_id = %envelope.dataspace_id,
+                block_height = envelope.block_height,
+                error_kind = err.as_label(),
+                "dropping conflicting lane relay envelope for finalized coordinates"
+            );
+            return;
+        }
         if storage[existing].has_merge_admission_material()
             && !envelope.has_merge_admission_material()
         {

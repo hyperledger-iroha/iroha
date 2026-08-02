@@ -14,7 +14,7 @@ builders can stay aligned with the Rust data model.
 
 ## 1. Inputs & Evidence
 
-- `target-codex/android_codegen/instruction_manifest.json` enumerates **98**
+- `target-codex/android_codegen/instruction_manifest.json` enumerates **113**
   `InstructionBox` entries with discriminants, schema hashes, enum layouts, and
   Rust type names exported by `norito_codegen_exporter`
   (`tools/norito_codegen_exporter/src/main.rs`). Each entry now carries a
@@ -35,10 +35,11 @@ builders can stay aligned with the Rust data model.
 
 ## 2. Instruction Coverage Snapshot
 
-- 98 discriminants span 16 modules (`InstructionBox` families) sourced from
-  `crates/iroha_data_model/src/isi/`. All modules have builder entries, and the
-  `iroha.revoke`, `iroha.set_key_value`, `iroha.remove_key_value`) still rely on
-  the boxed helper enums instead of the fully qualified module paths.
+- The 113 discriminants span 18 generator families sourced from
+  `crates/iroha_data_model/src/isi/`, and every discriminant has a builder
+  entry. The four boxed helpers use the short wire IDs `iroha.grant`,
+  `iroha.revoke`, `iroha.set_key_value`, and `iroha.remove_key_value` while
+  mapping to their fully qualified Rust types.
 - Every discriminant already has a Norito example file, so fixture generation is
   complete from Rust’s perspective. Android needs to bundle these examples into
   a signed manifest per release (see §4).
@@ -48,19 +49,26 @@ builders can stay aligned with the Rust data model.
 | `transparent` | 23 | iroha.custom, iroha.execute_trigger |
 | `register` | 16 | iroha.register, iroha.unregister |
 | `zk` | 10 | CancelConfidentialPolicyTransition, CreateElection |
-| `sorafs` | 9 | ApprovePinManifest, BindManifestAlias |
+| `sorafs` | 15 | ApprovePinManifest, BindManifestAlias |
+| `governance` | 6 | CastPlainBallot, ProposeDeployContract |
 | `kaigi` | 7 | CreateKaigi, EndKaigi |
+| `ministry` | 1 | SubmitAgendaProposal |
 | `mint_burn` | 6 | iroha.burn, iroha.mint |
 | `transfer` | 6 | iroha.transfer, iroha.transfer_batch |
-| `smart_contract_code` | 5 | ActivateContractInstance, DeactivateContractInstance |
+| `smart_contract_code` | 8 | ActivateContractInstance, UploadSmartContractCodeChunk |
 | `repo` | 3 | iroha.repo.initiate, iroha.repo.reverse |
 | `runtime_upgrade` | 3 | iroha.runtime_upgrade.activate, iroha.runtime_upgrade.cancel |
 | `settlement` | 3 | iroha.settlement.dvp, iroha.settlement.pvp |
-| `verifying_keys` | 3 | DeprecateVerifyingKey, RegisterVerifyingKey |
+| `verifying_keys` | 2 | RegisterVerifyingKey, UpdateVerifyingKey |
 | `GrantBox` | 1 | iroha.grant |
 | `RemoveKeyValueBox` | 1 | iroha.remove_key_value |
 | `RevokeBox` | 1 | iroha.revoke |
 | `SetKeyValueBox` | 1 | iroha.set_key_value |
+
+The confidential instruction row is the first-release H22 shape:
+`Unshield { asset, to, public_amount, inputs, proof, root_hint }`. There is no
+caller-supplied private-output field; any change commitment is authenticated by
+the verifier result before ledger insertion.
 
 ## 3. Fees, Manifest & Governance Payloads
 

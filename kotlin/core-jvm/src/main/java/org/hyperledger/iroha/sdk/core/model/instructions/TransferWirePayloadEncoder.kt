@@ -91,6 +91,29 @@ object TransferWirePayloadEncoder {
         return encoder.toByteArray()
     }
 
+    /** Encodes a canonical `AssetDefinitionId` as a bare Norito payload. */
+    @JvmStatic
+    fun encodeAssetDefinitionIdPayload(assetDefinitionId: String): ByteArray {
+        val parsed = AssetDefinitionId.fromAddress(assetDefinitionId)
+        val encoder = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
+        AssetDefinitionIdAdapter().encode(encoder, parsed)
+        return encoder.toByteArray()
+    }
+
+    /** Encodes a canonical non-negative `Quantity` as a bare Norito payload. */
+    @JvmStatic
+    fun encodeQuantityPayload(quantity: String): ByteArray {
+        val parsed = parseQuantityAmount(quantity)
+        val encoder = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS)
+        QuantityAdapter().encode(encoder, parsed)
+        return encoder.toByteArray()
+    }
+
+    /** Encodes a lossless validated `Quantity` as a bare Norito payload. */
+    @JvmStatic
+    fun encodeQuantityPayload(quantity: KotodamaQuantity): ByteArray =
+        encodeQuantityPayload(quantity.toString())
+
     /** Decodes a bare `AccountId` payload produced by [encodeAccountIdPayload]. */
     @JvmStatic
     internal fun decodeAccountIdPayload(

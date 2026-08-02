@@ -1,0 +1,113 @@
+{
+  "schema": "iroha.bootle_lantern.issuance_client_contract",
+  "version": 1,
+  "classification": "public-synthetic-test-data",
+  "transport": {
+    "method": "POST",
+    "authorize_path": "/v1/privacy/bootle-lantern/issuance/authorize",
+    "issue_path": "/v1/privacy/bootle-lantern/issuance/issue",
+    "norito_media_type": "application/x-norito",
+    "unauthorized_www_authenticate": "Bearer realm=\"iroha-bootle-lantern-issuance\""
+  },
+  "credential": {
+    "encoding": "base64url-unpadded-canonical",
+    "minimum_decoded_bytes": 1,
+    "maximum_decoded_bytes": 4096,
+    "examples": [
+      {
+        "id": "single-ascii-octet",
+        "decoded_hex": "61",
+        "encoded": "YQ"
+      },
+      {
+        "id": "three-incrementing-octets",
+        "decoded_hex": "010203",
+        "encoded": "AQID"
+      },
+      {
+        "id": "url-alphabet-boundary",
+        "decoded_hex": "fbefff",
+        "encoded": "--__"
+      }
+    ]
+  },
+  "bodies": {
+    "pattern": "byte-at-index-equals-index-modulo-256-with-canonical-wire-magics",
+    "authorization_response": {
+      "wire": "ILA1",
+      "length_bytes": 320,
+      "pattern_sha256_hex": "e77634a5551d838baa804af502b56d5a58b0eaa58f7ce43e8a894bb8a98ce346"
+    },
+    "issue_request": {
+      "wire": "ILA1+ILQ1",
+      "component_lengths_bytes": [320, 71576],
+      "length_bytes": 71896,
+      "pattern_sha256_hex": "55923884e42b03ada2657dfad75bd92b5d3abc0f0d05ea47f1b416e9cb4fb7ce"
+    },
+    "issue_response": {
+      "wire": "ILR1",
+      "length_bytes": 3176,
+      "pattern_sha256_hex": "230033d021583037fa11e7299c6eaf62f1020228944523a88a737c9e14bf322a"
+    }
+  },
+  "errors": {
+    "maximum_body_bytes": 512,
+    "norito_envelope": {
+      "schema_type_name": "iroha_torii_shared::ErrorEnvelope",
+      "schema_hash_hex": "793f11768076bfe270a17aeb86752cd9",
+      "flags_hex": "02"
+    },
+    "responses": [
+      {
+        "status": 400,
+        "media_type": "application/x-norito",
+        "code": "privacy_issuance_invalid_request",
+        "body_hex": "4e5254300000793f11768076bfe270a17aeb86752cd90046000000000000001f6a4722fb07c80d022120707269766163795f69737375616e63655f696e76616c69645f726571756573742120707269766163795f69737375616e63655f696e76616c69645f726571756573740100"
+      },
+      {
+        "status": 401,
+        "media_type": "application/x-norito",
+        "code": "privacy_issuance_unauthorized",
+        "www_authenticate": "Bearer realm=\"iroha-bootle-lantern-issuance\"",
+        "body_hex": "4e5254300000793f11768076bfe270a17aeb86752cd90040000000000000007a3838ad348e74bd021e1d707269766163795f69737375616e63655f756e617574686f72697a65641e1d707269766163795f69737375616e63655f756e617574686f72697a65640100"
+      },
+      {
+        "status": 406,
+        "media_type": "application/json",
+        "code": "privacy_issuance_not_acceptable",
+        "body_utf8": "{\"code\":\"privacy_issuance_not_acceptable\",\"message\":\"privacy_issuance_not_acceptable\"}"
+      },
+      {
+        "status": 409,
+        "media_type": "application/x-norito",
+        "code": "privacy_issuance_state_conflict",
+        "body_hex": "4e5254300000793f11768076bfe270a17aeb86752cd9004400000000000000acab4fdc5d06cd9502201f707269766163795f69737375616e63655f73746174655f636f6e666c696374201f707269766163795f69737375616e63655f73746174655f636f6e666c6963740100"
+      },
+      {
+        "status": 413,
+        "media_type": "application/x-norito",
+        "code": "privacy_issuance_payload_too_large",
+        "body_hex": "4e5254300000793f11768076bfe270a17aeb86752cd9004a00000000000000f384cca1331c504c022322707269766163795f69737375616e63655f7061796c6f61645f746f6f5f6c617267652322707269766163795f69737375616e63655f7061796c6f61645f746f6f5f6c617267650100"
+      },
+      {
+        "status": 415,
+        "media_type": "application/x-norito",
+        "code": "privacy_issuance_unsupported_media_type",
+        "body_hex": "4e5254300000793f11768076bfe270a17aeb86752cd900540000000000000070299c7ad23a4dbb022827707269766163795f69737375616e63655f756e737570706f727465645f6d656469615f747970652827707269766163795f69737375616e63655f756e737570706f727465645f6d656469615f747970650100"
+      },
+      {
+        "status": 429,
+        "media_type": "application/x-norito",
+        "code": "privacy_issuance_capacity_exhausted",
+        "retry_after_seconds": 1,
+        "body_hex": "4e5254300000793f11768076bfe270a17aeb86752cd9004c00000000000000550604eb22278122022423707269766163795f69737375616e63655f63617061636974795f6578686175737465642423707269766163795f69737375616e63655f63617061636974795f6578686175737465640100"
+      },
+      {
+        "status": 503,
+        "media_type": "application/x-norito",
+        "code": "privacy_issuance_unavailable",
+        "body_hex": "4e5254300000793f11768076bfe270a17aeb86752cd9003e00000000000000ada4af79a5b64b32021d1c707269766163795f69737375616e63655f756e617661696c61626c651d1c707269766163795f69737375616e63655f756e617661696c61626c650100"
+      }
+    ]
+  }
+}

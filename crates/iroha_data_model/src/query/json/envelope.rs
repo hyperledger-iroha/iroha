@@ -1580,7 +1580,7 @@ mod tests {
 
     #[test]
     fn find_asset_queries_roundtrip_with_public_selectors() {
-        let definition_id = crate::asset::AssetDefinitionId::new(
+        let definition_id = crate::asset::AssetDefinitionId::derive_from_components(
             crate::domain::DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             "rose".parse::<crate::Name>().expect("valid asset name"),
         );

@@ -771,7 +771,7 @@ mod tests {
             revision,
             predecessor_policy_digest,
             economics: ReservePolicyV1::default(),
-            asset_definition: AssetDefinitionId::new(
+            asset_definition: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("reserve", "universal").expect("domain"),
                 "xor".parse().expect("asset name"),
             ),

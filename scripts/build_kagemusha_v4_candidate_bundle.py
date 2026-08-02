@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Kagemusha V4 candidate generator from one reviewed dirty source closure."""
+"""Build the Kagemusha V4 candidate generator from one reviewed clean source closure."""
 
 from __future__ import annotations
 
@@ -32,9 +32,11 @@ from scripts.formal import run_sumeragi_v2_tlapm_guard as resource_guard
 
 BINARY_NAME = "kagemusha_recursive_spend_v4_bundle"
 SEALED_FEATURE = "kagemusha-candidate-source-seal"
+CANDIDATE_EVIDENCE_FEATURE = "kagemusha-candidate-evidence-lab"
 CANDIDATE_BUILD_FEATURES = (
     "iroha_core/dev-tools",
     f"iroha_core/{SEALED_FEATURE}",
+    f"iroha_core/{CANDIDATE_EVIDENCE_FEATURE}",
 )
 # The measured single-rustc frontend high-water mark is about 11.466 GiB.
 # Requiring 24 GiB of installed physical memory leaves slightly more than a
@@ -409,6 +411,13 @@ def build_candidate_bundle(
         str(reviewed_source_closure),
         reviewed_source_closure_sha256,
     )
+    if (
+        first.source_repo_dirty
+        or first.reviewed_source_closure.get("source_repo_dirty") is not False
+    ):
+        raise CandidateBuildError(
+            "candidate generation requires a clean signed source closure"
+        )
     environment = _sanitized_build_environment()
     environment["KAGEMUSHA_BUILD_SOURCE_COMMIT"] = first.source_commit
     environment["KAGEMUSHA_BUILD_SOURCE_TREE_SHA256"] = first.source_tree_sha256

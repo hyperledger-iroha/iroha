@@ -6266,7 +6266,7 @@ mod tests {
                 let statement =
                     PrivacyStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
                         context,
-                        asset_definition_id: AssetDefinitionId::new(
+                        asset_definition_id: AssetDefinitionId::derive_from_components(
                             DomainId::try_new("privacy", "universal").expect("privacy domain"),
                             Name::from_str("pgc_cash").expect("asset name"),
                         ),
@@ -6581,7 +6581,7 @@ mod tests {
     }
 
     fn zk_ace_asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("asset").expect("asset name"),
         )
@@ -6722,8 +6722,13 @@ mod tests {
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let asset_definition =
-            AssetDefinition::numeric(zk_ace_asset_definition_id()).build(&ALICE_ID);
+        let asset_definition = AssetDefinition::numeric(
+            zk_ace_asset_definition_id(),
+            "asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let mut world = World::with([domain], [alice], [asset_definition]);
         world
             .privacy_activations
@@ -6763,8 +6768,13 @@ mod tests {
         let domain_id = DomainId::try_new("privacy", "universal").expect("privacy domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let asset_definition =
-            AssetDefinition::numeric(statement.asset_definition_id.clone()).build(&ALICE_ID);
+        let asset_definition = AssetDefinition::numeric(
+            statement.asset_definition_id.clone(),
+            "fcmp_asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let mut world = World::with([domain], [alice], [asset_definition]);
         world.privacy_activations.insert(
             PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1),
@@ -7256,8 +7266,13 @@ mod tests {
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let asset_definition =
-            AssetDefinition::numeric(statement.asset_definition_id.clone()).build(&ALICE_ID);
+        let asset_definition = AssetDefinition::numeric(
+            statement.asset_definition_id.clone(),
+            "ivmnote".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let world = World::with([domain], [alice], [asset_definition]);
         let mut state = State::new_with_chain_for_testing(
             world,
@@ -8960,12 +8975,19 @@ mod tests {
         else {
             unreachable!("ZK-ACE runtime fixture")
         };
-        let domain = Domain::new(statement.asset_definition_id.domain().clone()).build(&ALICE_ID);
+        let domain =
+            Domain::new(DomainId::try_new("privacy", "universal").expect("privacy domain"))
+                .build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let source = Account::new(statement.source.clone()).build(&ALICE_ID);
         let destination = Account::new(statement.destination.clone()).build(&ALICE_ID);
-        let asset_definition =
-            AssetDefinition::numeric(statement.asset_definition_id.clone()).build(&ALICE_ID);
+        let asset_definition = AssetDefinition::numeric(
+            statement.asset_definition_id.clone(),
+            "zkace_runtime".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let policy = PrivacyZkAcePolicyRecordV1::new(
             statement.policy_id,
             statement.identity_commitment,

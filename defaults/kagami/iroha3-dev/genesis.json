@@ -169,7 +169,7 @@
               "finality_margin_blocks": 8,
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
-              "max_validators": 128,
+              "max_validators": 31,
               "min_nomination_bond": "1",
               "min_self_bond": "1000",
               "seat_band_pct": 5,
@@ -240,6 +240,16 @@
             "Permission": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
+                "name": "CanReadAllLedgerData"
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
                 "name": "CanManageSoracloud"
               }
             }
@@ -266,7 +276,7 @@
     }
   ],
   "consensus_mode": "Npos",
-  "wire_protocol_version": 3,
+  "wire_protocol_version": 4,
   "consensus_fingerprint": "0xb2773e61e419a3b1e04f2ea19c936372aadb013b6ad39b5b3e4dd737d1201527",
   "sumeragi_v2": {
     "da_layout": {

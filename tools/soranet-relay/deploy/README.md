@@ -43,7 +43,11 @@ All manifests consume the same Norito JSON configuration file and rely on the
      separately authenticated and encrypted local proxy when remote scraping is
      required.
    - Replace the TLS certificate paths or remove the `tls` section to use the
-     built-in self-signed certificate during testing.
+     built-in self-signed certificate during non-VPN development only. A relay
+     with `vpn.enabled = true` must use durable certificate and private-key
+     files. Its authenticated guard-directory certificate must authorize the
+     exit role and a VPN-tagged endpoint whose exact TLS server name and leaf
+     SPKI SHA-256 match those files; startup fails closed on any mismatch.
    - Update the `descriptor_commit_hex` to match the directory-issued descriptor
      and point `descriptor_manifest_path` at the location of the private
      manifest. The sample assumes `/etc/soranet/relay/secrets/`.
@@ -86,6 +90,15 @@ All manifests consume the same Norito JSON configuration file and rely on the
     `pow.token.replay_store_path` on the same class of durable storage. Active
     token records are never evicted; exhausted capacity rejects new token
     admissions, and malformed/over-capacity snapshots fail startup.
+  - For VPN exits, place `vpn.helper_ticket_replay_store_path` on that same
+    operator-protected durable volume and size
+    `vpn.helper_ticket_replay_store_capacity` for the maximum number of
+    simultaneously unexpired leases. Helper-ticket redemption is not accepted
+    until this ledger is fsynced; corruption, write failure, lock contention,
+    or capacity exhaustion fails closed. The ledger's persisted clock
+    high-water mark also prevents a wall-clock regression from reopening an
+    expired redemption. Do not delete or roll back the ledger while any
+    recorded helper ticket remains valid.
    - Set the `compliance` block to match your log retention requirements. The
      default writes JSON Lines events to `/var/log/soranet/relay_compliance.jsonl`,
      rotates the file when it reaches 64 MiB (retaining seven backups), and mirrors
@@ -121,6 +134,10 @@ the hybrid handshake session key and derive the direction- and stream-specific
 ChaCha20-Poly1305 record keys. The shipped Sora VPN helper implements this
 protocol. Relay QUIC endpoints reject TLS 0-RTT and the helper does not offer
 it, so application traffic cannot precede authenticated hybrid key derivation.
+The relay preloads its TLS identity and authenticated transport trust at
+startup. VPN helper tickets that outlive the authenticated directory snapshot
+are rejected, so rotate the snapshot, certificate, and TLS identity together
+and restart the relay before the current trust interval expires.
 
 ## Using the Kubernetes manifests
 
@@ -159,8 +176,8 @@ if another owner is active. Before applying it:
    your policy (limits propagate directly to the runtime guard counters and
    compliance logger).
 5. Bind `soranet-relay-state` to durable storage appropriate for the cluster.
-   The relay refuses startup if a persisted spent-ticket or consumed-token
-   snapshot is unreadable or malformed.
+   The relay refuses startup if a persisted spent-ticket, consumed-token, or
+   consumed VPN helper-ticket snapshot is unreadable or malformed.
 6. Adjust the container image (defaults to
    `ghcr.io/sora-nexus/soranet-relay:latest`), resource requests, and security
    context as needed. The sample deliberately does not publish or probe the

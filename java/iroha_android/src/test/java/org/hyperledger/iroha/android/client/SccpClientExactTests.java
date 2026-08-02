@@ -1071,9 +1071,23 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.anchorHash.equals(
         "0x" + finalityAnchorHash().toLowerCase());
 
+    final Map<String, Object> current = proofRequest();
+    final Map<String, Object> currentAnchor = object(current.get("sora_finality_anchor"));
+    currentAnchor.put("protocol_version", 4);
+    current.put(
+        "sora_finality_anchor_hash", "0x" + finalityAnchorHash(currentAnchor).toLowerCase());
+    final SccpModels.Groth16ProofRequestV1 currentRequest =
+        SccpJsonParser.parseProofRequest(jsonBytes(current));
+    assert currentRequest.soraFinalityAnchor.protocolVersion == 4;
+    assert !currentRequest.soraFinalityAnchor.anchorHash.equals(
+        request.soraFinalityAnchor.anchorHash);
+
     final Map<String, Object> wrongProtocol = proofRequest();
     object(wrongProtocol.get("sora_finality_anchor")).put("protocol_version", 1);
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocol)));
+    final Map<String, Object> futureProtocol = proofRequest();
+    object(futureProtocol.get("sora_finality_anchor")).put("protocol_version", 5);
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(futureProtocol)));
     final Map<String, Object> wrongProtocolType = proofRequest();
     object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "3");
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocolType)));
@@ -1555,7 +1569,7 @@ public final class SccpClientExactTests {
     destination.put("deployment", deployment);
     final Map<String, Object> settlement = map();
     settlement.put("asset_definition_id", "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
-    settlement.put("custody_account_id", "sorau-test-account");
+    settlement.put("custody_account_id", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
     settlement.put("payload_amount_scale", 9);
     final Map<String, Object> route = map();
     route.put("lane_id", lane());
@@ -1914,7 +1928,7 @@ public final class SccpClientExactTests {
     transfer.put("asset_home_domain", 0);
     transfer.put("asset_id", canonicalProjectionText("xor"));
     transfer.put("amount", 1000);
-    transfer.put("sender", canonicalProjectionText("sorau-test-account"));
+    transfer.put("sender", canonicalProjectionText("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"));
     transfer.put("recipient", Map.of("EvmAddress20", Map.of("bytes", "0x" + "11".repeat(20))));
     transfer.put("route_id", canonicalProjectionText("taira_bsc_xor"));
     return new LinkedHashMap<>(Map.of("Transfer", transfer));

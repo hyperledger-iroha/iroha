@@ -207,16 +207,16 @@ HistoricalCandidateProducerContinuationIngressCutClosureProperty(
                     node, record, status, budget)
 
 THEOREM HistoricalCandidateProducerContinuationFrozenPrefixRankIsFinite ==
-  \A node \in ValidatorIds,
-     record \in AsyncCandidateProducerContinuationRecordSet,
-     status \in {"Reserved", "Materialized"},
-     budget:
-    /\ AsyncControlServiceStateTypeInvariant
-    /\ HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
-         node, record, status, budget)
-      => /\ budget
-               \in AsyncCandidateProducerContinuationFrozenPrefixRankCarrier
-         /\ budget[1] \in Nat \ {0}
+  \A budget:
+    \A node \in ValidatorIds,
+       record \in AsyncCandidateProducerContinuationRecordSet,
+       status \in {"Reserved", "Materialized"}:
+      /\ AsyncControlServiceStateTypeInvariant
+      /\ HistoricalCandidateProducerContinuationFrozenPrefixAtBudget(
+           node, record, status, budget)
+        => /\ budget
+                 \in AsyncCandidateProducerContinuationFrozenPrefixRankCarrier
+           /\ budget[1] \in Nat \ {0}
 BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive
    DEF HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
        HistoricalCandidateProducerContinuationAtStatus

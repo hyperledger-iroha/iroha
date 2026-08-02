@@ -8,6 +8,7 @@ import base64
 import csv
 from dataclasses import dataclass
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -24,16 +25,27 @@ import tempfile
 import time
 from typing import Any
 
+
+_LOCALNET_MANIFEST_MODULE_PATH = Path(__file__).resolve(strict=True).with_name(
+    "sumeragi_v2_localnet_manifest.py"
+)
+_LOCALNET_MANIFEST_SPEC = importlib.util.spec_from_file_location(
+    "_sumeragi_v2_release_localnet_manifest",
+    _LOCALNET_MANIFEST_MODULE_PATH,
+)
+if _LOCALNET_MANIFEST_SPEC is None or _LOCALNET_MANIFEST_SPEC.loader is None:
+    raise RuntimeError("could not load the adjacent localnet manifest validator")
+_LOCALNET_MANIFEST_MODULE = importlib.util.module_from_spec(
+    _LOCALNET_MANIFEST_SPEC
+)
+_PREVIOUS_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 try:
-    from sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
-except ModuleNotFoundError:
-    from scripts.sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
+    _LOCALNET_MANIFEST_SPEC.loader.exec_module(_LOCALNET_MANIFEST_MODULE)
+finally:
+    sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
+LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
+canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
@@ -127,7 +139,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
+    "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -139,6 +151,10 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
     "manifest_helper": ("compute-manifest.py", _SIGNATURE_DATA_MODE),
     "python": ("python3", _SIGNATURE_TOOL_MODE),
     "receipt_validator": ("validate-receipt.py", _SIGNATURE_DATA_MODE),
+    "receipt_validator_support": (
+        "sumeragi_v2_localnet_manifest.py",
+        _SIGNATURE_DATA_MODE,
+    ),
     "revocation": ("bootstrap-revocation", _SIGNATURE_DATA_MODE),
     "runner_tool_manifest": ("runner-tool-manifest.json", _SIGNATURE_DATA_MODE),
     "ssh_keygen": ("ssh-keygen", _SIGNATURE_TOOL_MODE),
@@ -353,7 +369,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 813
+_PRODUCTION_TEST_COUNT = 826
 _G_UNIT_TEST_COUNT = 309
 _G_UNIT_GROUPS = (
     (
@@ -468,13 +484,13 @@ _PRODUCTION_MODULES = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 129),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -546,11 +562,6 @@ _PRODUCTION_MODULES = (
         7,
     ),
     (
-        "production-irohad-genesis-reply-geometry",
-        "genesis_bootstrap::tests",
-        5,
-    ),
-    (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
         2,
@@ -602,12 +613,12 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 51
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 56),
-    ("javascript", 54),
-    ("swift", 3),
+    ("python", 58),
+    ("javascript", 56),
+    ("swift", 4),
     ("kotlin", 6),
     ("java", 5),
 )
@@ -623,7 +634,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "python/iroha_torii_client/native_amx.py",
     "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
     "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/src/norito.js",
+    "javascript/iroha_js/src/native.js",
     "javascript/iroha_js/scripts/build-dist.mjs",
+    "javascript/iroha_js/scripts/native-build-provenance.mjs",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
@@ -643,6 +657,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "NativeAmxV2.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
     "SumeragiDiagnosticsModels.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/util/"
+    "HashLiteral.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/"
+    "IrohaHash.kt",
     "kotlin/core-jvm/build.gradle.kts",
     "kotlin/settings.gradle.kts",
     "kotlin/gradlew",
@@ -654,6 +672,10 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "NativeAmxV2Models.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
     "SumeragiDiagnosticsModels.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/"
+    "IrohaHash.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/util/"
+    "HashLiteral.java",
     "java/iroha_android/core/build.gradle.kts",
     "java/iroha_android/settings.gradle.kts",
     "java/iroha_android/gradlew",
@@ -719,7 +741,6 @@ def _canonical_production_tests(
                     "consensus_message_control::tests::",
                     "network_relay_tests::",
                     "tests::relay_fairness::",
-                    "genesis_bootstrap::tests::",
                     "parameters::",
                 )
             )
@@ -825,7 +846,6 @@ def _production_module_command(module: str) -> str:
         "consensus_message_control::tests",
         "network_relay_tests",
         "tests::relay_fairness",
-        "genesis_bootstrap::tests",
     }:
         return (
             "cargo test --locked --offline -p irohad --bin irohad "
@@ -1082,7 +1102,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                1730,
+                3676,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "

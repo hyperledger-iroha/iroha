@@ -9,7 +9,8 @@ use std::{
 const VERGEN_GIT_SHA_ENV: &str = "VERGEN_GIT_SHA";
 const VERGEN_CARGO_FEATURES_ENV: &str = "VERGEN_CARGO_FEATURES";
 const VERGEN_CARGO_TARGET_TRIPLE_ENV: &str = "VERGEN_CARGO_TARGET_TRIPLE";
-const GIT_RERUN_ENV_VARS: &[&str] = &[VERGEN_GIT_SHA_ENV];
+const IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV: &str = "IROHA_DPN_VALIDATOR_RELEASE_COMMIT";
+const GIT_RERUN_ENV_VARS: &[&str] = &[VERGEN_GIT_SHA_ENV, IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV];
 
 #[derive(Debug)]
 struct GitDirectories {
@@ -308,7 +309,10 @@ mod tests {
 
     #[test]
     fn git_rerun_env_vars_tracks_git_sha_override() {
-        assert_eq!(GIT_RERUN_ENV_VARS, &[VERGEN_GIT_SHA_ENV]);
+        assert_eq!(
+            GIT_RERUN_ENV_VARS,
+            &[VERGEN_GIT_SHA_ENV, IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV,]
+        );
     }
 
     #[test]

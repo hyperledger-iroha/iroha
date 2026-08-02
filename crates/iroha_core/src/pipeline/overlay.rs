@@ -4056,7 +4056,7 @@ mod tests_overlay_manifest {
             crate::query::store::LiveQueryStore::start_test(),
         );
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             71,
             DataSpaceId::UNIVERSAL,
@@ -4149,7 +4149,7 @@ mod tests_overlay_manifest {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             72,
             DataSpaceId::UNIVERSAL,
@@ -4650,7 +4650,7 @@ seiyaku RebuildArguments {
                 .expect("bounded rebuild argument record");
         let (authority, _) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -4825,7 +4825,7 @@ seiyaku QuarantineArguments {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             95,
             DataSpaceId::UNIVERSAL,
@@ -5096,7 +5096,7 @@ seiyaku ProtectedParameterizedOverlay {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             93,
             DataSpaceId::UNIVERSAL,
@@ -5158,7 +5158,7 @@ seiyaku ProtectedParameterizedOverlay {
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, keypair) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             92,
             DataSpaceId::UNIVERSAL,
@@ -5686,14 +5686,14 @@ seiyaku GuardedOverlayRebound {
         const CHILD_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             82,
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive root contract address");
         let child_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             83,
             DataSpaceId::UNIVERSAL,
@@ -6868,7 +6868,7 @@ seiyaku ProtectedProvedOverlay {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             92,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -8602,7 +8602,7 @@ seiyaku DeriveDispatch {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             94,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -8707,14 +8707,14 @@ seiyaku DeriveDispatch {
         let (authority, _) = gen_account_in("wonderland");
         let (other_authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive root contract address");
         let child_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             2,
             DataSpaceId::UNIVERSAL,
@@ -8870,7 +8870,7 @@ seiyaku ProtectedProved {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             93,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -9005,7 +9005,7 @@ seiyaku ProtectedProved {
             .expect("sample raw contract artifact must verify");
         let code_hash = verified.code_hash;
         let address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -9126,7 +9126,7 @@ seiyaku ProtectedProved {
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
 
         let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let kp = checked_keypair();
@@ -9221,7 +9221,7 @@ seiyaku AliasBoundArguments {
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let contract_address = ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             9,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -9397,7 +9397,7 @@ seiyaku AliasBoundArguments {
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let contract_address = ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             10,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -9647,7 +9647,7 @@ seiyaku AliasBoundArguments {
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
 
         let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let wrong_binding = Hash::new(b"other-binding");
@@ -9719,7 +9719,7 @@ seiyaku AliasBoundArguments {
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
 
         let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let kp = checked_keypair();
@@ -9769,7 +9769,7 @@ seiyaku AliasBoundArguments {
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
 
         let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let kp = checked_keypair();
@@ -9974,7 +9974,7 @@ seiyaku AliasBoundArguments {
         world.contract_manifests.insert(code_hash, manifest.clone());
         world.contract_code.insert(code_hash, program.clone());
         let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         world

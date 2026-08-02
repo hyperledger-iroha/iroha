@@ -2431,7 +2431,7 @@ mod tests {
             revision: 1,
             predecessor_policy_digest: None,
             economics: crate::sorafs::reserve::ReservePolicyV1::default(),
-            asset_definition: crate::asset::AssetDefinitionId::new(
+            asset_definition: crate::asset::AssetDefinitionId::derive_from_components(
                 domain,
                 "xor".parse().expect("reserve asset name"),
             ),

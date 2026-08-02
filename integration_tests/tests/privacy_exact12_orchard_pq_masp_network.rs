@@ -560,9 +560,14 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         stringify!(canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart);
     let privacy_domain = DomainId::try_new("privacy", "universal")?;
     let (reserve_account, _) = gen_account_in("privacy");
-    let orchard_asset =
-        AssetDefinitionId::new(privacy_domain.clone(), "orchard_note".parse::<Name>()?);
-    let pq_asset = AssetDefinitionId::new(privacy_domain.clone(), "pq_note".parse::<Name>()?);
+    let orchard_asset = AssetDefinitionId::derive_from_components(
+        privacy_domain.clone(),
+        "orchard_note".parse::<Name>()?,
+    );
+    let pq_asset = AssetDefinitionId::derive_from_components(
+        privacy_domain.clone(),
+        "pq_note".parse::<Name>()?,
+    );
     let orchard_asset_at_alice = AssetId::new(orchard_asset.clone(), ALICE_ID.clone());
     let orchard_asset_at_reserve = AssetId::new(orchard_asset.clone(), reserve_account.clone());
     let transaction_budget =
@@ -606,13 +611,18 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         )))
         .with_genesis_instruction(Register::domain(Domain::new(privacy_domain.clone())))
         .with_genesis_instruction(Register::account(Account::new(reserve_account.clone())))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(orchard_asset.clone())
-                .with_name(orchard_asset.name().to_string()),
-        ))
-        .with_genesis_instruction(Register::asset_definition(
-            AssetDefinition::numeric(pq_asset.clone()).with_name(pq_asset.name().to_string()),
-        ))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            orchard_asset.clone(),
+            "orchard_note".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
+        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+            pq_asset.clone(),
+            "pq_note".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )))
         .with_genesis_instruction(Mint::asset_quantity(
             100_u32,
             orchard_asset_at_alice.clone(),

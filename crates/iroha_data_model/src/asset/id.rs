@@ -1,11 +1,6 @@
 //! Asset identifiers.
 
-use std::{
-    array, fmt, format,
-    hash::{Hash, Hasher},
-    str::FromStr,
-    string::String,
-};
+use std::{array, fmt, format, str::FromStr, string::String};
 
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
@@ -18,12 +13,6 @@ use norito::{
 pub use self::model::*;
 use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
-pub(crate) struct AssetDefinitionProjection {
-    domain: DomainId,
-    name: Name,
-}
-
 #[model]
 mod model {
     use super::*;
@@ -33,15 +22,12 @@ mod model {
     /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes
     /// plus a version byte and checksum. On-chain asset aliases resolve to this
     /// identifier only.
-    #[derive(Debug, Clone, CopyGetters, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, CopyGetters, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionId {
         /// Canonical `UUIDv4` bytes.
         #[getset(get_copy = "pub")]
         pub aid_bytes: [u8; 16],
-        /// Optional domain/name projection carried only for IDs constructed from
-        /// explicit domain-scoped components.
-        pub(crate) projection: Option<AssetDefinitionProjection>,
     }
 
     /// Balance partition used for a concrete asset ownership bucket.
@@ -92,32 +78,6 @@ string_id!(AssetDefinitionId);
 
 const ASSET_DEFINITION_ADDRESS_VERSION: u8 = 1;
 const ASSET_DEFINITION_ADDRESS_LEN: usize = 1 + 16 + 4;
-
-impl PartialEq for AssetDefinitionId {
-    fn eq(&self, other: &Self) -> bool {
-        self.aid_bytes == other.aid_bytes
-    }
-}
-
-impl Eq for AssetDefinitionId {}
-
-impl PartialOrd for AssetDefinitionId {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for AssetDefinitionId {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.aid_bytes.cmp(&other.aid_bytes)
-    }
-}
-
-impl Hash for AssetDefinitionId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.aid_bytes.hash(state);
-    }
-}
 
 impl NoritoSerialize for AssetDefinitionId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -274,27 +234,22 @@ impl AssetDefinitionId {
                 "Asset Definition ID must encode UUIDv4 bytes",
             ));
         }
-        Ok(Self {
-            aid_bytes,
-            projection: None,
-        })
+        Ok(Self { aid_bytes })
     }
 
-    /// Construct from UUID bytes without validation.
-    #[must_use]
-    pub fn from_uuid_bytes_unchecked(aid_bytes: [u8; 16]) -> Self {
-        Self {
-            aid_bytes,
-            projection: None,
-        }
+    /// Construct from trusted UUID bytes already validated by the decoder.
+    fn from_uuid_bytes_unchecked(aid_bytes: [u8; 16]) -> Self {
+        Self { aid_bytes }
     }
 
     /// Deterministically derive canonical UUID bytes from component labels.
     ///
-    /// This is an internal construction helper. Public textual identifiers remain the
-    /// Base58 address returned by [`Self::canonical_address`].
+    /// The labels are only a deterministic seed. They are not retained and confer no ownership,
+    /// routing, or display-name semantics. Those properties belong to the stored asset
+    /// definition. Public textual identifiers remain the Base58 address returned by
+    /// [`Self::canonical_address`].
     #[must_use]
-    pub fn new(domain: DomainId, name: Name) -> Self {
+    pub fn derive_from_components(domain: DomainId, name: Name) -> Self {
         let literal = format!("{name}#{domain}");
         let digest = blake3::hash(literal.as_bytes());
         let mut aid_bytes = [0u8; 16];
@@ -302,48 +257,7 @@ impl AssetDefinitionId {
         // Force UUIDv4 version and RFC4122 variant bits.
         aid_bytes[6] = (aid_bytes[6] & 0x0f) | 0x40;
         aid_bytes[8] = (aid_bytes[8] & 0x3f) | 0x80;
-        Self {
-            aid_bytes,
-            projection: Some(AssetDefinitionProjection { domain, name }),
-        }
-    }
-
-    /// Domain projection for domain-scoped identifiers constructed via [`Self::new`].
-    #[must_use]
-    pub fn try_domain(&self) -> Option<&DomainId> {
-        self.projection
-            .as_ref()
-            .map(|projection| &projection.domain)
-    }
-
-    /// Name projection for domain-scoped identifiers constructed via [`Self::new`].
-    #[must_use]
-    pub fn try_name(&self) -> Option<&Name> {
-        self.projection.as_ref().map(|projection| &projection.name)
-    }
-
-    /// Domain projection for a domain-scoped identifier.
-    ///
-    /// # Panics
-    /// Panics when called on an opaque canonical ID parsed from raw bytes or
-    /// canonical Base58 without an explicit domain-scoped projection.
-    #[must_use]
-    pub fn domain(&self) -> &DomainId {
-        self.try_domain().expect(
-            "opaque canonical asset definition ids do not carry a domain projection; use an asset alias or the stored asset definition metadata instead",
-        )
-    }
-
-    /// Name projection for a domain-scoped identifier.
-    ///
-    /// # Panics
-    /// Panics when called on an opaque canonical ID parsed from raw bytes or
-    /// canonical Base58 without an explicit domain-scoped projection.
-    #[must_use]
-    pub fn name(&self) -> &Name {
-        self.try_name().expect(
-            "opaque canonical asset definition ids do not carry a synthetic name; use the stored asset definition name or an asset alias instead",
-        )
+        Self { aid_bytes }
     }
 
     /// Canonical textual address (unprefixed Base58 with version and checksum).
@@ -351,13 +265,6 @@ impl AssetDefinitionId {
     pub fn canonical_address(&self) -> String {
         let payload = self.address_payload();
         bs58::encode(payload).into_string()
-    }
-
-    /// Returns `true` when this identifier is an opaque canonical ID without an
-    /// explicit domain/name projection.
-    #[must_use]
-    pub fn is_opaque_canonical(&self) -> bool {
-        self.projection.is_none()
     }
 
     /// Parse the canonical unprefixed Base58 address.
@@ -394,11 +301,6 @@ impl AssetDefinitionId {
         }
         let aid_bytes = array::from_fn(|index| payload[index + 1]);
         Self::from_uuid_bytes(aid_bytes)
-    }
-
-    /// Convenience alias for [`Self::new`].
-    pub fn of(domain: DomainId, name: Name) -> Self {
-        Self::new(domain, name)
     }
 
     fn address_payload(&self) -> [u8; ASSET_DEFINITION_ADDRESS_LEN] {
@@ -514,7 +416,7 @@ mod tests {
         let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
         let name: Name = "xor".parse().unwrap();
         let account: AccountId = AccountId::new(kp.public_key().clone());
-        let def = AssetDefinitionId::new(domain, name);
+        let def = AssetDefinitionId::derive_from_components(domain, name);
         let id = AssetId::new(def, account);
         let s = format!("{id:?}");
         assert_eq!(s, id.canonical_literal());
@@ -534,38 +436,38 @@ mod tests {
     }
 
     #[test]
-    fn asset_definition_id_distinguishes_opaque_from_domain_scoped_ids() {
-        let opaque = AssetDefinitionId::from_uuid_bytes([
-            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
-            0xcd, 0x2f,
-        ])
-        .expect("opaque bytes should parse");
-        assert!(opaque.is_opaque_canonical());
-        assert!(opaque.try_domain().is_none());
-        assert!(opaque.try_name().is_none());
+    fn asset_definition_id_rejects_non_v4_uuid_bytes() {
+        assert!(AssetDefinitionId::from_uuid_bytes([0_u8; 16]).is_err());
 
-        let domain_scoped = AssetDefinitionId::new(
+        let mut wrong_variant = [0_u8; 16];
+        wrong_variant[6] = 0x40;
+        wrong_variant[8] = 0x40;
+        assert!(AssetDefinitionId::from_uuid_bytes(wrong_variant).is_err());
+    }
+
+    #[test]
+    fn unchecked_asset_definition_constructor_is_not_public() {
+        let source = include_str!("id.rs");
+        let forbidden = ["pub fn ", "from_uuid_bytes_unchecked"].concat();
+        assert!(!source.contains(&forbidden));
+    }
+
+    #[test]
+    fn component_derivation_produces_canonical_opaque_id() {
+        let derived = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         );
-        assert!(!domain_scoped.is_opaque_canonical());
-        assert_eq!(
-            domain_scoped
-                .try_domain()
-                .expect("domain-scoped projection"),
-            &DomainId::try_new("wonderland", "universal").expect("domain"),
-        );
-        assert_eq!(
-            domain_scoped.try_name().expect("name projection"),
-            &"xor".parse::<Name>().expect("name"),
-        );
+        let reparsed = AssetDefinitionId::parse_address_literal(&derived.canonical_address())
+            .expect("derived address parses");
+        assert_eq!(reparsed, derived);
     }
 
     #[test]
     fn asset_id_parse_literal_roundtrips_global() {
         let kp = checked_random_keypair();
         let account = AccountId::new(kp.public_key().clone());
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         );
@@ -580,7 +482,7 @@ mod tests {
     fn asset_id_parse_literal_roundtrips_scoped() {
         let kp = checked_random_keypair();
         let account = AccountId::new(kp.public_key().clone());
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         );
@@ -637,7 +539,7 @@ mod tests {
 
     #[test]
     fn asset_definition_id_rejects_invalid_checksum() {
-        let mut literal = AssetDefinitionId::new(
+        let mut literal = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         )

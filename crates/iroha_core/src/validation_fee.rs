@@ -3306,7 +3306,6 @@ fn native_instruction_ds_effect_disposition(
         // subject after its code identity was reviewed.
         iroha_data_model::isi::smart_contract_code::DeactivateContractInstance,
         iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes,
-        iroha_data_model::isi::SetAssetDefinitionBalancePolicy,
         iroha_data_model::isi::rwa::RwaInstructionBox,
         iroha_data_model::isi::rwa::RegisterRwa,
         iroha_data_model::isi::rwa::TransferRwa,
@@ -3700,8 +3699,8 @@ mod tests {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaAndroidKeyMintHardwareAssertionV1,
@@ -3711,7 +3710,7 @@ mod tests {
             KagemushaRecursiveSpendOperationVectorV4, KagemushaRecursiveSpendProofV4,
             KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendRedeemRequestV4,
             KagemushaRecursiveSpendRedeemUnsignedV4, KagemushaRecursiveSpendRedemptionIntentV4,
-            KagemushaRecursiveSpendStateBoundaryV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+            KagemushaRecursiveSpendStateBoundaryV5, KagemushaRecursiveSpendTopUpAnchorRefV2,
             KagemushaRecursiveSpendTopUpRequestV4, KagemushaRecursiveSpendTopUpUnsignedV4,
             KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
             KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
@@ -3761,7 +3760,7 @@ mod tests {
     }
 
     fn asset_definition(name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "paynet").expect("domain id"),
             Name::from_str(name).expect("asset name"),
         )
@@ -3796,7 +3795,7 @@ mod tests {
 
     fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
         iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &account(9),
             42,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -4070,7 +4069,7 @@ mod tests {
             None,
             "test authorization must exactly anchor its retained electorate"
         );
-        state_tx.world.governance_proposals.insert(
+        state_tx.world.put_governance_proposal(
             proposal_id,
             crate::state::GovernanceProposalRecord {
                 proposer: account(250),
@@ -4268,12 +4267,18 @@ mod tests {
         accounts.extend((2..=7).map(|seed| Account::new(account(seed)).build(deployer)));
         let fee_definition = AssetDefinition::new(
             fee_asset(),
+            "fee_token".to_owned(),
             NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(deployer);
         let xor_definition = AssetDefinition::new(
             xor_asset(),
+            "xor".to_owned(),
             NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(deployer);
         crate::state::World::with(
@@ -4315,7 +4320,7 @@ mod tests {
         )
         .expect("register signed contract manifest");
         let contract_address = ContractAddress::derive(
-            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             deployer,
             0,
             DataSpaceId::UNIVERSAL,
@@ -4560,8 +4565,8 @@ mod tests {
             verifier_key_id: verifier_key_id.clone(),
         };
         let public_statement_digest = statement.digest().expect("valid public statement");
-        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
         let mut operation_limbs = [0; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
         operation_limbs[0] = 1;
         let bundle = KagemushaRecursiveSpendBundleV4 {
@@ -4587,7 +4592,7 @@ mod tests {
                     step_ep_circuit_params_sha256: [0xB8; 32],
                     step_eq_verifier_key_sha256: [0xB9; 32],
                     step_ep_verifier_key_sha256: [0xBA; 32],
-                    state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
+                    state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)
                         .expect("valid state boundary"),
                     proof: ProofBox::new(
                         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
@@ -4720,7 +4725,7 @@ mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(Executable::ContractCall(ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: iroha_crypto::Hash::new(b"validation-fee-contract-code"),
@@ -4898,7 +4903,7 @@ mod tests {
         let policy = policy(&treasury);
         let code_hash = Hash::new(b"permissionless-contract-artifact");
         let contract_address: iroha_data_model::smart_contract::ContractAddress =
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address");
         let instructions: Vec<InstructionBox> = vec![
@@ -4976,7 +4981,7 @@ mod tests {
         let policy = policy(&treasury);
         let code_hash = Hash::new(b"immutable-contract-artifact");
         let contract_address: iroha_data_model::smart_contract::ContractAddress =
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address");
         let instructions: Vec<InstructionBox> = vec![
@@ -5612,7 +5617,8 @@ mod tests {
                 Repeats::Indefinitely,
                 initiator.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let instruction_groups = std::collections::BTreeMap::from([(
             initiator,
@@ -5910,7 +5916,8 @@ mod tests {
                 Repeats::Indefinitely,
                 user.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         instruction_groups.insert(
             user.clone(),
@@ -5935,7 +5942,8 @@ mod tests {
                 Repeats::Indefinitely,
                 user.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(nested_trigger_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let multisig = account(4);
         instruction_groups.insert(
@@ -5995,7 +6003,8 @@ mod tests {
                 Repeats::Indefinitely,
                 user.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(approval_trigger_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         assert_indirect_approval_rejected(vec![
             RegisterBox::Trigger(Register::trigger(approval_trigger)).into(),
@@ -6379,12 +6388,18 @@ mod tests {
         accounts.extend((2..=7).map(|seed| Account::new(account(seed)).build(&deployer)));
         let fee_definition = AssetDefinition::new(
             fee_asset(),
+            "fee_token".to_owned(),
             NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(&deployer);
         let xor_definition = AssetDefinition::new(
             xor_asset(),
+            "xor".to_owned(),
             NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
         .build(&deployer);
         let world = crate::state::World::with(
@@ -6441,7 +6456,7 @@ mod tests {
         )
         .expect("register signed contract manifest");
         let contract_address = ContractAddress::derive(
-            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &deployer,
             0,
             DataSpaceId::UNIVERSAL,

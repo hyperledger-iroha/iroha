@@ -1,7 +1,7 @@
 //! `SoraNet` handshake helpers shared across runtime components and the fixture harness.
 //!
 //! Provides capability TLV parsing, transcript hashing, a deterministic Noise XX
-//! handshake simulation (with ML-KEM material, dual signatures, and padded
+//! handshake simulation (with ML-KEM material, authenticated relay identity, and padded
 //! frames), plus helpers for salt/telemetry fixture generation.
 
 use std::{
@@ -39,13 +39,21 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::{KeyPair, SessionKey, kex::is_x25519_low_order_public_key};
+use crate::{
+    Algorithm, KeyPair, PublicKey, SessionKey, Signature, kex::is_x25519_low_order_public_key,
+};
 
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
 const EXPAND_MATERIAL_DOMAIN: &[u8] = b"soranet.expand-material.v1";
 const SESSION_KEY_IKM_DOMAIN: &[u8] = b"soranet.session-key.ikm.v1";
 const STEP_DOMAIN: &[u8] = b"soranet.noise.step.v1";
+const RELAY_AUTH_DOMAIN: &[u8] = b"soranet.handshake.relay-auth.v1";
+
+/// ALPN used by the public SoraNet QUIC transport.
+pub const SORANET_QUIC_ALPN: &[u8] = b"soranet/1";
+/// Placeholder TLS name used by non-VPN harnesses that do not terminate TLS.
+pub const DEFAULT_TLS_SERVER_NAME: &str = "soranet.invalid";
 
 const HYBRID_CLIENT_HELLO_TYPE: u8 = 0x11;
 const HYBRID_RELAY_RESPONSE_TYPE: u8 = 0x12;
@@ -1442,7 +1450,6 @@ struct KemLabelSet {
 }
 
 struct DeterministicHandshakeMaterial {
-    client_static_bytes: [u8; NOISE_SECRET_LEN],
     client_static_public: [u8; NOISE_SECRET_LEN],
     client_ephemeral_public: [u8; NOISE_SECRET_LEN],
     relay_static_bytes: [u8; NOISE_SECRET_LEN],
@@ -1450,6 +1457,18 @@ struct DeterministicHandshakeMaterial {
     relay_ephemeral_public: [u8; NOISE_SECRET_LEN],
     primary_kem: SimulatedKemArtifacts,
     forward_secure_kem: SimulatedKemArtifacts,
+}
+
+fn simulation_relay_identity_key(
+    material: &DeterministicHandshakeMaterial,
+) -> Result<KeyPair, HarnessError> {
+    KeyPair::try_from_seed(material.relay_static_bytes.to_vec(), Algorithm::Ed25519).map_err(
+        |error| {
+            HarnessError::Validation(format!(
+                "failed to derive deterministic simulation relay identity: {error}"
+            ))
+        },
+    )
 }
 
 fn derive_kem_artifacts(
@@ -1569,7 +1588,6 @@ fn derive_handshake_material(
     );
 
     Ok(DeterministicHandshakeMaterial {
-        client_static_bytes: *client_static,
         client_static_public,
         client_ephemeral_public,
         relay_static_bytes: *relay_static,
@@ -1606,23 +1624,6 @@ fn build_nk2_artifacts(
         }
         None => client_init.push(0),
     }
-    let client_body = client_init.clone();
-    let client_dilithium = expand_material(
-        b"soranet.sig.dilithium.hybrid.client.v1",
-        &[
-            material.client_static_bytes.as_ref(),
-            client_body.as_slice(),
-            transcript_hash,
-        ],
-        DILITHIUM3_SIGNATURE_LEN,
-    );
-    append_len_prefixed(&mut client_init, &client_dilithium)?;
-    let client_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.hybrid.client.v1",
-        material.client_static_bytes.as_ref(),
-        &[client_body.as_slice(), transcript_hash],
-    )?;
-    append_len_prefixed(&mut client_init, &client_ed)?;
     pad_to_noise_block(&mut client_init);
 
     let mut relay_response = Vec::new();
@@ -1637,27 +1638,17 @@ fn build_nk2_artifacts(
     append_len_prefixed(&mut relay_response, &primary.confirmation)?;
     append_len_prefixed(&mut relay_response, transcript_hash)?;
     let relay_body = relay_response.clone();
-    let relay_dilithium = expand_material(
-        b"soranet.sig.dilithium.hybrid.relay.v1",
-        &[
-            material.relay_static_bytes.as_ref(),
-            client_init.as_slice(),
-            relay_body.as_slice(),
-            transcript_hash,
-        ],
-        DILITHIUM3_SIGNATURE_LEN,
-    );
-    append_len_prefixed(&mut relay_response, &relay_dilithium)?;
-    let relay_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.hybrid.relay.v1",
-        material.relay_static_bytes.as_ref(),
-        &[
-            client_init.as_slice(),
-            relay_body.as_slice(),
-            transcript_hash,
-        ],
+    let relay_identity_key = simulation_relay_identity_key(material)?;
+    append_relay_authentication(
+        &mut relay_response,
+        HandshakeSuite::Nk2Hybrid,
+        &client_init,
+        &relay_body,
+        transcript_hash,
+        &relay_identity_key,
+        SORANET_QUIC_ALPN,
+        DEFAULT_TLS_SERVER_NAME,
     )?;
-    append_len_prefixed(&mut relay_response, &relay_ed)?;
     pad_to_noise_block(&mut relay_response);
 
     let mut telemetry_map = Map::new();
@@ -1753,23 +1744,6 @@ fn build_nk3_artifacts(
         None => client_commit.push(0),
     }
     append_len_prefixed(&mut client_commit, &fs_commitment)?;
-    let client_body = client_commit.clone();
-    let client_dilithium = expand_material(
-        b"soranet.sig.dilithium.pqfs.client.v1",
-        &[
-            material.client_static_bytes.as_ref(),
-            client_body.as_slice(),
-            transcript_hash,
-        ],
-        DILITHIUM3_SIGNATURE_LEN,
-    );
-    append_len_prefixed(&mut client_commit, &client_dilithium)?;
-    let client_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.pqfs.client.v1",
-        material.client_static_bytes.as_ref(),
-        &[client_body.as_slice(), transcript_hash],
-    )?;
-    append_len_prefixed(&mut client_commit, &client_ed)?;
     pad_to_noise_block(&mut client_commit);
 
     let mut relay_response = Vec::new();
@@ -1789,27 +1763,17 @@ fn build_nk3_artifacts(
     append_len_prefixed(&mut relay_response, &fs_commitment)?;
     append_len_prefixed(&mut relay_response, &dual_mix)?;
     let relay_body = relay_response.clone();
-    let relay_dilithium = expand_material(
-        b"soranet.sig.dilithium.pqfs.relay.v1",
-        &[
-            material.relay_static_bytes.as_ref(),
-            client_commit.as_slice(),
-            relay_body.as_slice(),
-            transcript_hash,
-        ],
-        DILITHIUM3_SIGNATURE_LEN,
-    );
-    append_len_prefixed(&mut relay_response, &relay_dilithium)?;
-    let relay_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.pqfs.relay.v1",
-        material.relay_static_bytes.as_ref(),
-        &[
-            client_commit.as_slice(),
-            relay_body.as_slice(),
-            transcript_hash,
-        ],
+    let relay_identity_key = simulation_relay_identity_key(material)?;
+    append_relay_authentication(
+        &mut relay_response,
+        HandshakeSuite::Nk3PqForwardSecure,
+        &client_commit,
+        &relay_body,
+        transcript_hash,
+        &relay_identity_key,
+        SORANET_QUIC_ALPN,
+        DEFAULT_TLS_SERVER_NAME,
     )?;
-    append_len_prefixed(&mut relay_response, &relay_ed)?;
     pad_to_noise_block(&mut relay_response);
 
     let mut telemetry_map = Map::new();
@@ -1980,40 +1944,158 @@ fn derive_ed25519_signature(
     Ok(signature.to_bytes())
 }
 
-fn validate_handshake_signature_material(
-    context: &str,
-    name: &str,
-    signature: &[u8],
-    expected: usize,
-) -> Result<(), HarnessError> {
-    let actual = signature.len();
-    if actual == expected {
-        if signature.iter().all(|&byte| byte == 0) {
-            return Err(HarnessError::Validation(format!(
-                "{context} {name} signature must not be all zero"
-            )));
-        }
-        return Ok(());
+fn relay_identity_bytes(key_pair: &KeyPair) -> Result<[u8; 32], HarnessError> {
+    let (algorithm, bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|error| HarnessError::Validation(format!("invalid relay identity: {error}")))?;
+    if algorithm != Algorithm::Ed25519 {
+        return Err(HarnessError::Validation(
+            "relay handshake identity must be Ed25519".to_owned(),
+        ));
     }
-    Err(HarnessError::Validation(format!(
-        "{context} {name} signature must be {expected} bytes, got {actual}"
-    )))
+    bytes.try_into().map_err(|_| {
+        HarnessError::Validation(format!(
+            "relay Ed25519 identity must be 32 bytes, got {}",
+            bytes.len()
+        ))
+    })
 }
 
-fn read_handshake_signature_pair(
-    cursor: &mut MessageCursor<'_>,
-    context: &str,
-) -> Result<(), HarnessError> {
-    let dilithium = cursor.read_len_prefixed()?;
-    validate_handshake_signature_material(
-        context,
-        "Dilithium3",
-        dilithium,
-        DILITHIUM3_SIGNATURE_LEN,
-    )?;
+fn update_relay_auth_component(hasher: &mut Sha3_256, component: &[u8]) {
+    Update::update(hasher, &(component.len() as u64).to_be_bytes());
+    Update::update(hasher, component);
+}
 
-    let ed25519 = cursor.read_len_prefixed()?;
-    validate_handshake_signature_material(context, "Ed25519", ed25519, ED25519_SIGNATURE_LEN)
+fn relay_auth_digest(
+    suite: HandshakeSuite,
+    client_hello: &[u8],
+    relay_body: &[u8],
+    transcript_hash: &[u8; 32],
+    relay_identity: &[u8; 32],
+    transport_alpn: &[u8],
+    tls_server_name: &str,
+) -> [u8; 32] {
+    let mut hasher = Sha3_256::new();
+    let version = [1u8];
+    let suite_id = [u8::from(suite)];
+    for component in [
+        RELAY_AUTH_DOMAIN,
+        version.as_slice(),
+        suite_id.as_slice(),
+        client_hello,
+        relay_body,
+        transcript_hash,
+        relay_identity,
+        transport_alpn,
+        tls_server_name.as_bytes(),
+    ] {
+        update_relay_auth_component(&mut hasher, component);
+    }
+    hasher.finalize().into()
+}
+
+fn append_relay_authentication(
+    frame: &mut Vec<u8>,
+    suite: HandshakeSuite,
+    client_hello: &[u8],
+    relay_body: &[u8],
+    transcript_hash: &[u8; 32],
+    relay_identity_key: &KeyPair,
+    transport_alpn: &[u8],
+    tls_server_name: &str,
+) -> Result<(), HarnessError> {
+    let relay_identity = relay_identity_bytes(relay_identity_key)?;
+    let digest = relay_auth_digest(
+        suite,
+        client_hello,
+        relay_body,
+        transcript_hash,
+        &relay_identity,
+        transport_alpn,
+        tls_server_name,
+    );
+    let signature = Signature::try_new(relay_identity_key.private_key(), &digest)
+        .map_err(|error| HarnessError::Validation(format!("relay signing failed: {error}")))?;
+    if signature.payload().len() != ED25519_SIGNATURE_LEN {
+        return Err(HarnessError::Validation(format!(
+            "relay Ed25519 signature must be {ED25519_SIGNATURE_LEN} bytes, got {}",
+            signature.payload().len()
+        )));
+    }
+    append_len_prefixed(frame, &relay_identity)?;
+    append_len_prefixed(frame, signature.payload())
+}
+
+fn verify_relay_authentication(
+    suite: HandshakeSuite,
+    client_hello: &[u8],
+    relay_body: &[u8],
+    transcript_hash: &[u8; 32],
+    relay_identity: &[u8; 32],
+    signature: &[u8],
+    expected_relay_identity: &PublicKey,
+    transport_alpn: &[u8],
+    tls_server_name: &str,
+) -> Result<(), HarnessError> {
+    let (algorithm, expected_bytes) = expected_relay_identity.try_to_bytes().map_err(|error| {
+        HarnessError::Validation(format!("invalid expected relay key: {error}"))
+    })?;
+    if algorithm != Algorithm::Ed25519 || expected_bytes != relay_identity {
+        return Err(HarnessError::Validation(
+            "relay handshake identity does not match the authenticated directory identity"
+                .to_owned(),
+        ));
+    }
+    if signature.len() != ED25519_SIGNATURE_LEN {
+        return Err(HarnessError::Validation(format!(
+            "relay Ed25519 signature must be {ED25519_SIGNATURE_LEN} bytes, got {}",
+            signature.len()
+        )));
+    }
+    let digest = relay_auth_digest(
+        suite,
+        client_hello,
+        relay_body,
+        transcript_hash,
+        relay_identity,
+        transport_alpn,
+        tls_server_name,
+    );
+    Signature::try_from_bytes(signature)
+        .map_err(|error| HarnessError::Validation(format!("invalid relay signature: {error}")))?
+        .verify(expected_relay_identity, &digest)
+        .map_err(|_| {
+            HarnessError::Validation("relay identity signature verification failed".into())
+        })
+}
+
+fn read_relay_authentication(
+    cursor: &mut MessageCursor<'_>,
+) -> Result<([u8; 32], Vec<u8>), HarnessError> {
+    let identity_bytes = cursor.read_len_prefixed()?;
+    let relay_identity: [u8; 32] = identity_bytes.try_into().map_err(|_| {
+        HarnessError::Validation(format!(
+            "relay Ed25519 identity must be 32 bytes, got {}",
+            identity_bytes.len()
+        ))
+    })?;
+    PublicKey::from_bytes(Algorithm::Ed25519, &relay_identity).map_err(|error| {
+        HarnessError::Validation(format!("relay Ed25519 identity is invalid: {error}"))
+    })?;
+    let signature = cursor.read_len_prefixed()?.to_vec();
+    if signature.len() != ED25519_SIGNATURE_LEN {
+        return Err(HarnessError::Validation(format!(
+            "relay Ed25519 signature must be {ED25519_SIGNATURE_LEN} bytes, got {}",
+            signature.len()
+        )));
+    }
+    if signature.iter().all(|byte| *byte == 0) {
+        return Err(HarnessError::Validation(
+            "relay Ed25519 signature must not be all zero".to_owned(),
+        ));
+    }
+    Ok((relay_identity, signature))
 }
 
 fn validate_noise_padding(
@@ -3018,6 +3100,10 @@ pub struct RuntimeParams<'a> {
     pub kem_id: u8,
     /// Signature suite identifier negotiated for the session.
     pub sig_id: u8,
+    /// Exact QUIC ALPN bound into relay authentication.
+    pub transport_alpn: &'a [u8],
+    /// Exact TLS DNS name bound into relay authentication.
+    pub tls_server_name: &'a str,
     /// Optional resume hash carried over from a previous circuit.
     pub resume_hash: Option<&'a [u8]>,
 }
@@ -3032,6 +3118,8 @@ impl RuntimeParams<'_> {
             relay_capabilities: &DEFAULT_RELAY_CAPABILITIES,
             kem_id: 1,
             sig_id: 1,
+            transport_alpn: SORANET_QUIC_ALPN,
+            tls_server_name: DEFAULT_TLS_SERVER_NAME,
             resume_hash: None,
         }
     }
@@ -3256,25 +3344,6 @@ fn build_client_hello_nk2(
     } else {
         client_init.push(0);
     }
-    let client_body = client_init.clone();
-    let placeholder_hash = [0u8; 32];
-    let static_secret_bytes = Zeroizing::new(materials.static_secret.to_bytes());
-    let client_dilithium = expand_material(
-        b"soranet.sig.dilithium.hybrid.client.v1",
-        &[
-            static_secret_bytes.as_ref(),
-            client_body.as_slice(),
-            placeholder_hash.as_ref(),
-        ],
-        DILITHIUM3_SIGNATURE_LEN,
-    );
-    append_len_prefixed(&mut client_init, client_dilithium.as_slice())?;
-    let client_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.hybrid.client.v1",
-        static_secret_bytes.as_ref(),
-        &[client_body.as_slice(), placeholder_hash.as_ref()],
-    )?;
-    append_len_prefixed(&mut client_init, client_ed.as_ref())?;
     pad_to_noise_block(&mut client_init);
 
     let state = materials.into_state(params, HandshakeSuite::Nk2Hybrid, client_init.clone(), None);
@@ -3314,25 +3383,6 @@ fn build_client_hello_nk3(
         client_commit.push(0);
     }
     append_len_prefixed(&mut client_commit, forward_commitment.as_slice())?;
-    let client_body = client_commit.clone();
-    let placeholder_hash = [0u8; 32];
-    let static_secret_bytes = Zeroizing::new(materials.static_secret.to_bytes());
-    let client_dilithium = expand_material(
-        b"soranet.sig.dilithium.pqfs.client.v1",
-        &[
-            static_secret_bytes.as_ref(),
-            client_body.as_slice(),
-            placeholder_hash.as_ref(),
-        ],
-        DILITHIUM3_SIGNATURE_LEN,
-    );
-    append_len_prefixed(&mut client_commit, client_dilithium.as_slice())?;
-    let client_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.pqfs.client.v1",
-        static_secret_bytes.as_ref(),
-        &[client_body.as_slice(), placeholder_hash.as_ref()],
-    )?;
-    append_len_prefixed(&mut client_commit, client_ed.as_ref())?;
     pad_to_noise_block(&mut client_commit);
 
     let forward_bundle = Some((forward_secret, forward_public.clone()));
@@ -3387,6 +3437,9 @@ struct HybridRelayParsed {
     kem_ciphertext: Vec<u8>,
     confirmation: Vec<u8>,
     transcript_hash: [u8; 32],
+    signed_relay_body: Vec<u8>,
+    relay_identity: [u8; 32],
+    relay_signature: Vec<u8>,
 }
 
 #[allow(dead_code)]
@@ -3405,6 +3458,9 @@ struct PqfsRelayParsed {
     transcript_hash: [u8; 32],
     forward_commitment: Vec<u8>,
     dual_mix: Vec<u8>,
+    signed_relay_body: Vec<u8>,
+    relay_identity: [u8; 32],
+    relay_signature: Vec<u8>,
 }
 
 #[allow(dead_code)]
@@ -3465,7 +3521,8 @@ fn parse_hybrid_relay_response(
     let mut transcript_hash = [0u8; 32];
     transcript_hash.copy_from_slice(&transcript_bytes);
 
-    read_handshake_signature_pair(&mut cursor, "hybrid relay response")?;
+    let signed_relay_body = relay_message[..cursor.pos].to_vec();
+    let (relay_identity, relay_signature) = read_relay_authentication(&mut cursor)?;
     validate_noise_padding(
         "hybrid relay response",
         relay_message.len(),
@@ -3482,6 +3539,9 @@ fn parse_hybrid_relay_response(
         kem_ciphertext,
         confirmation,
         transcript_hash,
+        signed_relay_body,
+        relay_identity,
+        relay_signature,
     })
 }
 
@@ -3553,7 +3613,8 @@ fn parse_pqfs_relay_response(
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
     let dual_mix = cursor.read_len_prefixed()?.to_vec();
 
-    read_handshake_signature_pair(&mut cursor, "pqfs relay response")?;
+    let signed_relay_body = relay_message[..cursor.pos].to_vec();
+    let (relay_identity, relay_signature) = read_relay_authentication(&mut cursor)?;
     validate_noise_padding(
         "pqfs relay response",
         relay_message.len(),
@@ -3575,6 +3636,9 @@ fn parse_pqfs_relay_response(
         transcript_hash,
         forward_commitment,
         dual_mix,
+        signed_relay_body,
+        relay_identity,
+        relay_signature,
     })
 }
 
@@ -3586,20 +3650,26 @@ fn parse_pqfs_relay_response(
 pub fn client_handle_relay_hello<R: TryCryptoRng>(
     state: ClientState,
     relay_hello: &[u8],
-    _key_pair: &KeyPair,
+    expected_relay_identity: &PublicKey,
     params: &RuntimeParams<'_>,
     _rng: &mut R,
 ) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
     validate_runtime_params(params)?;
     match state.handshake_suite {
-        HandshakeSuite::Nk2Hybrid => handle_nk2_client_finish(state, relay_hello),
-        HandshakeSuite::Nk3PqForwardSecure => handle_nk3_client_finish(state, relay_hello),
+        HandshakeSuite::Nk2Hybrid => {
+            handle_nk2_client_finish(state, relay_hello, expected_relay_identity, params)
+        }
+        HandshakeSuite::Nk3PqForwardSecure => {
+            handle_nk3_client_finish(state, relay_hello, expected_relay_identity, params)
+        }
     }
 }
 
 fn handle_nk2_client_finish(
     state: ClientState,
     relay_message: &[u8],
+    expected_relay_identity: &PublicKey,
+    params: &RuntimeParams<'_>,
 ) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
     let ClientState {
         client_nonce,
@@ -3609,11 +3679,23 @@ fn handle_nk2_client_finish(
         resume_hash,
         kem_id,
         sig_id,
+        client_hello,
         ..
     } = state;
 
     let profile = kem_profile(kem_id)?;
     let parsed = parse_hybrid_relay_response(relay_message, &descriptor_commit, profile.suite())?;
+    verify_relay_authentication(
+        HandshakeSuite::Nk2Hybrid,
+        &client_hello,
+        &parsed.signed_relay_body,
+        &parsed.transcript_hash,
+        &parsed.relay_identity,
+        &parsed.relay_signature,
+        expected_relay_identity,
+        params.transport_alpn,
+        params.tls_server_name,
+    )?;
 
     let (selected, _) = verify_capabilities_alignment(
         kem_id,
@@ -3802,6 +3884,8 @@ fn decapsulate_nk3_secrets(
 fn handle_nk3_client_finish(
     state: ClientState,
     relay_message: &[u8],
+    expected_relay_identity: &PublicKey,
+    params: &RuntimeParams<'_>,
 ) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
     let ClientState {
         client_nonce,
@@ -3813,6 +3897,7 @@ fn handle_nk3_client_finish(
         resume_hash,
         kem_id,
         sig_id,
+        client_hello,
         ..
     } = state;
 
@@ -3825,6 +3910,17 @@ fn handle_nk3_client_finish(
 
     let profile = kem_profile(kem_id)?;
     let parsed = parse_pqfs_relay_response(relay_message, &descriptor_commit, profile.suite())?;
+    verify_relay_authentication(
+        HandshakeSuite::Nk3PqForwardSecure,
+        &client_hello,
+        &parsed.signed_relay_body,
+        &parsed.transcript_hash,
+        &parsed.relay_identity,
+        &parsed.relay_signature,
+        expected_relay_identity,
+        params.transport_alpn,
+        params.tls_server_name,
+    )?;
 
     ensure_nk3_negotiation(
         &client_capabilities,
@@ -3960,7 +4056,6 @@ fn parse_client_hello_nk2(
         _ => {}
     }
 
-    read_handshake_signature_pair(&mut cursor, "nk2 client hello")?;
     validate_noise_padding(
         "nk2 client hello",
         cursor.buf.len(),
@@ -4044,7 +4139,6 @@ fn parse_client_hello_nk3(
     }
 
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
-    read_handshake_signature_pair(&mut cursor, "nk3 client hello")?;
     validate_noise_padding(
         "nk3 client hello",
         cursor.buf.len(),
@@ -4227,6 +4321,7 @@ fn build_hybrid_relay_response(
     primary: &RuntimeKemArtifacts,
     confirmation: &[u8],
     transcript: &[u8; 32],
+    relay_identity_key: &KeyPair,
 ) -> Result<Vec<u8>, HarnessError> {
     let mut relay_response = Vec::new();
     relay_response.push(HYBRID_RELAY_RESPONSE_TYPE);
@@ -4241,24 +4336,16 @@ fn build_hybrid_relay_response(
     append_len_prefixed(&mut relay_response, transcript.as_ref())?;
 
     let relay_body = relay_response.clone();
-    let static_secret_bytes = Zeroizing::new(noise.static_secret.to_bytes());
-    let relay_dilithium = expand_material(
-        b"soranet.sig.dilithium.hybrid.relay.v1",
-        &[
-            static_secret_bytes.as_ref(),
-            client_init,
-            relay_body.as_slice(),
-            transcript.as_ref(),
-        ],
-        DILITHIUM3_SIGNATURE_LEN,
-    );
-    append_len_prefixed(&mut relay_response, &relay_dilithium)?;
-    let relay_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.hybrid.relay.v1",
-        static_secret_bytes.as_ref(),
-        &[client_init, relay_body.as_slice(), transcript.as_ref()],
+    append_relay_authentication(
+        &mut relay_response,
+        HandshakeSuite::Nk2Hybrid,
+        client_init,
+        relay_body.as_slice(),
+        transcript,
+        relay_identity_key,
+        params.transport_alpn,
+        params.tls_server_name,
     )?;
-    append_len_prefixed(&mut relay_response, &relay_ed)?;
     pad_to_noise_block(&mut relay_response);
     Ok(relay_response)
 }
@@ -4275,6 +4362,7 @@ struct PqfsRelayResponseInputs<'ctx> {
     transcript: &'ctx [u8; 32],
     forward_commitment: &'ctx [u8],
     dual_mix: &'ctx [u8],
+    relay_identity_key: &'ctx KeyPair,
 }
 
 #[allow(dead_code)]
@@ -4304,28 +4392,16 @@ fn build_pqfs_relay_response(
     append_len_prefixed(&mut relay_response, inputs.dual_mix)?;
 
     let relay_body = relay_response.clone();
-    let static_secret_bytes = Zeroizing::new(noise.static_secret.to_bytes());
-    let relay_dilithium = expand_material(
-        b"soranet.sig.dilithium.pqfs.relay.v1",
-        &[
-            static_secret_bytes.as_ref(),
-            inputs.client_commit,
-            relay_body.as_slice(),
-            inputs.transcript.as_ref(),
-        ],
-        DILITHIUM3_SIGNATURE_LEN,
-    );
-    append_len_prefixed(&mut relay_response, &relay_dilithium)?;
-    let relay_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.pqfs.relay.v1",
-        static_secret_bytes.as_ref(),
-        &[
-            inputs.client_commit,
-            relay_body.as_slice(),
-            inputs.transcript.as_ref(),
-        ],
+    append_relay_authentication(
+        &mut relay_response,
+        HandshakeSuite::Nk3PqForwardSecure,
+        inputs.client_commit,
+        relay_body.as_slice(),
+        inputs.transcript,
+        inputs.relay_identity_key,
+        params.transport_alpn,
+        params.tls_server_name,
     )?;
-    append_len_prefixed(&mut relay_response, &relay_ed)?;
     pad_to_noise_block(&mut relay_response);
     Ok(relay_response)
 }
@@ -4408,6 +4484,7 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
     params: &RuntimeParams<'_>,
     rng: &mut R,
     kem_suite: MlKemSuite,
+    relay_identity_key: &KeyPair,
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
     if parsed.client_static_public.is_none() {
         return Err(HarnessError::Validation(
@@ -4440,6 +4517,7 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
         &primary,
         &confirmation,
         &transcript,
+        relay_identity_key,
     )?;
 
     let mut state = assemble_relay_state(RelayStateInputs {
@@ -4522,6 +4600,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     params: &RuntimeParams<'_>,
     rng: &mut R,
     kem_suite: MlKemSuite,
+    relay_identity_key: &KeyPair,
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
     let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
 
@@ -4560,6 +4639,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
         transcript: &transcript,
         forward_commitment: requirements.forward_commitment.as_slice(),
         dual_mix: confirmations.dual_mix.as_slice(),
+        relay_identity_key,
     };
     let relay_response = build_pqfs_relay_response(&response_inputs)?;
 
@@ -4608,7 +4688,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
 pub fn process_client_hello<R: TryCryptoRng>(
     client_hello: &[u8],
     params: &RuntimeParams<'_>,
-    _key_pair: &KeyPair,
+    key_pair: &KeyPair,
     rng: &mut R,
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
     validate_runtime_params(params)?;
@@ -4638,10 +4718,10 @@ pub fn process_client_hello<R: TryCryptoRng>(
 
     match parsed.handshake_suite {
         HandshakeSuite::Nk2Hybrid => {
-            process_nk2_client_hello(client_hello, parsed, params, rng, profile.suite())
+            process_nk2_client_hello(client_hello, parsed, params, rng, profile.suite(), key_pair)
         }
         HandshakeSuite::Nk3PqForwardSecure => {
-            process_nk3_client_hello(client_hello, parsed, params, rng, profile.suite())
+            process_nk3_client_hello(client_hello, parsed, params, rng, profile.suite(), key_pair)
         }
     }
 }
@@ -4650,6 +4730,14 @@ fn validate_runtime_params(params: &RuntimeParams<'_>) -> Result<(), HarnessErro
     validate_transcript_field_len("descriptor commitment", params.descriptor_commit)?;
     validate_len_prefixed_field_len("client capability vector", params.client_capabilities)?;
     validate_len_prefixed_field_len("relay capability vector", params.relay_capabilities)?;
+    if params.transport_alpn.is_empty() || params.transport_alpn.len() > u8::MAX.into() {
+        return Err(HarnessError::Validation(
+            "transport ALPN must contain between 1 and 255 bytes".to_owned(),
+        ));
+    }
+    super::certificate::validate_tls_server_name(params.tls_server_name).map_err(|error| {
+        HarnessError::Validation(format!("invalid TLS server name binding: {error}"))
+    })?;
     if let Some(resume_hash) = params.resume_hash {
         validate_transcript_field_len("resume hash", resume_hash)?;
     }
@@ -4988,6 +5076,28 @@ mod tests {
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked SoraNet handshake fixture keypair")
+    }
+
+    fn checked_seeded_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked SoraNet handshake fixture keypair")
+    }
+
+    fn authenticated_exchange(
+        client_rng_seed: u64,
+        relay_rng_seed: u64,
+        relay_identity_seed: u8,
+    ) -> (RuntimeParams<'static>, ClientState, Vec<u8>, KeyPair) {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng_client = StdRng::seed_from_u64(client_rng_seed);
+        let mut rng_relay = StdRng::seed_from_u64(relay_rng_seed);
+        let relay_keys = checked_seeded_keypair(relay_identity_seed);
+        let (client_hello, client_state) =
+            build_client_hello(&params, &mut rng_client).expect("client hello");
+        let (relay_hello, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("authenticated relay hello");
+        (params, client_state, relay_hello, relay_keys)
     }
 
     struct PanicRng;
@@ -5538,6 +5648,8 @@ mod tests {
                 relay_capabilities: relay_caps.as_slice(),
                 kem_id: defaults.kem_id,
                 sig_id: defaults.sig_id,
+                transport_alpn: defaults.transport_alpn,
+                tls_server_name: defaults.tls_server_name,
                 resume_hash: defaults.resume_hash,
             };
 
@@ -5749,28 +5861,7 @@ mod tests {
         frame[range].copy_from_slice(&replacement_len.to_be_bytes());
     }
 
-    fn client_first_signature_len_range(frame: &[u8]) -> Range<usize> {
-        let mut offset = 1;
-        skip_len_prefixed_payload(frame, &mut offset);
-        offset += 3 + NOISE_SECRET_LEN;
-        skip_len_prefixed_payload(frame, &mut offset);
-        skip_len_prefixed_payload(frame, &mut offset);
-        if frame[0] == PQFS_CLIENT_COMMIT_TYPE {
-            skip_len_prefixed_payload(frame, &mut offset);
-        }
-        skip_len_prefixed_payload(frame, &mut offset);
-        let resume_flag = frame[offset];
-        offset += 1;
-        if resume_flag == 1 {
-            skip_len_prefixed_payload(frame, &mut offset);
-        }
-        if frame[0] == PQFS_CLIENT_COMMIT_TYPE {
-            skip_len_prefixed_payload(frame, &mut offset);
-        }
-        len_prefixed_header_range(frame, &mut offset)
-    }
-
-    fn relay_signature_len_ranges(frame: &[u8]) -> (Range<usize>, Range<usize>) {
+    fn relay_authentication_len_ranges(frame: &[u8]) -> (Range<usize>, Range<usize>) {
         let mut offset = 1;
         skip_len_prefixed_payload(frame, &mut offset);
         skip_len_prefixed_payload(frame, &mut offset);
@@ -5795,9 +5886,9 @@ mod tests {
             }
             other => panic!("unexpected relay response type {other:#04x}"),
         }
-        let dilithium = len_prefixed_header_range(frame, &mut offset);
-        let ed25519 = len_prefixed_header_range(frame, &mut offset);
-        (dilithium, ed25519)
+        let identity = len_prefixed_header_range(frame, &mut offset);
+        let signature = len_prefixed_header_range(frame, &mut offset);
+        (identity, signature)
     }
 
     #[test]
@@ -5838,6 +5929,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng = StdRng::seed_from_u64(7301);
@@ -5880,6 +5973,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng = StdRng::seed_from_u64(7302);
@@ -5916,6 +6011,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(7303);
@@ -5965,6 +6062,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(7305);
@@ -6037,49 +6136,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_client_hello_rejects_short_dilithium_signature() {
-        let params = RuntimeParams::soranet_defaults();
-        let mut rng = StdRng::seed_from_u64(7311);
-        let (mut client_hello, _state) =
-            build_client_hello(&params, &mut rng).expect("client hello");
-
-        let range = client_first_signature_len_range(&client_hello);
-        overwrite_len_prefix(&mut client_hello, range, DILITHIUM3_SIGNATURE_LEN - 1);
-
-        let err = match parse_client_hello(&client_hello, params.resume_hash) {
-            Ok(_) => panic!("malformed Dilithium signature length must be rejected"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string().contains("Dilithium3 signature"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_client_hello_rejects_all_zero_dilithium_signature() {
-        let params = RuntimeParams::soranet_defaults();
-        let mut rng = StdRng::seed_from_u64(7314);
-        let (mut client_hello, _state) =
-            build_client_hello(&params, &mut rng).expect("client hello");
-
-        let header = client_first_signature_len_range(&client_hello);
-        let mut offset = header.start;
-        let payload = len_prefixed_payload_range(&client_hello, &mut offset);
-        client_hello[payload].fill(0);
-
-        let err = match parse_client_hello(&client_hello, params.resume_hash) {
-            Ok(_) => panic!("all-zero Dilithium signature material must be rejected"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string().contains("Dilithium3 signature")
-                && err.to_string().contains("all zero"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn parse_client_hello_rejects_malformed_padding() {
         let params = RuntimeParams::soranet_defaults();
         let mut rng = StdRng::seed_from_u64(7314);
@@ -6129,7 +6185,7 @@ mod tests {
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay response");
 
-        let (_dilithium_range, ed25519_range) = relay_signature_len_ranges(&relay_response);
+        let (_identity_range, ed25519_range) = relay_authentication_len_ranges(&relay_response);
         overwrite_len_prefix(
             &mut relay_response,
             ed25519_range,
@@ -6172,7 +6228,7 @@ mod tests {
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay response");
 
-        let (_dilithium_header, ed25519_header) = relay_signature_len_ranges(&relay_response);
+        let (_identity_header, ed25519_header) = relay_authentication_len_ranges(&relay_response);
         let mut offset = ed25519_header.start;
         let payload = len_prefixed_payload_range(&relay_response, &mut offset);
         relay_response[payload].fill(0);
@@ -6201,7 +6257,7 @@ mod tests {
     }
 
     #[test]
-    fn client_handle_relay_hello_rejects_unadvertised_selected_relay_kem_id() {
+    fn client_handle_relay_hello_rejects_tampered_relay_capabilities() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_required_flag(
             defaults.client_capabilities,
@@ -6221,11 +6277,12 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(7314);
         let mut rng_relay = StdRng::seed_from_u64(7315);
-        let client_keys = checked_random_keypair();
         let relay_keys = checked_random_keypair();
 
         let (client_hello, client_state) =
@@ -6243,23 +6300,129 @@ mod tests {
         let err = match client_handle_relay_hello(
             client_state,
             &relay_response,
-            &client_keys,
+            relay_keys.public_key(),
             &params,
             &mut rng_client,
         ) {
             Ok(_) => panic!("relay response missing selected KEM id must fail"),
             Err(err) => err,
         };
-        match err {
-            HarnessError::Downgrade { warnings, .. } => assert!(
-                warnings
-                    .iter()
-                    .any(|warning| warning.capability_type == CAPABILITY_PQKEM
-                        && warning.message.contains("selected id 0x01")),
-                "missing selected KEM warning: {warnings:?}"
-            ),
-            other => panic!("expected downgrade, got {other:?}"),
-        }
+        assert!(
+            matches!(err, HarnessError::Validation(ref message) if message.contains("signature verification failed")),
+            "signed relay capabilities must fail authentication before negotiation: {err:?}"
+        );
+    }
+
+    #[test]
+    fn client_handle_relay_hello_rejects_wrong_directory_identity() {
+        let (params, client_state, relay_hello, _relay_keys) =
+            authenticated_exchange(8_001, 8_002, 0x41);
+        let wrong_relay_keys = checked_seeded_keypair(0x42);
+        let mut rng = StdRng::seed_from_u64(8_003);
+
+        let err = client_handle_relay_hello(
+            client_state,
+            &relay_hello,
+            wrong_relay_keys.public_key(),
+            &params,
+            &mut rng,
+        )
+        .err()
+        .expect("an identity absent from the authenticated directory must fail");
+
+        assert!(
+            matches!(err, HarnessError::Validation(ref message) if message.contains("authenticated directory identity")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn client_handle_relay_hello_rejects_forged_nonzero_signature() {
+        let (params, client_state, mut relay_hello, relay_keys) =
+            authenticated_exchange(8_004, 8_005, 0x43);
+        let (_identity_header, signature_header) = relay_authentication_len_ranges(&relay_hello);
+        let mut offset = signature_header.start;
+        let signature_payload = len_prefixed_payload_range(&relay_hello, &mut offset);
+        relay_hello[signature_payload.start] ^= 0x80;
+        assert!(
+            relay_hello[signature_payload].iter().any(|byte| *byte != 0),
+            "fixture must remain a nonzero forged signature"
+        );
+        let mut rng = StdRng::seed_from_u64(8_006);
+
+        let err = client_handle_relay_hello(
+            client_state,
+            &relay_hello,
+            relay_keys.public_key(),
+            &params,
+            &mut rng,
+        )
+        .err()
+        .expect("a nonzero forged signature must fail");
+
+        assert!(
+            matches!(err, HarnessError::Validation(ref message) if message.contains("signature verification failed")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    fn assert_transport_authentication_mismatch(
+        transport_alpn: &'static [u8],
+        tls_server_name: &'static str,
+    ) {
+        let (params, client_state, relay_hello, relay_keys) =
+            authenticated_exchange(8_007, 8_008, 0x44);
+        let mismatched_params = RuntimeParams {
+            transport_alpn,
+            tls_server_name,
+            ..params
+        };
+        let mut rng = StdRng::seed_from_u64(8_009);
+
+        let err = client_handle_relay_hello(
+            client_state,
+            &relay_hello,
+            relay_keys.public_key(),
+            &mismatched_params,
+            &mut rng,
+        )
+        .err()
+        .expect("transport identity mismatch must fail relay authentication");
+
+        assert!(
+            matches!(err, HarnessError::Validation(ref message) if message.contains("signature verification failed")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn client_handle_relay_hello_binds_alpn_and_tls_server_name() {
+        assert_transport_authentication_mismatch(b"soranet/other", DEFAULT_TLS_SERVER_NAME);
+        assert_transport_authentication_mismatch(SORANET_QUIC_ALPN, "other.soranet.invalid");
+    }
+
+    #[test]
+    fn client_handle_relay_hello_rejects_client_hello_substitution() {
+        let (params, client_state, _relay_hello, _relay_keys) =
+            authenticated_exchange(8_010, 8_011, 0x45);
+        let (_other_params, _other_state, substituted_relay_hello, relay_keys) =
+            authenticated_exchange(8_012, 8_013, 0x45);
+        let mut rng = StdRng::seed_from_u64(8_014);
+
+        let err = client_handle_relay_hello(
+            client_state,
+            &substituted_relay_hello,
+            relay_keys.public_key(),
+            &params,
+            &mut rng,
+        )
+        .err()
+        .expect("a response signed for a different client hello must fail");
+
+        assert!(
+            matches!(err, HarnessError::Validation(ref message) if message.contains("signature verification failed")),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
@@ -6471,6 +6634,7 @@ mod tests {
             vec![0x50, 0x51, 0x52, 0x53, 0x54],
         );
 
+        let relay_keys = checked_random_keypair();
         let inputs = PqfsRelayResponseInputs {
             client_commit,
             params: &params,
@@ -6482,6 +6646,7 @@ mod tests {
             transcript: &transcript,
             forward_commitment: forward_commitment.as_slice(),
             dual_mix: dual_mix.as_slice(),
+            relay_identity_key: &relay_keys,
         };
 
         let response = build_pqfs_relay_response(&inputs).expect("build pqfs relay response");
@@ -6520,27 +6685,21 @@ mod tests {
         let body_len = response.len() - cursor.remaining_slice().len();
         let relay_body = &response[..body_len];
 
-        let dilithium = cursor.read_len_prefixed().expect("dilithium signature");
-        let expected_dilithium = expand_material(
-            b"soranet.sig.dilithium.pqfs.relay.v1",
-            &[
-                noise.static_secret.to_bytes().as_ref(),
-                client_commit,
-                relay_body,
-                transcript.as_ref(),
-            ],
-            DILITHIUM3_SIGNATURE_LEN,
-        );
-        assert_eq!(dilithium, expected_dilithium.as_slice());
-
-        let ed_signature = cursor.read_len_prefixed().expect("ed25519 signature");
-        let expected_ed = derive_ed25519_signature(
-            b"soranet.sig.ed25519.pqfs.relay.v1",
-            noise.static_secret.to_bytes().as_ref(),
-            &[client_commit, relay_body, transcript.as_ref()],
+        let relay_identity = cursor.read_len_prefixed().expect("relay identity");
+        assert_eq!(relay_identity, relay_identity_bytes(&relay_keys).unwrap());
+        let relay_signature = cursor.read_len_prefixed().expect("relay signature");
+        verify_relay_authentication(
+            HandshakeSuite::Nk3PqForwardSecure,
+            client_commit,
+            relay_body,
+            &transcript,
+            relay_identity.try_into().expect("32-byte relay identity"),
+            relay_signature,
+            relay_keys.public_key(),
+            params.transport_alpn,
+            params.tls_server_name,
         )
-        .expect("derive ed25519 signature");
-        assert_eq!(ed_signature, expected_ed.as_ref());
+        .expect("relay response signature verifies");
 
         let padding = cursor.remaining_slice();
         assert!(
@@ -6799,7 +6958,6 @@ mod tests {
         let params = RuntimeParams::soranet_defaults();
         let mut rng_client = StdRng::seed_from_u64(1);
         let mut rng_relay = StdRng::seed_from_u64(2);
-        let client_keys = checked_random_keypair();
         let relay_keys = checked_random_keypair();
 
         let (client_hello, client_state) =
@@ -6810,7 +6968,7 @@ mod tests {
         let (client_finish, client_secrets) = client_handle_relay_hello(
             client_state,
             &relay_hello,
-            &client_keys,
+            relay_keys.public_key(),
             &params,
             &mut rng_client,
         )
@@ -6855,6 +7013,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng = StdRng::seed_from_u64(99);
@@ -6888,6 +7048,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(9102);
@@ -6929,10 +7091,11 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
 
-        let client_keys = checked_random_keypair();
         let relay_keys = checked_random_keypair();
         let mut rng_client = StdRng::seed_from_u64(100);
         let mut rng_relay = StdRng::seed_from_u64(200);
@@ -6953,7 +7116,7 @@ mod tests {
         let (client_finish, client_secrets) = client_handle_relay_hello(
             client_state,
             &relay_hello,
-            &client_keys,
+            relay_keys.public_key(),
             &params,
             &mut rng_client,
         )
@@ -6996,6 +7159,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(6102);
@@ -7037,6 +7202,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(6104);
@@ -7084,6 +7251,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng = StdRng::seed_from_u64(1234);
@@ -7123,6 +7292,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(9103);
@@ -7173,10 +7344,11 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
 
-        let client_keys = checked_random_keypair();
         let relay_keys = checked_random_keypair();
         let mut rng_client = StdRng::seed_from_u64(2024);
         let mut rng_relay = StdRng::seed_from_u64(4048);
@@ -7201,7 +7373,7 @@ mod tests {
         let (client_finish, client_secrets) = client_handle_relay_hello(
             client_state,
             &relay_hello,
-            &client_keys,
+            relay_keys.public_key(),
             &params,
             &mut rng_client,
         )
@@ -7256,6 +7428,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(6103);
@@ -7303,6 +7477,8 @@ mod tests {
             relay_capabilities: relay_caps.as_slice(),
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(6105);
@@ -7338,11 +7514,12 @@ mod tests {
             relay_capabilities: relay_capabilities.as_slice(),
             kem_id: 2,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(11);
         let mut rng_relay = StdRng::seed_from_u64(12);
-        let client_keys = checked_random_keypair();
         let relay_keys = checked_random_keypair();
 
         let (client_hello, client_state) =
@@ -7353,7 +7530,7 @@ mod tests {
         let (client_finish, client_secrets) = client_handle_relay_hello(
             client_state,
             &relay_hello,
-            &client_keys,
+            relay_keys.public_key(),
             &params,
             &mut rng_client,
         )
@@ -7496,6 +7673,8 @@ mod tests {
             relay_capabilities: defaults.relay_capabilities,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
 
@@ -7522,6 +7701,8 @@ mod tests {
             relay_capabilities: defaults.relay_capabilities,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: Some(&short_resume),
         };
 
@@ -7555,6 +7736,8 @@ mod tests {
             relay_capabilities: defaults.relay_capabilities,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
 
@@ -7584,6 +7767,8 @@ mod tests {
             relay_capabilities: &bad_relay_caps,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
 
@@ -7622,6 +7807,8 @@ mod tests {
             relay_capabilities: defaults.relay_capabilities,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: Some(&short_resume),
         };
         let relay_keys = checked_random_keypair();
@@ -7708,6 +7895,8 @@ mod tests {
             relay_capabilities: defaults.relay_capabilities,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: defaults.resume_hash,
         };
 
@@ -7717,12 +7906,10 @@ mod tests {
             process_client_hello(&client_hello, &bad_params, &relay_keys, &mut rng_relay)
                 .expect("relay hello");
 
-        let client_keys = checked_random_keypair();
-
         match client_handle_relay_hello(
             client_state,
             &relay_hello,
-            &client_keys,
+            relay_keys.public_key(),
             &defaults,
             &mut rng_client,
         ) {
@@ -7751,6 +7938,8 @@ mod tests {
             relay_capabilities: defaults.relay_capabilities,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: Some(&resume_a),
         };
         let mismatched_params = RuntimeParams {
@@ -7759,6 +7948,8 @@ mod tests {
             relay_capabilities: defaults.relay_capabilities,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: Some(&resume_b),
         };
         let absent_params = RuntimeParams {
@@ -7767,6 +7958,8 @@ mod tests {
             relay_capabilities: defaults.relay_capabilities,
             kem_id: defaults.kem_id,
             sig_id: defaults.sig_id,
+            transport_alpn: defaults.transport_alpn,
+            tls_server_name: defaults.tls_server_name,
             resume_hash: None,
         };
 

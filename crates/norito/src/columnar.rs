@@ -63,6 +63,13 @@ fn read_row_count_prefix(bytes: &[u8]) -> Result<usize, Error> {
     let mut prefix = [0u8; 4];
     prefix.copy_from_slice(raw);
     let count = u32::from_le_bytes(prefix);
+    // Every NCB row represented by this module contributes at least one byte
+    // after the shared count prefix.  Enforce that local structural bound
+    // before callers reserve `count` elements; ambient decode limits are an
+    // additional policy boundary, not a prerequisite for memory safety.
+    if count as usize > bytes.len().saturating_sub(prefix.len()) {
+        return Err(Error::LengthMismatch);
+    }
     crate::core::enforce_decode_sequence_length(u64::from(count))?;
     Ok(count as usize)
 }
@@ -4021,7 +4028,25 @@ mod tests {
             assert!(matches!(err, Error::LengthMismatch));
         }
 
-        assert_eq!(read_row_count_prefix(&prefix).unwrap(), 42);
+        assert!(matches!(
+            read_row_count_prefix(&prefix),
+            Err(Error::LengthMismatch)
+        ));
+
+        let mut structurally_bounded = prefix.to_vec();
+        structurally_bounded.resize(4 + 42, 0);
+        assert_eq!(read_row_count_prefix(&structurally_bounded).unwrap(), 42);
+    }
+
+    #[test]
+    fn ncb_row_count_prefix_rejects_disproportionate_allocation_without_limit_scope() {
+        let mut forged = u32::MAX.to_le_bytes().to_vec();
+        forged.push(0);
+
+        assert!(matches!(
+            read_row_count_prefix(&forged),
+            Err(Error::LengthMismatch)
+        ));
     }
 
     #[test]

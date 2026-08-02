@@ -47,52 +47,57 @@ jobs:
             "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Generate runtime-only genesis signing custody
+      - name: Prepare seed-matched signed genesis artifacts
         run: |
           umask 077
-          key_root="$(mktemp -d "$RUNNER_TEMP/iroha-compose-genesis.XXXXXX")"
-          echo "IROHA_GENESIS_KEY_ROOT=$key_root" >> "$GITHUB_ENV"
+          bundle_root="$(mktemp -d "$RUNNER_TEMP/iroha-compose-genesis.XXXXXX")"
+          echo "IROHA_GENESIS_BUNDLE_ROOT=$bundle_root" >> "$GITHUB_ENV"
           docker run --rm \
             --user "$(id -u):$(id -g)" \
-            --mount "type=bind,src=$key_root,dst=/keys" \
+            --mount "type=bind,src=$bundle_root,dst=/bundle" \
             --entrypoint kagami \
             hyperledger/iroha:local \
-            keys --out-dir /keys/custody > /dev/null
-          key_dir="$key_root/custody"
-          test -s "$key_dir/public.key"
-          test -s "$key_dir/private.key"
-          echo "IROHA_GENESIS_PUBLIC_KEY_FILE=$key_dir/public.key" >> "$GITHUB_ENV"
-          echo "IROHA_GENESIS_PRIVATE_KEY_FILE=$key_dir/private.key" >> "$GITHUB_ENV"
+            localnet --seed Iroha --peers 4 --sora-profile nexus \
+              --consensus-mode npos --out-dir /bundle > /dev/null
+          test -s "$bundle_root/genesis.signed.nrt"
+          test -s "$bundle_root/genesis.public_key"
+          test -s "$bundle_root/genesis.expected_hash"
+          echo "IROHA_GENESIS_SIGNED_FILE=$bundle_root/genesis.signed.nrt" >> "$GITHUB_ENV"
+          echo "IROHA_GENESIS_PUBLIC_KEY_FILE=$bundle_root/genesis.public_key" >> "$GITHUB_ENV"
+          echo "IROHA_GENESIS_EXPECTED_HASH_FILE=$bundle_root/genesis.expected_hash" >> "$GITHUB_ENV"
       - name: Test docker-compose.single.yml
         run: |
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml up --wait || {
+          docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml up --wait || {
             echo "docker-compose failed. Logs:";
-            docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml logs --tail="all";
+            docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml logs --tail="all";
+            docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml down --volumes --remove-orphans;
             exit 1;
           }
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml down
+          docker compose -p iroha-single-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml down --volumes --remove-orphans
       - name: Test docker-compose.local.yml
         run: |
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml up --wait || {
+          docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml up --wait || {
             echo "docker-compose failed. Logs:";
-            docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml logs --tail="all";
+            docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml logs --tail="all";
+            docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml down --volumes --remove-orphans;
             exit 1;
           }
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml down
+          docker compose -p iroha-local-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml down --volumes --remove-orphans
       - name: Test docker-compose.yml
         run: |
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml up --wait || {
+          docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml up --wait || {
             echo "docker-compose failed. Logs:";
-            docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml logs --tail="all";
+            docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml logs --tail="all";
+            docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down --volumes --remove-orphans;
             exit 1;
           }
-          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down
-      - name: Remove runtime-only genesis signing custody
+          docker compose -p iroha-default-${{ github.run_id }}-${{ github.run_attempt }} -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down --volumes --remove-orphans
+      - name: Remove runtime-only prepared genesis bundle
         if: always()
         run: |
-          case "${IROHA_GENESIS_KEY_ROOT:-}" in
+          case "${IROHA_GENESIS_BUNDLE_ROOT:-}" in
             "") exit 0 ;;
             "$RUNNER_TEMP"/iroha-compose-genesis.*) ;;
-            *) echo "Refusing to remove an unexpected genesis custody path" >&2; exit 1 ;;
+            *) echo "Refusing to remove an unexpected genesis bundle path" >&2; exit 1 ;;
           esac
-          rm -rf -- "$IROHA_GENESIS_KEY_ROOT"
+          rm -rf -- "$IROHA_GENESIS_BUNDLE_ROOT"

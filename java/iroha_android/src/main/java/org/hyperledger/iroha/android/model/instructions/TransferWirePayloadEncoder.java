@@ -105,6 +105,29 @@ public final class TransferWirePayloadEncoder {
     return encoder.toByteArray();
   }
 
+  /** Encodes a canonical {@code AssetDefinitionId} as a bare Norito payload. */
+  public static byte[] encodeAssetDefinitionIdPayload(final String assetDefinitionId) {
+    Objects.requireNonNull(assetDefinitionId, "assetDefinitionId");
+    final AssetDefinitionId parsed = AssetDefinitionId.fromAddress(assetDefinitionId);
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    new AssetDefinitionIdAdapter().encode(encoder, parsed);
+    return encoder.toByteArray();
+  }
+
+  /** Encodes a canonical non-negative {@code Quantity} as a bare Norito payload. */
+  public static byte[] encodeQuantityPayload(final String quantity) {
+    Objects.requireNonNull(quantity, "quantity");
+    final QuantityValue parsed = parseQuantityAmount(quantity);
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    new QuantityAdapter().encode(encoder, parsed);
+    return encoder.toByteArray();
+  }
+
+  /** Encodes a lossless validated {@code Quantity} as a bare Norito payload. */
+  public static byte[] encodeQuantityPayload(final NumericV1.QuantityValue quantity) {
+    return encodeQuantityPayload(Objects.requireNonNull(quantity, "quantity").toString());
+  }
+
   /**
    * Decodes a bare {@code AccountId} payload produced by {@link #encodeAccountIdPayload}.
    *

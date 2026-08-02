@@ -2849,6 +2849,7 @@ def test_validate_runner_context_evidence_plan_accepts_schema_closed_plan(
             "environment": "staging",
             "deployment_context_reviewed": True,
         },
+        "external_evidence": {"publication": "/reviewed/publication.json"},
         "evidence_contract": {
             "publication": {
                 "schema": "example.publication.v1",
@@ -2880,6 +2881,8 @@ def test_validate_runner_context_evidence_plan_accepts_schema_closed_plan(
             known_kinds={"publication": Kind("example.publication.v1")},
             evidence_contract=rendered["evidence_contract"],
             evidence_required_fields={"publication": ("schema", "deployment_id")},
+            external_evidence=rendered["external_evidence"],
+            external_evidence_fields=frozenset({"publication"}),
         )
         == []
     )

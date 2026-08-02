@@ -30,7 +30,7 @@ use iroha_data_model::{
         KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendBundleV4,
         KagemushaRecursiveSpendOperationVectorV4, KagemushaRecursiveSpendPeerPaymentV4,
         KagemushaRecursiveSpendPeerSplitTransitionV4, KagemushaRecursiveSpendProofV4,
-        KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV2,
+        KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV5,
         KagemushaRecursiveSpendTopUpAnchorV4, KagemushaRecursiveSpendTopUpFinalityEvidenceV4,
         KagemushaRecursiveSpendTopUpProvenanceV4, KagemushaRecursiveSpendTransitionV4,
         KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
@@ -255,7 +255,7 @@ fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSp
         step_ep_circuit_params_sha256: [0x5c; 32],
         step_eq_verifier_key_sha256: [0x5d; 32],
         step_ep_verifier_key_sha256: [0x5e; 32],
-        state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
+        state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)
             .expect("fixture state boundary"),
         proof: ProofBox::new(
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.into(),

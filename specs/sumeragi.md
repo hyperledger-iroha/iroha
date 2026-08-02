@@ -1,3 +1,72 @@
+# Sumeragi consensus
+
+## Authoritative Sumeragi v2 revision 4
+
+Revision 4 is the first-release production consensus contract. Wire and pure
+core protocol versions are exactly `4`; nodes do not negotiate or reinterpret
+older consensus messages.
+
+### Committee and roles
+
+- Every height uses an equal-vote committee with exact `n = 3f + 1` geometry,
+  where `1 <= f <= 10`. Valid committee sizes are 4, 7, 10, …, 31 and quorum is
+  exactly `q = 2f + 1`. NPoS stake affects candidate election, not consensus
+  vote weight.
+- The finalized height seed and height determine a stable roster permutation.
+  Views rotate that permutation cyclically without changing validator indices.
+- Set A is the first `q` members: the leader is first and the proxy tail is
+  last. Set B is the remaining `f` members.
+
+### Proposal, availability, and voting
+
+1. The leader broadcasts the signed proposal manifest to the full committee
+   and initially sends its canonical body chunks to Set A.
+2. Reed-Solomon-16 is mandatory. A validator may Prepare-vote only after it has
+   reconstructed the complete canonical body, verified its manifest and hashes,
+   stored it durably, and completed deterministic validation.
+3. Set A sends Prepare and Commit votes directly to the proxy tail. The proxy
+   tail aggregates `q` equal votes and broadcasts the corresponding QC.
+4. When the fast path does not complete, recovery expands body/chunk delivery
+   and voting to the full committee. The quorum remains `q`; Set B never
+   weakens the certificate.
+5. Timeout votes are committee-wide and do not depend on the proxy tail. A
+   TimeoutCertificate rotates the leader, proxy tail, Set A, and Set B. A
+   locked body is re-proposed unchanged; Proposal, Vote, and QC evidence always
+   has same-round semantics.
+
+### Finality and progress
+
+- A CommitQC is unique under the standard authenticated `3f + 1`, at-most-`f`
+  Byzantine assumption and durable honest sign-once/lock rules.
+- A node applies only the exact certified, locally available body. Durable
+  application and its typed finality artifact authorize successor construction.
+- NPoS epochs advance after exactly 3,600 finalized non-empty blocks. Empty
+  blocks are rejected before voting/finality, so the height boundary is also
+  the non-empty-block boundary; the old committee authenticates the full
+  next-epoch transition evidence.
+- Retryable finalized-height output, merge/lane sidecars, historical service,
+  and cleanup run under detached supervised repair. They remain observable
+  debt but cannot revoke finality or block successor activation.
+- Liveness is conditional on partial synchrony after GST, at least `2f + 1`
+  responsive committee members, terminating deterministic validation and
+  durable storage, and an eventually honest leader/proxy-tail view. It is not
+  claimed during an unbounded partition or permanent storage failure.
+
+### Fresh-genesis migration
+
+Revision 4 is a fresh-genesis cutover. There is no rolling or in-place
+compatibility path from revision 3: old consensus wire values, frozen height
+contexts, safety WAL state, and partially completed rounds must be rejected.
+Operators must generate and sign a revision-4 genesis and start new revision-4
+storage. State transfer, if separately authorized, terminates at an audited
+snapshot boundary and does not import revision-3 consensus state.
+
+## Historical Sumeragi V1 material (non-authoritative)
+
+Everything below this heading describes the retired V1 implementation and
+operator surfaces. It is retained only as historical context and must not be
+used to implement, configure, validate, or operate revision 4.
+
 ## Sumeragi Consensus V1
 
 Sumeragi V1 is Iroha's first-release deterministic BFT consensus protocol.
@@ -312,8 +381,8 @@ Genesis manifests now seed `Sumeragi::NextMode` and the `sumeragi_npos_parameter
 - Bare-metal (Iroha2 staged cutover): `kagami localnet --build-line iroha2 --peers 4 --out-dir ./npos-local --consensus-mode permissioned --next-consensus-mode npos --mode-activation-height 5 --seed demo` stages a permissioned→NPoS cutover at height 5 and keeps the advertised fingerprint on the permissioned mode until activation.
 - Localnet defaults to a fast 1s pipeline (block/commit split), shortens transaction gossip cadence (`transaction_gossip_period_ms = 100`, `transaction_gossip_resend_ticks = 1`, target reshuffle cadence = 100ms), raises `sumeragi.advanced.rbc.chunk_max_bytes` to 256 KiB, lifts queue capacity to 262,144, sets `nexus.fusion.exit_teu = 1,000,000` and `sumeragi.block.proposal_queue_scan_multiplier = 4` to bound proposal assembly, relaxes Torii tx rate limiting (`torii.tx_rate_per_authority_per_sec = 1,000,000`, `torii.tx_burst_per_authority = 2,000,000`, `torii.api_high_load_tx_threshold = 262,144`), keeps Kura on its crash-safe batched fsync policy (`kura.fsync_mode = "batched"`), clamps the pacing governor to 1.0x so effective block/commit timing stays aligned with the pipeline, and bumps redundant-send fanout when DA is enabled; for NPoS localnets it seeds XOR stake, activates validators in genesis, and rewrites `SumeragiParameters` timing fields (`block_time_ms`, `commit_time_ms`) to match the selected pipeline. Override with `--block-time-ms`, `--commit-time-ms`, or `--redundant-send-r` if you need slower timings. When only one of the block/commit values is set, Kagami mirrors it to the other to keep the pipeline balanced; set both to decouple them.
 - Localnet soak (permissioned, thousands of blocks/tx): `cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_soak_thousands -- --ignored --exact --nocapture` (long-running).
-- Docker Compose: point `--config-dir` at the same localnet output and run `kagami docker --peers 4 --config-dir ./npos-local --image hyperledger/iroha:dev --out-file docker-compose.npos.yml --consensus-mode npos --no-banner --print` to emit a Compose file that re-signs genesis in-container with `GENESIS_CONSENSUS_MODE` overrides (add the `GENESIS_NEXT_CONSENSUS_MODE`/`GENESIS_MODE_ACTIVATION_HEIGHT` pair only on Iroha2 staged networks).
-- Rosters/PoPs: re-sign custom topologies with `kagami genesis sign --topology '<peers_json>' --peer-pop <public_key=pop_hex>...` (swarm’s inline signer accepts the same flags). Reuse the same `--seed` when regenerating localnet output so BLS/Ed25519 keys and PoPs stay deterministic for VRF sampling.
+- Docker Compose: point `--config-dir` at the same localnet output and run `kagami docker --peers 4 --config-dir ./npos-local --image hyperledger/iroha:dev --out-file docker-compose.npos.yml --no-banner --print`. Kagami validates and reuses the prepared validator identities, PoPs, signed genesis body, verifier key, and exact hash; the validator-only Compose file does not sign or override consensus at runtime.
+- Rosters/PoPs: re-sign custom topologies before deployment with `kagami genesis sign --topology '<peers_json>' --peer-pop <public_key=pop_hex>...`, then distribute the matching prepared peer configs and trust artifacts. Reuse the same `--seed` only when regenerating deterministic development output so BLS/Ed25519 keys and PoPs stay stable for VRF sampling.
 - Genesis signing (NPoS): when no public-lane validators are present in the manifest, `kagami genesis sign` injects a bootstrap transaction that registers the default `nexus`/`ivm` domains, mints `xor#nexus`, and stakes/activates each topology peer in the public lane.
 - Guardrails: `--mode-activation-height` requires `--next-consensus-mode` (height > 0) and `--consensus-mode` continues to advertise the pre‑activation mode for fingerprints; omit both flags to stay in the configured mode, or pair them to stage a permissioned→NPoS cutover on Iroha2 only.
 
@@ -824,7 +893,9 @@ windows:
    `VrfCommit` payloads with a hash of their reveal.
 2. **Reveal window** (`vrf_reveal_deadline_offset` blocks) — validators disclose
    the reveal (`VrfReveal`). The adapter verifies it against the prior commit and
-   records the 32-byte reveal.
+   records the 32-byte reveal. The reveal deadline must be strictly before the
+   epoch boundary, leaving at least one finalized block in which the complete
+   entropy record is immutable pre-state.
 
 The commit/reveal ingestion path is synchronous and deterministic:
 
@@ -847,9 +918,12 @@ The commit/reveal ingestion path is synchronous and deterministic:
 When the epoch boundary is reached (block height multiple of
 `epoch_length_blocks`), the adapter:
 
-1. Computes penalties (`committed_no_reveal`, `no_participation`).
-2. Mixes valid reveals into the next epoch seed `S_e`.
-3. Persists a finalized `VrfEpochRecord` (with penalties populated).
+1. Revalidates the exact non-finalized current-epoch record from the preceding
+   finalized state and mixes its canonically ordered on-time reveals into the
+   immediate next-epoch seed `S_e`.
+2. Freezes that seed in the old-roster-authenticated boundary height context.
+3. Computes penalties (`committed_no_reveal`, `no_participation`) and persists
+   the finalized `VrfEpochRecord` in the boundary block.
 4. Updates `epoch_report::VrfPenaltiesReport`, status counters, and telemetry.
 
 The refreshed seed flows back into deterministic collector selection through

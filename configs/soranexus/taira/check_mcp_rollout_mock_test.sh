@@ -46,6 +46,7 @@ exec "${SCRIPT_DIR}/check_mcp_rollout.real.sh" \
   --validator-root validator-4=https://validator-4.test \
   --require-all-validators \
   --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
+  --expected-dpn-validator-release-commit dddddddddddddddddddddddddddddddddddddddd \
   ${onboarding_token_args[@]+"${onboarding_token_args[@]}"} \
   "$@"
 SH
@@ -285,7 +286,10 @@ height = int(sys.argv[1])
 if sys.argv[2] == "fleet_lagging_status_blocks":
     height -= 1
 print(json.dumps({
-    "build": {"git_commit_sha": "490dacc287f00d490dacc287f00d490dacc287f0"},
+    "build": {
+        "dpn_validator_release_commit": "d" * 40,
+        "git_commit_sha": "490dacc287f00d490dacc287f00d490dacc287f0",
+    },
     "peers": 4,
     "blocks": height,
     "queue_size": 0,
@@ -309,7 +313,7 @@ subject = {
     "payload_hash": "hash:" + "F" * 64,
 }
 payload = {
-    "protocol_version": 3,
+    "protocol_version": 4,
     "restart_required": False,
     "node_fingerprint": "hash:" + node_hex,
     "build_fingerprint": "hash:" + "B" * 64,
@@ -394,7 +398,7 @@ elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$pa
   status="202"
   body=''
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"tools/list"'* ]]; then
-  body='{"result":{"tools":[{"name":"iroha.health","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
+  body='{"result":{"tools":[{"name":"iroha.health","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.queries.exact_package","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.queries.exact_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.release_yank_set","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/health" ]]; then
   body='Healthy'
   content_type='text/plain'
@@ -429,14 +433,16 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
   elif [[ "$scenario" == "status_build_sha_missing" ]]; then
     body='{"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   elif [[ "$scenario" == "status_build_sha_too_short" ]]; then
-    body='{"build":{"git_commit_sha":"490dac"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
+    body='{"build":{"dpn_validator_release_commit":"dddddddddddddddddddddddddddddddddddddddd","git_commit_sha":"490dac"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   elif [[ "$scenario" == "status_build_sha_mismatch" ]]; then
-    body='{"build":{"git_commit_sha":"94dcbf7c28"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
+    body='{"build":{"dpn_validator_release_commit":"dddddddddddddddddddddddddddddddddddddddd","git_commit_sha":"94dcbf7c28"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
+  elif [[ "$scenario" == "status_dpn_commit_mismatch" ]]; then
+    body='{"build":{"dpn_validator_release_commit":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","git_commit_sha":"490dacc287f00d490dacc287f00d490dacc287f0"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   else
-    body='{"build":{"git_commit_sha":"490dacc287f00d490dacc287f00d490dacc287f0"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
+    body='{"build":{"dpn_validator_release_commit":"dddddddddddddddddddddddddddddddddddddddd","git_commit_sha":"490dacc287f00d490dacc287f00d490dacc287f0"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
-  body='{"protocol_version":3,"restart_required":false,"node_fingerprint":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","build_fingerprint":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","config_fingerprint":"hash:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC","height_context_id":["hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"view_change_install_total":2,"busy_deferral_total":0,"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":1,"queued_transactions":1,"capacity":100,"retained_bytes":128,"max_retained_bytes":8192,"oldest_queued_age_ms":5,"saturated_by_count":false,"saturated_by_bytes":false,"saturated_by_age":false}}}'
+  body='{"protocol_version":4,"restart_required":false,"node_fingerprint":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","build_fingerprint":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","config_fingerprint":"hash:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC","height_context_id":["hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"view_change_install_total":2,"busy_deferral_total":0,"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":1,"queued_transactions":1,"capacity":100,"retained_bytes":128,"max_retained_bytes":8192,"oldest_queued_age_ms":5,"saturated_by_count":false,"saturated_by_bytes":false,"saturated_by_age":false}}}'
   if [[ "$scenario" == "sumeragi_missing_restart_required" ]]; then
     body="${body/\"restart_required\":false,/}"
   elif [[ "$scenario" == "sumeragi_invalid_restart_required" ]]; then
@@ -496,10 +502,12 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/transactions/
     status="404"
     body='{"code":"route_not_found","message":"route not found"}'
   fi
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/musubi/packages?query=&limit=1" ]]; then
-  body='{"items":[]}'
-elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/instructions/yank-release" ]]; then
-  body='{"instructions":[]}'
+elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/queries/ordered-prefix" ]]; then
+  status="400"
+  body='{"error":"missing typed request"}'
+elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/instructions/release-yank-set" ]]; then
+  status="400"
+  body='{"error":"missing typed instruction"}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/contracts/deploy" ]]; then
   status="404"
   body='{"code":"route_not_found","message":"route not found"}'
@@ -565,7 +573,7 @@ if [[ "$*" == *"ledger transaction ping"* ]]; then
 fi
 
 if [[ "$*" == *"tools address convert"* ]]; then
-  echo '{"i105":{"value":"testuFAKEACCOUNT@universal"}}'
+  echo '{"i105":{"value":"testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV@universal"}}'
   exit 0
 fi
 
@@ -711,6 +719,7 @@ run_case time_warn_enforcement '/v1/time/now is not release-ready: fail-closed t
 run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
 run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
 run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not exactly match release commit 490dacc287f00d490dacc287f00d490dacc287f0' '' '490dacc'
+run_case status_dpn_commit_mismatch '/status DPN validator release commit eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee does not exactly match dddddddddddddddddddddddddddddddddddddddd'
 run_case sumeragi_missing_restart_required 'v2 status restart_required must be a boolean'
 run_case sumeragi_invalid_restart_required 'v2 status restart_required must be a boolean'
 run_case sumeragi_highest_qc_behind_commit 'durable CommitQC height does not match last_committed_height'
@@ -847,12 +856,29 @@ grep -q 'public Taira rollout requires --expected-git-sha with the exact full 40
 if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \
+    "$release_script" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      "${release_fleet_args[@]}" \
+      --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
+      --skip-write-canary \
+      >"${root}/release-without-dpn-output.log" 2>&1; then
+  echo "public release without exact DPN release commit unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'public Taira rollout requires --expected-dpn-validator-release-commit with the exact full 40-character commit' \
+  "${root}/release-without-dpn-output.log"
+
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
     VALIDATOR_PROGRESS_SAMPLES=2 \
     "$release_script" \
       --skip-local \
       --public-root https://taira.sora.org \
       "${release_fleet_args[@]}" \
       --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
+      --expected-dpn-validator-release-commit dddddddddddddddddddddddddddddddddddddddd \
       --skip-write-canary \
       >"${root}/release-too-few-samples-output.log" 2>&1; then
   echo "public release with fewer than three fleet samples unexpectedly succeeded" >&2

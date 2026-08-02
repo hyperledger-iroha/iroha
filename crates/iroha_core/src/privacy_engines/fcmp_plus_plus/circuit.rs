@@ -7,8 +7,6 @@
 //! discrete logarithm, public rerandomizations are checked with incomplete
 //! addition, and every tree layer is checked with set membership.
 
-use zeroize::Zeroize;
-
 use super::{
     FcmpNativeErrorV1,
     bulletproof::{
@@ -21,6 +19,9 @@ use super::{
         VerifierTranscript, multiexp,
     },
 };
+
+#[cfg(test)]
+use super::proof_math::FcmpProofRandomSource;
 
 const COMMITMENT_WORD_LEN: usize = 128;
 const MAX_EMBEDDED_POINT_ATTEMPTS_V1: usize = 128;
@@ -283,7 +284,12 @@ pub(super) struct ProverVectorCommitmentTape<F: ProofScalar> {
 
 impl<F: ProofScalar> Drop for ProverVectorCommitmentTape<F> {
     fn drop(&mut self) {
-        self.values.zeroize();
+        for commitment in &mut self.values {
+            for value in commitment {
+                value.clear_secret();
+            }
+        }
+        self.values.clear();
     }
 }
 
@@ -482,9 +488,16 @@ struct CircuitProverData<S: ProofSuite> {
 
 impl<S: ProofSuite> Drop for CircuitProverData<S> {
     fn drop(&mut self) {
-        self.a_l.zeroize();
-        self.a_r.zeroize();
-        self.vector_commitments.zeroize();
+        for scalar in &mut self.a_l {
+            scalar.clear_secret();
+        }
+        for scalar in &mut self.a_r {
+            scalar.clear_secret();
+        }
+        self.a_l.clear();
+        self.a_r.clear();
+        // Each opening's shared Drop implementation clears its values and mask.
+        self.vector_commitments.clear();
     }
 }
 
@@ -564,9 +577,6 @@ impl<S: ProofSuite> Circuit<S> {
                     .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?
                     * *weight;
             }
-        }
-        if !lincomb.wv.is_empty() {
-            return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
         Ok(Some(result))
     }
@@ -772,12 +782,12 @@ impl<S: ProofSuite> Circuit<S> {
         if self.muls > generators.g_bold.len() || self.prover.is_some() {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        ArithmeticCircuitStatement::new(
+        Ok(ArithmeticCircuitStatement::new(
             generators,
             self.constraints,
             vector_commitments,
             Vec::new(),
-        )
+        )?)
     }
 
     pub(super) fn proving_statement<'a>(
@@ -1223,7 +1233,7 @@ pub(super) fn discrete_log<S: ProofSuite>(
     .chain(&point.divisor.x_from_power_of_2)
     .chain(&point.dlog)
     {
-        if !matches!(variable, Variable::CG { .. } | Variable::V(_)) {
+        if !matches!(variable, Variable::CG { .. }) {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
     }
@@ -1509,7 +1519,11 @@ mod tests {
         transcript.write_commitments::<SeleneSuite>(commitments, Vec::new());
         let mut rng = StdRng::seed_from_u64(0xc1_0017);
         statement
-            .prove(&mut rng, &mut transcript, witness)
+            .prove(
+                &mut FcmpProofRandomSource::new(&mut rng),
+                &mut transcript,
+                witness,
+            )
             .expect("proof");
         let proof = transcript.complete();
 

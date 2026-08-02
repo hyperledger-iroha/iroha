@@ -28,6 +28,10 @@ assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+GENESIS_PUBLIC_KEY = "ed0120" + "AB" * 32
+GENESIS_EXPECTED_HASH = "00" * 31 + "01"
+DPN_VALIDATOR_RELEASE_COMMIT = "d" * 40
+
 
 def _write(path: Path, body: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -141,7 +145,6 @@ def _build_bundle(tmp_path: Path, binary_sha: str, source_commit: str) -> Path:
         ("genesis.json", b'{"chain":"taira"}\n'),
         ("genesis.signed.nrt", b"signed-genesis"),
         ("validator-roster.toml", b"roster\n"),
-        ("validator-secrets.toml", b"secrets\n"),
     ):
         _write(bundle / name, body)
 
@@ -174,7 +177,9 @@ soranet_spool_bps = 250
 soravpn_spool_bps = 250
 
 [genesis]
-file = "{bundle / 'genesis.signed.nrt'}"
+file = "{bundle / "genesis.signed.nrt"}"
+public_key = "{GENESIS_PUBLIC_KEY}"
+expected_hash = "{GENESIS_EXPECTED_HASH}"
 """
         _write(workdir / "config.toml", config.encode())
         config_hashes[slug] = hashlib.sha256(config.encode()).hexdigest()
@@ -188,7 +193,10 @@ file = "{bundle / 'genesis.signed.nrt'}"
         "node_storage_budget_weights": MODULE.NODE_STORAGE_WEIGHTS,
         "nexus_storage_budget_policy": MODULE.NODE_STORAGE_BUDGET_POLICY,
         "source_commit": source_commit,
+        "dpn_validator_release_commit": DPN_VALIDATOR_RELEASE_COMMIT,
         "irohad_sha256": binary_sha,
+        "genesis_public_key": GENESIS_PUBLIC_KEY,
+        "genesis_expected_hash": GENESIS_EXPECTED_HASH,
         "signed_genesis_sha256": hashlib.sha256(
             (bundle / "genesis.signed.nrt").read_bytes()
         ).hexdigest(),
@@ -217,6 +225,7 @@ def _validate(bundle: Path, binary_sha: str, source_commit: str) -> MODULE.Bundl
         expected_reset_manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
         expected_binary_sha256=binary_sha,
         expected_source_commit=source_commit,
+        expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
         minimum_free_bytes=0,
         maximum_fsync_latency_ms=10_000,
     )
@@ -247,6 +256,8 @@ soravpn_spool_bps = 250
 
 [genesis]
 file = "/private/reset/genesis.signed.nrt"
+public_key = "{GENESIS_PUBLIC_KEY}"
+expected_hash = "{GENESIS_EXPECTED_HASH}"
 """
 
 
@@ -258,6 +269,8 @@ def test_projection_parser_extracts_all_required_fields() -> None:
 
     assert config["chain"] == MODULE.CHAIN_ID
     assert config["chain_discriminant"] == MODULE.CHAIN_DISCRIMINANT
+    assert config["genesis"]["public_key"] == GENESIS_PUBLIC_KEY
+    assert config["genesis"]["expected_hash"] == GENESIS_EXPECTED_HASH
     assert (
         config["nexus"]["storage"]["disk_budget_weights"] == MODULE.NODE_STORAGE_WEIGHTS
     )
@@ -312,6 +325,32 @@ def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) ->
     assert all(not any(peer.storage.iterdir()) for peer in plan.peers)
 
 
+def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    slug = MODULE.SLUGS[0]
+    config_path = bundle / "rendered" / slug / "config.toml"
+    alternate_hash = "02" * 31 + "03"
+    config = config_path.read_text().replace(
+        f'expected_hash = "{GENESIS_EXPECTED_HASH}"',
+        f'expected_hash = "{alternate_hash}"',
+    )
+    _write(config_path, config.encode())
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    _write(
+        manifest_path,
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="exact expected hash"):
+        _validate(bundle, binary_sha, source_commit)
+
+
 def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(
     tmp_path: Path,
 ) -> None:
@@ -325,6 +364,26 @@ def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(
             expected_reset_manifest_sha256="0" * 64,
             expected_binary_sha256=binary_sha,
             expected_source_commit=source_commit,
+            expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
+            minimum_free_bytes=0,
+            maximum_fsync_latency_ms=10_000,
+        )
+
+
+def test_bundle_preflight_rejects_dpn_only_identity_mismatch(tmp_path: Path) -> None:
+    binary_sha = "8" * 64
+    source_commit = "9" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+
+    with pytest.raises(MODULE.DeploymentError, match="DPN release commit"):
+        MODULE.validate_bundle(
+            bundle,
+            expected_reset_manifest_sha256=hashlib.sha256(
+                (bundle / "reset-manifest.json").read_bytes()
+            ).hexdigest(),
+            expected_binary_sha256=binary_sha,
+            expected_source_commit=source_commit,
+            expected_dpn_validator_release_commit="e" * 40,
             minimum_free_bytes=0,
             maximum_fsync_latency_ms=10_000,
         )
@@ -349,7 +408,7 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
 
     MODULE.validate_installed_peer_configs(
         binary,
-        SimpleNamespace(peers=peers),
+        SimpleNamespace(peers=peers, owner_uid=501, owner_gid=502),
         runner=runner,
     )
 
@@ -368,6 +427,7 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
         and kwargs["capture_output"] is True
         and kwargs["timeout"] == MODULE.CONFIG_CHECK_TIMEOUT_SECONDS
         and kwargs["env"] == {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+        and callable(kwargs["preexec_fn"])
         for _command, kwargs in calls
     )
 
@@ -393,11 +453,39 @@ def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None
     ):
         MODULE.validate_installed_peer_configs(
             tmp_path / "irohad",
-            SimpleNamespace(peers=peers),
+            SimpleNamespace(peers=peers, owner_uid=501, owner_gid=502),
             runner=runner,
         )
 
     assert calls == 2
+
+
+def test_binary_config_gate_privilege_drop_clears_groups_before_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(MODULE.os, "setgroups", lambda value: calls.append(("groups", value)))
+    monkeypatch.setattr(MODULE.os, "setgid", lambda value: calls.append(("gid", value)))
+    monkeypatch.setattr(MODULE.os, "setuid", lambda value: calls.append(("uid", value)))
+    monkeypatch.setattr(MODULE.os, "umask", lambda value: calls.append(("umask", value)))
+
+    MODULE._drop_config_check_privileges(501, 502)()
+
+    assert calls == [
+        ("groups", []),
+        ("gid", 502),
+        ("uid", 501),
+        ("umask", 0o077),
+    ]
+
+
+@pytest.mark.parametrize(("uid", "gid"), ((0, 502), (501, 0), (-1, 502)))
+def test_binary_config_gate_rejects_root_or_invalid_runtime_identity(
+    uid: int,
+    gid: int,
+) -> None:
+    with pytest.raises(MODULE.DeploymentError, match="non-root runtime identity"):
+        MODULE._drop_config_check_privileges(uid, gid)
 
 
 @pytest.mark.parametrize(
@@ -644,9 +732,7 @@ def test_supervisor_python_rejects_runtime_identity_drift(
     changed = copy.copy(stable)
     changed.st_ino = 9
     monkeypatch.setattr(MODULE, "canonical_path", lambda path, _label: path)
-    monkeypatch.setattr(
-        MODULE, "require_system_python_launcher", lambda _path: stable
-    )
+    monkeypatch.setattr(MODULE, "require_system_python_launcher", lambda _path: stable)
     identities = iter((stable, changed))
     monkeypatch.setattr(
         MODULE,
@@ -679,9 +765,12 @@ def test_supervisor_python_live_probe_resolves_direct_clt_runtime() -> None:
 
     assert str(runtime).startswith(f"{MODULE.SYSTEM_PYTHON_DEVELOPER_DIR}/")
     assert str(runtime).endswith("/Resources/Python.app/Contents/MacOS/Python")
-    assert MODULE.metadata_identity(
-        MODULE.require_root_controlled_file(runtime, executable=True)
-    ) == identity
+    assert (
+        MODULE.metadata_identity(
+            MODULE.require_root_controlled_file(runtime, executable=True)
+        )
+        == identity
+    )
 
 
 def test_supervisor_python_rejects_homebrew_path(
@@ -726,7 +815,7 @@ def _health_getter(
         if "/v1/sumeragi/status" in url:
             subject = {"block_hash": f"hash:{block_hash.upper()}#A1b2"}
             return {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "restart_required": False,
                 "height": 8,
                 "last_committed_height": 7,
@@ -756,7 +845,10 @@ def _health_getter(
         if url.endswith("/status"):
             return {
                 "blocks": 6 if bad_blocks and index == 0 else 7,
-                "build": {"git_commit_sha": source_commit},
+                "build": {
+                    "dpn_validator_release_commit": DPN_VALIDATOR_RELEASE_COMMIT,
+                    "git_commit_sha": source_commit,
+                },
             }
         raise AssertionError(f"unexpected JSON health route: {url}")
 
@@ -804,6 +896,7 @@ def test_four_peer_health_requires_exact_common_status_and_dataspaces(
     sample = MODULE.capture_fleet(
         plan,
         source_commit,
+        DPN_VALIDATOR_RELEASE_COMMIT,
         getter=_health_getter(plan, source_commit),
         health_getter=lambda url, _timeout: health_urls.append(url),
     )
@@ -823,6 +916,7 @@ def test_four_peer_health_requires_exact_common_status_and_dataspaces(
         MODULE.capture_fleet(
             plan,
             source_commit,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             getter=_health_getter(plan, source_commit, bad_blocks=True),
             health_getter=lambda _url, _timeout: None,
         )
@@ -840,8 +934,31 @@ def test_four_peer_health_fails_closed_when_health_is_not_200(tmp_path: Path) ->
         MODULE.capture_fleet(
             plan,
             source_commit,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             getter=_health_getter(plan, source_commit),
             health_getter=unhealthy,
+        )
+
+
+def test_four_peer_health_rejects_dpn_only_runtime_mismatch(tmp_path: Path) -> None:
+    source_commit = "4" * 40
+    bundle = _build_bundle(tmp_path, "5" * 64, source_commit)
+    plan = _validate(bundle, "5" * 64, source_commit)
+    healthy = _health_getter(plan, source_commit)
+
+    def wrong_dpn(url: str, timeout: float) -> dict:
+        payload = copy.deepcopy(healthy(url, timeout))
+        if url.endswith("/status"):
+            payload["build"]["dpn_validator_release_commit"] = "e" * 40
+        return payload
+
+    with pytest.raises(MODULE.DeploymentError, match="wrong DPN validator"):
+        MODULE.capture_fleet(
+            plan,
+            source_commit,
+            DPN_VALIDATOR_RELEASE_COMMIT,
+            getter=wrong_dpn,
+            health_getter=lambda _url, _timeout: None,
         )
 
 
@@ -863,6 +980,7 @@ def test_four_peer_health_requires_exact_is_and_is2_dataspace_identities(
         MODULE.capture_fleet(
             plan,
             source_commit,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             getter=wrong_dataspace,
             health_getter=lambda _url, _timeout: None,
         )
@@ -898,6 +1016,7 @@ def test_four_peer_health_rejects_underquorum_or_noncommit_qc(
         MODULE.capture_fleet(
             plan,
             source_commit,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             getter=getter,
             health_getter=lambda _url, _timeout: None,
         )
@@ -1000,6 +1119,7 @@ def test_controller_fails_before_initial_health_when_terminal_latched() -> None:
         MODULE.wait_for_fleet_sample(
             SimpleNamespace(),
             "1" * 40,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             MODULE.time.monotonic() + 10,
             getter=lambda *_args: pytest.fail("health getter ran"),
             health_getter=lambda *_args: pytest.fail("health endpoint ran"),
@@ -1020,6 +1140,7 @@ def test_controller_fails_before_advancement_when_terminal_latched() -> None:
         MODULE.wait_for_advancement(
             SimpleNamespace(),
             "1" * 40,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             SimpleNamespace(),
             MODULE.time.monotonic() + 10,
             getter=lambda *_args: pytest.fail("health getter ran"),
@@ -1164,6 +1285,7 @@ def test_restart_proof_reverifies_same_child_and_reports_ceil_duration(
     actual = MODULE.restart_proof(
         bundle,
         "1" * 40,
+        DPN_VALIDATOR_RELEASE_COMMIT,
         tmp_path,
         {peer.label: b"plist"},
         Path("/irohad"),
@@ -1208,6 +1330,7 @@ def test_restart_proof_rejects_child_or_supervisor_drift_after_advancement(
         MODULE.restart_proof(
             bundle,
             "1" * 40,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             tmp_path,
             {peer.label: b"plist"},
             Path("/irohad"),
@@ -1247,6 +1370,7 @@ def test_restart_proof_rejects_measured_duration_beyond_bound(
         MODULE.restart_proof(
             bundle,
             "1" * 40,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             tmp_path,
             {peer.label: b"plist"},
             Path("/irohad"),
@@ -1266,6 +1390,7 @@ def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
         MODULE.restart_proof(
             SimpleNamespace(),
             "1" * 40,
+            DPN_VALIDATOR_RELEASE_COMMIT,
             Path("/runtime"),
             {},
             Path("/irohad"),
@@ -1361,9 +1486,7 @@ def test_process_inspection_rejects_native_argv_drift(
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="1 501\n"),
     )
     samples = iter((("/runtime", "first"), ("/runtime", "second")))
-    monkeypatch.setattr(
-        MODULE, "read_darwin_process_argv", lambda _pid: next(samples)
-    )
+    monkeypatch.setattr(MODULE, "read_darwin_process_argv", lambda _pid: next(samples))
 
     with pytest.raises(MODULE.DeploymentError, match="changed during capture"):
         ops.inspect_process(77)
@@ -1451,9 +1574,7 @@ def _framework_python_capture_payload(
     Path,
 ]:
     package = tmp_path / "Cellar/python@3.14/3.14.6"
-    version_root = (
-        package / "Frameworks/Python.framework/Versions/3.14"
-    )
+    version_root = package / "Frameworks/Python.framework/Versions/3.14"
     resolved_launcher = version_root / "bin/python3.14"
     runtime = version_root / "Resources/Python.app/Contents/MacOS/Python"
     _write(resolved_launcher, b"launcher")
@@ -1486,8 +1607,8 @@ def _framework_python_capture_payload(
 def test_framework_python_rewrite_requires_flag_and_binds_observed_rollback_argv(
     tmp_path: Path,
 ) -> None:
-    payload, _plist_argv, runtime_argv, _runtime = (
-        _framework_python_capture_payload(tmp_path)
+    payload, _plist_argv, runtime_argv, _runtime = _framework_python_capture_payload(
+        tmp_path
     )
     ops = _OldCaptureOps(46, runtime_argv)
 
@@ -1530,8 +1651,8 @@ def test_framework_python_rewrite_requires_flag_and_binds_observed_rollback_argv
 def test_framework_python_rewrite_rejects_any_nonstructural_difference(
     tmp_path: Path, mutation: str
 ) -> None:
-    _payload, plist_argv, runtime_argv, runtime = (
-        _framework_python_capture_payload(tmp_path)
+    _payload, plist_argv, runtime_argv, runtime = _framework_python_capture_payload(
+        tmp_path
     )
     if mutation == "wrong-root":
         other = tmp_path / "other/Resources/Python.app/Contents/MacOS/Python"
@@ -1592,9 +1713,7 @@ def test_absent_old_pid_rejects_child_emerging_between_samples(
     payload, supervisor_argv = _old_capture_payload(pid_file)
     ops = _OldCaptureOps(45, supervisor_argv)
     child_samples = iter(((), (145,)))
-    ops.child_pids = lambda parent_pid: (
-        next(child_samples) if parent_pid == 45 else ()
-    )
+    ops.child_pids = lambda parent_pid: next(child_samples) if parent_pid == 45 else ()
 
     with pytest.raises(MODULE.DeploymentError, match="still owns a child"):
         MODULE.inspect_old_managed_identity(
@@ -1686,6 +1805,7 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         binary_sha256="a" * 64,
         supervisor_sha256="b" * 64,
         source_commit="c" * 40,
+        dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
         restart_generation="9" * 64,
     )
     bundle = SimpleNamespace(
@@ -1710,7 +1830,7 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         MODULE,
         "verify_deployment_admission",
-        lambda _args: (events.append("admission-verify") or admission),
+        lambda _args: events.append("admission-verify") or admission,
     )
     monkeypatch.setattr(MODULE, "require_inputs_match_admission", lambda *args: None)
     monkeypatch.setattr(
@@ -1726,7 +1846,7 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         MODULE,
         "capture_old_cohort",
-        lambda _ops, *, allow_absent_child: (events.append("capture") or cohort),
+        lambda _ops, *, allow_absent_child: events.append("capture") or cohort,
     )
     monkeypatch.setattr(
         MODULE,
@@ -1746,9 +1866,12 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         admission_authority_dir=Path("/authority"),
         supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
         expected_source_commit="c" * 40,
+        expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
         expected_cargo_lock_sha256="d" * 64,
         expected_workspace_source_manifest_sha256="e" * 64,
         expected_receipt_id="f" * 64,
+        expected_artifact_handoff_sha256="9" * 64,
+        expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
@@ -1773,6 +1896,8 @@ def test_admission_failure_precedes_every_deployment_preflight(
 ) -> None:
     events: list[str] = []
     monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
 
     def reject_admission(_args):
         events.append("admission-verify")
@@ -1792,9 +1917,12 @@ def test_admission_failure_precedes_every_deployment_preflight(
         admission_authority_dir=Path("/authority"),
         supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
         expected_source_commit="c" * 40,
+        expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
         expected_cargo_lock_sha256="d" * 64,
         expected_workspace_source_manifest_sha256="e" * 64,
         expected_receipt_id="f" * 64,
+        expected_artifact_handoff_sha256="9" * 64,
+        expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
@@ -1822,18 +1950,21 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         binary_sha256="a" * 64,
         supervisor_sha256="b" * 64,
         source_commit="c" * 40,
+        dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
         restart_generation="9" * 64,
     )
     bundle = SimpleNamespace()
     sources = SimpleNamespace()
     cohort = tuple(object() for _ in range(MODULE.PEER_COUNT))
     monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
     monkeypatch.setattr(MODULE, "validate_bundle", lambda *args, **kwargs: bundle)
     monkeypatch.setattr(MODULE, "validate_sources", lambda *args, **kwargs: sources)
     monkeypatch.setattr(
         MODULE,
         "verify_deployment_admission",
-        lambda _args: (events.append("admission-verify") or admission),
+        lambda _args: events.append("admission-verify") or admission,
     )
     monkeypatch.setattr(
         MODULE,
@@ -1852,6 +1983,7 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
             events.append(f"capture:{allow_absent_child}") or cohort
         ),
     )
+
     def apply(*_args, **kwargs):
         events.append("apply")
         kwargs["rollout_starter"]()
@@ -1888,9 +2020,12 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         admission_authority_dir=Path("/authority"),
         supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
         expected_source_commit="c" * 40,
+        expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
         expected_cargo_lock_sha256="d" * 64,
         expected_workspace_source_manifest_sha256="e" * 64,
         expected_receipt_id="f" * 64,
+        expected_artifact_handoff_sha256="9" * 64,
+        expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
@@ -1934,16 +2069,17 @@ def _receipt_transaction_plan(tmp_path: Path) -> MODULE.AdmissionPlan:
         authority_dir=tmp_path,
         replay_ledger=ledger,
         receipt_id="a" * 64,
+        artifact_handoff_sha256="9" * 64,
         archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
         source_commit="b" * 40,
+        dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
         cargo_lock_sha256="c" * 64,
         workspace_source_manifest_sha256="d" * 64,
         reset_manifest_sha256="e" * 64,
         binary_sha256="f" * 64,
         supervisor_sha256="1" * 64,
         validator_config_sha256=tuple(
-            (slug, f"{index}" * 64)
-            for index, slug in enumerate(MODULE.SLUGS, start=2)
+            (slug, f"{index}" * 64) for index, slug in enumerate(MODULE.SLUGS, start=2)
         ),
         restart_generation="6" * 64,
         signer_fingerprint_sha256="7" * 64,
@@ -1975,9 +2111,12 @@ def test_receipt_consumption_restores_exact_ledger_when_rollout_does_not_begin(
 
     with pytest.raises(MODULE.DeploymentError, match="injected pre-cutover failure"):
         with MODULE.consume_admission_receipt(admission):
-            assert admission.receipt_id in MODULE.rollout_admission.load_replay_ledger(
-                admission.replay_ledger
-            ).consumed_receipt_ids
+            assert (
+                admission.receipt_id
+                in MODULE.rollout_admission.load_replay_ledger(
+                    admission.replay_ledger
+                ).consumed_receipt_ids
+            )
             raise MODULE.DeploymentError("injected pre-cutover failure")
 
     assert admission.replay_ledger.read_bytes() == prior
@@ -2069,9 +2208,7 @@ def test_receipt_consumption_rejects_replay_under_lock(
 ) -> None:
     admission = _receipt_transaction_plan(tmp_path)
     admission.replay_ledger.write_bytes(
-        MODULE.rollout_admission.canonical_replay_ledger_bytes(
-            [admission.receipt_id]
-        )
+        MODULE.rollout_admission.canonical_replay_ledger_bytes([admission.receipt_id])
     )
     _use_unprivileged_transaction_ledger(monkeypatch)
 
@@ -2113,7 +2250,7 @@ def test_archive_substitution_is_rejected_before_rollout(tmp_path: Path) -> None
         MODULE.require_admission_archive_unchanged(admission)
 
 
-def test_receipt_config_binding_rejects_one_peer_substitution(tmp_path: Path) -> None:
+def test_production_config_may_differ_from_secret_free_qualification(tmp_path: Path) -> None:
     admission = _receipt_transaction_plan(tmp_path)
     peers = tuple(
         SimpleNamespace(slug=slug, config_sha256=digest)
@@ -2125,7 +2262,12 @@ def test_receipt_config_binding_rejects_one_peer_substitution(tmp_path: Path) ->
     )
     bundle = SimpleNamespace(
         manifest_sha256=admission.reset_manifest_sha256,
-        manifest={"source_commit": admission.source_commit},
+        manifest={
+            "source_commit": admission.source_commit,
+            "dpn_validator_release_commit": (
+                admission.dpn_validator_release_commit
+            ),
+        },
         peers=peers,
     )
     sources = SimpleNamespace(
@@ -2133,6 +2275,9 @@ def test_receipt_config_binding_rejects_one_peer_substitution(tmp_path: Path) ->
         supervisor_sha256=admission.supervisor_sha256,
     )
 
+    MODULE.require_inputs_match_admission(bundle, sources, admission)
+
+    sources.binary_sha256 = "0" * 64
     with pytest.raises(MODULE.DeploymentError, match="do not match"):
         MODULE.require_inputs_match_admission(bundle, sources, admission)
 
@@ -2168,7 +2313,9 @@ def test_under_lock_recheck_rejects_python_runtime_identity_drift(
         binary_sha256=sources.binary_sha256,
         supervisor_sha256=sources.supervisor_sha256,
     )
-    monkeypatch.setattr(MODULE, "require_bundle_runtime_unchanged", lambda _bundle: None)
+    monkeypatch.setattr(
+        MODULE, "require_bundle_runtime_unchanged", lambda _bundle: None
+    )
     monkeypatch.setattr(
         MODULE,
         "sha256_regular",
@@ -2399,12 +2546,18 @@ def test_cli_defaults_match_the_audited_operator_contract() -> None:
             "/authority",
             "--expected-source-commit",
             "c" * 40,
+            "--expected-dpn-validator-release-commit",
+            DPN_VALIDATOR_RELEASE_COMMIT,
             "--expected-cargo-lock-sha256",
             "d" * 64,
             "--expected-workspace-source-manifest-sha256",
             "e" * 64,
-            "--expected-receipt-id",
-            "f" * 64,
+                "--expected-receipt-id",
+                "f" * 64,
+                "--expected-artifact-handoff-sha256",
+                "9" * 64,
+                "--expected-production-reset-manifest-sha256",
+                "a" * 64,
             "--trusted-signing-fingerprint",
             "1" * 64,
             "--release-manifest-verifier",
@@ -2423,3 +2576,80 @@ def test_cli_defaults_match_the_audited_operator_contract() -> None:
     assert args.allow_absent_old_child is False
     assert args.allow_framework_python_argv0_rewrite is False
     assert args.apply is False
+
+
+def test_root_without_sealed_external_tool_identity_fails_before_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(MODULE.os, "getegid", lambda: 0)
+    monkeypatch.delenv(MODULE.EXTERNAL_TOOL_UID_ENV, raising=False)
+    monkeypatch.delenv(MODULE.EXTERNAL_TOOL_GID_ENV, raising=False)
+    monkeypatch.setattr(
+        MODULE,
+        "validate_arguments",
+        lambda _args: pytest.fail("argument preflight ran before identity refusal"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "verify_deployment_admission",
+        lambda _args: pytest.fail("admission verifier ran before identity refusal"),
+    )
+
+    with pytest.raises(
+        MODULE.DeploymentError,
+        match="root deployment lacks the sealed external-tool identity",
+    ):
+        MODULE.execute(argparse.Namespace(apply=False), ops=MODULE.SystemOps())
+
+
+@pytest.mark.parametrize(
+    ("raw_uid", "raw_gid", "message"),
+    [
+        (None, "41", "incomplete"),
+        ("41", None, "incomplete"),
+        ("0", "41", "positive canonical"),
+        ("41", "0", "positive canonical"),
+        ("041", "42", "positive canonical"),
+        ("+41", "42", "noncanonical"),
+        ("41 ", "42", "noncanonical"),
+        ("４１", "42", "noncanonical"),
+    ],
+)
+def test_sealed_external_tool_identity_rejects_malformed_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_uid: str | None,
+    raw_gid: str | None,
+    message: str,
+) -> None:
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(MODULE.os, "getegid", lambda: 0)
+    for name, value in (
+        (MODULE.EXTERNAL_TOOL_UID_ENV, raw_uid),
+        (MODULE.EXTERNAL_TOOL_GID_ENV, raw_gid),
+    ):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    with pytest.raises(MODULE.DeploymentError, match=message):
+        MODULE.require_sealed_external_tool_identity()
+
+
+def test_sealed_external_tool_identity_is_exact_for_root_and_non_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(MODULE.os, "getegid", lambda: 0)
+    assert MODULE.require_sealed_external_tool_identity() == (41, 42)
+
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 41)
+    monkeypatch.setattr(MODULE.os, "getegid", lambda: 42)
+    assert MODULE.require_sealed_external_tool_identity() is None
+
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "43")
+    with pytest.raises(MODULE.DeploymentError, match="differs from the current identity"):
+        MODULE.require_sealed_external_tool_identity()

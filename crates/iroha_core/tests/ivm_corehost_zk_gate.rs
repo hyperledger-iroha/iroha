@@ -74,16 +74,16 @@ fn unshield_without_verify_is_rejected() {
     vm.set_host(host);
 
     // Build a Norito-encoded Unshield instruction and pass via the vendor syscall bridge.
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),
         public_amount: 1_u128.into(),
         inputs: vec![[0u8; 32]],
-        outputs: Vec::new(),
         proof: small_proof_attachment(),
         root_hint: None,
     };
@@ -145,10 +145,11 @@ fn zktransfer_without_verify_is_rejected() {
     vm.set_host(host);
 
     // Build ZkTransfer instruction
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "gold".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "gold".parse().unwrap(),
+        );
     let zkt = iroha_data_model::isi::zk::ZkTransfer {
         asset,
         inputs: vec![[1u8; 32]],

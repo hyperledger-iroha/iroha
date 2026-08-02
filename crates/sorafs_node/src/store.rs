@@ -860,6 +860,21 @@ impl StoredManifest {
 
     /// Load and decode the persisted manifest payload from disk.
     pub fn load_manifest(&self) -> Result<ManifestV1, StorageError> {
+        self.load_manifest_with_bytes()
+            .map(|(manifest, _)| manifest)
+    }
+
+    /// Load the exact canonical manifest bytes after revalidating their retained identity.
+    ///
+    /// The read is byte-bounded, refuses links, verifies that the opened file did not change,
+    /// and binds the decoded manifest back to this immutable storage record before returning the
+    /// bytes. Callers that need to relay the original payload should use this method instead of
+    /// reopening [`Self::manifest_path`] by pathname.
+    pub fn load_manifest_bytes(&self) -> Result<Vec<u8>, StorageError> {
+        self.load_manifest_with_bytes().map(|(_, bytes)| bytes)
+    }
+
+    fn load_manifest_with_bytes(&self) -> Result<(ManifestV1, Vec<u8>), StorageError> {
         let _io_guard = self
             .io_lock
             .read()
@@ -883,7 +898,7 @@ impl StoredManifest {
                 "manifest no longer matches its immutable stored identity",
             ));
         }
-        Ok(manifest)
+        Ok((manifest, bytes))
     }
 
     /// Reconstruct a [`CarBuildPlan`] matching the stored manifest chunk metadata.
@@ -7039,6 +7054,12 @@ mod tests {
 
         let decoded = stored.load_manifest().expect("load manifest");
         assert_eq!(decoded, manifest);
+        assert_eq!(
+            stored
+                .load_manifest_bytes()
+                .expect("load canonical manifest bytes"),
+            norito::to_bytes(&manifest).expect("encode canonical manifest")
+        );
     }
 
     #[test]

@@ -625,7 +625,7 @@ fn consensus_genesis_norito_roundtrip() {
         epoch_seed: [0x11; 32],
         vrf_commit_window_blocks: 8,
         vrf_reveal_window_blocks: 5,
-        max_validators: 20,
+        max_validators: 19,
         min_self_bond: 10_u64.into(),
         min_nomination_bond: 2_u64.into(),
         max_nominator_concentration_pct: 35,

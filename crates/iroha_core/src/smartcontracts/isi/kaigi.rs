@@ -1,7 +1,7 @@
 //! Host-side execution of Kaigi instruction family.
 use std::{collections::BTreeSet, convert::TryFrom};
 
-use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_crypto::{Hash, derive_non_signing_ed25519_public_key};
 use iroha_data_model::{
     HasMetadata,
     events::{
@@ -39,37 +39,29 @@ use crate::{
 
 mod privacy;
 
-fn opaque_account_from_seed(label: &str, seed: &[u8]) -> Result<AccountId, Error> {
-    let mut preimage = Vec::with_capacity(label.len() + 1 + seed.len());
-    preimage.extend_from_slice(label.as_bytes());
-    preimage.push(0);
-    preimage.extend_from_slice(seed);
-    let digest = Hash::new(preimage);
-    let keypair =
-        KeyPair::try_from_seed(digest.as_ref().to_vec(), Algorithm::Ed25519).map_err(|err| {
-            Error::InvariantViolation(
-                format!("Kaigi opaque account seed was rejected: {err}").into(),
-            )
-        })?;
-    Ok(AccountId::new(keypair.public_key().clone()))
+fn opaque_account_from_fields(domain: &str, fields: &[&[u8]]) -> AccountId {
+    AccountId::new(derive_non_signing_ed25519_public_key(
+        domain.as_bytes(),
+        fields,
+    ))
 }
 
-fn opaque_host_account(commitment: &KaigiParticipantCommitment) -> Result<AccountId, Error> {
-    opaque_account_from_seed(
+fn opaque_host_account(commitment: &KaigiParticipantCommitment) -> AccountId {
+    opaque_account_from_fields(
         "iroha.private_kaigi.host.v1",
-        commitment.commitment.as_ref(),
+        &[commitment.commitment.as_ref()],
     )
 }
 
 fn opaque_participant_account(
     call_id: &KaigiId,
     commitment: &KaigiParticipantCommitment,
-) -> Result<AccountId, Error> {
-    let mut seed = Vec::new();
-    seed.extend_from_slice(call_id.to_string().as_bytes());
-    seed.push(0);
-    seed.extend_from_slice(commitment.commitment.as_ref());
-    opaque_account_from_seed("iroha.private_kaigi.participant.v1", &seed)
+) -> AccountId {
+    let call_id = call_id.to_string();
+    opaque_account_from_fields(
+        "iroha.private_kaigi.participant.v1",
+        &[call_id.as_bytes(), commitment.commitment.as_ref()],
+    )
 }
 
 fn private_template_to_new_kaigi(
@@ -97,7 +89,7 @@ pub(crate) fn private_instruction_box(
 ) -> Result<InstructionBox, Error> {
     Ok(match &tx.action {
         PrivateKaigiAction::Create(create) => {
-            let host = opaque_host_account(&tx.artifacts.commitment)?;
+            let host = opaque_host_account(&tx.artifacts.commitment);
             CreateKaigi {
                 call: private_template_to_new_kaigi(&create.call, host),
                 commitment: Some(tx.artifacts.commitment.clone()),
@@ -108,7 +100,7 @@ pub(crate) fn private_instruction_box(
             .into()
         }
         PrivateKaigiAction::Join(join) => {
-            let participant = opaque_participant_account(&join.call_id, &tx.artifacts.commitment)?;
+            let participant = opaque_participant_account(&join.call_id, &tx.artifacts.commitment);
             JoinKaigi {
                 call_id: join.call_id.clone(),
                 participant,
@@ -137,7 +129,7 @@ pub(crate) fn execute_private_transaction(
 ) -> Result<(), Error> {
     match &tx.action {
         PrivateKaigiAction::Create(create) => {
-            let host = opaque_host_account(&tx.artifacts.commitment)?;
+            let host = opaque_host_account(&tx.artifacts.commitment);
             let call = private_template_to_new_kaigi(&create.call, host);
             CreateKaigi {
                 call,
@@ -149,7 +141,7 @@ pub(crate) fn execute_private_transaction(
             .execute_authorized(KaigiAuthorization::PrivacyProof, state_transaction)
         }
         PrivateKaigiAction::Join(join) => {
-            let participant = opaque_participant_account(&join.call_id, &tx.artifacts.commitment)?;
+            let participant = opaque_participant_account(&join.call_id, &tx.artifacts.commitment);
             JoinKaigi {
                 call_id: join.call_id.clone(),
                 participant,
@@ -1414,14 +1406,12 @@ mod tests {
     }
 
     #[test]
-    fn opaque_account_from_seed_accepts_arbitrary_digest_bytes() {
+    fn opaque_account_derivation_is_stable_and_domain_separated() {
         let seed = Hash::new(b"private-kaigi-seed");
-        let first = opaque_account_from_seed("iroha.private_kaigi.test", seed.as_ref())
-            .expect("opaque account derivation succeeds");
-        let second = opaque_account_from_seed("iroha.private_kaigi.test", seed.as_ref())
-            .expect("opaque account derivation is repeatable");
-        let different_label = opaque_account_from_seed("iroha.private_kaigi.other", seed.as_ref())
-            .expect("opaque account derivation supports arbitrary labels");
+        let first = opaque_account_from_fields("iroha.private_kaigi.test", &[seed.as_ref()]);
+        let second = opaque_account_from_fields("iroha.private_kaigi.test", &[seed.as_ref()]);
+        let different_label =
+            opaque_account_from_fields("iroha.private_kaigi.other", &[seed.as_ref()]);
 
         assert_eq!(first, second);
         assert_ne!(first, different_label);
@@ -1463,7 +1453,7 @@ mod tests {
                 proof: vec![1, 2, 3],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     domain.clone(),
                     Name::from_str("unused-fee-fixture").expect("asset name"),
                 ),
@@ -1490,10 +1480,7 @@ mod tests {
                 .clone()
                 .try_into_any_norito()
                 .expect("decode private Kaigi record");
-            assert_eq!(
-                record.host,
-                opaque_host_account(&commitment).expect("opaque host")
-            );
+            assert_eq!(record.host, opaque_host_account(&commitment));
             assert_eq!(record.host_commitment.as_ref(), Some(&commitment));
 
             let join_commitment = KaigiParticipantCommitment {
@@ -1558,8 +1545,7 @@ mod tests {
                 domain.clone(),
                 Name::from_str("signed-account-gate").expect("call name"),
             );
-            let signed_host =
-                opaque_host_account(&commitment).expect("deterministic opaque host identity");
+            let signed_host = opaque_host_account(&commitment);
             let signed_instruction = CreateKaigi {
                 call: private_template_to_new_kaigi(
                     &PrivateKaigiTemplate {

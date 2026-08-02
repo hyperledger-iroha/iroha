@@ -735,11 +735,11 @@ mod tests {
         let missing_account = (*BOB_ID).clone();
         let domain = DomainId::try_new("wonderland", "universal").expect("domain");
         let missing_domain = DomainId::try_new("looking_glass", "universal").expect("domain");
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             domain.clone(),
             "rose".parse::<Name>().expect("asset definition name"),
         );
-        let missing_asset_definition = AssetDefinitionId::new(
+        let missing_asset_definition = AssetDefinitionId::derive_from_components(
             domain.clone(),
             "missing_rose"
                 .parse::<Name>()
@@ -768,9 +768,13 @@ mod tests {
         let domain_record = Domain::new(domain.clone())
             .with_metadata(metadata_entry("region", "west"))
             .build(&account);
-        let mut asset_definition_record = AssetDefinition::numeric(asset_definition.clone())
-            .with_name(String::from("Rose"))
-            .build(&account);
+        let mut asset_definition_record = AssetDefinition::numeric(
+            asset_definition.clone(),
+            String::from("Rose"),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&account);
         asset_definition_record
             .metadata_mut()
             .insert("issuer".parse::<Name>().expect("metadata key"), "alice");
@@ -862,7 +866,7 @@ mod tests {
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
 
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             format!("rose_{seed}").parse().unwrap(),
         );
@@ -1230,7 +1234,7 @@ mod tests {
         // First run
         start_block();
         // Simulate asset balance read+write
-        let ad = iroha_data_model::asset::AssetDefinitionId::new(
+        let ad = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1345,7 +1349,7 @@ mod tests {
 
         let key: Name = "color".parse().expect("metadata key");
         let account = (*ALICE_ID).clone();
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1447,7 +1451,7 @@ mod tests {
         let account = (*ALICE_ID).clone();
         let domain = DomainId::try_new("wonderland", "universal").unwrap();
         let nft: NftId = "ticket$wonderland.universal".parse().expect("nft id");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             domain.clone(),
             "rose".parse().unwrap(),
         );
@@ -1588,7 +1592,7 @@ mod tests {
 
         let _guard = exec_witness_guard();
         start_block();
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1639,7 +1643,7 @@ mod tests {
 
         let _guard = exec_witness_guard();
         start_block();
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1691,7 +1695,7 @@ mod tests {
 
         let _guard = exec_witness_guard();
         start_block();
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1737,7 +1741,7 @@ mod tests {
         use iroha_data_model::{asset::id::AssetDefinitionId, fastpq::TransferTranscript};
         let _guard = exec_witness_guard();
         let _ = drain_exec_witness();
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1759,7 +1763,7 @@ mod tests {
 
     #[test]
     fn guard_drop_clears_unfinished_capture() {
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );

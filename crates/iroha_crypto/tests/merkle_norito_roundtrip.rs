@@ -1,9 +1,12 @@
 //! Norito roundtrip tests for Merkle structures.
 //!
-//! Verifies that `MerkleTree<[u8;32]>` and `MerkleProof<[u8;32]>` serialize
-//! and deserialize losslessly via the Norito codec.
+//! Verifies that `MerkleTree<[u8;32]>` serializes only canonical leaves plus
+//! its hash scheme, rebuilds cached nodes on decode, and that proofs remain
+//! lossless via the Norito codec.
 
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
+use std::num::NonZeroU64;
+
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 
 fn leaf_hash(payload: &[u8]) -> HashOf<[u8; 32]> {
     // Domain-tag example for TX entry leaves (not strictly required for roundtrip,
@@ -15,12 +18,6 @@ fn leaf_hash(payload: &[u8]) -> HashOf<[u8; 32]> {
 
 #[test]
 fn merkle_tree_roundtrips_via_norito() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: Merkle Norito roundtrip pending Norito opt handling. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     // Build a small non-perfect tree (odd number of leaves) to exercise promotion semantics.
     let leaves = [leaf_hash(b"TX1"), leaf_hash(b"TX2"), leaf_hash(b"TX3")];
     let tree: MerkleTree<[u8; 32]> = leaves.into_iter().collect();
@@ -39,12 +36,6 @@ fn merkle_tree_roundtrips_via_norito() {
 
 #[test]
 fn merkle_proof_roundtrips_via_norito() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: MerkleProof Norito roundtrip pending Norito opt handling. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     // Build a deeper tree and extract a proof for the middle leaf.
     let leaves = [
         leaf_hash(b"TX1"),
@@ -66,10 +57,19 @@ fn merkle_proof_roundtrips_via_norito() {
     assert_eq!(proof, decoded, "MerkleProof must roundtrip exactly");
 
     // Optional verification sanity check: decoded proof still verifies
-    let leaf = tree.leaves().nth(2).expect("leaf at index must exist");
-    let root = tree.root().expect("root");
+    let leaf = leaves[2];
+    let commitment = tree.commitment().expect("commitment");
     assert!(
-        decoded.clone().verify(&leaf, &root, 8),
-        "decoded proof should verify (bounded height)"
+        decoded.verify(&leaf, &commitment),
+        "decoded proof should verify against the exact commitment"
+    );
+    let wrong_count_commitment = MerkleTreeCommitment::new(
+        *commitment.root(),
+        NonZeroU64::new(commitment.leaf_count().get() * 2)
+            .expect("wrong test count remains non-zero"),
+    );
+    assert!(
+        !decoded.verify(&leaf, &wrong_count_commitment),
+        "decoded proof must reject the same root paired with a mismatched count"
     );
 }

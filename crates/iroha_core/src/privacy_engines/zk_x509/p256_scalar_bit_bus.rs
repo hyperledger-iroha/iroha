@@ -67,9 +67,6 @@ pub(crate) const P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1: usize = 32;
 pub(crate) const P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1: usize = 16;
 /// Exact fixed-width opened-row constraint inventory.
 pub(crate) const P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1: usize = 67;
-/// Maximum total polynomial degree.
-pub(crate) const P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_DEGREE_V1: u8 = 3;
-
 const P256_SCALAR_BITS_V1: usize = 256;
 const P256_SCALAR_LIMBS_V1: usize = 16;
 const P256_SCALAR_LIMB_BITS_V1: usize = 16;
@@ -1171,14 +1168,6 @@ impl P256ScalarBitBusBoundSourceV1 {
         &self,
     ) -> Result<P256ScalarBitBusStarkBaseRowProviderV1<'_>, P256ScalarBitBusErrorV1> {
         P256ScalarBitBusStarkBaseRowProviderV1::new_v1(self.material_v1()?)
-    }
-
-    /// Verifier-owned fixed-row replay retained across the phase transition.
-    pub(crate) fn fixed_rows_v1(
-        &self,
-    ) -> Result<P256ScalarBitBusStarkFixedProviderV1, P256ScalarBitBusErrorV1> {
-        self.material_v1()?;
-        P256ScalarBitBusStarkFixedProviderV1::new_v1(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
     }
 
     /// Mint deterministic auxiliary replay under the bound X5B1 challenges.

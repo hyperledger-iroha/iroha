@@ -142,7 +142,7 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         let buyer_client = network
             .peer()
             .client_for(&buyer, buyer_keypair.private_key().clone());
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "aitai_xor_native".parse()?,
         );
@@ -150,10 +150,12 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         client.submit_all_blocking(
             [
                 InstructionBox::from(Register::account(Account::new(buyer.clone()))),
-                Register::asset_definition(
-                    AssetDefinition::numeric(asset_definition_id.clone())
-                        .with_name(asset_definition_id.name().to_string()),
-                )
+                Register::asset_definition(AssetDefinition::numeric(
+                    asset_definition_id.clone(),
+                    "aitai_xor_native".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ))
                 .into(),
                 Mint::asset_quantity(100_u64, seller_asset_id.clone()).into(),
             ],
@@ -268,7 +270,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             &release_authority,
             release_authority_keypair.private_key().clone(),
         );
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "aitai_xor_lock_native".parse()?,
         );
@@ -277,10 +279,12 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             [
                 InstructionBox::from(Register::account(Account::new(destination.clone()))),
                 InstructionBox::from(Register::account(Account::new(release_authority.clone()))),
-                Register::asset_definition(
-                    AssetDefinition::numeric(asset_definition_id.clone())
-                        .with_name(asset_definition_id.name().to_string()),
-                )
+                Register::asset_definition(AssetDefinition::numeric(
+                    asset_definition_id.clone(),
+                    "aitai_xor_lock_native".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ))
                 .into(),
                 Mint::asset_quantity(100_u64, source_asset_id.clone()).into(),
             ],

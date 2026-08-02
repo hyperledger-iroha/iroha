@@ -969,7 +969,7 @@ mod tests {
     }
 
     fn asset_definition_id() -> crate::asset::AssetDefinitionId {
-        crate::asset::AssetDefinitionId::new(
+        crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse::<Name>().unwrap(),
         )
@@ -1041,7 +1041,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn escrow_instruction_constructors_fill_expected_fields() {
         let escrow_id = crate::escrow::EscrowId::new(Hash::new("escrow-ctor"));
-        let asset_definition = crate::asset::AssetDefinitionId::new(
+        let asset_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse::<Name>().unwrap(),
         );

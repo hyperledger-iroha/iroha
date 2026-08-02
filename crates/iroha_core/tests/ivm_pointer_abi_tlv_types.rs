@@ -96,7 +96,7 @@ fn wrong_type_for_set_account_detail_value_rejected() {
     let key_payload = to_bytes(&key).expect("encode name");
     let key = tlv_envelope(PointerType::Name as u16, &key_payload);
     // Wrong type: AssetDefinitionId TLV where Json is expected
-    let asset_def_payload = to_bytes(&AssetDefinitionId::new(
+    let asset_def_payload = to_bytes(&AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     ))

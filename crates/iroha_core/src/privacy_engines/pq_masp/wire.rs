@@ -784,7 +784,7 @@ mod tests {
                 statement_schema_digest: PrivacyStatementSchemaDigestV1::new(raw(5)),
                 engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
             },
-            asset_definition_id: AssetDefinitionId::new(
+            asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("pq_note").expect("asset name"),
             ),
@@ -993,7 +993,7 @@ mod tests {
             Err(PqMaspWireErrorV1::AuthenticationFailed)
         );
         let mut cross_asset = statement.clone();
-        cross_asset.asset_definition_id = AssetDefinitionId::new(
+        cross_asset.asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("other_pq_note").expect("asset name"),
         );

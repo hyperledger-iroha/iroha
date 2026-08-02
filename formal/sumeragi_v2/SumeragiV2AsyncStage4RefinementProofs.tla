@@ -2556,7 +2556,11 @@ BY TypedItemIsInNetworkCarrier, TypedCandidateIsInCarrier, Isa
        NextCandidateGeneration, NormalProposalPrepareNoItemKinds,
        NormalProposalPrepareNetworkKinds, NormalBeginPrepareParentKinds,
        AsyncCandidateTyped, AsyncCandidateSet, AsyncCandidateDomain,
-       AsyncCandidateWithIdentity, AsyncEvidenceTyped, AsyncItemTyped,
+       AsyncCandidateWithIdentity,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncEvidenceTyped, AsyncItemTyped,
        Views, Generations, Heights
 
 THEOREM TypedLiveProtectedServiceIsCanonical ==
@@ -2743,7 +2747,8 @@ PROOF
              /\ CausalCandidate("Normal", "BeginPrepare", command).kind
                   \in NormalProposalPrepareNoItemKinds
         BY DEF CausalCandidate, AsyncCandidateFrom,
-               AsyncCandidateWithIdentity,
+               AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+               AsyncCandidateWithIdentityAndOrigin,
                NormalProposalPrepareNoItemKinds
       <3>2. \E parent \in AsyncCandidateSet,
                    blockHeight \in Heights:
@@ -2757,13 +2762,18 @@ PROOF
         <4> QED BY <1>1, <2>2, <4>2
              DEF CausalCandidate, AsyncCandidateFrom,
                  FrozenNormalBeginPrepareCandidate,
-                 AsyncCandidateWithIdentity
+                 AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+                 AsyncCandidateSuccessorSemanticPhase,
+                 AsyncCandidateSuccessorProposalRound,
+                 AsyncCandidateSemanticPhase,
+                 AsyncCandidateWithIdentityAndOrigin
       <3> QED BY <3>1, <3>2
            DEF NormalProposalPrepareNoItemCandidate
     <2>5. CausalCandidate("Normal", "BeginPrepare", command).class =
              "Normal"
       BY DEF CausalCandidate, AsyncCandidateFrom,
-             AsyncCandidateWithIdentity
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin
     <2>6. NormalProposalPrepareCandidate(
              CausalCandidate("Normal", "BeginPrepare", command))
       BY <2>3, <2>4, <2>5 DEF NormalProposalPrepareCandidate
@@ -2872,8 +2882,10 @@ PROOF
            /\ InstallProposalSubject(command) \in SubjectOrNone
       BY <1>1, <2>1, SMT
          DEF AsyncTypeInvariant, TypeInvariant, AsyncCandidateTyped,
-             InstallProposalSuccessor, AsyncCandidateAtConsumer,
-             AsyncCandidateWithIdentity, NextCandidateGeneration,
+             InstallProposalSuccessor,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin,
+             NextCandidateGeneration,
              Generations
     <2>3. InstallProposalSuccessor(command) \in AsyncCandidateSet
       BY <2>1, TypedCandidateIsInCarrier
@@ -2882,16 +2894,18 @@ PROOF
       <3>1. /\ InstallProposalSuccessor(command).item = NoAsyncItem
              /\ InstallProposalSuccessor(command).kind
                   \in NormalProposalPrepareNoItemKinds
-        BY DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
-               AsyncCandidateWithIdentity,
+        BY DEF InstallProposalSuccessor,
+               AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+               AsyncCandidateWithIdentityAndOrigin,
                NormalProposalPrepareNoItemKinds
       <3>2. InstallProposalSuccessor(command) =
                FrozenInstallProposalSuccessor(
                  command, context, generation[command.node],
                  InstallProposalSubject(command))
-        BY DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
+        BY DEF InstallProposalSuccessor,
                FrozenInstallProposalSuccessor,
-               NextCandidateGeneration, AsyncCandidateWithIdentity
+               NextCandidateGeneration,
+               AsyncCandidateCausalSuccessorWithIdentityAndOrigin
       <3>3. \E installCommand \in AsyncCandidateSet,
                    installedContext \in ContextRecords,
                    priorGeneration \in Generations,
@@ -2910,8 +2924,9 @@ PROOF
       <3> QED BY <3>1, <3>3
            DEF NormalProposalPrepareNoItemCandidate
     <2>5. InstallProposalSuccessor(command).class = "Normal"
-      BY DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
-             AsyncCandidateWithIdentity
+      BY DEF InstallProposalSuccessor,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin
     <2>6. NormalProposalPrepareCandidate(
              InstallProposalSuccessor(command))
       BY <2>3, <2>4, <2>5 DEF NormalProposalPrepareCandidate
@@ -2940,7 +2955,10 @@ BY Isa
        FrozenNormalDeliveryCandidate, NextCandidateGeneration,
        NormalProposalPrepareNoItemKinds,
        NormalProposalPrepareNetworkKinds,
-       AsyncCandidateWithIdentity
+       AsyncCandidateWithIdentity,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound
 
 THEOREM ProtectedRankProgressCoversNormalProposalPrepare ==
   \A initialContext:

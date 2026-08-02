@@ -12,7 +12,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 /** Canonical bare-Norito models for the Sumeragi v2 consensus wire protocol. */
 object SumeragiV2Wire {
     /** The only protocol revision accepted by live consensus. */
-    const val PROTOCOL_VERSION: Int = 3
+    const val PROTOCOL_VERSION: Int = 4
     /** Maximum number of real Kagemusha top-up leaves committed by one block. */
     const val MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: Long = 16
     private val KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =

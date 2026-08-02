@@ -46,6 +46,19 @@ public final class Blake3 {
   }
 
   /**
+   * Computes the BLAKE3 hash without applying the legacy AccountLtHash preimage bound.
+   *
+   * <p>This entry point is intended for bounded protocol payloads whose consensus limits can exceed
+   * the Android SDK helper limit, such as a maximum-size Musubi verification lock.
+   *
+   * @param input the data to hash
+   * @return the 32-byte BLAKE3 hash
+   */
+  public static byte[] hashUnbounded(final byte[] input) {
+    return deriveUnchecked(input, OUT_LEN);
+  }
+
+  /**
    * Computes BLAKE3 XOF output for the given input.
    *
    * @param input the data to hash
@@ -58,6 +71,10 @@ public final class Blake3 {
       throw new IllegalArgumentException(
           "Input too large for Blake3 helper: " + input.length + " bytes (max " + MAX_INPUT_LEN + ")");
     }
+    return deriveUnchecked(input, outputLength);
+  }
+
+  private static byte[] deriveUnchecked(final byte[] input, final int outputLength) {
     if (outputLength < 0) {
       throw new IllegalArgumentException("outputLength must not be negative");
     }
@@ -83,7 +100,10 @@ public final class Blake3 {
   }
 
   private static Output rootOutput(final byte[] input) {
-    final int chunkCount = Math.max(1, (input.length + CHUNK_LEN - 1) / CHUNK_LEN);
+    final int chunkCount =
+        Math.max(
+            1,
+            input.length / CHUNK_LEN + (input.length % CHUNK_LEN == 0 ? 0 : 1));
     return subtreeOutput(input, 0, chunkCount);
   }
 

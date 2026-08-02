@@ -10,17 +10,9 @@
 
     use super::*;
     use crate::privacy_engines::zk_x509::{
-        accumulator_air::{
-            ZkX509CaAccumulatorStatementV1, ZkX509CaAccumulatorWitnessV1,
-            build_ca_accumulator_trace_v1,
-        },
         der_air::ZkX509DerEkuV1,
         der_stark::ZkX509DerStarkPrivateShapeV1,
         io_air::ZkX509IoEndpointV1,
-        merkle::{
-            ZK_X509_CA_SPKI_DER_BYTES_V1, ca_membership_path_from_complete_spkis_v1,
-            ca_root_from_complete_spkis_v1,
-        },
         p256_aggregate_adapter::p256_main_base_source_fixture_for_test_v1,
         sha_call_bus_stark::ZkX509ShaCallPublicShapeV1,
     };
@@ -1511,59 +1503,6 @@
 
     fn accumulator_aggregate_layout() -> AggregateProofLayoutV1 {
         AggregateProofLayoutV1::for_accumulators_v1().expect("accumulator aggregate layout")
-    }
-
-    fn accumulator_public_fixture() -> AccumulatorRegistrationPublicV1 {
-        AccumulatorRegistrationPublicV1 {
-            ca_membership: ZkX509CaAccumulatorStarkPublicV1 {
-                governed_root: [F(7); 32],
-                root_spki_channel: F(36),
-            },
-        }
-    }
-
-    fn accumulator_trace() -> &'static (ZkX509CaAccumulatorTraceV1, ZkX509ShaCallScheduleV1) {
-        static TRACE: OnceLock<(ZkX509CaAccumulatorTraceV1, ZkX509ShaCallScheduleV1)> =
-            OnceLock::new();
-        TRACE.get_or_init(|| {
-            fn spki(index: u16) -> [u8; ZK_X509_CA_SPKI_DER_BYTES_V1] {
-                let mut spki = [0x42; ZK_X509_CA_SPKI_DER_BYTES_V1];
-                spki[..2].copy_from_slice(&index.to_be_bytes());
-                spki
-            }
-            let members = [spki(7), spki(1), spki(9), spki(3)];
-            let references = members
-                .iter()
-                .map(|member: &[u8; ZK_X509_CA_SPKI_DER_BYTES_V1]| member.as_slice())
-                .collect::<Vec<_>>();
-            let root = ca_root_from_complete_spkis_v1(&references).expect("compact CA root");
-            let path =
-                ca_membership_path_from_complete_spkis_v1(&references, &members[0]).expect("path");
-            let trace = build_ca_accumulator_trace_v1(
-                ZkX509CaAccumulatorStatementV1 {
-                    governed_root: root,
-                },
-                ZkX509CaAccumulatorWitnessV1 {
-                    root_spki_der: members[0],
-                    path,
-                },
-            )
-            .expect("compact CA trace");
-            let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
-                disclosed_attributes: 4,
-            })
-            .expect("canonical SHA schedule");
-            (trace, schedule)
-        })
-    }
-
-    fn accumulator_trace_registration() -> &'static AccumulatorTraceRegistrationV1 {
-        static REGISTRATION: OnceLock<AccumulatorTraceRegistrationV1> = OnceLock::new();
-        REGISTRATION.get_or_init(|| {
-            let (ca, schedule) = accumulator_trace();
-            compile_accumulator_trace_registration_v1(ca, schedule)
-                .expect("canonical accumulator registration")
-        })
     }
 
     fn p256_aggregate_challenges_fixture() -> P256AggregateChallengesV1 {

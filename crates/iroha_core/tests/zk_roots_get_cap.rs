@@ -88,10 +88,7 @@ fn zk_roots_get_respects_cap_and_max() {
             },
             stark: cfg::Stark::default(),
             sccp: cfg::Sccp::default(),
-            root_history_cap: 4,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
-            empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
-            merkle_depth: defaults::zk::ledger::EMPTY_ROOT_DEPTH,
             preverify_max_bytes: defaults::zk::preverify::MAX_BYTES,
             preverify_budget_bytes: defaults::zk::preverify::BUDGET_BYTES,
             proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
@@ -120,7 +117,7 @@ fn zk_roots_get_respects_cap_and_max() {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
-            tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
+            tree_roots_history_len: nonzero!(4_usize),
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
             registry_max_vk_entries: defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
@@ -141,18 +138,21 @@ fn zk_roots_get_respects_cap_and_max() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("zkd", "universal").unwrap(),
-        "zcoin".parse().unwrap(),
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("zkd", "universal").unwrap(),
+            "zcoin".parse().unwrap(),
+        );
     let owner = checked_random_zk_roots_account_id();
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "zcoin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy
@@ -189,21 +189,20 @@ fn zk_roots_get_respects_cap_and_max() {
             .execute_instruction(&mut stx, &owner, ib)
             .unwrap();
     }
+    let zk_snapshot = stx
+        .world
+        .zk_assets()
+        .iter()
+        .map(|(asset_id, state)| (asset_id.clone(), state.clone()))
+        .collect();
     stx.apply();
 
     // Build CoreHost and snapshot roots
     let mut vm = ivm::IVM::new(1_000_000);
     let mut host = CoreHost::new(owner.clone());
-    host.set_zk_root_history_cap(state.view().zk.root_history_cap);
-    // Snapshot
-    {
-        use std::collections::BTreeMap;
-        let mut snap: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>> = BTreeMap::new();
-        for (ad, st) in state.view().world.zk_assets().iter() {
-            snap.insert(ad.clone(), st.root_history.clone());
-        }
-        host.set_zk_roots_snapshot(snap);
-    }
+    host.set_zk_tree_roots_history_len(state.view().zk.tree_roots_history_len);
+    host.set_zk_roots_snapshot(zk_snapshot)
+        .expect("canonical confidential tree snapshot");
     let mut host = host;
 
     // Case 1: max=0 => bounded by cap

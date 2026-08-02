@@ -8,7 +8,7 @@ use std::{
 };
 
 use blake3::Hasher;
-use iroha_crypto::{Algorithm, PublicKey, SignatureOf, ed25519_parse_signature};
+use iroha_crypto::{Algorithm, Hash, PublicKey, SignatureOf, ed25519_parse_signature};
 use iroha_data_model::{
     events::data::oracle::{
         DefiOracleAttestationRecorded, OracleChangeProposed, OracleChangeStageUpdated, OracleEvent,
@@ -43,6 +43,63 @@ use crate::{
     oracle::{FeedEventRecord, ObservationWindow, ObservationWindowKey},
     state::{StateTransaction, WorldTransaction},
 };
+
+/// Exact retained Oracle purpose carried by a one-shot numeric movement capability.
+pub(in crate::smartcontracts::isi) enum VerifiedOracleNumericPurpose {
+    Reward {
+        feed_id: FeedId,
+        feed_config_version: FeedConfigVersion,
+        slot: FeedSlot,
+        request_hash: Hash,
+        provider: AccountId,
+    },
+    Penalty {
+        feed_id: FeedId,
+        feed_config_version: FeedConfigVersion,
+        slot: FeedSlot,
+        request_hash: Hash,
+        provider: AccountId,
+        kind: OraclePenaltyKind,
+    },
+    DisputeEscrow {
+        dispute_id: OracleDisputeId,
+    },
+}
+
+/// Non-reusable proof that Oracle admission selected one exact retained movement.
+pub(in crate::smartcontracts::isi) struct VerifiedOracleNumericMovement {
+    purpose: VerifiedOracleNumericPurpose,
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedOracleNumericMovement {
+    fn new(
+        purpose: VerifiedOracleNumericPurpose,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            purpose,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (VerifiedOracleNumericPurpose, AssetId, AssetId, Quantity) {
+        (
+            self.purpose,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
 
 fn aggregation_err(err: &iroha_data_model::oracle::OracleAggregationError) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
@@ -549,12 +606,22 @@ fn reward_provider(
         return Ok(());
     }
 
-    state_transaction
-        .world
-        .withdraw_numeric_asset(&pool_asset, &amount)?;
-    state_transaction
-        .world
-        .deposit_numeric_asset(&provider_asset, &amount)?;
+    let movement = VerifiedOracleNumericMovement::new(
+        VerifiedOracleNumericPurpose::Reward {
+            feed_id: feed_id.clone(),
+            feed_config_version,
+            slot,
+            request_hash,
+            provider: provider.clone(),
+        },
+        pool_asset,
+        provider_asset,
+        amount.clone(),
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_oracle_numeric_movement(
+        state_transaction,
+        movement,
+    )?;
 
     with_provider_stats_mut(&mut state_transaction.world, feed_id, provider, |stats| {
         stats.inliers = stats.inliers.saturating_add(1);
@@ -602,12 +669,23 @@ fn slash_provider(
         return Ok(());
     }
 
-    state_transaction
-        .world
-        .withdraw_numeric_asset(&provider_asset, amount)?;
-    state_transaction
-        .world
-        .deposit_numeric_asset(&receiver_asset, amount)?;
+    let movement = VerifiedOracleNumericMovement::new(
+        VerifiedOracleNumericPurpose::Penalty {
+            feed_id: feed_id.clone(),
+            feed_config_version,
+            slot,
+            request_hash,
+            provider: provider.clone(),
+            kind,
+        },
+        provider_asset,
+        receiver_asset,
+        amount.clone(),
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_oracle_numeric_movement(
+        state_transaction,
+        movement,
+    )?;
 
     with_provider_stats_mut(&mut state_transaction.world, feed_id, provider, |stats| {
         match kind {
@@ -1614,12 +1692,14 @@ impl Execute for OpenOracleDispute {
             )));
         }
 
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&challenger_asset, &bond_amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&escrow_asset, &bond_amount)?;
+        crate::smartcontracts::isi::asset::isi::execute_oracle_dispute_bond_transfer(
+            state_transaction,
+            authority,
+            &dispute_id,
+            challenger_asset,
+            escrow_asset,
+            bond_amount.clone(),
+        )?;
 
         let dispute = OracleDispute {
             id: dispute_id,
@@ -1704,9 +1784,16 @@ fn resolve_upheld_dispute(
         OraclePenaltyKind::Dispute,
         &economics.outlier_slash,
     )?;
-    move_from_escrow(state_transaction, assets, &dispute.bond, &assets.challenger)?;
     move_from_escrow(
         state_transaction,
+        dispute,
+        assets,
+        &dispute.bond,
+        &assets.challenger,
+    )?;
+    move_from_escrow(
+        state_transaction,
+        dispute,
         assets,
         &economics.reward,
         &assets.challenger,
@@ -1728,16 +1815,24 @@ fn resolve_reduced_dispute(
         OraclePenaltyKind::Dispute,
         &economics.error_slash,
     )?;
-    move_from_escrow(state_transaction, assets, &dispute.bond, &assets.challenger)
+    move_from_escrow(
+        state_transaction,
+        dispute,
+        assets,
+        &dispute.bond,
+        &assets.challenger,
+    )
 }
 
 fn resolve_frivolous_dispute(
     state_transaction: &mut StateTransaction<'_, '_>,
+    dispute: &OracleDispute,
     economics: &DisputeEconomics,
     assets: &DisputeAssets,
 ) -> Result<(), Error> {
     move_from_escrow(
         state_transaction,
+        dispute,
         assets,
         &economics.frivolous_slash,
         &assets.target,
@@ -1746,16 +1841,23 @@ fn resolve_frivolous_dispute(
 
 fn move_from_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
+    dispute: &OracleDispute,
     assets: &DisputeAssets,
     amount: &Quantity,
     destination: &AssetId,
 ) -> Result<(), Error> {
-    state_transaction
-        .world
-        .withdraw_numeric_asset(&assets.escrow, amount)?;
-    state_transaction
-        .world
-        .deposit_numeric_asset(destination, amount)
+    let movement = VerifiedOracleNumericMovement::new(
+        VerifiedOracleNumericPurpose::DisputeEscrow {
+            dispute_id: dispute.id,
+        },
+        assets.escrow.clone(),
+        destination.clone(),
+        amount.clone(),
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_oracle_numeric_movement(
+        state_transaction,
+        movement,
+    )
 }
 
 impl Execute for ResolveOracleDispute {
@@ -1818,7 +1920,7 @@ impl Execute for ResolveOracleDispute {
                 resolve_reduced_dispute(state_transaction, &dispute, ctx, &economics, &assets)?
             }
             OracleDisputeOutcome::Frivolous => {
-                resolve_frivolous_dispute(state_transaction, &economics, &assets)?
+                resolve_frivolous_dispute(state_transaction, &dispute, &economics, &assets)?
             }
         }
 

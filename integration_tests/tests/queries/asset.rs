@@ -40,9 +40,12 @@ fn find_asset_total_quantity() -> Result<()> {
             gen_account_in("looking-glass").0,
         ];
         let wonderland_domain: DomainId = DomainId::try_new("wonderland", "universal")?;
-        let quantity_definition =
-            AssetDefinitionId::new(wonderland_domain.clone(), "quantity".parse()?);
-        let fixed_definition = AssetDefinitionId::new(wonderland_domain.clone(), "fixed".parse()?);
+        let quantity_definition = AssetDefinitionId::derive_from_components(
+            wonderland_domain.clone(),
+            "quantity".parse()?,
+        );
+        let fixed_definition =
+            AssetDefinitionId::derive_from_components(wonderland_domain.clone(), "fixed".parse()?);
 
         // Registering accounts
         let register_accounts = accounts
@@ -61,6 +64,7 @@ fn find_asset_total_quantity() -> Result<()> {
             &test_client,
             &accounts,
             quantity_definition,
+            "quantity".to_owned(),
             NumericSpec::default(),
             &Quantity::one(),
             &Quantity::from(10_u32),
@@ -71,6 +75,7 @@ fn find_asset_total_quantity() -> Result<()> {
             &test_client,
             &accounts,
             fixed_definition,
+            "fixed".to_owned(),
             NumericSpec::default(),
             &Quantity::one(),
             &Quantity::from(10_u32),
@@ -91,6 +96,7 @@ fn test_total_quantity(
     test_client: &Client,
     accounts: &[AccountId; 5],
     definition_id: AssetDefinitionId,
+    definition_name: String,
     asset_spec: NumericSpec,
     initial_value: &Quantity,
     to_mint: &Quantity,
@@ -101,8 +107,13 @@ fn test_total_quantity(
     // Registering new asset definition
     let asset_definition = {
         let __asset_definition_id = definition_id.clone();
-        AssetDefinition::new(__asset_definition_id.clone(), asset_spec)
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::new(
+            __asset_definition_id.clone(),
+            definition_name,
+            asset_spec,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     };
     test_client.submit_blocking(
         Register::asset_definition(asset_definition),

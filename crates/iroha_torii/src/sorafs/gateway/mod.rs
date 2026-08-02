@@ -44,6 +44,7 @@ pub use compliance::{
 };
 pub use controller::TlsAutomationHandle;
 pub use feed_transport::ProductionGatewayComplianceFeedTransport;
+pub(crate) use policy::{CanonicalHost, RegionCode};
 pub use policy::{
     GatewayPolicy, GatewayPolicyConfig, PolicyDecision, PolicyViolation, RequestContext,
     build_gar_violation_event,

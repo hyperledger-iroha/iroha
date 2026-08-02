@@ -23,11 +23,45 @@ pub(crate) struct Sampler<T: PRNG> {
     remaining_proposals: u32,
 }
 
-const MAX_PROPOSALS_PER_COEFFICIENT: u32 = 256;
+pub(super) const MAX_PROPOSALS_PER_COEFFICIENT: u32 = 256;
 
 impl<T: PRNG> core::fmt::Debug for Sampler<T> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("Falcon512Sampler(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct RejectingPrng;
+
+    impl PRNG for RejectingPrng {
+        fn new(_seed: &[u8]) -> Self {
+            Self
+        }
+
+        fn next_u8(&mut self) -> u8 {
+            u8::MAX
+        }
+
+        fn next_u16(&mut self) -> u16 {
+            u16::MAX
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            u64::MAX
+        }
+
+        fn zeroize(&mut self) {}
+    }
+
+    #[test]
+    fn one_coefficient_stops_after_exact_public_proposal_cap() {
+        let mut sampler = Sampler::<RejectingPrng>::new(9, &[], MAX_PROPOSALS_PER_COEFFICIENT + 1);
+        assert!(sampler.next(FLR::ZERO, INV_SIGMA[9]).is_none());
+        assert_eq!(sampler.remaining_proposals, 1);
     }
 }
 

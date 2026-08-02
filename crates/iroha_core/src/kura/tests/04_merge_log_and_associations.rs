@@ -22,6 +22,54 @@
     }
 
     #[test]
+    fn retained_merge_reference_survives_remote_only_body_eviction() {
+        let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(nonzero!(2_usize));
+        let mut generator = DummyBlocks::new();
+        let genesis = generator.next();
+        let mut entry = sample_merge_entry(1);
+        let carrier = next_merge_carrier(&mut generator, &mut entry);
+        let expected_reference = CertifiedMergeLedgerReference::new(&entry);
+        let third = generator.next();
+        let fourth = generator.next();
+
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store retained-witness genesis");
+        kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
+            .expect("store retained-witness merge carrier");
+        kura.store_block(Arc::clone(&third))
+            .expect("store retained-witness third block");
+        kura.store_block(Arc::clone(&fourth))
+            .expect("store retained-witness tail");
+
+        let blocks = vec![genesis, carrier.clone(), third, fourth];
+        let finality = v2_finality_artifacts_for_chain(&blocks)[1].clone();
+        let _commit_receipt = kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist exact carrier finality and retained witness");
+        let height = nonzero!(2_usize);
+        let (_, payload_len) = advertise_required_replicas(&kura, height);
+        assert!(
+            kura.evict_block_bodies(payload_len)
+                .expect("evict finalized merge carrier")
+                > 0
+        );
+        kura.remove_evicted_block_sidecar_for_testing(height)
+            .expect("make the retained merge carrier remote-only");
+        assert!(
+            kura.get_block_without_merge_sidecar(height).is_none(),
+            "the test must not recover serving authority from a local body"
+        );
+
+        let (header, recovered_finality, recovered_reference) = kura
+            .v2_finality_artifact_with_merge_reference(2)
+            .expect("validate body-independent retained merge witness")
+            .expect("retained merge witness exists");
+        assert_eq!(header, carrier.header());
+        assert_eq!(recovered_finality, finality);
+        assert_eq!(recovered_reference, Some(expected_reference));
+    }
+
+    #[test]
     fn merge_pending_cleanup_releases_block_data_before_waiting_for_sidecar_lock() {
         let kura = Kura::blank_kura_for_testing();
         let mut blocks = DummyBlocks::new();

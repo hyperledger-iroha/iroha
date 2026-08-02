@@ -8,7 +8,7 @@ description: High-level design for the MOCHI local Iroha devnet app.
 
 ## Goals
 
-- Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
+- Bootstrap exact 3f+1 local validator committees (four nodes by default) quickly.
 - Wrap `kagami`, `irohad`, and supporting binaries in a Ganache-style local devnet workflow.
 - Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
 - Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
@@ -35,7 +35,7 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 
 ## User Flows Backed by `mochi-core`
 
-- **Devnet Quickstart**: choose a `Single Peer` or `Four Peer BFT` preset, set the workspace and chain ID, then start, restart, stop, or rebuild the local network from one surface.
+- **Devnet Quickstart**: use the `Four Peer BFT` preset, set the workspace and chain ID, then start, restart, stop, or rebuild the local network from one surface.
 - **Devnet Access**: expose copyable Torii/API endpoints plus development identities so application code can connect to the local network without digging through generated files.
 - **Lifecycle Controls**: start, stop, and restart the devnet; surface live metrics; expose log tails; and reserve advanced profile edits for the Settings dialog.
 - **Live Activity Streams**: subscribe to `/v1/blocks/stream`, `/v1/events/ws`, and peer logs, keeping rolling in-memory buffers that the UI can auto-attach to running peers.

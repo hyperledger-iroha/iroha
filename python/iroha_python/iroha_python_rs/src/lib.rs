@@ -77,7 +77,7 @@ use iroha_data_model::{
         AssetBalanceScope, AssetTransferAvailability, AssetTransferControlWindow,
         AssetTransferLimit,
         alias::AssetDefinitionAlias,
-        definition::{AssetBalancePolicy, AssetConfidentialPolicy},
+        definition::{AssetBalancePolicy, AssetConfidentialPolicy, validate_asset_name},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
     block::{
@@ -236,7 +236,9 @@ use sorafs_manifest::{
     OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
     OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
     OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
-    alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
+    alias_cache::{
+        AliasCachePolicy, AliasProofState, decode_alias_proof_untrusted_signers, unix_now_secs,
+    },
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
@@ -2293,7 +2295,7 @@ fn sorafs_evaluate_alias_proof_py(
     let proof_bytes = BASE64.decode(trimmed.as_bytes()).map_err(|err| {
         PyValueError::new_err(format!("failed to decode base64 alias proof: {err}"))
     })?;
-    let bundle = decode_alias_proof(&proof_bytes)
+    let bundle = decode_alias_proof_untrusted_signers(&proof_bytes)
         .map_err(|err| PyValueError::new_err(format!("invalid alias proof bundle: {err}")))?;
     let evaluation = policy.evaluate(&bundle, now);
     let state_label = match evaluation.state {
@@ -10391,7 +10393,7 @@ mod tests {
     }
 
     const BATCH_TEST_CONTRACT_ADDRESS: &str =
-        "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
+        "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
 
     #[test]
     fn transaction_builder_preserves_mixed_batch_order_and_wire_tags() {
@@ -11205,10 +11207,7 @@ fn parse_confidential_policy(mode: Option<&str>) -> PyResult<Option<AssetConfide
     Ok(Some(policy))
 }
 
-fn parse_balance_scope_policy(mode: Option<&str>) -> PyResult<Option<AssetBalancePolicy>> {
-    let Some(mode) = mode else {
-        return Ok(None);
-    };
+fn parse_balance_scope_policy(mode: &str) -> PyResult<AssetBalancePolicy> {
     let policy = match mode {
         "Global" => AssetBalancePolicy::Global,
         "DataspaceRestricted" => AssetBalancePolicy::DataspaceRestricted,
@@ -11218,11 +11217,7 @@ fn parse_balance_scope_policy(mode: Option<&str>) -> PyResult<Option<AssetBalanc
             )));
         }
     };
-    Ok(Some(policy))
-}
-
-fn domain_id_to_py(py: Python<'_>, id: &DomainId) -> PyResult<Py<PyDomainId>> {
-    Py::new(py, PyDomainId { inner: id.clone() })
+    Ok(policy)
 }
 
 fn account_id_to_py(py: Python<'_>, id: &AccountId) -> PyResult<Py<PyAccountId>> {
@@ -11347,7 +11342,7 @@ impl PyAssetDefinitionId {
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid asset name `{name}`: {err}")))?;
         Ok(Self {
-            inner: AssetDefinitionId::new(domain, name),
+            inner: AssetDefinitionId::derive_from_components(domain, name),
         })
     }
 
@@ -11358,11 +11353,6 @@ impl PyAssetDefinitionId {
 
     fn canonical_address(&self) -> String {
         self.inner.canonical_address().to_string()
-    }
-
-    #[getter]
-    fn domain<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDomainId>> {
-        domain_id_to_py(py, self.inner.domain())
     }
 
     fn __str__(&self) -> String {
@@ -11930,19 +11920,19 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (definition_id, owner, *, name=None, description=None, alias=None, scale=None, mintable=None, balance_scope_policy=None, confidential_policy=None, metadata=None))]
+    #[pyo3(signature = (definition_id, *, owning_domain, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, confidential_policy=None, metadata=None))]
     #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
     fn register_asset_definition<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         definition_id: &str,
-        owner: &str,
-        name: Option<&str>,
+        owning_domain: Option<&str>,
+        balance_scope_policy: &str,
+        name: &str,
         description: Option<&str>,
         alias: Option<&str>,
         scale: Option<u32>,
         mintable: Option<&str>,
-        balance_scope_policy: Option<&str>,
         confidential_policy: Option<&str>,
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
@@ -11951,17 +11941,33 @@ impl Instruction {
                 "invalid asset definition id `{definition_id}`: {err}"
             ))
         })?;
+
+        let owning_domain = owning_domain
+            .map(|domain| {
+                DomainId::parse_fully_qualified(domain).map_err(|err| {
+                    PyValueError::new_err(format!("invalid owning domain `{domain}`: {err}"))
+                })
+            })
+            .transpose()?;
+        let parsed_balance_scope_policy = parse_balance_scope_policy(balance_scope_policy)?;
+        validate_asset_name(name).map_err(|err| {
+            PyValueError::new_err(format!("invalid asset definition name `{name}`: {err}"))
+        })?;
+        if parsed_balance_scope_policy == AssetBalancePolicy::DataspaceRestricted
+            && owning_domain.is_none()
         {
-            let owner = parse_account_id(owner)?;
-            ensure_ed25519_account(&owner)?;
+            return Err(PyValueError::new_err(
+                "owning_domain is required for DataspaceRestricted balances",
+            ));
         }
-
         let spec = numeric_spec_from_optional_scale(scale)?;
-        let mut new_asset = AssetDefinition::new(definition_id, spec);
-
-        if let Some(name) = name {
-            new_asset = new_asset.with_name(name.to_owned());
-        }
+        let mut new_asset = AssetDefinition::new(
+            definition_id,
+            name.to_owned(),
+            spec,
+            parsed_balance_scope_policy,
+            owning_domain,
+        );
 
         if let Some(description) = description {
             new_asset = new_asset.with_description(Some(description.to_owned()));
@@ -11989,10 +11995,6 @@ impl Instruction {
 
         if let Some(policy) = parse_confidential_policy(confidential_policy)? {
             new_asset = new_asset.confidential_policy(policy);
-        }
-
-        if let Some(policy) = parse_balance_scope_policy(balance_scope_policy)? {
-            new_asset = new_asset.with_balance_scope_policy(policy);
         }
 
         let instruction = Register::<AssetDefinition>::asset_definition(new_asset);
@@ -12107,8 +12109,7 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (asset_definition_id, to_account_id, public_amount, inputs, proof, *, outputs=None, root_hint=None))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (asset_definition_id, to_account_id, public_amount, inputs, proof, *, root_hint=None))]
     fn unshield_prepared<'py>(
         _cls: &Bound<'py, PyType>,
         asset_definition_id: &str,
@@ -12116,7 +12117,6 @@ impl Instruction {
         public_amount: &str,
         inputs: &Bound<'py, PyAny>,
         proof: &Bound<'py, PyAny>,
-        outputs: Option<&Bound<'py, PyAny>>,
         root_hint: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
@@ -12134,15 +12134,9 @@ impl Instruction {
             ));
         }
         ensure_unique_fixed_arrays(&inputs, "inputs")?;
-        let outputs = match outputs {
-            Some(value) if !value.is_none() => py_fixed_array_list(value, "outputs")?,
-            _ => Vec::new(),
-        };
-        ensure_unique_fixed_arrays(&outputs, "outputs")?;
         let proof = parse_zk_proof_attachment(proof, "proof")?;
         let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
-        let instruction =
-            Unshield::new_with_outputs(asset, to, public_amount, inputs, outputs, proof, root_hint);
+        let instruction = Unshield::new(asset, to, public_amount, inputs, proof, root_hint);
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -13003,6 +12997,7 @@ impl Instruction {
             authority.clone(),
             TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
         )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?
         .with_metadata(metadata);
         let trigger = Trigger::new(trigger_id, action);
         let instruction = Register::trigger(trigger);
@@ -13055,6 +13050,7 @@ impl Instruction {
             authority.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
         )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?
         .with_metadata(metadata);
         let trigger = Trigger::new(trigger_id, action);
         let instruction = Register::trigger(trigger);

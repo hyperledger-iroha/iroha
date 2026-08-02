@@ -33,11 +33,18 @@ fn plain_ballot_locks_bond_into_escrow() {
     let domain = Domain::new(wonderland.clone()).build(alice_id);
     let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(alice_id);
     let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(bob_id);
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
-    let asset_def = AssetDefinition::numeric(def_id.clone()).build(alice_id);
+    let def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+    let asset_def = AssetDefinition::numeric(
+        def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
         Quantity::from(1_000_u64),

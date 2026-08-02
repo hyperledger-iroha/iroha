@@ -596,9 +596,13 @@ mod tests {
         let authority = AccountId::new(authority_key.public_key().clone());
         let app = fixture_app(&authority, None, NonceFixture::U64(7));
         let alias: ContractAlias = "deploy::universal".parse().expect("contract alias");
-        let previous =
-            ContractAddress::derive(chain_discriminant(), &authority, 6, DataSpaceId::UNIVERSAL)
-                .expect("previous contract address");
+        let previous = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            6,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("previous contract address");
         let observed_hash = anchor_state(
             &app,
             1_000,
@@ -625,7 +629,7 @@ mod tests {
         );
 
         let new_address = ContractAddress::derive(
-            chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             response.deploy_nonce.parse().expect("decimal deploy nonce"),
             DataSpaceId::new(response.dataspace_id.parse().expect("decimal dataspace id")),
@@ -642,9 +646,13 @@ mod tests {
         );
         let authority = AccountId::new(authority_key.public_key().clone());
         let app = fixture_app(&authority, None, NonceFixture::U64(1));
-        let previous =
-            ContractAddress::derive(chain_discriminant(), &authority, 0, DataSpaceId::UNIVERSAL)
-                .expect("previous contract address");
+        let previous = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("previous contract address");
         anchor_state(
             &app,
             1_000,

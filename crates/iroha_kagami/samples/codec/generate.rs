@@ -42,7 +42,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         Repeats::Exactly(1),
         account_id,
         BlockEventFilter::default(),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     let trigger = Trigger::new("log_trigger".parse()?, action);
     write_sample(&out_dir, "trigger", &trigger)?;
 

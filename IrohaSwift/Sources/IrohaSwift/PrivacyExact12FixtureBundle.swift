@@ -447,10 +447,11 @@ public enum PrivacyExact12FixtureCodecV1 {
             )
         }
         let protocolTag = try readUInt32LE(protocolBytes, at: 0, label: "protocol id")
-        guard Int(protocolTag) < protocols.count else {
+        guard let protocolId = try? PrivacyProtocolIdV1(
+            noritoDiscriminant: protocolTag
+        ) else {
             throw PrivacyExact12FixtureCodecErrorV1.unknownProtocolDiscriminant(protocolTag)
         }
-        let protocolId = protocols[Int(protocolTag)]
         guard protocolId == protocols[rowIndex] else {
             throw PrivacyExact12FixtureCodecErrorV1.protocolOrderMismatch(index: rowIndex)
         }
@@ -530,7 +531,7 @@ public enum PrivacyExact12FixtureCodecV1 {
         }
         var payload = Data()
         var protocolBytes = Data()
-        appendUInt32LE(UInt32(rowIndex), to: &protocolBytes)
+        appendUInt32LE(row.protocolId.noritoDiscriminant, to: &protocolBytes)
         appendCompactField(protocolBytes, to: &payload)
         appendCompactField(rawByteVector(row.statementNorito), to: &payload)
         appendCompactField(rawByteVector(row.envelopeNorito), to: &payload)
@@ -548,7 +549,7 @@ public enum PrivacyExact12FixtureCodecV1 {
         _ row: PrivacyExact12TypedFixtureRowV1,
         rowIndex: Int
     ) throws {
-        let protocolTag = UInt32(rowIndex)
+        let protocolTag = row.protocolId.noritoDiscriminant
         let statement = try decodeFrame(
             row.statementNorito,
             schemaName: statementSchemaName,
@@ -684,10 +685,20 @@ public enum PrivacyExact12FixtureCodecV1 {
                 field: "envelope protocol"
             )
         }
-        let expectedEngineTag = expectedProofSystemAndEngineTag(protocolTag: expectedProtocolTag)
-        for (index, label) in [(1, "proof system"), (2, "engine")] {
+        guard let protocolId = try? PrivacyProtocolIdV1(
+            noritoDiscriminant: expectedProtocolTag
+        ) else {
+            throw PrivacyExact12FixtureCodecErrorV1.unknownProtocolDiscriminant(
+                expectedProtocolTag
+            )
+        }
+        let expectedTags = [
+            (1, "proof system", protocolId.expectedProofSystem.rawValue),
+            (2, "engine", protocolId.expectedEngine.rawValue),
+        ]
+        for (index, label, expectedTag) in expectedTags {
             guard fields[index].count == 4,
-                  try readUInt32LE(fields[index], at: 0, label: label) == expectedEngineTag else {
+                  try readUInt32LE(fields[index], at: 0, label: label) == expectedTag else {
                 throw PrivacyExact12FixtureCodecErrorV1.invalidCrossFieldBinding(
                     row: rowIndex,
                     field: "envelope \(label)"
@@ -892,23 +903,6 @@ public enum PrivacyExact12FixtureCodecV1 {
                 row: rowIndex,
                 field: "signed-to-unsigned transaction"
             )
-        }
-    }
-
-    private static func expectedProofSystemAndEngineTag(protocolTag: UInt32) -> UInt32 {
-        // The proof-system and engine enums deliberately use the same V1
-        // ordinal mapping even though they remain distinct wire types.
-        switch protocolTag {
-        case 0, 5, 10, 11: return 0
-        case 1: return 2
-        case 2: return 3
-        case 3: return 1
-        case 4: return 4
-        case 6: return 5
-        case 7: return 8
-        case 8: return 6
-        case 9: return 7
-        default: return UInt32.max
         }
     }
 

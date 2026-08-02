@@ -1657,6 +1657,17 @@ impl V2ApplyService {
                 return Err(V2ApplyError::InjectedCrashAfterReputationArchiveCapture);
             }
         }
+        #[cfg(feature = "test-network-native-amx-fault-injection")]
+        if let Some(execution_context) = committed_block.execution_context() {
+            for external in &execution_context.external {
+                if let Some(receipt) = &external.native_amx_receipt {
+                    crate::native_amx_fault_injection::maybe_abort(
+                        crate::native_amx_fault_injection::NativeAmxFaultPhase::BeforeWorldCommit,
+                        receipt.source_id,
+                    );
+                }
+            }
+        }
         state_block.commit().map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
@@ -2158,7 +2169,7 @@ mod tests {
     }
 
     fn fixture_reserve_asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("sorafs", "universal").expect("valid fixture settlement domain"),
             "xor".parse().expect("valid fixture settlement asset name"),
         )
@@ -2217,11 +2228,17 @@ mod tests {
         include_projection_policies: bool,
     ) -> World {
         let reserve_asset_definition = fixture_reserve_asset_definition();
-        let reserve_domain =
-            Domain::new(reserve_asset_definition.domain().clone()).build(transaction_authority);
-        let reserve_asset = AssetDefinition::numeric(reserve_asset_definition)
-            .with_name("XOR".to_owned())
-            .build(transaction_authority);
+        let reserve_domain = Domain::new(
+            DomainId::try_new("sorafs", "universal").expect("valid fixture settlement domain"),
+        )
+        .build(transaction_authority);
+        let reserve_asset = AssetDefinition::numeric(
+            reserve_asset_definition,
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(transaction_authority);
         let mut world = World::with_assets(
             [reserve_domain],
             [
@@ -2388,12 +2405,12 @@ mod tests {
                 nexus_amx_context_hash: Hash::new(b"apply crash fixture Nexus/AMX"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::Plain,
+                    encoding: wire::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 2 * 1024 * 1024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 2 * 1024 * 1024,
-                    max_chunk_count: 1,
+                    max_chunk_count: 2,
                 },
                 leader_seed: [0x63; 32],
             };

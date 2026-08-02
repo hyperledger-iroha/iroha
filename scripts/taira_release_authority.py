@@ -86,6 +86,9 @@ RETIRED_LABELS = (
 
 EVIDENCE_PATHS = {
     "cargo_lock": "provenance/Cargo.lock",
+    "dpn_validator_build_provenance": (
+        "provenance/dpn-validator-build.provenance.json"
+    ),
     "command_manifest_json": (
         "provenance/privacy-native/command-manifest-v1.json"
     ),
@@ -277,7 +280,64 @@ def _validate_exact12_matrix(payload: bytes) -> dict[str, object]:
     }
 
 
-def _evidence(root: Path) -> tuple[list[dict[str, object]], dict[str, object], str]:
+def _validate_build_provenance(
+    payload: bytes,
+    *,
+    expected_commit: str,
+    expected_dpn_commit: str,
+    expected_cargo_lock_sha256: str,
+    expected_workspace_source_manifest_sha256: str,
+) -> None:
+    try:
+        value = load_json_object(payload, "DPN validator build provenance")
+    except ReleaseArtifactError as exc:
+        raise TairaReleaseAuthorityError(str(exc)) from exc
+    if canonical_json_bytes(value) != payload:
+        _fail("DPN validator build provenance is not canonical deterministic JSON")
+    expected_fields = {
+        "dpn_validator_release_commit",
+        "iroha_git_head",
+        "iroha_source_attested",
+        "iroha_source_bundle_provenance_sha256",
+        "iroha_source_tree_sha256",
+        "iroha_tracked_patch_sha256",
+        "iroha_worktree_clean",
+        "schema_version",
+        "validator_lock_sha256",
+        "workspace_source_manifest_sha256",
+    }
+    if set(value) != expected_fields:
+        _fail("DPN validator build provenance fields are not exact")
+    if value["schema_version"] != 1 or value["iroha_source_attested"] is not True:
+        _fail("DPN validator build provenance is not one attested v1 release source")
+    if value["iroha_git_head"] != expected_commit:
+        _fail("DPN validator build provenance Iroha commit differs")
+    if value["dpn_validator_release_commit"] != expected_dpn_commit:
+        _fail("DPN validator build provenance release commit differs")
+    if value["validator_lock_sha256"] != expected_cargo_lock_sha256:
+        _fail("DPN validator build provenance Cargo.lock digest differs")
+    if (
+        value["workspace_source_manifest_sha256"]
+        != expected_workspace_source_manifest_sha256
+    ):
+        _fail("DPN validator build provenance workspace source digest differs")
+    for field in (
+        "iroha_source_bundle_provenance_sha256",
+        "iroha_source_tree_sha256",
+        "iroha_tracked_patch_sha256",
+    ):
+        if not isinstance(value[field], str) or SHA256_RE.fullmatch(value[field]) is None:
+            _fail(f"DPN validator build provenance {field} is invalid")
+    if not isinstance(value["iroha_worktree_clean"], bool):
+        _fail("DPN validator build provenance worktree cleanliness is invalid")
+
+
+def _evidence(
+    root: Path,
+    *,
+    expected_commit: str,
+    expected_dpn_commit: str,
+) -> tuple[list[dict[str, object]], dict[str, object], str]:
     root = Path(os.path.abspath(root))
     source_info, source_digest = _read_source_digest(root)
     matrix_info, matrix_payload = _stable_read(
@@ -287,7 +347,22 @@ def _evidence(root: Path) -> tuple[list[dict[str, object]], dict[str, object], s
     )
     exact12 = _validate_exact12_matrix(matrix_payload)
 
+    provenance_info, provenance_payload = _stable_read(
+        root,
+        EVIDENCE_PATHS["dpn_validator_build_provenance"],
+        maximum=1024 * 1024,
+    )
+    cargo_info = stable_hash_relative(root, EVIDENCE_PATHS["cargo_lock"])
+    _validate_build_provenance(
+        provenance_payload,
+        expected_commit=expected_commit,
+        expected_dpn_commit=expected_dpn_commit,
+        expected_cargo_lock_sha256=cargo_info.sha256,
+        expected_workspace_source_manifest_sha256=source_digest,
+    )
     captured = {
+        "cargo_lock": cargo_info,
+        "dpn_validator_build_provenance": provenance_info,
         "exact12_matrix": matrix_info,
         "workspace_source_manifest": source_info,
     }
@@ -513,7 +588,13 @@ def _image_subject(
 
 
 def build_authority(args: argparse.Namespace) -> dict[str, object]:
-    artifacts, exact12, source_digest = _evidence(Path(args.evidence_root))
+    commit = _commit(args.commit)
+    dpn_commit = _commit(args.dpn_validator_release_commit)
+    artifacts, exact12, source_digest = _evidence(
+        Path(args.evidence_root),
+        expected_commit=commit,
+        expected_dpn_commit=dpn_commit,
+    )
     if args.archive is not None:
         archive_path = Path(args.archive)
         subject, archive_info = _archive_subject(archive_path)
@@ -526,7 +607,8 @@ def build_authority(args: argparse.Namespace) -> dict[str, object]:
             source_digest,
         )
     return {
-        "commit": _commit(args.commit),
+        "commit": commit,
+        "dpn_validator_release_commit": dpn_commit,
         "exact12": exact12,
         "native_release_evidence": artifacts,
         "native_verifier_protocol": "sorafs-validate-release-manifest-v1",
@@ -553,6 +635,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--evidence-root", required=True)
         subparser.add_argument("--commit", required=True)
+        subparser.add_argument("--dpn-validator-release-commit", required=True)
         subparser.add_argument("--signing-fingerprint", required=True)
         subparser.add_argument("--native-verifier-sha256", required=True)
         subject = subparser.add_mutually_exclusive_group(required=True)

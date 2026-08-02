@@ -10,6 +10,7 @@ import type { IvmArtifactAdmissionWasmVerifier } from "./ivm-artifact-admission-
 export const SMART_CONTRACT_CODE_CHUNK_BYTES: 65536;
 
 export interface ContractAddressDerivationInput {
+  chainId: string;
   chainDiscriminant: BrowserTransactionUnsigned;
   authority: string;
   deployNonce: BrowserTransactionUnsigned;

@@ -101,16 +101,21 @@ _TERMINAL_EVIDENCE_KEYS = {
     "corridor_completion",
     "corridor_summary",
     "corridor_production_inventory",
+    "g_unit_focused_test_inventory",
     "corridor_logs",
+    "prebuilt_binary_bundle",
     "formal_completion",
     "formal_gate_log",
     "formal_proof_coverage",
     "formal_proof_evidence",
     "formal_verus_evidence",
     "formal_verus_log",
+    "formal_multilane_apalache_evidence",
     "formal_cross_tool_evidence",
     "formal_harness_lock",
     "formal_toolchain",
+    "formal_tlaps_resource_jsonl",
+    "formal_tlaps_resource_summary",
     "seed_matrix_completion",
     "seed_matrix_summary",
     "seed_matrix_run_logs",
@@ -121,7 +126,67 @@ _TERMINAL_EVIDENCE_KEYS = {
     "taira_completion",
     "taira_evidence",
     "taira_run_log",
+    "multilane_scaling_bundle",
+    "multilane_scaling_retained_validator",
+    "multilane_scaling_trust_anchors",
+    "g4p_multilane",
+    "g12_cross_dataspace",
 }
+_TERMINAL_SIMPLE_ARTIFACT_KEYS = {"path", "sha256"}
+_TERMINAL_FULL_ARTIFACT_KEYS = {
+    "path",
+    "sha256",
+    "size_bytes",
+    "mode",
+    "owner_uid",
+    "nlink",
+}
+_PREBUILT_BINARY_SPECS = (
+    ("irohad", "release/irohad"),
+    ("irohad_message_control", "message-control/release/irohad"),
+    ("iroha", "release/iroha"),
+    ("kagami", "release/kagami"),
+)
+_PREBUILT_MANIFEST_FIELDS = (
+    "schema_version",
+    "source_manifest_sha256",
+    "cargo_lock_sha256",
+    "cargo_version_sha256",
+    "rustc_version_sha256",
+    "host_triple",
+    "target_triple",
+    "profile",
+    "bundle_dir",
+    *(
+        field
+        for role, _relative in _PREBUILT_BINARY_SPECS
+        for field in (
+            f"{role}_relative_path",
+            f"{role}_sha256",
+            f"{role}_size_bytes",
+            f"{role}_mode_octal",
+        )
+    ),
+)
+_SCALING_REQUIRED_TOOLING = (
+    ("localnet", "scripts/deploy_localnet.sh"),
+    ("load_generator", "scripts/tx_load.py"),
+    ("nexus_load_bundle", "scripts/nexus_lane_load_test.py"),
+)
+_SCALING_DIGEST_ENVIRONMENT = {
+    "trial_harness_sha256": "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+    "configuration_sha256": "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
+    "irohad_sha256": "IROHA_RELEASE_SCALING_IROHAD_SHA256",
+    "iroha_cli_sha256": "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
+}
+_SCALING_SAFE_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
+_PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
+_MAX_TERMINAL_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
+_MAX_SCALING_BUNDLE_FILE_COUNT = 256
+_MAX_SCALING_BUNDLE_DIRECTORY_COUNT = 512
+_MAX_SCALING_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
+_MAX_SCALING_BUNDLE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _TRANSCRIPT_KEYS = {
     "schema_version",
     "archive_names",
@@ -1196,6 +1261,754 @@ def _fsync_sealed_tree(root: Path) -> None:
             os.close(descriptor)
 
 
+def _terminal_directory_snapshot(path: Path, label: str) -> DirectorySnapshot:
+    """Capture one resolved terminal-evidence directory without mode assumptions."""
+
+    path = _absolute_resolved_existing(path, label)
+    try:
+        before = path.lstat()
+    except OSError as error:
+        raise BootstrapError(f"{label} is unavailable") from error
+    if (
+        stat.S_ISLNK(before.st_mode)
+        or not stat.S_ISDIR(before.st_mode)
+        or before.st_uid != os.getuid()
+    ):
+        raise BootstrapError(f"{label} must be an owner-owned non-symlink directory")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise BootstrapError(f"{label} could not be opened safely") from error
+    try:
+        opened = os.fstat(descriptor)
+        fields = (
+            "st_dev",
+            "st_ino",
+            "st_mode",
+            "st_uid",
+            "st_nlink",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if not stat.S_ISDIR(opened.st_mode) or any(
+            getattr(opened, field) != getattr(before, field) for field in fields
+        ):
+            raise BootstrapError(f"{label} changed while it was opened")
+        return DirectorySnapshot(
+            path=path,
+            device=opened.st_dev,
+            inode=opened.st_ino,
+            mode=stat.S_IMODE(opened.st_mode),
+            owner=opened.st_uid,
+            nlink=opened.st_nlink,
+            mtime_ns=opened.st_mtime_ns,
+            ctime_ns=opened.st_ctime_ns,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _require_terminal_directory_unchanged(
+    snapshot: DirectorySnapshot, label: str
+) -> None:
+    if _terminal_directory_snapshot(snapshot.path, label) != snapshot:
+        raise BootstrapError(f"{label} changed during protected receipt validation")
+
+
+def _terminal_mode(value: Any, label: str) -> int:
+    if not isinstance(value, str) or re.fullmatch(r"[0-7]{4}", value) is None:
+        raise BootstrapError(f"{label} mode is not canonical")
+    return int(value, 8)
+
+
+def _terminal_relative_path(value: Any, label: str) -> tuple[str, ...]:
+    if not isinstance(value, str) or not value or value.startswith("/"):
+        raise BootstrapError(f"{label} is not a safe relative path")
+    parts = tuple(value.split("/"))
+    if (
+        "/".join(parts) != value
+        or any(
+            part in {"", ".", ".."}
+            or _SCALING_SAFE_COMPONENT_RE.fullmatch(part) is None
+            for part in parts
+        )
+    ):
+        raise BootstrapError(f"{label} is not a safe relative path")
+    return parts
+
+
+def _validate_terminal_release_evidence(
+    *,
+    receipt_evidence: dict[str, Any],
+    evidence: Path,
+    release_root: Path,
+    receipt_identity: dict[str, Any],
+    runner_record: dict[str, Any],
+) -> tuple[list[LargeFileSnapshot], list[DirectorySnapshot]]:
+    """Validate and freeze every newly protected terminal-evidence input."""
+
+    artifact_snapshots: list[LargeFileSnapshot] = []
+    directory_snapshots: list[DirectorySnapshot] = []
+    artifact_paths: dict[Path, str] = {}
+    artifact_inodes: dict[tuple[int, int], str] = {}
+    directories: dict[Path, DirectorySnapshot] = {}
+    directory_inodes: dict[tuple[int, int], str] = {}
+    authenticated_environment = runner_record.get("environment_without_self_digest")
+    if not isinstance(authenticated_environment, dict):
+        raise BootstrapError("terminal runner omits its authenticated environment")
+
+    def capture_directory(
+        path: Path,
+        label: str,
+        *,
+        containment_root: Path = evidence,
+        expected_mode: int | None = None,
+    ) -> DirectorySnapshot:
+        existing = directories.get(path)
+        if existing is not None:
+            if expected_mode is not None and existing.mode != expected_mode:
+                raise BootstrapError(f"{label} has the wrong mode")
+            return existing
+        snapshot = _terminal_directory_snapshot(path, label)
+        if not _inside(snapshot.path, containment_root):
+            raise BootstrapError(f"{label} escaped its authenticated containment root")
+        if expected_mode is not None and snapshot.mode != expected_mode:
+            raise BootstrapError(f"{label} has the wrong mode")
+        inode = (snapshot.device, snapshot.inode)
+        alias = directory_inodes.get(inode)
+        if alias is not None:
+            raise BootstrapError(f"terminal evidence directories alias: {alias} and {label}")
+        directory_inodes[inode] = label
+        directories[snapshot.path] = snapshot
+        directory_snapshots.append(snapshot)
+        return snapshot
+
+    def capture_artifact(
+        record: Any,
+        label: str,
+        *,
+        full: bool,
+        extra_fields: frozenset[str] = frozenset(),
+        expected_path: Path | None = None,
+        maximum_bytes: int = _MAX_TERMINAL_ARTIFACT_BYTES,
+        expected_mode: int | None = None,
+        containment_root: Path = evidence,
+    ) -> LargeFileSnapshot:
+        expected_fields = (
+            _TERMINAL_FULL_ARTIFACT_KEYS
+            if full
+            else _TERMINAL_SIMPLE_ARTIFACT_KEYS
+        ) | set(extra_fields)
+        record = _require_exact_json_fields(record, expected_fields, label)
+        rendered = record["path"]
+        digest = record["sha256"]
+        if not isinstance(rendered, str) or not isinstance(digest, str):
+            raise BootstrapError(f"{label} path or digest is not text")
+        _require_digest(digest, f"{label} digest")
+        path = _absolute_resolved_existing(Path(rendered), label)
+        if not _inside(path, containment_root):
+            raise BootstrapError(f"{label} escaped its authenticated containment root")
+        if expected_path is not None and path != expected_path:
+            raise BootstrapError(f"{label} has the wrong contained path")
+        alias = artifact_paths.get(path)
+        if alias is not None:
+            raise BootstrapError(f"terminal evidence path is multiply carried: {alias} and {label}")
+        snapshot = _capture_large_file(path, label)
+        if snapshot.size > maximum_bytes:
+            raise BootstrapError(f"{label} exceeds its closed size limit")
+        if snapshot.sha256 != digest:
+            raise BootstrapError(f"{label} digest does not match its bytes")
+        if snapshot.owner != os.getuid() or snapshot.nlink != 1:
+            raise BootstrapError(f"{label} must be owner-owned and single-link")
+        if expected_mode is not None and snapshot.mode != expected_mode:
+            raise BootstrapError(f"{label} has the wrong mode")
+        if full:
+            size = record["size_bytes"]
+            owner = record["owner_uid"]
+            nlink = record["nlink"]
+            if (
+                type(size) is not int
+                or size < 0
+                or type(owner) is not int
+                or owner < 0
+                or type(nlink) is not int
+                or nlink < 1
+                or size != snapshot.size
+                or _terminal_mode(record["mode"], label) != snapshot.mode
+                or owner != snapshot.owner
+                or nlink != snapshot.nlink
+            ):
+                raise BootstrapError(f"{label} metadata does not match its file")
+        inode = (snapshot.device, snapshot.inode)
+        inode_alias = artifact_inodes.get(inode)
+        if inode_alias is not None:
+            raise BootstrapError(
+                f"terminal evidence files are inode aliases: {inode_alias} and {label}"
+            )
+        artifact_paths[path] = label
+        artifact_inodes[inode] = label
+        artifact_snapshots.append(snapshot)
+        capture_directory(
+            snapshot.path.parent,
+            f"{label} parent directory",
+            containment_root=containment_root,
+        )
+        return snapshot
+
+    def require_inventory(
+        path: Path,
+        expected: set[str],
+        label: str,
+        *,
+        containment_root: Path = evidence,
+        expected_mode: int | None = None,
+    ) -> None:
+        capture_directory(
+            path,
+            label,
+            containment_root=containment_root,
+            expected_mode=expected_mode,
+        )
+        try:
+            with os.scandir(path) as iterator:
+                entries = list(iterator)
+        except OSError as error:
+            raise BootstrapError(f"{label} cannot be enumerated") from error
+        if {entry.name for entry in entries} != expected:
+            raise BootstrapError(f"{label} has the wrong closed inventory")
+        for entry in entries:
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise BootstrapError(f"{label} entry is unavailable") from error
+            if stat.S_ISLNK(metadata.st_mode) or not (
+                stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)
+            ):
+                raise BootstrapError(f"{label} contains an unsafe entry")
+
+    simple_specs = (
+        (
+            "g_unit_focused_test_inventory",
+            "g-unit-required-tests.tsv",
+            "corridor_completion",
+            16 * 1024 * 1024,
+        ),
+        (
+            "formal_multilane_apalache_evidence",
+            "multilane_apalache_evidence.tsv",
+            "formal_completion",
+            16 * 1024 * 1024,
+        ),
+        (
+            "formal_tlaps_resource_jsonl",
+            "tlaps_resource.jsonl",
+            "formal_completion",
+            256 * 1024 * 1024,
+        ),
+        (
+            "formal_tlaps_resource_summary",
+            "tlaps_resource_summary.json",
+            "formal_completion",
+            128 * 1024 * 1024,
+        ),
+    )
+    for label, filename, family_completion, maximum_bytes in simple_specs:
+        family = receipt_evidence[family_completion]
+        if not isinstance(family, dict) or not isinstance(family.get("path"), str):
+            raise BootstrapError(f"terminal release evidence {family_completion} is malformed")
+        family_path = _absolute_resolved_existing(
+            Path(family["path"]), f"terminal receipt {family_completion}"
+        )
+        capture_artifact(
+            receipt_evidence[label],
+            f"terminal receipt {label}",
+            full=False,
+            expected_path=family_path.with_name(filename),
+            maximum_bytes=maximum_bytes,
+        )
+        capture_directory(family_path.parent, f"terminal {label} family directory")
+
+    prebuilt = _require_exact_json_fields(
+        receipt_evidence["prebuilt_binary_bundle"],
+        {
+            "schema_version",
+            "manifest",
+            "source_manifest_sha256",
+            "cargo_lock_sha256",
+            "cargo_version_sha256",
+            "rustc_version_sha256",
+            "host_triple",
+            "target_triple",
+            "profile",
+            "bundle_dir",
+            "version_transcripts",
+            "binaries",
+        },
+        "terminal prebuilt binary bundle",
+    )
+    if type(prebuilt["schema_version"]) is not int or prebuilt["schema_version"] != 2:
+        raise BootstrapError("terminal prebuilt binary bundle has the wrong schema")
+    for field in (
+        "source_manifest_sha256",
+        "cargo_lock_sha256",
+        "cargo_version_sha256",
+        "rustc_version_sha256",
+    ):
+        if not isinstance(prebuilt[field], str):
+            raise BootstrapError(f"terminal prebuilt {field} is malformed")
+        _require_digest(prebuilt[field], f"terminal prebuilt {field}")
+    if (
+        prebuilt["source_manifest_sha256"]
+        != receipt_identity["sealed_source_manifest_sha256"]
+        or prebuilt["cargo_lock_sha256"] != receipt_identity["cargo_lock_sha256"]
+        or prebuilt["profile"] != "release"
+        or not isinstance(prebuilt["host_triple"], str)
+        or _PREBUILT_TRIPLE_RE.fullmatch(prebuilt["host_triple"]) is None
+        or prebuilt["target_triple"] != prebuilt["host_triple"]
+        or not isinstance(prebuilt["bundle_dir"], str)
+    ):
+        raise BootstrapError("terminal prebuilt binary bundle identity is not exact")
+    prebuilt_root = _absolute_resolved_existing(
+        Path(prebuilt["bundle_dir"]), "terminal prebuilt bundle directory"
+    )
+    target_alias = release_root / "target"
+    try:
+        target_alias_metadata = target_alias.lstat()
+        workspace_target = target_alias.resolve(strict=True)
+        workspace_target_metadata = workspace_target.lstat()
+    except OSError as error:
+        raise BootstrapError("terminal prebuilt target authority is unavailable") from error
+    if (
+        not (
+            stat.S_ISDIR(target_alias_metadata.st_mode)
+            or stat.S_ISLNK(target_alias_metadata.st_mode)
+        )
+        or workspace_target != Path(os.path.abspath(workspace_target))
+        or stat.S_ISLNK(workspace_target_metadata.st_mode)
+        or not stat.S_ISDIR(workspace_target_metadata.st_mode)
+        or workspace_target_metadata.st_uid != os.getuid()
+        or (
+            not stat.S_ISLNK(target_alias_metadata.st_mode)
+            and workspace_target != target_alias
+        )
+        or prebuilt_root.parent
+        != (
+            workspace_target
+            / "sumeragi-v2-release"
+            / receipt_identity["sealed_source_manifest_sha256"]
+            / "programs"
+        )
+        or _PREBUILT_INVOCATION_RE.fullmatch(prebuilt_root.name) is None
+    ):
+        raise BootstrapError("terminal prebuilt bundle is outside the sealed invocation root")
+    capture_directory(
+        workspace_target,
+        "terminal prebuilt workspace target",
+        containment_root=workspace_target,
+    )
+    prebuilt_manifest_snapshot = capture_artifact(
+        prebuilt["manifest"],
+        "terminal prebuilt manifest",
+        full=True,
+        expected_path=prebuilt_root / ".sumeragi-v2-prebuilt-binaries.tsv",
+        maximum_bytes=32 * 1024,
+        expected_mode=_DATA_MODE,
+        containment_root=workspace_target,
+    )
+    prebuilt_manifest_file = _read_file(
+        prebuilt_manifest_snapshot.path,
+        "terminal prebuilt manifest contents",
+        maximum_bytes=32 * 1024,
+    )
+    if (
+        prebuilt_manifest_file.sha256 != prebuilt_manifest_snapshot.sha256
+        or prebuilt_manifest_file.device != prebuilt_manifest_snapshot.device
+        or prebuilt_manifest_file.inode != prebuilt_manifest_snapshot.inode
+        or prebuilt_manifest_file.mode != prebuilt_manifest_snapshot.mode
+        or prebuilt_manifest_file.owner != prebuilt_manifest_snapshot.owner
+        or prebuilt_manifest_file.nlink != prebuilt_manifest_snapshot.nlink
+        or prebuilt_manifest_file.size != prebuilt_manifest_snapshot.size
+        or prebuilt_manifest_file.mtime_ns != prebuilt_manifest_snapshot.mtime_ns
+        or prebuilt_manifest_file.ctime_ns != prebuilt_manifest_snapshot.ctime_ns
+    ):
+        raise BootstrapError("terminal prebuilt manifest changed while it was decoded")
+    try:
+        manifest_text = prebuilt_manifest_file.data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise BootstrapError("terminal prebuilt manifest is not UTF-8") from error
+    manifest_lines = manifest_text.splitlines(keepends=True)
+    if (
+        len(manifest_lines) != len(_PREBUILT_MANIFEST_FIELDS)
+        or any(
+            not line.endswith("\n")
+            or line.endswith("\r\n")
+            or line.count("\t") != 1
+            for line in manifest_lines
+        )
+    ):
+        raise BootstrapError("terminal prebuilt manifest is not one exact TSV inventory")
+    manifest_rows = tuple(line[:-1].split("\t", 1) for line in manifest_lines)
+    if tuple(row[0] for row in manifest_rows) != _PREBUILT_MANIFEST_FIELDS:
+        raise BootstrapError("terminal prebuilt manifest field order is not exact")
+    manifest_fields = dict(manifest_rows)
+    if (
+        manifest_fields["schema_version"] != "2"
+        or manifest_fields["source_manifest_sha256"]
+        != prebuilt["source_manifest_sha256"]
+        or manifest_fields["cargo_lock_sha256"] != prebuilt["cargo_lock_sha256"]
+        or manifest_fields["cargo_version_sha256"]
+        != prebuilt["cargo_version_sha256"]
+        or manifest_fields["rustc_version_sha256"]
+        != prebuilt["rustc_version_sha256"]
+        or manifest_fields["host_triple"] != prebuilt["host_triple"]
+        or manifest_fields["target_triple"] != prebuilt["target_triple"]
+        or manifest_fields["profile"] != prebuilt["profile"]
+        or manifest_fields["bundle_dir"] != str(prebuilt_root)
+    ):
+        raise BootstrapError("terminal prebuilt receipt diverges from its manifest")
+    transcripts = _require_exact_json_fields(
+        prebuilt["version_transcripts"], {"cargo", "rustc"}, "terminal prebuilt transcripts"
+    )
+    for tool in ("cargo", "rustc"):
+        transcript = _require_exact_json_fields(
+            transcripts[tool], {"argv", "sha256", "size_bytes"}, f"terminal {tool} transcript"
+        )
+        if (
+            not isinstance(transcript["argv"], list)
+            or len(transcript["argv"]) != 2
+            or not all(isinstance(item, str) and item for item in transcript["argv"])
+            or transcript["argv"][1] != ("--version" if tool == "cargo" else "-vV")
+            or transcript["sha256"] != prebuilt[f"{tool}_version_sha256"]
+            or type(transcript["size_bytes"]) is not int
+            or not 0 < transcript["size_bytes"] <= 64 * 1024
+        ):
+            raise BootstrapError(f"terminal {tool} transcript is malformed")
+        executable = _absolute_resolved_existing(
+            Path(transcript["argv"][0]), f"terminal {tool} transcript executable"
+        )
+        executable_metadata = executable.lstat()
+        if (
+            not stat.S_ISREG(executable_metadata.st_mode)
+            or stat.S_ISLNK(executable_metadata.st_mode)
+            or executable_metadata.st_uid != os.getuid()
+            or executable_metadata.st_nlink != 1
+            or executable_metadata.st_mode & 0o111 == 0
+        ):
+            raise BootstrapError(
+                f"terminal {tool} transcript executable is not exact and owner-controlled"
+            )
+    binaries = prebuilt["binaries"]
+    if not isinstance(binaries, list) or len(binaries) != len(_PREBUILT_BINARY_SPECS):
+        raise BootstrapError("terminal prebuilt binary inventory is incomplete")
+    for index, ((role, relative), record) in enumerate(
+        zip(_PREBUILT_BINARY_SPECS, binaries)
+    ):
+        if (
+            not isinstance(record, dict)
+            or record.get("role") != role
+            or record.get("relative_path") != relative
+            or manifest_fields[f"{role}_relative_path"] != relative
+            or manifest_fields[f"{role}_sha256"] != record.get("sha256")
+            or manifest_fields[f"{role}_size_bytes"]
+            != str(record.get("size_bytes"))
+            or manifest_fields[f"{role}_mode_octal"] != record.get("mode")
+        ):
+            raise BootstrapError(f"terminal prebuilt binary {index} identity is not exact")
+        capture_artifact(
+            record,
+            f"terminal prebuilt binary {index}",
+            full=True,
+            extra_fields=frozenset({"role", "relative_path"}),
+            expected_path=prebuilt_root.joinpath(*relative.split("/")),
+            maximum_bytes=2 * 1024 * 1024 * 1024,
+            expected_mode=_TOOL_MODE,
+            containment_root=workspace_target,
+        )
+    require_inventory(
+        prebuilt_root,
+        {".sumeragi-v2-prebuilt-binaries.tsv", "release", "message-control"},
+        "terminal prebuilt invocation directory",
+        containment_root=workspace_target,
+        expected_mode=_TOOL_MODE,
+    )
+    require_inventory(
+        prebuilt_root / "release",
+        {"irohad", "iroha", "kagami"},
+        "terminal prebuilt release directory",
+        containment_root=workspace_target,
+        expected_mode=_TOOL_MODE,
+    )
+    require_inventory(
+        prebuilt_root / "message-control",
+        {"release"},
+        "terminal prebuilt message-control directory",
+        containment_root=workspace_target,
+        expected_mode=_TOOL_MODE,
+    )
+    require_inventory(
+        prebuilt_root / "message-control" / "release",
+        {"irohad"},
+        "terminal prebuilt message-control release directory",
+        containment_root=workspace_target,
+        expected_mode=_TOOL_MODE,
+    )
+
+    scaling = _require_exact_json_fields(
+        receipt_evidence["multilane_scaling_bundle"],
+        {"root", "file_count", "total_size_bytes", "directories", "files"},
+        "terminal scaling bundle",
+    )
+    if not isinstance(scaling["root"], str):
+        raise BootstrapError("terminal scaling bundle root is malformed")
+    scaling_root = _absolute_resolved_existing(
+        Path(scaling["root"]), "terminal scaling bundle root"
+    )
+    capture_directory(
+        scaling_root,
+        "terminal scaling bundle root",
+        containment_root=scaling_root,
+    )
+    scaling_directories = scaling["directories"]
+    scaling_files = scaling["files"]
+    if (
+        not isinstance(scaling_directories, list)
+        or len(scaling_directories) > _MAX_SCALING_BUNDLE_DIRECTORY_COUNT
+        or not isinstance(scaling_files, list)
+        or len(scaling_files) > _MAX_SCALING_BUNDLE_FILE_COUNT
+        or type(scaling["file_count"]) is not int
+        or scaling["file_count"] != len(scaling_files)
+        or type(scaling["total_size_bytes"]) is not int
+        or not 0 <= scaling["total_size_bytes"] <= _MAX_SCALING_BUNDLE_TOTAL_BYTES
+    ):
+        raise BootstrapError("terminal scaling bundle inventory is malformed")
+    parsed_directories: list[str] = []
+    for index, relative in enumerate(scaling_directories):
+        parts = _terminal_relative_path(relative, f"terminal scaling directory {index}")
+        parsed_directories.append(relative)
+        capture_directory(
+            scaling_root.joinpath(*parts),
+            f"terminal scaling directory {index}",
+            containment_root=scaling_root,
+        )
+    if parsed_directories != sorted(set(parsed_directories)):
+        raise BootstrapError("terminal scaling directories are not sorted and unique")
+    parsed_files: list[str] = []
+    total_size = 0
+    scaling_manifest: Path | None = None
+    for index, record in enumerate(scaling_files):
+        if not isinstance(record, dict):
+            raise BootstrapError(f"terminal scaling file {index} is malformed")
+        relative = record.get("relative_path")
+        parts = _terminal_relative_path(relative, f"terminal scaling file {index}")
+        parsed_files.append(relative)
+        snapshot = capture_artifact(
+            record,
+            f"terminal scaling file {index}",
+            full=True,
+            extra_fields=frozenset({"relative_path"}),
+            expected_path=scaling_root.joinpath(*parts),
+            maximum_bytes=_MAX_SCALING_BUNDLE_FILE_BYTES,
+            containment_root=scaling_root,
+        )
+        total_size += snapshot.size
+        if relative == "scaling_evidence.json":
+            scaling_manifest = snapshot.path
+    if parsed_files != sorted(set(parsed_files)) or total_size != scaling["total_size_bytes"]:
+        raise BootstrapError("terminal scaling files are not one exact sorted inventory")
+    if scaling_manifest is None:
+        raise BootstrapError("terminal scaling bundle omits scaling_evidence.json")
+    live_files: list[str] = []
+    live_directories: list[str] = []
+    for current, names, filenames in os.walk(scaling_root, followlinks=False):
+        current_path = Path(current)
+        for name in names:
+            path = current_path / name
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                raise BootstrapError("terminal scaling bundle contains an unsafe directory")
+            live_directories.append(path.relative_to(scaling_root).as_posix())
+        for name in filenames:
+            path = current_path / name
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise BootstrapError("terminal scaling bundle contains an unsafe file")
+            live_files.append(path.relative_to(scaling_root).as_posix())
+    if sorted(live_directories) != parsed_directories or sorted(live_files) != parsed_files:
+        raise BootstrapError("terminal scaling bundle live inventory does not match receipt")
+
+    retained_validator = capture_artifact(
+        receipt_evidence["multilane_scaling_retained_validator"],
+        "terminal retained scaling validator",
+        full=True,
+        expected_path=release_root / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py",
+    )
+    trust_anchors = _require_exact_json_fields(
+        receipt_evidence["multilane_scaling_trust_anchors"],
+        {
+            "trial_harness_sha256",
+            "configuration_sha256",
+            "irohad_sha256",
+            "iroha_cli_sha256",
+            "repository_root",
+            "retained_tooling",
+        },
+        "terminal scaling trust anchors",
+    )
+    for field, environment_name in _SCALING_DIGEST_ENVIRONMENT.items():
+        value = authenticated_environment.get(environment_name)
+        if not isinstance(value, str):
+            raise BootstrapError(f"authenticated runner environment omits {environment_name}")
+        _require_digest(value, f"authenticated {environment_name}")
+        if trust_anchors[field] != value:
+            raise BootstrapError(f"terminal scaling trust anchor {field} is not authenticated")
+    manifest_environment = authenticated_environment.get(
+        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
+    )
+    if manifest_environment != str(scaling_manifest):
+        raise BootstrapError("terminal scaling manifest is not the authenticated runner input")
+    if trust_anchors["repository_root"] != str(release_root):
+        raise BootstrapError("terminal scaling trust anchors have the wrong repository root")
+    retained_tooling = trust_anchors["retained_tooling"]
+    if not isinstance(retained_tooling, list) or len(retained_tooling) != len(_SCALING_REQUIRED_TOOLING):
+        raise BootstrapError("terminal scaling retained tooling inventory is incomplete")
+    for index, ((role, source_path), record) in enumerate(
+        zip(_SCALING_REQUIRED_TOOLING, retained_tooling)
+    ):
+        if (
+            not isinstance(record, dict)
+            or record.get("role") != role
+            or record.get("source_path") != source_path
+        ):
+            raise BootstrapError(f"terminal retained scaling tool {index} identity is not exact")
+        capture_artifact(
+            record,
+            f"terminal retained scaling tool {index}",
+            full=True,
+            extra_fields=frozenset({"role", "source_path"}),
+            expected_path=release_root.joinpath(*source_path.split("/")),
+        )
+    if retained_validator.mode & 0o111 == 0:
+        raise BootstrapError("terminal retained scaling validator is not executable")
+
+    g4p = _require_exact_json_fields(
+        receipt_evidence["g4p_multilane"],
+        {"schema_version", "completion", "run_summary", "run_logs"},
+        "terminal G-4P evidence",
+    )
+    if type(g4p["schema_version"]) is not int or g4p["schema_version"] != 1:
+        raise BootstrapError("terminal G-4P evidence has the wrong schema")
+    if not isinstance(g4p["completion"], dict) or not isinstance(g4p["completion"].get("path"), str):
+        raise BootstrapError("terminal G-4P completion is malformed")
+    g4p_root = Path(g4p["completion"]["path"]).parent
+    capture_artifact(
+        g4p["completion"],
+        "terminal G-4P completion",
+        full=True,
+        expected_path=g4p_root / "COMPLETED.tsv",
+        maximum_bytes=1024 * 1024,
+    )
+    capture_artifact(
+        g4p["run_summary"],
+        "terminal G-4P run summary",
+        full=True,
+        expected_path=g4p_root / "runs.tsv",
+        maximum_bytes=1024 * 1024,
+    )
+    g4p_logs = g4p["run_logs"]
+    g4p_names = (
+        "run-00-nexus_and_streaming.log",
+        "run-01-nexus_and_streaming.log",
+        "run-02-nexus_and_streaming.log",
+        "run-03-native_amx_routing.log",
+    )
+    if not isinstance(g4p_logs, list) or len(g4p_logs) != len(g4p_names):
+        raise BootstrapError("terminal G-4P run-log inventory is incomplete")
+    for index, (record, filename) in enumerate(zip(g4p_logs, g4p_names)):
+        capture_artifact(
+            record,
+            f"terminal G-4P run log {index}",
+            full=True,
+            expected_path=g4p_root / filename,
+            maximum_bytes=16 * 1024 * 1024,
+        )
+    require_inventory(g4p_root, {"COMPLETED.tsv", "runs.tsv", *g4p_names}, "terminal G-4P directory")
+
+    g12 = _require_exact_json_fields(
+        receipt_evidence["g12_cross_dataspace"],
+        {
+            "seed_completion",
+            "seed_summary",
+            "seed_run_logs",
+            "fault_soak_completion",
+            "fault_soak_log",
+        },
+        "terminal G-12 evidence",
+    )
+    if not isinstance(g12["seed_completion"], dict) or not isinstance(
+        g12["seed_completion"].get("path"), str
+    ):
+        raise BootstrapError("terminal G-12 seed completion is malformed")
+    if not isinstance(g12["fault_soak_completion"], dict) or not isinstance(
+        g12["fault_soak_completion"].get("path"), str
+    ):
+        raise BootstrapError("terminal G-12 fault-soak completion is malformed")
+    seed_root = Path(g12["seed_completion"]["path"]).parent
+    soak_root = Path(g12["fault_soak_completion"]["path"]).parent
+    if seed_root == soak_root:
+        raise BootstrapError("terminal G-12 seed and soak roots are not distinct")
+    capture_artifact(
+        g12["seed_completion"],
+        "terminal G-12 seed completion",
+        full=True,
+        expected_path=seed_root / "COMPLETED.tsv",
+        maximum_bytes=1024 * 1024,
+    )
+    capture_artifact(
+        g12["seed_summary"],
+        "terminal G-12 seed summary",
+        full=True,
+        expected_path=seed_root / "runs.tsv",
+        maximum_bytes=1024 * 1024,
+    )
+    seed_logs = g12["seed_run_logs"]
+    seed_names = tuple(f"seed-{ordinal:02d}.log" for ordinal in range(10))
+    if not isinstance(seed_logs, list) or len(seed_logs) != len(seed_names):
+        raise BootstrapError("terminal G-12 seed-log inventory is incomplete")
+    for index, (record, filename) in enumerate(zip(seed_logs, seed_names)):
+        capture_artifact(
+            record,
+            f"terminal G-12 seed log {index}",
+            full=True,
+            expected_path=seed_root / filename,
+            maximum_bytes=16 * 1024 * 1024,
+        )
+    capture_artifact(
+        g12["fault_soak_completion"],
+        "terminal G-12 fault-soak completion",
+        full=True,
+        expected_path=soak_root / "COMPLETED.tsv",
+        maximum_bytes=1024 * 1024,
+    )
+    capture_artifact(
+        g12["fault_soak_log"],
+        "terminal G-12 fault-soak log",
+        full=True,
+        expected_path=soak_root / "fault-soak.log",
+        maximum_bytes=16 * 1024 * 1024,
+    )
+    require_inventory(seed_root, {"COMPLETED.tsv", "runs.tsv", *seed_names}, "terminal G-12 seed directory")
+    require_inventory(soak_root, {"COMPLETED.tsv", "fault-soak.log"}, "terminal G-12 soak directory")
+
+    return artifact_snapshots, directory_snapshots
+
+
 def _validate_terminal_receipt(
     *,
     evidence: Path,
@@ -1209,7 +2022,12 @@ def _validate_terminal_receipt(
     protected: dict[str, FileSnapshot],
     identity_attestation: dict[str, Any],
     expected_signer_fingerprint: str,
-) -> tuple[FileSnapshot, dict[str, Any], list[DirectorySnapshot]]:
+) -> tuple[
+    FileSnapshot,
+    dict[str, Any],
+    list[LargeFileSnapshot],
+    list[DirectorySnapshot],
+]:
     release_runner = evidence / "release-runner"
     output = release_runner / "output"
     release = output / "release"
@@ -1318,6 +2136,15 @@ def _validate_terminal_receipt(
         is None
     ):
         raise BootstrapError("terminal release receipt has an invalid sealed-source digest")
+    terminal_artifacts, terminal_evidence_directories = (
+        _validate_terminal_release_evidence(
+            receipt_evidence=receipt_evidence,
+            evidence=evidence,
+            release_root=release_runner / "source",
+            receipt_identity=receipt_identity,
+            runner_record=runner_record,
+        )
+    )
 
     authentication = _require_exact_json_fields(
         receipt["authentication"],
@@ -1462,7 +2289,12 @@ def _validate_terminal_receipt(
         or release_identity["replay"].get("performed") is not True
     ):
         raise BootstrapError("terminal release identity trust evidence is not exact")
-    return receipt_snapshot, receipt, directories
+    return (
+        receipt_snapshot,
+        receipt,
+        terminal_artifacts,
+        [*directories, *terminal_evidence_directories],
+    )
 
 
 def _fsync_file_snapshot(snapshot: FileSnapshot, label: str) -> None:
@@ -1554,16 +2386,66 @@ def _validate_retained_source(
 def _receipt_artifact_path(
     receipt: dict[str, Any], label: str, evidence: Path
 ) -> Path:
-    record = receipt["evidence"].get(label)
+    return _receipt_nested_artifact_path(receipt, (label,), evidence)
+
+
+def _receipt_nested_artifact_path(
+    receipt: dict[str, Any], fields: tuple[str | int, ...], containment_root: Path
+) -> Path:
+    value: Any = receipt.get("evidence")
+    rendered_fields: list[str] = []
+    for field in fields:
+        rendered_fields.append(str(field))
+        try:
+            value = value[field]
+        except (KeyError, IndexError, TypeError) as error:
+            raise BootstrapError(
+                f"terminal receipt omits {'.'.join(rendered_fields)}"
+            ) from error
+    record = value
+    label = ".".join(rendered_fields)
     if not isinstance(record, dict) or not {"path", "sha256"}.issubset(record):
         raise BootstrapError(f"terminal receipt omits {label}")
     rendered = record["path"]
-    if not isinstance(rendered, str):
+    digest = record["sha256"]
+    if not isinstance(rendered, str) or not isinstance(digest, str):
         raise BootstrapError(f"terminal receipt {label} path is not text")
+    _require_digest(digest, f"terminal receipt {label} digest")
     path = _absolute_resolved_existing(Path(rendered), f"terminal receipt {label}")
-    if not _inside(path, evidence):
-        raise BootstrapError(f"terminal receipt {label} escaped bootstrap evidence")
+    if not _inside(path, containment_root):
+        raise BootstrapError(
+            f"terminal receipt {label} escaped its authenticated containment root"
+        )
+    snapshot = _capture_large_file(path, f"terminal receipt {label}")
+    if snapshot.sha256 != digest:
+        raise BootstrapError(f"terminal receipt {label} digest changed")
     return path
+
+
+def _receipt_scaling_manifest_path(receipt: dict[str, Any]) -> Path:
+    bundle = receipt.get("evidence", {}).get("multilane_scaling_bundle")
+    if (
+        not isinstance(bundle, dict)
+        or not isinstance(bundle.get("root"), str)
+        or not isinstance(bundle.get("files"), list)
+    ):
+        raise BootstrapError("terminal receipt omits its scaling bundle")
+    scaling_root = _absolute_resolved_existing(
+        Path(bundle["root"]), "terminal receipt scaling bundle root"
+    )
+    matching = [
+        index
+        for index, record in enumerate(bundle["files"])
+        if isinstance(record, dict)
+        and record.get("relative_path") == "scaling_evidence.json"
+    ]
+    if len(matching) != 1:
+        raise BootstrapError("terminal receipt scaling manifest inventory is not exact")
+    return _receipt_nested_artifact_path(
+        receipt,
+        ("multilane_scaling_bundle", "files", matching[0]),
+        scaling_root,
+    )
 
 
 def _run_protected_receipt_validator(
@@ -1583,6 +2465,16 @@ def _run_protected_receipt_validator(
     environment: dict[str, str],
     timeout_seconds: int,
 ) -> CommandResult:
+    scaling_digests: dict[str, str] = {}
+    for field, environment_name in _SCALING_DIGEST_ENVIRONMENT.items():
+        value = environment.get(environment_name)
+        if not isinstance(value, str):
+            raise BootstrapError(
+                f"protected receipt validation lacks {environment_name}"
+            )
+        scaling_digests[field] = _require_digest(
+            value, f"protected {environment_name}"
+        )
     arguments = [
         "-I",
         "-S",
@@ -1645,6 +2537,36 @@ def _run_protected_receipt_validator(
         str(_receipt_artifact_path(receipt, "chaos_completion", evidence)),
         "--taira-completion",
         str(_receipt_artifact_path(receipt, "taira_completion", evidence)),
+        "--g4p-completion",
+        str(
+            _receipt_nested_artifact_path(
+                receipt, ("g4p_multilane", "completion"), evidence
+            )
+        ),
+        "--g12-seed-completion",
+        str(
+            _receipt_nested_artifact_path(
+                receipt, ("g12_cross_dataspace", "seed_completion"), evidence
+            )
+        ),
+        "--g12-fault-soak-completion",
+        str(
+            _receipt_nested_artifact_path(
+                receipt,
+                ("g12_cross_dataspace", "fault_soak_completion"),
+                evidence,
+            )
+        ),
+        "--scaling-evidence-manifest",
+        str(_receipt_scaling_manifest_path(receipt)),
+        "--expected-scaling-trial-harness-sha256",
+        scaling_digests["trial_harness_sha256"],
+        "--expected-scaling-configuration-sha256",
+        scaling_digests["configuration_sha256"],
+        "--expected-scaling-irohad-sha256",
+        scaling_digests["irohad_sha256"],
+        "--expected-scaling-iroha-cli-sha256",
+        scaling_digests["iroha_cli_sha256"],
         "--repository-root",
         str(sealed_root),
         "--output",
@@ -2163,6 +3085,13 @@ def bootstrap(args: argparse.Namespace) -> int:
             False,
         ),
         (
+            "receipt_validator_support",
+            args.receipt_validator_support,
+            args.expected_receipt_validator_support_sha256,
+            _MAX_HELPER_BYTES,
+            False,
+        ),
+        (
             "runner_tool_manifest",
             args.runner_tool_manifest,
             args.expected_runner_tool_manifest_sha256,
@@ -2243,6 +3172,7 @@ def bootstrap(args: argparse.Namespace) -> int:
             "manifest_helper": "compute-manifest.py",
             "identity_verifier": "verify-identity.py",
             "receipt_validator": "validate-receipt.py",
+            "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
             "runner_tool_manifest": "runner-tool-manifest.json",
             "allowed_signers": "bootstrap-allowed-signers",
             "revocation": "bootstrap-revocation",
@@ -2651,8 +3581,12 @@ def bootstrap(args: argparse.Namespace) -> int:
         if post_error is not None:
             raise post_error
 
-        terminal_receipt, terminal_receipt_value, terminal_directories = (
-            _validate_terminal_receipt(
+        (
+            terminal_receipt,
+            terminal_receipt_value,
+            terminal_artifacts,
+            terminal_directories,
+        ) = _validate_terminal_receipt(
             evidence=evidence,
             candidate=candidate,
             bootstrap_marker=marker,
@@ -2664,7 +3598,6 @@ def bootstrap(args: argparse.Namespace) -> int:
             protected=protected,
             identity_attestation=identity_attestation,
             expected_signer_fingerprint=args.expected_signer_fingerprint,
-            )
         )
         _require_unchanged(
             terminal_receipt,
@@ -2672,8 +3605,12 @@ def bootstrap(args: argparse.Namespace) -> int:
             maximum_bytes=_MAX_TERMINAL_RECEIPT_BYTES,
         )
         for index, directory in enumerate(terminal_directories):
-            _require_directory_unchanged(
+            _require_terminal_directory_unchanged(
                 directory, f"terminal release directory {index}"
+            )
+        for index, artifact in enumerate(terminal_artifacts):
+            _require_large_file_unchanged(
+                artifact, f"terminal release artifact {index}"
             )
         sealed_identity_snapshot, sealed_identity, sealed_directory = (
             _validate_retained_source(
@@ -2715,6 +3652,14 @@ def bootstrap(args: argparse.Namespace) -> int:
         _require_sealed_directory_unchanged(
             sealed_directory, "protected-validator retained sealed source"
         )
+        for index, artifact in enumerate(terminal_artifacts):
+            _require_large_file_unchanged(
+                artifact, f"protected-validator terminal release artifact {index}"
+            )
+        for index, directory in enumerate(terminal_directories):
+            _require_terminal_directory_unchanged(
+                directory, f"protected-validator terminal release directory {index}"
+            )
         release_completion_value = {
             "schema_version": 1,
             "result": "release-complete",
@@ -2780,8 +3725,12 @@ def bootstrap(args: argparse.Namespace) -> int:
             maximum_bytes=_MAX_TERMINAL_RECEIPT_BYTES,
         )
         for index, directory in enumerate(terminal_directories):
-            _require_directory_unchanged(
+            _require_terminal_directory_unchanged(
                 directory, f"terminal release directory {index}"
+            )
+        for index, artifact in enumerate(terminal_artifacts):
+            _require_large_file_unchanged(
+                artifact, f"terminal release artifact {index}"
             )
         for label, snapshot in protected.items():
             maximum = _protected_size_limit(label, executable_labels)
@@ -2898,6 +3847,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-identity-verifier-sha256", required=True)
     parser.add_argument("--receipt-validator", type=Path, required=True)
     parser.add_argument("--expected-receipt-validator-sha256", required=True)
+    parser.add_argument("--receipt-validator-support", type=Path, required=True)
+    parser.add_argument(
+        "--expected-receipt-validator-support-sha256", required=True
+    )
     parser.add_argument("--runner-tool-manifest", type=Path, required=True)
     parser.add_argument("--expected-runner-tool-manifest-sha256", required=True)
     parser.add_argument("--bash-bin", type=Path, required=True)

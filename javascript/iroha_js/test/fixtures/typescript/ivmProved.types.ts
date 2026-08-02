@@ -23,7 +23,7 @@ const snake: IvmProvedContractCallInput = {
   authority: "account",
   private_key: privateKey,
   vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
-  contract_address: "tairac1contract",
+  contract_address: "irohac1contract",
   fee_payment: feePayment,
   expected_code_hash_hex: "11".repeat(32),
   expected_artifact_sha256_hex: "22".repeat(32),
@@ -41,7 +41,7 @@ const duplicateChain: IvmProvedContractCallInput = {
 // @ts-expect-error address and alias target selectors are mutually exclusive.
 const duplicateTarget: IvmProvedContractCallInput = {
   ...camel,
-  contractAddress: "tairac1contract",
+  contractAddress: "irohac1contract",
 };
 
 // @ts-expect-error both independently trusted artifact identities are required.

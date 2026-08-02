@@ -176,12 +176,6 @@ impl ServicedCandidateKey {
         self.owner
     }
 
-    /// Optional block subject projected by the serviced reducer occurrence.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn target(self) -> Option<[u8; 32]> {
-        self.target
-    }
-
     /// Protocol phase projected by the serviced reducer occurrence.
     pub(crate) const fn phase(self) -> u8 {
         self.phase
@@ -190,12 +184,6 @@ impl ServicedCandidateKey {
     /// Closed reducer-event kind used to derive stage and replay class.
     pub(crate) const fn kind(self) -> u8 {
         self.kind
-    }
-
-    /// Route-neutral semantic evidence hash for this exact occurrence.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn evidence(self) -> [u8; 32] {
-        self.evidence
     }
 
     /// Semantic adapter lane which owned the serviced occurrence.
@@ -414,12 +402,6 @@ impl ProducerContinuationTerminalToken {
         self.identity
     }
 
-    /// Exact route-neutral serviced occurrence paired with this terminal.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn candidate(self) -> ServicedCandidateKey {
-        self.identity.candidate()
-    }
-
     /// Physical replay class frozen before terminal publication.
     pub(crate) const fn source_class(self) -> ProducerContinuationSourceClass {
         self.source_class
@@ -556,17 +538,6 @@ pub(crate) struct RestoredServicedCandidates {
         BTreeMap<ProducerContinuationAddress, ProducerContinuationRecord>,
     /// Whether the pre-Decision epoch has already been reclaimed.
     pub(crate) decision_reclaimed: bool,
-}
-
-impl RestoredServicedCandidates {
-    /// Canonical restart-stable producer terminals from the validated snapshot.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn producer_terminal_tokens(&self) -> Vec<ProducerContinuationTerminalToken> {
-        self.producer_continuations
-            .values()
-            .filter_map(ProducerContinuationRecord::terminal_token)
-            .collect()
-    }
 }
 
 /// Durable position of one generic productive leader-wire lifecycle.
@@ -1504,18 +1475,6 @@ impl LeaderWireLifecycleStoreGate {
     /// Whether two handles name the same synchronous persistence gate.
     pub(crate) fn ptr_eq(left: &Arc<Self>, right: &Arc<Self>) -> bool {
         Arc::ptr_eq(left, right)
-    }
-
-    /// Height context bound into every accepted token and persisted header.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn context_id(&self) -> wire::HeightContextId {
-        self.context_id
-    }
-
-    /// Exact height bound into this per-height persistence gate.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn height(&self) -> wire::Height {
-        self.height
     }
 
     /// Whether a proposed fair-ingress binding has identical frozen geometry.
@@ -2977,12 +2936,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [9; 32],
         };

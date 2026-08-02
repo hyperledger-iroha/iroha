@@ -17,7 +17,8 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     content::{
-        ContentAuthMode, ContentBundleManifest, ContentBundleRecord, ContentDaReceipt, ContentRange,
+        ContentAuthMode, ContentBundleManifest, ContentBundleRecord, ContentDaReceipt,
+        ContentFileEntry, ContentRange,
     },
     da::types::BlobDigest,
 };
@@ -35,6 +36,9 @@ pub enum ContentError {
 }
 
 const CONTENT_RECEIPT_HEADER: &str = "sora-content-receipt";
+/// Exact `Vary` value for content whose manifest requires canonical authentication.
+pub(crate) const CANONICAL_CONTENT_AUTH_VARY: &str =
+    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
 
 impl IntoResponse for ContentError {
     fn into_response(self) -> Response {
@@ -111,15 +115,18 @@ pub async fn handle_get_content(
                 return Err(ContentError::NotFound);
             }
 
-            let Some(entry) = bundle.files.iter().find(|f| f.path == path).cloned() else {
-                outcome_hint = Some("not_found");
-                return Err(ContentError::NotFound);
-            };
-
-            if let Err(err) = enforce_auth(&bundle.manifest, &app.state, &headers, &method, &uri) {
-                outcome_hint = Some("auth_failed");
-                return Err(err);
-            }
+            let entry =
+                authorize_content_entry(&bundle, &app.state, &headers, &method, &uri, &path)
+                    .map_err(|err| {
+                        outcome_hint = Some(match &err {
+                            ContentError::Unauthorized(_) | ContentError::Forbidden(_) => {
+                                "auth_failed"
+                            }
+                            ContentError::NotFound => "not_found",
+                            _ => "internal",
+                        });
+                        err
+                    })?;
 
             if let Err(err) = enforce_pow(&app.content_config.pow, &headers, &bundle_id, &path) {
                 outcome_hint = Some(match &err {
@@ -195,9 +202,11 @@ pub async fn handle_get_content(
         headers_mut.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
         headers_mut.insert(
             header::CACHE_CONTROL,
-            HeaderValue::from_str(&bundle.manifest.cache.cache_control_value())
-                .unwrap_or_else(|_| HeaderValue::from_static("public, max-age=300")),
+            content_cache_control_header(&bundle.manifest),
         );
+        if let Some(vary) = content_auth_vary_header(&bundle.manifest) {
+            headers_mut.insert(header::VARY, vary);
+        }
         headers_mut.insert(
             header::CONTENT_TYPE,
             HeaderValue::from_str(&mime_for_path(&bundle.manifest, &entry))
@@ -266,6 +275,37 @@ fn parse_bundle_id(bundle_hex: &str) -> Result<Hash, ContentError> {
 
 fn is_bundle_expired(current_height: u64, expires_at_height: Option<u64>) -> bool {
     matches!(expires_at_height, Some(expiry) if current_height >= expiry)
+}
+
+fn content_cache_control_header(manifest: &ContentBundleManifest) -> HeaderValue {
+    HeaderValue::from_str(&manifest.cache_control_value())
+        .unwrap_or_else(|_| HeaderValue::from_static("private, no-store"))
+}
+
+fn content_auth_vary_header(manifest: &ContentBundleManifest) -> Option<HeaderValue> {
+    match &manifest.auth {
+        ContentAuthMode::Public => None,
+        ContentAuthMode::RoleGate(_) | ContentAuthMode::Sponsor(_) => {
+            Some(HeaderValue::from_static(CANONICAL_CONTENT_AUTH_VARY))
+        }
+    }
+}
+
+fn authorize_content_entry(
+    bundle: &ContentBundleRecord,
+    state: &std::sync::Arc<iroha_core::state::State>,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    path: &str,
+) -> Result<ContentFileEntry, ContentError> {
+    enforce_auth(&bundle.manifest, state, headers, method, uri)?;
+    bundle
+        .files
+        .iter()
+        .find(|entry| entry.path == path)
+        .cloned()
+        .ok_or(ContentError::NotFound)
 }
 
 fn content_rate_key(
@@ -756,6 +796,89 @@ mod tests {
         assert!(is_bundle_expired(5, Some(5)));
         assert!(is_bundle_expired(6, Some(5)));
         assert!(!is_bundle_expired(0, None));
+    }
+
+    #[test]
+    fn content_cache_header_disables_storage_for_protected_manifests() {
+        let mut manifest = sample_manifest();
+        assert_eq!(
+            content_cache_control_header(&manifest),
+            HeaderValue::from_static("public, max-age=60")
+        );
+        assert_eq!(content_auth_vary_header(&manifest), None);
+
+        manifest.auth =
+            ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
+        assert_eq!(
+            content_cache_control_header(&manifest),
+            HeaderValue::from_static("private, no-store")
+        );
+        assert_eq!(
+            content_auth_vary_header(&manifest),
+            Some(HeaderValue::from_static(CANONICAL_CONTENT_AUTH_VARY))
+        );
+
+        manifest.auth = ContentAuthMode::Sponsor(
+            iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"sponsor")),
+        );
+        assert_eq!(
+            content_cache_control_header(&manifest),
+            HeaderValue::from_static("private, no-store")
+        );
+        assert_eq!(
+            content_auth_vary_header(&manifest),
+            Some(HeaderValue::from_static(CANONICAL_CONTENT_AUTH_VARY))
+        );
+    }
+
+    #[test]
+    fn protected_missing_path_authenticates_before_file_index_lookup() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = checked_ed25519_keypair();
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let state = minimal_state_with_account(&account_id, None);
+        let mut manifest = sample_manifest();
+        manifest.auth =
+            ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
+        let mut bundle = ContentBundleRecord {
+            bundle_id: manifest.bundle_id,
+            manifest,
+            total_bytes: 0,
+            chunk_size: 1,
+            chunk_hashes: Vec::new(),
+            chunk_root: [0; 32],
+            stripe_layout: DaStripeLayout::default(),
+            pdp_commitment: None,
+            files: Vec::new(),
+            created_by: account_id,
+            created_height: 1,
+            expires_at_height: None,
+        };
+        let method = Method::GET;
+        let uri: Uri = "/v1/content/bundle/unknown.txt".parse().expect("uri");
+
+        let protected_error = authorize_content_entry(
+            &bundle,
+            &state,
+            &HeaderMap::new(),
+            &method,
+            &uri,
+            "unknown.txt",
+        )
+        .expect_err("protected lookup must authenticate before checking the path");
+        assert!(matches!(protected_error, ContentError::Unauthorized(_)));
+
+        bundle.manifest.auth = ContentAuthMode::Public;
+        let public_error = authorize_content_entry(
+            &bundle,
+            &state,
+            &HeaderMap::new(),
+            &method,
+            &uri,
+            "unknown.txt",
+        )
+        .expect_err("public missing path must remain not found");
+        assert!(matches!(public_error, ContentError::NotFound));
     }
 
     #[test]

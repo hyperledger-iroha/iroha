@@ -3,6 +3,8 @@ package org.hyperledger.iroha.sdk.client
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 
 /** Minimal JSON parser for Sora VPN Torii responses. */
@@ -17,23 +19,29 @@ object VpnJsonParser {
         "available", "relay_endpoint", "supported_exit_classes", "default_exit_class",
         "lease_secs", "dns_push_interval_secs", "meter_family", "route_pushes",
         "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
-        "display_billing_label", "fee_asset_id", "escrow_account_id", "operator_account_id",
+        "display_billing_label", "operator_account_id",
         "lease_fee", "settlement_grace_secs", "flow_label_bits", "padding_budget_ms",
-        "relay_tls_spki_sha256_hex",
+        "relay_id_hex", "descriptor_commit_hex", "tls_server_name",
+        "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
     )
     private val QUOTE_FIELDS = setOf(
         "quote_id", "lease_id_hex", "session_id_hex", "payment_reference", "account_id",
         "exit_class", "relay_endpoint", "lease_secs", "quote_expires_at_ms", "fee_asset_id",
         "escrow_account_id", "operator_account_id", "lease_fee", "route_pushes",
         "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes", "meter_family",
-        "flow_label_bits", "padding_budget_ms", "relay_tls_spki_sha256_hex",
-        "metering_public_key_hex", "open_lease_instruction", "tx_instructions",
+        "flow_label_bits", "padding_budget_ms", "relay_id_hex", "descriptor_commit_hex",
+        "tls_server_name", "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
+        "metering_public_key_hex", "open_lease_instruction",
     )
     private val SESSION_FIELDS = setOf(
         "session_id", "account_id", "exit_class", "relay_endpoint", "lease_secs",
         "expires_at_ms", "connected_at_ms", "meter_family", "quote_id", "payment_reference",
         "payment_tx_hash", "fee_asset_id", "escrow_account_id", "operator_account_id",
-        "lease_fee", "flow_label_bits", "padding_budget_ms", "relay_tls_spki_sha256_hex",
+        "lease_fee", "flow_label_bits", "padding_budget_ms", "relay_id_hex",
+        "descriptor_commit_hex", "tls_server_name", "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex", "directory_snapshot_digest_hex",
         "route_pushes", "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
         "helper_ticket_hex", "bytes_in", "bytes_out", "status",
     )
@@ -42,7 +50,7 @@ object VpnJsonParser {
         "connected_at_ms", "disconnected_at_ms", "duration_ms", "bytes_in", "bytes_out",
         "status", "receipt_source", "quote_id", "payment_tx_hash", "fee_asset_id",
         "escrow_account_id", "operator_account_id", "lease_fee", "earned_fee", "refunded_fee",
-        "lease_id_hex", "settle_lease_instruction", "tx_instructions",
+        "lease_id_hex", "settle_lease_instruction",
     )
     private val RECEIPT_LIST_FIELDS = setOf("items", "total")
     private val TX_INSTRUCTION_FIELDS = setOf("wire_id", "payload_hex")
@@ -51,9 +59,15 @@ object VpnJsonParser {
     fun parseProfile(payload: ByteArray): VpnProfile {
         val root = expectObject(parse(payload, "vpn profile response"), "vpn profile response")
         requireExactFields(root, PROFILE_FIELDS, "vpn profile response")
+        val available = requiredBoolean(root["available"], "vpn profile response.available")
+        val trust = vpnTrustTuple(root, "vpn profile response", allowEmpty = !available)
         return VpnProfile(
-            available = requiredBoolean(root["available"], "vpn profile response.available"),
-            relayEndpoint = requiredString(root["relay_endpoint"], "vpn profile response.relay_endpoint"),
+            available = available,
+            relayEndpoint = relayEndpoint(
+                root["relay_endpoint"],
+                "vpn profile response.relay_endpoint",
+                allowEmpty = !available,
+            ),
             supportedExitClasses = exitClassList(root["supported_exit_classes"], "vpn profile response.supported_exit_classes"),
             defaultExitClass = exitClass(root["default_exit_class"], "vpn profile response.default_exit_class"),
             leaseSecs = boundedLong(root["lease_secs"], "vpn profile response.lease_secs", 1, U32_MAX),
@@ -69,14 +83,17 @@ object VpnJsonParser {
             tunnelAddresses = stringList(root["tunnel_addresses"], "vpn profile response.tunnel_addresses"),
             mtuBytes = exactLong(root["mtu_bytes"], "vpn profile response.mtu_bytes", 1_280),
             displayBillingLabel = requiredString(root["display_billing_label"], "vpn profile response.display_billing_label"),
-            feeAssetId = requiredString(root["fee_asset_id"], "vpn profile response.fee_asset_id"),
-            escrowAccountId = requiredString(root["escrow_account_id"], "vpn profile response.escrow_account_id"),
             operatorAccountId = requiredString(root["operator_account_id"], "vpn profile response.operator_account_id"),
             leaseFee = quantity(root["lease_fee"], "vpn profile response.lease_fee"),
             settlementGraceSecs = atLeastLong(root["settlement_grace_secs"], "vpn profile response.settlement_grace_secs", 1),
             flowLabelBits = exactInt(root["flow_label_bits"], "vpn profile response.flow_label_bits", 24),
             paddingBudgetMs = boundedInt(root["padding_budget_ms"], "vpn profile response.padding_budget_ms", 1, 65_535),
-            relayTlsSpkiSha256Hex = optionalHex32(root["relay_tls_spki_sha256_hex"], "relayTlsSpkiSha256Hex"),
+            relayIdHex = trust.relayIdHex,
+            descriptorCommitHex = trust.descriptorCommitHex,
+            tlsServerName = trust.tlsServerName,
+            relayTlsSpkiSha256Hex = trust.relayTlsSpkiSha256Hex,
+            relayCertificateSha256Hex = trust.relayCertificateSha256Hex,
+            directorySnapshotDigestHex = trust.directorySnapshotDigestHex,
         )
     }
 
@@ -84,6 +101,7 @@ object VpnJsonParser {
     fun parseQuote(payload: ByteArray): VpnQuote {
         val root = expectObject(parse(payload, "vpn quote response"), "vpn quote response")
         requireExactFields(root, QUOTE_FIELDS, "vpn quote response")
+        val trust = vpnTrustTuple(root, "vpn quote response", allowEmpty = false)
         return VpnQuote(
             quoteId = hex32(root["quote_id"], "quoteId"),
             leaseIdHex = hex32(root["lease_id_hex"], "leaseIdHex"),
@@ -91,7 +109,7 @@ object VpnJsonParser {
             paymentReference = requiredString(root["payment_reference"], "vpn quote response.payment_reference"),
             accountId = requiredString(root["account_id"], "vpn quote response.account_id"),
             exitClass = exitClass(root["exit_class"], "vpn quote response.exit_class"),
-            relayEndpoint = requiredString(root["relay_endpoint"], "vpn quote response.relay_endpoint"),
+            relayEndpoint = relayEndpoint(root["relay_endpoint"], "vpn quote response.relay_endpoint"),
             leaseSecs = boundedLong(root["lease_secs"], "vpn quote response.lease_secs", 1, U32_MAX),
             quoteExpiresAtMs = atLeastLong(root["quote_expires_at_ms"], "vpn quote response.quote_expires_at_ms", 0),
             feeAssetId = requiredString(root["fee_asset_id"], "vpn quote response.fee_asset_id"),
@@ -106,11 +124,18 @@ object VpnJsonParser {
             meterFamily = requiredString(root["meter_family"], "vpn quote response.meter_family"),
             flowLabelBits = exactInt(root["flow_label_bits"], "vpn quote response.flow_label_bits", 24),
             paddingBudgetMs = boundedInt(root["padding_budget_ms"], "vpn quote response.padding_budget_ms", 1, 65_535),
-            relayTlsSpkiSha256Hex = optionalHex32(root["relay_tls_spki_sha256_hex"], "relayTlsSpkiSha256Hex"),
+            relayIdHex = trust.relayIdHex,
+            descriptorCommitHex = trust.descriptorCommitHex,
+            tlsServerName = trust.tlsServerName,
+            relayTlsSpkiSha256Hex = trust.relayTlsSpkiSha256Hex,
+            relayCertificateSha256Hex = trust.relayCertificateSha256Hex,
+            directorySnapshotDigestHex = trust.directorySnapshotDigestHex,
             meteringPublicKeyHex =
                 ed25519PublicKeyHex(root["metering_public_key_hex"], "meteringPublicKeyHex"),
-            openLeaseInstruction = optionalTxInstruction(root["open_lease_instruction"], "vpn quote response.open_lease_instruction"),
-            txInstructions = txInstructionList(root["tx_instructions"], "vpn quote response.tx_instructions", 1, 1),
+            openLeaseInstruction = parseTxInstruction(
+                expectObject(root["open_lease_instruction"], "vpn quote response.open_lease_instruction"),
+                "vpn quote response.open_lease_instruction",
+            ),
         )
     }
 
@@ -118,11 +143,12 @@ object VpnJsonParser {
     fun parseSession(payload: ByteArray): VpnSession {
         val root = expectObject(parse(payload, "vpn session response"), "vpn session response")
         requireExactFields(root, SESSION_FIELDS, "vpn session response")
+        val trust = vpnTrustTuple(root, "vpn session response", allowEmpty = false)
         return VpnSession(
             sessionId = hex32(root["session_id"], "sessionId"),
             accountId = requiredString(root["account_id"], "vpn session response.account_id"),
             exitClass = exitClass(root["exit_class"], "vpn session response.exit_class"),
-            relayEndpoint = requiredString(root["relay_endpoint"], "vpn session response.relay_endpoint"),
+            relayEndpoint = relayEndpoint(root["relay_endpoint"], "vpn session response.relay_endpoint"),
             leaseSecs = boundedLong(root["lease_secs"], "vpn session response.lease_secs", 1, U32_MAX),
             expiresAtMs = atLeastLong(root["expires_at_ms"], "vpn session response.expires_at_ms", 0),
             connectedAtMs = atLeastLong(root["connected_at_ms"], "vpn session response.connected_at_ms", 0),
@@ -136,7 +162,12 @@ object VpnJsonParser {
             leaseFee = quantity(root["lease_fee"], "vpn session response.lease_fee"),
             flowLabelBits = exactInt(root["flow_label_bits"], "vpn session response.flow_label_bits", 24),
             paddingBudgetMs = boundedInt(root["padding_budget_ms"], "vpn session response.padding_budget_ms", 1, 65_535),
-            relayTlsSpkiSha256Hex = optionalHex32(root["relay_tls_spki_sha256_hex"], "relayTlsSpkiSha256Hex"),
+            relayIdHex = trust.relayIdHex,
+            descriptorCommitHex = trust.descriptorCommitHex,
+            tlsServerName = trust.tlsServerName,
+            relayTlsSpkiSha256Hex = trust.relayTlsSpkiSha256Hex,
+            relayCertificateSha256Hex = trust.relayCertificateSha256Hex,
+            directorySnapshotDigestHex = trust.directorySnapshotDigestHex,
             routePushes = stringList(root["route_pushes"], "vpn session response.route_pushes"),
             excludedRoutes = stringList(root["excluded_routes"], "vpn session response.excluded_routes"),
             dnsServers = stringList(root["dns_servers"], "vpn session response.dns_servers"),
@@ -195,7 +226,6 @@ object VpnJsonParser {
             refundedFee = quantity(root["refunded_fee"], "$path.refunded_fee"),
             leaseIdHex = hex32(root["lease_id_hex"], "leaseIdHex"),
             settleLeaseInstruction = optionalTxInstruction(root["settle_lease_instruction"], "$path.settle_lease_instruction"),
-            txInstructions = txInstructionList(root["tx_instructions"], "$path.tx_instructions", 0, 1),
         )
     }
 
@@ -228,16 +258,6 @@ object VpnJsonParser {
         return requiredList(value, path).mapIndexed { index, item ->
             requiredString(item, "$path[$index]")
         }
-    }
-
-    private fun txInstructionList(value: Any?, path: String, minimum: Int, maximum: Int): List<VpnTxInstruction> {
-        val parsed = requiredList(value, path).mapIndexed { index, item ->
-            parseTxInstruction(expectObject(item, "$path[$index]"), "$path[$index]")
-        }
-        check(parsed.size in minimum..maximum) {
-            "$path must contain between $minimum and $maximum entries"
-        }
-        return parsed
     }
 
     private fun optionalTxInstruction(value: Any?, path: String): VpnTxInstruction? {
@@ -344,6 +364,148 @@ object VpnJsonParser {
 
     private fun hex32(value: Any?, field: String): String = canonicalHex(value, field, 64)
 
+    private class VpnTrustTuple(
+        val relayIdHex: String,
+        val descriptorCommitHex: String,
+        val tlsServerName: String,
+        val relayTlsSpkiSha256Hex: String,
+        val relayCertificateSha256Hex: String,
+        val directorySnapshotDigestHex: String,
+    )
+
+    private fun vpnTrustTuple(
+        root: Map<String, Any?>,
+        context: String,
+        allowEmpty: Boolean,
+    ): VpnTrustTuple = VpnTrustTuple(
+        relayIdHex = trustRelayId(root["relay_id_hex"], "$context.relay_id_hex", allowEmpty),
+        descriptorCommitHex = trustDigest(
+            root["descriptor_commit_hex"],
+            "$context.descriptor_commit_hex",
+            allowEmpty,
+        ),
+        tlsServerName = tlsServerName(
+            root["tls_server_name"],
+            "$context.tls_server_name",
+            allowEmpty,
+        ),
+        relayTlsSpkiSha256Hex = trustDigest(
+            root["relay_tls_spki_sha256_hex"],
+            "$context.relay_tls_spki_sha256_hex",
+            allowEmpty,
+        ),
+        relayCertificateSha256Hex = trustDigest(
+            root["relay_certificate_sha256_hex"],
+            "$context.relay_certificate_sha256_hex",
+            allowEmpty,
+        ),
+        directorySnapshotDigestHex = trustDigest(
+            root["directory_snapshot_digest_hex"],
+            "$context.directory_snapshot_digest_hex",
+            allowEmpty,
+        ),
+    )
+
+    private fun trustRelayId(value: Any?, field: String, allowEmpty: Boolean): String {
+        if (allowEmpty && value == "") return ""
+        return ed25519PublicKeyHex(value, field)
+    }
+
+    private fun trustDigest(value: Any?, field: String, allowEmpty: Boolean): String {
+        if (allowEmpty && value == "") return ""
+        val canonical = hex32(value, field)
+        check(canonical.any { it != '0' }) { "$field must not be the all-zero digest" }
+        return canonical
+    }
+
+    private fun tlsServerName(value: Any?, field: String, allowEmpty: Boolean): String {
+        if (allowEmpty && value == "") return ""
+        val name = requiredString(value, field)
+        check(name.length <= 253 && name == name.lowercase()) {
+            "$field must be a canonical lowercase DNS name"
+        }
+        val labels = name.split('.')
+        check(labels.all { label ->
+            label.isNotEmpty() &&
+                label.length <= 63 &&
+                (label.first() in 'a'..'z' || label.first() in '0'..'9') &&
+                (label.last() in 'a'..'z' || label.last() in '0'..'9') &&
+                label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
+        }) { "$field must be a canonical lowercase DNS name" }
+        return name
+    }
+
+    private fun relayEndpoint(value: Any?, field: String, allowEmpty: Boolean = false): String {
+        if (allowEmpty && value == "") return ""
+        val endpoint = requiredString(value, field)
+        val parts = endpoint.split('/')
+        check(parts.size == 6 && parts[0].isEmpty() && parts[3] == "udp" && parts[5] == "quic") {
+            "$field must use /{ip4|ip6|dns|dns4|dns6}/host/udp/port/quic"
+        }
+        val protocol = parts[1]
+        val host = parts[2]
+        check(protocol in setOf("ip4", "ip6", "dns", "dns4", "dns6")) {
+            "$field has an unsupported host protocol"
+        }
+        when (protocol) {
+            "ip4" -> requireCanonicalIpv4(host, field)
+            "ip6" -> requireCanonicalIpv6(host, field)
+            else -> tlsServerName(host, "$field host", allowEmpty = false)
+        }
+        val port = parts[4].toIntOrNull()
+        check(port != null && port in 1..65_535 && port.toString() == parts[4]) {
+            "$field must contain a canonical non-zero UDP port"
+        }
+        return endpoint
+    }
+
+    private fun requireCanonicalIpv4(host: String, field: String) {
+        val octets = host.split('.')
+        check(octets.size == 4 && octets.all { octet ->
+            val parsed = octet.toIntOrNull()
+            parsed != null && parsed in 0..255 && parsed.toString() == octet
+        }) { "$field must contain a canonical IPv4 address" }
+    }
+
+    private fun requireCanonicalIpv6(host: String, field: String) {
+        val parsed = runCatching { InetAddress.getByName(host) }.getOrNull()
+        check(parsed is Inet6Address && host == canonicalIpv6(parsed.address)) {
+            "$field must contain a canonical lowercase IPv6 address"
+        }
+    }
+
+    private fun canonicalIpv6(bytes: ByteArray): String {
+        val groups = IntArray(8) { index ->
+            ((bytes[index * 2].toInt() and 0xff) shl 8) or
+                (bytes[index * 2 + 1].toInt() and 0xff)
+        }
+        var bestStart = -1
+        var bestLength = 0
+        var index = 0
+        while (index < groups.size) {
+            if (groups[index] != 0) {
+                index += 1
+                continue
+            }
+            val start = index
+            while (index < groups.size && groups[index] == 0) index += 1
+            val length = index - start
+            if (length >= 2 && length > bestLength) {
+                bestStart = start
+                bestLength = length
+            }
+        }
+        if (bestStart < 0) return groups.joinToString(":") { it.toString(16) }
+        val before = groups.take(bestStart).joinToString(":") { it.toString(16) }
+        val after = groups.drop(bestStart + bestLength).joinToString(":") { it.toString(16) }
+        return when {
+            before.isEmpty() && after.isEmpty() -> "::"
+            before.isEmpty() -> "::$after"
+            after.isEmpty() -> "$before::"
+            else -> "$before::$after"
+        }
+    }
+
     private fun ed25519PublicKeyHex(value: Any?, field: String): String {
         val canonical = hex32(value, field)
         val publicKey = ByteArray(Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH) { index ->
@@ -358,11 +520,6 @@ object VpnJsonParser {
     }
 
     private fun hex16(value: Any?, field: String): String = canonicalHex(value, field, 32)
-
-    private fun optionalHex32(value: Any?, field: String): String? {
-        if (value == null) return null
-        return canonicalHex(value, field, 64)
-    }
 
     private fun canonicalEvenHex(value: Any?, field: String): String {
         check(value is String &&

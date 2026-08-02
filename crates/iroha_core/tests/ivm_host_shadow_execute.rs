@@ -81,9 +81,13 @@ fn setup_state(
     let query_handle = LiveQueryStore::start_test();
     let domain = Domain::new(asset_domain.clone()).build(authority);
     let account = Account::new(authority.clone()).build(authority);
-    let asset_definition = AssetDefinition::numeric(asset_def.clone())
-        .with_name(asset_name.to_string())
-        .build(authority);
+    let asset_definition = AssetDefinition::numeric(
+        asset_def.clone(),
+        asset_name.to_string(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(authority);
     State::new_for_testing(
         World::with([domain], [account], [asset_definition]),
         kura,
@@ -108,7 +112,10 @@ fn ivm_host_shadow_execute_matches_native_execute() {
     let asset_domain = DomainId::try_new("wonderland", "universal").unwrap();
     let asset_name: Name = "coin".parse().unwrap();
     let asset_def_seed: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::new(asset_domain.clone(), asset_name.clone());
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            asset_domain.clone(),
+            asset_name.clone(),
+        );
     let asset_def = AssetDefinitionId::parse_address_literal(&asset_def_seed.canonical_address())
         .expect("canonical asset definition literal");
     let key: Name = "parity_key".parse().unwrap();

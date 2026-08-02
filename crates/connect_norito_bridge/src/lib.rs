@@ -148,7 +148,8 @@ const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment whenever any NativeSignerBridge JNI method descriptor changes.
 // The bridge-wide ABI number alone cannot distinguish two ABI-21 artifacts
 // whose JVM calling conventions differ.
-const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 1;
+// Revision 2 removes the caller-supplied Unshield outputs parameter.
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 2;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
@@ -1541,6 +1542,7 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
 
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
+const PRIVACY_COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1: usize = 8 * 1024 * 1024;
 const PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1: usize =
     if PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
         > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
@@ -1556,6 +1558,11 @@ struct PrivacyBufferHeader {
     len: usize,
 }
 
+static PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1: OnceLock<Result<Vec<u8>, c_int>> =
+    OnceLock::new();
+#[cfg(test)]
+static PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1: AtomicU64 = AtomicU64::new(0);
+
 fn privacy_compiled_profile_catalog() -> Result<PrivacyCompiledProfileCatalogV1, c_int> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|_| ERR_CONNECT_ENCODE)?;
     debug_assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::ALL.len());
@@ -1567,6 +1574,38 @@ fn privacy_compiled_profile_catalog() -> Result<PrivacyCompiledProfileCatalogV1,
             .eq(PrivacyProtocolIdV1::ALL)
     );
     Ok(catalog)
+}
+
+fn build_privacy_compiled_profile_catalog_archive_v1() -> Result<Vec<u8>, c_int> {
+    let catalog = privacy_compiled_profile_catalog()?;
+    let bytes = norito::encode_canonical(&catalog).map_err(|_| ERR_CONNECT_ENCODE)?;
+    if bytes.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
+        || !validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes).is_valid()
+    {
+        return Err(ERR_CONNECT_ENCODE);
+    }
+    Ok(bytes)
+}
+
+fn privacy_compiled_profile_catalog_archive_v1() -> Result<&'static [u8], c_int> {
+    // The catalog is immutable build metadata, but its first derivation
+    // initializes several native cryptographic profiles. Own that one-time
+    // stack budget at the FFI boundary instead of inheriting an arbitrary
+    // mobile/runtime caller stack. Initialization, including deterministic
+    // failure, is serialized and cached so concurrent cold callers cannot
+    // amplify the owned worker-stack allocation.
+    let archive = PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get_or_init(|| {
+        #[cfg(test)]
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1.fetch_add(1, Ordering::Relaxed);
+
+        let worker = std::thread::Builder::new()
+            .name("iroha-privacy-profile-catalog-v1".to_owned())
+            .stack_size(PRIVACY_COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1)
+            .spawn(build_privacy_compiled_profile_catalog_archive_v1)
+            .map_err(|_| ERR_CONNECT_ENCODE)?;
+        worker.join().map_err(|_| ERR_CONNECT_ENCODE)?
+    });
+    archive.as_ref().map(Vec::as_slice).map_err(|code| *code)
 }
 
 fn clear_privacy_output(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
@@ -1661,26 +1700,13 @@ fn write_privacy_compiled_profile_catalog(
     if out_ptr.is_null() || out_len.is_null() {
         return ERR_NULL_PTR;
     }
-    let Ok(catalog) = privacy_compiled_profile_catalog() else {
+    let Ok(bytes) = privacy_compiled_profile_catalog_archive_v1() else {
         return ERR_CONNECT_ENCODE;
     };
-    let bytes = match norito::encode_canonical(&catalog) {
-        Ok(bytes) => bytes,
-        Err(_) => return ERR_CONNECT_ENCODE,
-    };
-    let mut bytes = bytes;
-    let result = if bytes.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
-        || !validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes).is_valid()
-    {
-        ERR_CONNECT_ENCODE
-    } else {
-        match unsafe { write_privacy_bytes(out_ptr, out_len, &bytes) } {
-            Ok(()) => 0,
-            Err(code) => code,
-        }
-    };
-    bytes.fill(0);
-    result
+    match unsafe { write_privacy_bytes(out_ptr, out_len, bytes) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
 }
 
 /// Return this binary's canonical local compiled-profile catalog.
@@ -6107,7 +6133,7 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
             || self.accepted_identity.candidate_record_sha256 != self.candidate_sha256
             || self.accepted_identity.candidate_manifest_sha256 != self.manifest_sha256
             || self.accepted_identity.production_capability_observed
-            || !self.accepted_identity.source_repo_dirty
+            || self.accepted_identity.source_repo_dirty
             || iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE
         {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
@@ -9135,70 +9161,13 @@ fn kagemusha_recursive_spend_append_statement_v4(
     final_root: [u8; 32],
     next_zero_leaf_index: u32,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendPublicStatementV4> {
-    use iroha_data_model::offline::{
-        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPeerSplitTransitionV4,
-        KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendTransitionV4,
-    };
-
-    split
-        .validate_public_binding()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    let current_note = match branch {
-        KagemushaRecursiveSpendBranchV2::Recipient => split.recipient_output.clone(),
-        KagemushaRecursiveSpendBranchV2::Change => split
-            .change_output
-            .clone()
-            .ok_or(BridgeError::KagemushaProve)?,
-    };
-    let parent_max_proof_step_count = split
-        .inputs
-        .iter()
-        .map(|input| input.proof_step_count)
-        .max()
-        .ok_or(BridgeError::KagemushaProve)?;
-    let parent_max_peer_hop_count = split
-        .inputs
-        .iter()
-        .map(|input| input.peer_hop_count)
-        .max()
-        .ok_or(BridgeError::KagemushaProve)?;
-    let transition = KagemushaRecursiveSpendPeerSplitTransitionV4 {
-        binding_digest: split
-            .binding_digest()
-            .map_err(|_| BridgeError::KagemushaProve)?,
+    iroha_core::zk::kagemusha_v2::kagemusha_recursive_spend_append_statement_v4(
+        split,
         branch,
-        recipient_request_digest: split.recipient_request_digest,
-        operation_id: split.operation_id,
-        parent_max_proof_step_count,
-        parent_max_peer_hop_count,
-    };
-    let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        chain_id: split.chain_id.clone(),
-        asset: split.asset.clone(),
-        asset_scale: split.asset_scale,
         final_root,
         next_zero_leaf_index,
-        topup_anchor_refs: split.topup_anchor_refs.clone(),
-        proof_step_count: parent_max_proof_step_count
-            .checked_add(1)
-            .ok_or(BridgeError::KagemushaProve)?,
-        peer_hop_count: parent_max_peer_hop_count
-            .checked_add(1)
-            .ok_or(BridgeError::KagemushaProve)?,
-        current_note,
-        branch_claims: split
-            .output_branch_claims(branch)
-            .map_err(|_| BridgeError::KagemushaProve)?,
-        transition: Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition)),
-        artifact_binding: split.output_artifact_binding.clone(),
-        verifier_key_id: kagemusha_recursive_spend_step_eq_verifier_id_v4(
-            split.output_artifact_binding.manifest_sha256,
-        ),
-    };
-    statement
-        .validate_public_binding()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    Ok(statement)
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
 }
 
 fn kagemusha_recursive_spend_redemption_change_statement_v4(
@@ -9276,13 +9245,13 @@ fn build_kagemusha_recursive_spend_bundle_v4(
     operation: &iroha_core::zk::kagemusha_v2::KagemushaStepOperationVectorV4,
     pair_bytes: Vec<u8>,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV4> {
-    use iroha_core::zk::kagemusha_v2::KagemushaRecursiveSpendStateVectorV2;
+    use iroha_core::zk::kagemusha_v2::KagemushaRecursiveSpendStateVectorV5;
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2, KagemushaPastaCycleArtifactKindV4,
+        KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5, KagemushaPastaCycleArtifactKindV4,
         KagemushaPastaCycleParityV1, KagemushaPastaCycleProofEnvelopeV4,
         KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendProofV4,
-        KagemushaRecursiveSpendStateBoundaryV2,
+        KagemushaRecursiveSpendStateBoundaryV5,
     };
 
     installed.validate_live_inventory()?;
@@ -9309,7 +9278,7 @@ fn build_kagemusha_recursive_spend_bundle_v4(
                 .map(|artifact| artifact.payload_sha256)
                 .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)
         };
-    let state = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(&statement)
+    let state = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&statement)
         .map_err(|_| BridgeError::KagemushaProve)?;
     let proof_backend = manifest
         .proof_backend
@@ -9333,8 +9302,8 @@ fn build_kagemusha_recursive_spend_bundle_v4(
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?,
         step_eq_verifier_key_sha256: verifier_key_sha256(step_eq)?,
         step_ep_verifier_key_sha256: verifier_key_sha256(step_ep)?,
-        state_boundary: KagemushaRecursiveSpendStateBoundaryV2 {
-            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
+        state_boundary: KagemushaRecursiveSpendStateBoundaryV5 {
+            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5,
             state_limbs: state.limbs.to_vec(),
         },
         proof: ProofBox::new(proof_backend, pair_bytes),
@@ -14739,9 +14708,13 @@ mod detached_transaction_scaffold_tests {
 
     fn contract_scaffold(authority_keypair: &KeyPair) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
-        let contract_address =
-            ContractAddress::derive(0x1234, &authority, 7, DataSpaceId::UNIVERSAL)
-                .expect("contract address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let invocation = ContractInvocation {
             contract_address,
             expected_code_hash: iroha_crypto::Hash::new(b"detached-contract-code"),
@@ -14761,7 +14734,7 @@ mod detached_transaction_scaffold_tests {
     fn transfer_scaffold(authority_keypair: &KeyPair, scoped: bool) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let destination = AccountId::new(fixture_keypair(0xB2).public_key().clone());
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wallet", "universal").expect("domain"),
             "coin".parse().expect("asset name"),
         );
@@ -15533,7 +15506,7 @@ mod kagemusha_bridge_tests {
         source_tree_sha256: [u8; 32],
         seed: u8,
     ) -> (KagemushaReviewedSourceClosureV1, [u8; 32]) {
-        let tracked_binary_diff_sha256 = Sha256::digest([seed; 32]).into();
+        let tracked_binary_diff_sha256 = Sha256::digest([]).into();
         let untracked_path_mode_blob_oid_manifest_sha256 = Sha256::digest([]).into();
         let mut combined = Sha256::new();
         combined.update(b"iroha-source-diff-v1\0");
@@ -15545,7 +15518,7 @@ mod kagemusha_bridge_tests {
             schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
             base_commit: source_commit.to_owned(),
             source_commit: source_commit.to_owned(),
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             source_tree_sha256,
             tracked_binary_diff_sha256,
             untracked_file_count: 0,
@@ -15677,7 +15650,7 @@ mod kagemusha_bridge_tests {
         let (step_ep, step_ep_frames) = profile_and_frames(generation, Parity::StepEp, 0x61);
         framed_artifacts.extend(step_ep_frames);
         let benchmark_evidence = b"SBD streaming installer benchmark evidence".to_vec();
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("offline domain"),
             "sbd".parse().expect("SBD asset name"),
         );
@@ -15694,7 +15667,7 @@ mod kagemusha_bridge_tests {
             generation: generation.to_owned(),
             source_commit: source_commit.to_owned(),
             source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id: ChainId::from("sbd-streaming-install-test"),
@@ -15703,6 +15676,10 @@ mod kagemusha_bridge_tests {
             activation_height: 1,
             withdrawal_height: 100,
             max_proof_bytes: 512,
+            generation_memory_limit_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
+            qualification_receipt_sha256: digest(b"SBD streaming installer qualification receipt"),
+            qualified_candidate_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -15718,9 +15695,23 @@ mod kagemusha_bridge_tests {
             cryptographic_review_sha256: digest(b"SBD review placeholder"),
             release_attestation_sha256: digest(b"SBD attestation placeholder"),
         };
-        let candidate = manifest
-            .immutable_candidate()
-            .expect("derive lightweight immutable candidate");
+        let mut candidate_manifest = manifest.clone();
+        candidate_manifest.qualification_receipt_sha256 = [0; 32];
+        candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.benchmark_evidence_sha256 = [0; 32];
+        candidate_manifest.cryptographic_review_sha256 = [0; 32];
+        candidate_manifest.release_attestation_sha256 = [0; 32];
+        let candidate = iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 {
+            schema: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4
+                .to_owned(),
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: candidate_manifest,
+        };
+        manifest.qualified_candidate_sha256 =
+            iroha_data_model::offline::kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("lightweight candidate identity"),
+                manifest.qualification_receipt_sha256,
+            );
         let roles = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
             KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
@@ -15749,6 +15740,8 @@ mod kagemusha_bridge_tests {
         };
         let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
             &candidate,
+            manifest.qualification_receipt_sha256,
+            manifest.qualified_candidate_sha256,
             digest(b"SBD streaming installer review report"),
             [
                 digest(b"SBD streaming constraint review"),
@@ -16001,7 +15994,7 @@ mod kagemusha_bridge_tests {
             version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V2,
             authority: AccountId::new(fixture_key_pair(0x41).public_key().clone()),
             device_id: "pk3-hardware-device".to_owned(),
-            asset_definition_id: AssetDefinitionId::new(
+            asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("pk3", "universal").expect("domain"),
                 "cash".parse().expect("asset name"),
             ),
@@ -16136,7 +16129,7 @@ mod kagemusha_bridge_tests {
         });
         let roster = keys
             .iter()
-            .zip([40_u64, 30, 20, 10])
+            .zip([1_u64; 4])
             .map(|(key, power)| ValidatorPower {
                 validator: PeerId::new(key.public_key().clone()),
                 power,
@@ -16179,12 +16172,12 @@ mod kagemusha_bridge_tests {
                 nexus_amx_context_hash: Hash::new(b"receiver-offer size fixture nexus context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: DataAvailabilityLayout {
-                    encoding: PayloadEncoding::Plain,
+                    encoding: PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1_024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4_096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0xD5; 32],
             };
@@ -16768,7 +16761,7 @@ mod kagemusha_bridge_tests {
             .push_str("-wrong");
         assert!(selector_mismatch.validate_structure().is_err());
         let mut asset_mismatch = offer.clone();
-        asset_mismatch.lineage.selector.asset = AssetDefinitionId::new(
+        asset_mismatch.lineage.selector.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("alternate domain"),
             "other".parse().expect("alternate asset name"),
         );
@@ -18625,34 +18618,8 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     fn production_release_circuit_params_v4()
     -> iroha_data_model::offline::KagemushaStepCircuitParamsV4 {
-        use iroha_data_model::offline::{
-            KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-            KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
-            KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4, KagemushaPastaPublicLayoutV4,
-            KagemushaStepCircuitParamsV4,
-        };
-
-        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
-        let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
-            .expect("compact degree-17 production public layout");
-        let params = KagemushaStepCircuitParamsV4 {
-            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-            k,
-            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
-            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
-            num_fixed: 1,
-            lookup_bits: k - 1,
-            num_instance_columns: 1,
-            public_input_limbs: layout.instance_column_limbs,
-            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
-        };
-        params
-            .validate_release_generation_profile()
-            .expect("reviewed compact degree-17 production generation profile");
-        params
+        iroha_data_model::offline::KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+            .expect("reviewed compact degree-17 production generation profile")
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -18840,7 +18807,7 @@ mod kagemusha_bridge_tests {
             generation: generation.to_owned(),
             source_commit: source_commit.to_owned(),
             source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id,
@@ -18849,6 +18816,12 @@ mod kagemusha_bridge_tests {
             activation_height,
             withdrawal_height,
             max_proof_bytes: max_recursive_pair_bytes,
+            generation_memory_limit_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
+            qualification_receipt_sha256: digest(
+                b"production gate actual recursion qualification receipt",
+            ),
+            qualified_candidate_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -18865,9 +18838,23 @@ mod kagemusha_bridge_tests {
             cryptographic_review_sha256: digest(b"initial cryptographic review digest slot"),
             release_attestation_sha256: digest(b"initial release attestation digest slot"),
         };
-        let candidate = manifest
-            .immutable_candidate()
-            .expect("derive exact immutable release candidate");
+        let mut candidate_manifest = manifest.clone();
+        candidate_manifest.qualification_receipt_sha256 = [0; 32];
+        candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.benchmark_evidence_sha256 = [0; 32];
+        candidate_manifest.cryptographic_review_sha256 = [0; 32];
+        candidate_manifest.release_attestation_sha256 = [0; 32];
+        let candidate = iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 {
+            schema: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4
+                .to_owned(),
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: candidate_manifest,
+        };
+        manifest.qualified_candidate_sha256 =
+            iroha_data_model::offline::kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("production candidate identity"),
+                manifest.qualification_receipt_sha256,
+            );
 
         let roles = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
@@ -18897,6 +18884,8 @@ mod kagemusha_bridge_tests {
         };
         let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
             &candidate,
+            manifest.qualification_receipt_sha256,
+            manifest.qualified_candidate_sha256,
             digest(b"complete production gate cryptographic review report"),
             [
                 digest(b"production gate constraint coverage evidence"),
@@ -18960,6 +18949,8 @@ mod kagemusha_bridge_tests {
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: generation.to_owned(),
             candidate_sha256: candidate.sha256().expect("candidate digest"),
+            qualification_receipt_sha256: manifest.qualification_receipt_sha256,
+            qualified_candidate_sha256: manifest.qualified_candidate_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),
@@ -19070,12 +19061,12 @@ mod kagemusha_bridge_tests {
             nexus_amx_context_hash: Hash::new(b"production SBD acceptance nexus"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1_024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4_096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x86; 32],
         };
@@ -22626,7 +22617,7 @@ mod kagemusha_bridge_tests {
     }
 
     fn sample_asset(account: AccountId) -> AssetId {
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("domain id"),
             "xor".parse().expect("asset definition name"),
         );
@@ -22640,15 +22631,15 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaPastaCycleParityV1,
             KagemushaPastaCycleProofEnvelopeV4, KagemushaRecursiveSpendArtifactBindingV4,
             KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV4,
             KagemushaRecursiveSpendOperationVectorV4, KagemushaRecursiveSpendProofV4,
-            KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV2,
+            KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV5,
             KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
             kagemusha_recursive_spend_lineage_root_v2,
             kagemusha_recursive_spend_verifier_key_id_v4,
@@ -22708,8 +22699,8 @@ mod kagemusha_bridge_tests {
         let operation = KagemushaRecursiveSpendOperationVectorV4 {
             limbs: operation_limbs,
         };
-        let mut state_limbs = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let mut state_limbs = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
         let proof_envelope = KagemushaPastaCycleProofEnvelopeV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
@@ -22724,7 +22715,7 @@ mod kagemusha_bridge_tests {
             step_ep_circuit_params_sha256: [0x98; 32],
             step_eq_verifier_key_sha256: [0x99; 32],
             step_ep_verifier_key_sha256: [0x9a; 32],
-            state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)
                 .expect("state boundary"),
             proof: ProofBox::new(
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.into(),
@@ -27890,7 +27881,7 @@ mod accel_tests {
     }
 
     fn asset_definition_literal(domain: &str, name: &str) -> String {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("domain"),
             Name::from_str(name).expect("name"),
         )
@@ -28134,7 +28125,7 @@ mod accel_tests {
         let account_id = AccountId::parse_encoded(account_literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse account");
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("bank", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
         );
@@ -29442,7 +29433,7 @@ mod accel_tests {
     }
 
     #[test]
-    fn unshield_encoder_path_preserves_private_change_outputs() {
+    fn unshield_encoder_path_has_output_free_shape() {
         let _guard = chain_guard();
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let (authority, private) = sample_account("bank", 1);
@@ -29453,7 +29444,6 @@ mod accel_tests {
             parse_asset_definition(asset_definition_literal("bank", "usd")).expect("asset");
         let destination = authority.clone();
         let input = [0x11_u8; 32];
-        let output = [0x22_u8; 32];
         let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
         let proof = parse_proof_attachment_from_json_slice(proof_json.as_bytes()).expect("proof");
 
@@ -29465,12 +29455,11 @@ mod accel_tests {
             FeePaymentIntent::authority(Vec::new(), None),
             private_key,
             || {
-                let instruction = zk::Unshield::new_with_outputs(
+                let instruction = zk::Unshield::new(
                     asset_definition,
                     destination,
                     7_u128,
                     vec![input],
-                    vec![output],
                     proof,
                     Some([0x33_u8; 32]),
                 );
@@ -29488,7 +29477,6 @@ mod accel_tests {
                     .downcast_ref::<zk::Unshield>()
                     .expect("unshield instruction");
                 assert_eq!(unshield.inputs, vec![input]);
-                assert_eq!(unshield.outputs, vec![output]);
                 assert_eq!(unshield.root_hint, Some([0x33_u8; 32]));
             }
             other => panic!("unexpected executable: {other:?}"),
@@ -33466,7 +33454,6 @@ fn java_native_encode_unshield_signed_transaction(
     destination: jni::objects::JByteArray<'_>,
     public_amount: jni::objects::JByteArray<'_>,
     inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
@@ -33498,10 +33485,7 @@ fn java_native_encode_unshield_signed_transaction(
                 .map_err(|_| "invalid publicAmount".to_owned())?;
         let inputs_bytes = read_java_byte_array(env, &inputs, "inputs")
             .ok_or_else(|| "invalid inputs".to_owned())?;
-        let outputs_bytes = read_java_byte_array(env, &outputs, "outputs")
-            .ok_or_else(|| "invalid outputs".to_owned())?;
         let inputs = java_fixed_32_chunks(&inputs_bytes, true, "inputs")?;
-        let outputs = java_fixed_32_chunks(&outputs_bytes, false, "outputs")?;
         let proof_bytes = read_java_byte_array_bounded(
             env,
             &proof_json,
@@ -33529,12 +33513,11 @@ fn java_native_encode_unshield_signed_transaction(
                 Metadata::default(),
                 private_key,
                 || {
-                    let instruction = zk::Unshield::new_with_outputs(
+                    let instruction = zk::Unshield::new(
                         asset_definition,
                         destination,
                         public_amount,
                         inputs,
-                        outputs,
                         proof,
                         root_hint,
                     );
@@ -34487,7 +34470,7 @@ fn java_native_kagemusha_candidate_lab_accepted_identity_v4(
         .map_err(|_| "candidate-lab identity failed revalidation".to_owned())?;
         if expected != installed.accepted_identity
             || expected.production_capability_observed
-            || !expected.source_repo_dirty
+            || expected.source_repo_dirty
             || expected.artifacts.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
         {
             return Err("candidate-lab identity changed after installation".to_owned());
@@ -39161,37 +39144,10 @@ fn java_native_kagemusha_project_operation_status_v4(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_privacy_public_archive(
-    payload: &PrivacyCompiledProfileCatalogV1,
-    context: &str,
-) -> Result<Vec<u8>, String> {
-    let mut archive = norito::encode_canonical(payload)
-        .map_err(|err| format!("failed to encode {context}: {err}"))?;
-    if archive.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
-        archive.fill(0);
-        return Err(format!("{context} archive exceeds maximum length"));
-    }
-    let status = validate_local_privacy_compiled_profile_catalog_archive_v1(&archive);
-    if !status.is_valid() {
-        archive.fill(0);
-        return Err(format!(
-            "{context} archive validation failed with status {}",
-            status.code()
-        ));
-    }
-    Ok(archive)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
 fn java_privacy_compiled_profile_catalog_archive() -> Result<Vec<u8>, String> {
-    let catalog = privacy_compiled_profile_catalog()
-        .map_err(|_| "failed to derive local compiled-profile catalog".to_owned())?;
-    java_privacy_public_archive(&catalog, "privacy compiled-profile catalog")
+    privacy_compiled_profile_catalog_archive_v1()
+        .map(<[u8]>::to_vec)
+        .map_err(|_| "failed to derive local compiled-profile catalog archive".to_owned())
 }
 
 #[cfg(any(
@@ -39521,7 +39477,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     destination: jni::objects::JByteArray<'_>,
     public_amount: jni::objects::JByteArray<'_>,
     inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
@@ -39540,7 +39495,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         destination,
         public_amount,
         inputs,
-        outputs,
         proof_json,
         root_hint,
         private_key,
@@ -39775,7 +39729,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     destination: jni::objects::JByteArray<'_>,
     public_amount: jni::objects::JByteArray<'_>,
     inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
@@ -39794,7 +39747,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         destination,
         public_amount,
         inputs,
-        outputs,
         proof_json,
         root_hint,
         private_key,
@@ -46707,8 +46659,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_signer_jni_contract_revision_is_the_v1_hard_cut() {
-        assert_eq!(native_signer_jni_contract_revision(), 1);
+    fn native_signer_jni_contract_revision_is_the_v2_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 2);
+    }
+
+    #[test]
+    fn native_signer_unshield_jni_descriptor_is_exact_and_output_free() {
+        fn parameter_declarations<'a>(source: &'a str, marker: &str) -> Vec<&'a str> {
+            source
+                .split_once(marker)
+                .unwrap_or_else(|| panic!("missing JNI function marker {marker}"))
+                .1
+                .split_once("\n) -> jni::sys::jobjectArray")
+                .unwrap_or_else(|| panic!("unterminated JNI function signature {marker}"))
+                .0
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(|line| line.strip_suffix(',').unwrap_or(line))
+                .collect()
+        }
+
+        let source = include_str!("lib.rs");
+        let descriptor = [
+            "algorithm_code: jni::sys::jint",
+            "chain_id: jni::objects::JByteArray<'_>",
+            "chain_discriminant: jni::sys::jint",
+            "authority: jni::objects::JByteArray<'_>",
+            "creation_time_ms: jni::sys::jlong",
+            "ttl_ms: jni::sys::jlong",
+            "ttl_present: jni::sys::jboolean",
+            "asset: jni::objects::JByteArray<'_>",
+            "destination: jni::objects::JByteArray<'_>",
+            "public_amount: jni::objects::JByteArray<'_>",
+            "inputs: jni::objects::JByteArray<'_>",
+            "proof_json: jni::objects::JByteArray<'_>",
+            "root_hint: jni::objects::JByteArray<'_>",
+            "private_key: jni::objects::JByteArray<'_>",
+            "fee_payment_json: jni::objects::JByteArray<'_>",
+        ];
+        assert_eq!(descriptor.len(), 15);
+
+        let helper = parameter_declarations(
+            source,
+            "fn java_native_encode_unshield_signed_transaction(\n",
+        );
+        assert_eq!(
+            helper,
+            std::iter::once("env: &mut jni::JNIEnv<'_>")
+                .chain(descriptor.iter().copied())
+                .collect::<Vec<_>>(),
+        );
+
+        for marker in [
+            "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(\n",
+            "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(\n",
+        ] {
+            let export = parameter_declarations(source, marker);
+            assert_eq!(
+                export,
+                [
+                    "mut env: jni::JNIEnv<'_>",
+                    "_class: jni::objects::JClass<'_>",
+                ]
+                .into_iter()
+                .chain(descriptor.iter().copied())
+                .collect::<Vec<_>>(),
+            );
+        }
     }
 
     #[test]
@@ -47191,6 +47209,165 @@ mod tests {
                 )
             },
             PrivacyCompiledProfileCatalogArchiveValidationStatusV1::InvalidCatalog.code()
+        );
+    }
+
+    #[test]
+    fn privacy_compiled_profile_catalog_ffi_initializes_from_small_stack_in_fresh_process() {
+        const CHILD_ENV: &str = "IROHA_TEST_PRIVACY_CATALOG_SMALL_STACK_CHILD_V1";
+        const CALLER_STACK_BYTES: usize = 512 * 1024;
+        const CONCURRENT_CALLERS: usize = 8;
+        const TEST_NAME: &str = "tests::privacy_compiled_profile_catalog_ffi_initializes_from_small_stack_in_fresh_process";
+
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("resolve the current Rust test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD_ENV, "1")
+            .output()
+            .expect("launch a fresh catalog-export test process");
+            assert!(
+                output.status.success(),
+                "fresh small-stack catalog export failed with {status}; stdout:\n{stdout}\nstderr:\n{stderr}",
+                status = output.status,
+                stdout = String::from_utf8_lossy(&output.stdout),
+                stderr = String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
+        assert!(
+            PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get().is_none(),
+            "the child process must exercise first initialization, not a warmed archive cache"
+        );
+        std::thread::Builder::new()
+            .name("privacy-catalog-ffi-null-small-stack-caller".to_owned())
+            .stack_size(CALLER_STACK_BYTES)
+            .spawn(|| {
+                let mut cleared_ptr = 1_usize as *mut c_uchar;
+                let mut cleared_len = c_ulong::MAX;
+                assert_eq!(
+                    unsafe {
+                        iroha_privacy_compiled_profile_catalog_v1(ptr::null_mut(), &mut cleared_len)
+                    },
+                    ERR_NULL_PTR
+                );
+                assert_eq!(cleared_len, 0);
+                assert_eq!(
+                    unsafe {
+                        iroha_privacy_compiled_profile_catalog_v1(&mut cleared_ptr, ptr::null_mut())
+                    },
+                    ERR_NULL_PTR
+                );
+                assert!(cleared_ptr.is_null());
+                assert!(
+                    PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get().is_none(),
+                    "null outputs must reject before initializing the catalog"
+                );
+            })
+            .expect("spawn the 512 KiB null-output caller thread")
+            .join()
+            .expect("null-output rejection must not exhaust the 512 KiB caller stack");
+
+        let start = Arc::new(std::sync::Barrier::new(CONCURRENT_CALLERS));
+        let callers = (0..CONCURRENT_CALLERS)
+            .map(|index| {
+                let start = Arc::clone(&start);
+                std::thread::Builder::new()
+                    .name(format!("privacy-catalog-ffi-small-stack-caller-{index}"))
+                    .stack_size(CALLER_STACK_BYTES)
+                    .spawn(move || {
+                        start.wait();
+                        let mut out_ptr = ptr::null_mut();
+                        let mut out_len = 0;
+                        assert_eq!(
+                            unsafe {
+                                iroha_privacy_compiled_profile_catalog_v1(
+                                    &mut out_ptr,
+                                    &mut out_len,
+                                )
+                            },
+                            0
+                        );
+                        assert!(!out_ptr.is_null());
+                        assert!(out_len > 0);
+                        let out_len = usize::try_from(out_len).expect("catalog length fits usize");
+                        assert!(out_len <= PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1);
+                        assert_eq!(
+                            unsafe {
+                                iroha_privacy_validate_compiled_profile_catalog_v1(
+                                    out_ptr,
+                                    c_ulong::try_from(out_len)
+                                        .expect("catalog length fits c_ulong"),
+                                )
+                            },
+                            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid.code()
+                        );
+                        let archive = unsafe { slice::from_raw_parts(out_ptr, out_len).to_vec() };
+                        (out_ptr as usize, archive)
+                    })
+                    .expect("spawn a 512 KiB concurrent catalog caller")
+            })
+            .collect::<Vec<_>>();
+        let outputs = callers
+            .into_iter()
+            .map(|caller| {
+                caller
+                    .join()
+                    .expect("catalog export must not exhaust a 512 KiB caller stack")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1.load(Ordering::Relaxed),
+            1,
+            "concurrent cold callers must serialize one owned-stack initialization"
+        );
+        let cached = PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1
+            .get()
+            .expect("successful first export initializes the bounded archive cache")
+            .as_ref()
+            .expect("the catalog archive must initialize successfully");
+        assert!(outputs.iter().all(|(_, archive)| archive == cached));
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|(address, _)| *address)
+                .collect::<HashSet<_>>()
+                .len(),
+            CONCURRENT_CALLERS,
+            "each simultaneous FFI caller must own an independent output allocation"
+        );
+        for (address, _) in outputs {
+            iroha_privacy_free_buffer(address as *mut c_uchar);
+        }
+    }
+
+    #[test]
+    fn privacy_compiled_profile_catalog_c_and_java_archives_are_byte_identical() {
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0;
+        assert_eq!(
+            unsafe { iroha_privacy_compiled_profile_catalog_v1(&mut out_ptr, &mut out_len) },
+            0
+        );
+        assert!(!out_ptr.is_null());
+        let c_archive = unsafe {
+            slice::from_raw_parts(
+                out_ptr,
+                usize::try_from(out_len).expect("C catalog length fits usize"),
+            )
+            .to_vec()
+        };
+        iroha_privacy_free_buffer(out_ptr);
+
+        let java_archive = java_privacy_compiled_profile_catalog_archive()
+            .expect("Java catalog helper must clone the shared archive");
+        assert_eq!(java_archive, c_archive);
+        assert_eq!(
+            validate_local_privacy_compiled_profile_catalog_archive_v1(&java_archive),
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
         );
     }
 

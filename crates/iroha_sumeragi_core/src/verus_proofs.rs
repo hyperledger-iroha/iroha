@@ -126,17 +126,12 @@ pub proof fn production_reverse_push_front_refines_fifo(
 
 /// Stable first-owner filter used at the production/TLA+ projection boundary.
 ///
-/// Integers stand for exact projected causal-candidate identities. `owned`
-/// must be the union of every production scheduler owner (admitted, deferred,
-/// causal, outstanding I/O, ready, and local worker state). Consequently this
-/// function is deliberately conditional on faithful identity and ownership
-/// extraction; `drive_effects` itself does not perform scheduler-wide
-/// coalescing.
-///
-/// TODO: replace this conditional integer/set projection with the
-/// machine-checked production effect-to-TLA candidate identity/ownership map
-/// and its Completion-capacity product-rank proof before promoting the
-/// temporal liveness obligation.
+/// Integers stand for exact projected causal-candidate identities. The
+/// source-linked `ProductionEffectToCandidateTraceProjection` below checks
+/// that `owned` is extracted from every retained production scheduler owner
+/// and that each concrete adapter effect has the exact abstract candidate
+/// kind, lifecycle origin, and first-owner/coalesced-retry outcome before the
+/// batch is retained.
 pub open spec fn production_fresh_causal_successors(
     owned: Set<int>,
     successors: Seq<int>,
@@ -366,9 +361,10 @@ pub open spec fn production_async_causal_fifo_after_batch(
     old_queue.add(production_fresh_causal_successors(owned, emitted))
 }
 
-/// Under a faithful scheduler-owner projection, a batch preserves the old
+/// With the checked effect-to-candidate projection, a batch preserves the old
 /// causal prefix and appends a disjoint, unique, stable first-owner suffix.
-/// This theorem does not identify concrete `Effect` values with TLA+ values.
+/// The concrete `Effect` mapping is discharged by
+/// `production_effect_to_candidate_trace_refines_async_ownership` below.
 pub proof fn production_async_causal_fifo_after_batch_preserves_fresh_tail(
     old_queue: Seq<int>,
     owned: Set<int>,
@@ -414,6 +410,46 @@ pub proof fn production_async_causal_fifo_after_batch_preserves_fresh_tail(
             .skip(old_queue.len() as int)
             == fresh
     );
+}
+
+/// Product rank for Completion capacity after exact first-owner coalescing.
+///
+/// The successor residual is bounded by three, so radix four makes one strict
+/// root-position descent dominate resetting that residual to its maximum.
+pub open spec fn production_completion_capacity_product_rank(
+    root_remaining: nat,
+    successor_remaining: nat,
+) -> nat {
+    root_remaining * 4 + successor_remaining
+}
+
+/// Completion-capacity service strictly descends either by consuming one
+/// successor under the same root, or by consuming a root while permitting the
+/// bounded successor component to reset. Equal-owner retries are absent from
+/// this rank: the checked projection retains them as a finite producer episode
+/// without minting another candidate owner.
+pub proof fn production_completion_capacity_product_rank_descends(
+    root_before: nat,
+    successor_before: nat,
+    root_after: nat,
+    successor_after: nat,
+)
+    requires
+        successor_before <= 3,
+        successor_after <= 3,
+        (root_after == root_before && successor_after < successor_before)
+            || root_after < root_before,
+    ensures
+        production_completion_capacity_product_rank(root_after, successor_after)
+            < production_completion_capacity_product_rank(root_before, successor_before),
+{
+    if root_after == root_before {
+        assert(successor_after < successor_before);
+    } else {
+        assert(root_after + 1 <= root_before) by(nonlinear_arith);
+        assert(root_after * 4 + successor_after < root_before * 4 + successor_before)
+            by(nonlinear_arith);
+    }
 }
 
 /// Deliberately inverted owner predicate used only by the concrete mutation
@@ -3787,6 +3823,41 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub ordinal_minted: bool,
 }
 
+/// Verus-side lossless observation of one concrete adapter effect and the
+/// exact causal-candidate owner retained for it by production.
+#[derive(Copy, Clone)]
+pub struct ProductionEffectToCandidateTraceProjection {
+    pub incoming_effect_kind: u8,
+    pub stored_effect_kind: u8,
+    pub incoming_candidate_kind: u8,
+    pub stored_candidate_kind: u8,
+    pub causality: u8,
+    pub fresh_root_kind: u8,
+    pub incoming_effect_position: u8,
+    pub stored_effect_position: u8,
+    pub incoming_effect_count: u8,
+    pub stored_effect_count: u8,
+    pub incoming_candidate_position: u8,
+    pub stored_candidate_position: u8,
+    pub incoming_candidate_count: u8,
+    pub stored_candidate_count: u8,
+    pub incoming_lifecycle_ordinal: u128,
+    pub stored_lifecycle_ordinal: u128,
+    pub incoming_effect_identity: CanonicalIdentityProjection,
+    pub stored_effect_identity: CanonicalIdentityProjection,
+    pub incoming_owner_identity: CanonicalIdentityProjection,
+    pub stored_owner_identity: CanonicalIdentityProjection,
+    pub parent_owner_identity: CanonicalIdentityProjection,
+    pub incoming_candidate_semantic_identity: CanonicalIdentityProjection,
+    pub stored_candidate_semantic_identity: CanonicalIdentityProjection,
+    pub incoming_candidate_identity: CanonicalIdentityProjection,
+    pub stored_candidate_identity: CanonicalIdentityProjection,
+    pub candidate_owner_count_before: u8,
+    pub candidate_owner_count_after: u8,
+    pub candidate_owner_admitted: bool,
+    pub producer_episode_retained: bool,
+}
+
 /// Verus-side exact replacement of one unpublished reservation by its
 /// reducer-visible command.
 #[derive(Copy, Clone)]
@@ -4310,6 +4381,18 @@ pub closed spec fn check_production_ingress_transition(
     }
 }
 
+/// Total effect-to-candidate ownership gate mirrored by production before it
+/// retains an adapter-effect batch or publishes an asynchronous owner.
+pub closed spec fn check_production_effect_to_candidate_transition(
+    projection: ProductionEffectToCandidateTraceProjection,
+) -> Option<ProductionEffectToCandidateTraceProjection> {
+    if production_effect_to_candidate_refines_async_ownership_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
 /// Total exact reservation-materialization gate mirrored by production.
 pub closed spec fn check_production_ingress_reservation_materialization_transition(
     projection: ProductionIngressReservationMaterializationTraceProjection,
@@ -4497,6 +4580,13 @@ pub closed spec fn production_ingress_identity_and_class_trace_refines_protected
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> bool {
     production_ingress_identity_and_class_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the concrete effect-to-candidate ownership kernel.
+pub closed spec fn production_effect_to_candidate_refines_async_ownership_kernel(
+    projection: ProductionEffectToCandidateTraceProjection,
+) -> bool {
+    production_effect_to_candidate_trace_body!(projection)
 }
 
 /// Exact Verus mirror of the reservation-materialization ownership kernel.
@@ -4867,6 +4957,49 @@ pub proof fn production_ingress_identity_and_class_trace_refines_protected_owner
 {
     reveal(check_production_ingress_transition);
     reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
+}
+
+/// One checked concrete adapter effect preserves exact identity and causal
+/// origin, maps to its closed candidate kind, and either installs the unique
+/// owner or retains a finite coalesced producer episode.
+pub proof fn production_effect_to_candidate_trace_refines_async_ownership(
+    projection: ProductionEffectToCandidateTraceProjection,
+)
+    ensures
+        check_production_effect_to_candidate_transition(projection) == Some(projection) ==> (
+            production_effect_to_candidate_refines_async_ownership_kernel(projection)
+            && projection.incoming_effect_kind == projection.stored_effect_kind
+            && projection.incoming_effect_count >= 1u8
+            && projection.incoming_effect_count <= 8u8
+            && projection.incoming_effect_position >= 1u8
+            && projection.incoming_effect_position <= projection.incoming_effect_count
+            && projection.incoming_candidate_count <= 3u8
+            && projection.incoming_lifecycle_ordinal > 0u128
+            && projection.incoming_lifecycle_ordinal
+                == projection.stored_lifecycle_ordinal
+            && projection.producer_episode_retained
+            && (
+                projection.incoming_candidate_kind == 0u8 ==> (
+                    projection.candidate_owner_count_before == 0u8
+                    && projection.candidate_owner_count_after == 0u8
+                    && !projection.candidate_owner_admitted
+                )
+            )
+            && (
+                projection.incoming_candidate_kind != 0u8 ==> (
+                    projection.incoming_candidate_position >= 1u8
+                    && projection.incoming_candidate_position
+                        <= projection.incoming_candidate_count
+                    && projection.candidate_owner_count_before <= 1u8
+                    && projection.candidate_owner_count_after == 1u8
+                    && projection.candidate_owner_admitted
+                        == (projection.candidate_owner_count_before == 0u8)
+                )
+            )
+        ),
+{
+    reveal(check_production_effect_to_candidate_transition);
+    reveal(production_effect_to_candidate_refines_async_ownership_kernel);
 }
 
 /// One exact reservation materialization preserves source and effective

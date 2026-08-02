@@ -362,6 +362,11 @@ def _open_anchored_regular(root: Path, relative_path: str) -> tuple[int, os.stat
         os.O_RDONLY
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
+        # A path can be exchanged for a FIFO or device after the no-follow
+        # stat but before open(2).  Nonblocking open lets the descriptor-side
+        # regular-file check reject that race instead of hanging the release
+        # authority on an attacker-controlled FIFO.
+        | getattr(os, "O_NONBLOCK", 0)
     )
     current_fd = -1
     try:
@@ -386,6 +391,8 @@ def _open_anchored_regular(root: Path, relative_path: str) -> tuple[int, os.stat
             os.close(current_fd)
             current_fd = next_fd
         before_path = os.stat(parts[-1], dir_fd=current_fd, follow_symlinks=False)
+        if not stat.S_ISREG(before_path.st_mode):
+            _fail(f"release artifact {relative_path!r} must be a regular file")
         file_fd = os.open(parts[-1], file_flags, dir_fd=current_fd)
     except ReleaseArtifactError:
         if current_fd >= 0:

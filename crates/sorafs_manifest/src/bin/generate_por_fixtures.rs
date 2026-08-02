@@ -921,6 +921,7 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         prev_cid: Some([0xA4; 32].to_vec()),
         timestamp: 1_700_000_700,
         publisher_peer_id: b"12D3KooWGovernancePublisher".to_vec(),
+        submission_provenance: None,
         payload: GovernanceLogPayloadV1::PorProof(proof.clone()),
         publisher_signature: GovernanceLogSignatureV1 {
             algorithm: GovernanceSignatureAlgorithm::Dilithium3,
@@ -932,6 +933,7 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         node.prev_cid.as_deref(),
         node.timestamp,
         &node.publisher_peer_id,
+        node.submission_provenance.as_ref(),
         &node.payload,
     )?;
     sign_governance_log_node_mldsa(&mut node, b"sorafs-fixture-governance-mldsa-v1")?;
@@ -2726,14 +2728,20 @@ fn signed_governance_node(
     publisher_peer_id: &[u8],
 ) -> Result<GovernanceLogNodeV1, Box<dyn Error>> {
     let publisher_peer_id = publisher_peer_id.to_vec();
-    let node_cid =
-        governance_log_node_cid_v1(prev_cid.as_deref(), timestamp, &publisher_peer_id, &payload)?;
+    let node_cid = governance_log_node_cid_v1(
+        prev_cid.as_deref(),
+        timestamp,
+        &publisher_peer_id,
+        None,
+        &payload,
+    )?;
     let mut node = GovernanceLogNodeV1 {
         version: GOVERNANCE_LOG_VERSION_V1,
         node_cid,
         prev_cid,
         timestamp,
         publisher_peer_id,
+        submission_provenance: None,
         payload,
         publisher_signature: empty_governance_ed25519_signature(),
     };
@@ -4614,6 +4622,21 @@ fn potr_status(status: PotrStatus) -> &'static str {
     }
 }
 
+fn governance_submission_provenance_json(node: &GovernanceLogNodeV1) -> Value {
+    node.submission_provenance
+        .as_ref()
+        .map(|provenance| {
+            let mut map = Map::new();
+            map.insert(
+                "publisher_account_digest_hex".into(),
+                Value::from(encode(provenance.publisher_account_digest)),
+            );
+            map.insert("origin".into(), Value::from(provenance.origin.label()));
+            Value::Object(map)
+        })
+        .unwrap_or(Value::Null)
+}
+
 fn governance_node_json(node: &GovernanceLogNodeV1, proof_digest: [u8; 32]) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(node.version));
@@ -4629,6 +4652,10 @@ fn governance_node_json(node: &GovernanceLogNodeV1, proof_digest: [u8; 32]) -> V
     map.insert(
         "publisher_peer_id".into(),
         Value::from(String::from_utf8_lossy(&node.publisher_peer_id).into_owned()),
+    );
+    map.insert(
+        "submission_provenance".into(),
+        governance_submission_provenance_json(node),
     );
     map.insert("payload_kind".into(), Value::from("por_proof"));
     let mut sig = Map::new();
@@ -4671,6 +4698,10 @@ fn moderation_governance_node_json(node: &GovernanceLogNodeV1) -> Result<Value, 
     map.insert(
         "publisher_peer_id".into(),
         Value::from(String::from_utf8_lossy(&node.publisher_peer_id).into_owned()),
+    );
+    map.insert(
+        "submission_provenance".into(),
+        governance_submission_provenance_json(node),
     );
     map.insert(
         "payload_kind".into(),

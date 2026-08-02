@@ -298,10 +298,11 @@ mod tests {
     fn key_roundtrip_and_ordering() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let alice = checked_account_id();
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::new(asset_def.clone(), alice.clone());
         let nft_id: NftId = "nft0$wonderland.universal".parse().unwrap();
         let rwa_id: RwaId = format!(

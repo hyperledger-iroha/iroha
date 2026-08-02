@@ -132,8 +132,8 @@ class ValidationOptions:
 EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
     EvidenceKind(
         "source_entry",
-        "sorafs.transparency.source_entry.canary.v1",
-        ("payload_bytes_included", "private_payloads_included", "response_bodies_included"),
+        "sorafs.transparency.source_entry.producer_evidence.v1",
+        ("payload_bytes_included", "private_payloads_included"),
     ),
     EvidenceKind(
         "publication",
@@ -177,13 +177,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "source_entry": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "source_batch_digest_hex",
-        "probe_count",
-        "passed_probe_count",
-        "source_entry_probe_count",
+        "producer_count",
+        "generic_public_ingress_absent",
         "payload_bytes_included",
         "private_payloads_included",
-        "response_bodies_included",
-        "probes",
+        "producers",
     ),
     "publication": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -240,6 +238,18 @@ DEFAULT_REQUIRED_SOURCE_KINDS = (
     "legal-hold-notice",
     "redaction-notice",
     "evidence-access-summary",
+)
+TRUSTED_SOURCE_PRODUCER_ID_PATTERN = re.compile(
+    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*\Z"
+)
+TRUSTED_SOURCE_PRODUCER_ROUTE_PATTERN = re.compile(
+    r"^internal:[a-z0-9]+(?:[._/-][a-z0-9]+)*\Z"
+)
+TRUSTED_SOURCE_PRODUCER_ID_ERROR = (
+    "producers[].producer_id must be a canonical production service id"
+)
+TRUSTED_SOURCE_PRODUCER_ROUTE_ERROR = (
+    "producers[].producer_route must identify a trusted internal producer route"
 )
 REQUIRED_PUBLICATION_ROUTES = ("cycles_list", "cycle_publication")
 REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES = ("transparency-cycle-detail-readback",)
@@ -483,11 +493,11 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
 
     if kind.name == "source_entry":
         require_hex(payload, "source_batch_digest_hex", HEX64_LEN, errors)
-        require_count_match(payload, "probe_count", "passed_probe_count", errors)
-        require_positive_int(payload, "source_entry_probe_count", errors)
+        producer_count = require_positive_int(payload, "producer_count", errors)
+        require_bool_true(payload, "generic_public_ingress_absent", errors)
         require_string_coverage(
             payload,
-            "probes",
+            "producers",
             "source_kind",
             DEFAULT_REQUIRED_SOURCE_KINDS,
             errors,
@@ -495,33 +505,53 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
         )
         require_only_required_values(
             payload,
-            "probes",
+            "producers",
             "source_kind",
             DEFAULT_REQUIRED_SOURCE_KINDS,
             errors,
         )
         require_string_inventory_count_match(
             payload,
-            "probes",
-            "source_entry_probe_count",
+            "producers",
+            "producer_count",
             errors,
             field="source_kind",
             allow_scalar_items=False,
         )
-        probe_records = validate_probe_array(
-            payload,
-            "probes",
-            errors,
-            success_field="response_success",
-            status_field="response_status",
-        )
-        require_count_value_equal(
-            payload,
-            "source_entry_probe_count",
-            len(probe_records),
-            "source_entry probes count",
+        producer_records = require_object_array(payload, "producers", errors)
+        require_count_length_match(
+            producer_count,
+            producer_records,
+            "producer_count",
+            "producers",
             errors,
         )
+        for index, record in producer_records:
+            producer_id = require_string(record, "producer_id", errors)
+            if (
+                producer_id
+                and TRUSTED_SOURCE_PRODUCER_ID_PATTERN.fullmatch(producer_id) is None
+            ):
+                errors.append(TRUSTED_SOURCE_PRODUCER_ID_ERROR)
+            producer_route = require_string(record, "producer_route", errors)
+            if (
+                producer_route
+                and TRUSTED_SOURCE_PRODUCER_ROUTE_PATTERN.fullmatch(producer_route) is None
+            ):
+                errors.append(TRUSTED_SOURCE_PRODUCER_ROUTE_ERROR)
+            require_hex(
+                record,
+                "provenance_digest_hex",
+                HEX64_LEN,
+                errors,
+                path=f"producers[{index}].provenance_digest_hex",
+            )
+            require_bool_true(
+                record,
+                "durable_checkpoint_verified",
+                errors,
+                path=f"producers[{index}].durable_checkpoint_verified",
+            )
     elif kind.name == "publication":
         require_hex(payload, "source_batch_digest_hex", HEX64_LEN, errors)
         require_hex(payload, "cycle_digest_hex", HEX64_LEN, errors)

@@ -47,7 +47,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     "iroha_crypto": {
         "default": ("application",),
         "application": ("std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"),
-        "consensus": ("std", "rand", "bls", "bls-multi-pairing"),
+        "consensus": ("std", "rand", "bls"),
         "node-crypto": ("application", "consensus"),
     },
     "iroha_data_model": {
@@ -60,7 +60,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "iroha_core": {
         "default": ("node",),
-        "runtime": ("json", "bls", "bls-multi-pairing", "fast_dsl", "proofs-halo2"),
+        "runtime": ("json", "bls", "fast_dsl", "proofs-halo2"),
         "node": ("runtime", "proofs-stark"),
         "proofs-halo2": ("zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"),
         "proofs-stark": ("zk-stark",),

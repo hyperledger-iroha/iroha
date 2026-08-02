@@ -33,9 +33,9 @@ use iroha_data_model::{
     },
 };
 use iroha_zkp_halo2::vega::{
-    VegaFieldError, VegaMdlFigure9ErrorV1, VegaMdlProofContextV1, VegaMdlProofErrorV1,
-    VegaMdlProverConfigV1, VegaRandomSourceErrorV1, VegaRandomSourceV1, VegaT256ScalarV1,
-    prove_vega_mdl_figure9_v1, verify_vega_mdl_figure9_v1,
+    VEGA_MDL_ACTION_INDEX_V1, VegaFieldError, VegaMdlFigure9ErrorV1, VegaMdlProofContextV1,
+    VegaMdlProofErrorV1, VegaMdlProverConfigV1, VegaRandomSourceErrorV1, VegaRandomSourceV1,
+    VegaT256ScalarV1, prove_vega_mdl_figure9_v1, verify_vega_mdl_figure9_v1,
 };
 use p256::{
     EncodedPoint, PublicKey as P256PublicKey,
@@ -72,7 +72,7 @@ pub const VEGA_MDL_DOCUMENT_TYPE_V1: &[u8] = b"org.iso.18013.5.1.mDL";
 /// Exact ISO/IEC 18013-5 mDL namespace.
 pub const VEGA_MDL_NAMESPACE_V1: &[u8] = b"org.iso.18013.5.1";
 /// Sole privacy-action index in a canonical first-release Vega transaction.
-pub const VEGA_PRIVACY_ACTION_INDEX_V1: u32 = 0;
+pub const VEGA_PRIVACY_ACTION_INDEX_V1: u32 = VEGA_MDL_ACTION_INDEX_V1;
 /// Deterministic commitment worker count used by the first-release action API.
 pub const VEGA_PRIVACY_ACTION_PROVER_WORKERS_V1: usize = 1;
 
@@ -161,6 +161,12 @@ impl VegaPrivacyActionWitnessMaterialV1 {
         birth_date_issuer_signed_item: Vec<u8>,
         issuer_signature: &[u8],
     ) -> Result<Self, VegaMdlError> {
+        // Take zeroizing ownership before the first fallible check so malformed
+        // private material is erased on every constructor return path.
+        let issuer_authentication_sig_structure =
+            Zeroizing::new(issuer_authentication_sig_structure);
+        let mobile_security_object_payload = Zeroizing::new(mobile_security_object_payload);
+        let birth_date_issuer_signed_item = Zeroizing::new(birth_date_issuer_signed_item);
         for (field, actual, expected) in [
             (
                 "issuer_authentication_sig_structure",
@@ -187,27 +193,25 @@ impl VegaPrivacyActionWitnessMaterialV1 {
                 });
             }
         }
-        let mut issuer_signature_bytes = [0_u8; 64];
+        let mut issuer_signature_bytes = Zeroizing::new([0_u8; 64]);
         issuer_signature_bytes.copy_from_slice(issuer_signature);
         Ok(Self {
-            issuer_authentication_sig_structure: Zeroizing::new(
-                issuer_authentication_sig_structure,
-            ),
-            mobile_security_object_payload: Zeroizing::new(mobile_security_object_payload),
-            birth_date_issuer_signed_item: Zeroizing::new(birth_date_issuer_signed_item),
-            issuer_signature: Zeroizing::new(issuer_signature_bytes),
+            issuer_authentication_sig_structure,
+            mobile_security_object_payload,
+            birth_date_issuer_signed_item,
+            issuer_signature: issuer_signature_bytes,
         })
     }
 
     fn witness_with_device_signature(
         &self,
-        device_signature: &[u8; 64],
+        device_signature: Zeroizing<[u8; 64]>,
     ) -> Result<VegaMdlWitnessV1, VegaMdlError> {
-        VegaMdlWitnessV1::new(
-            self.issuer_authentication_sig_structure.to_vec(),
-            self.mobile_security_object_payload.to_vec(),
-            self.birth_date_issuer_signed_item.to_vec(),
-            &self.issuer_signature[..],
+        VegaMdlWitnessV1::from_zeroizing_parts(
+            self.issuer_authentication_sig_structure.clone(),
+            self.mobile_security_object_payload.clone(),
+            self.birth_date_issuer_signed_item.clone(),
+            self.issuer_signature.clone(),
             device_signature,
         )
     }
@@ -764,7 +768,10 @@ impl<'a> VegaMdlConsensusBindingV1<'a> {
                 field: VegaBindingFieldV1::ChainId,
             });
         }
-        if self.action_index != statement.context.action_index {
+        if self.action_index != VEGA_PRIVACY_ACTION_INDEX_V1
+            || statement.context.action_index != VEGA_PRIVACY_ACTION_INDEX_V1
+            || self.action_index != statement.context.action_index
+        {
             return Err(VegaMdlError::BindingMismatch {
                 field: VegaBindingFieldV1::ActionIndex,
             });
@@ -1261,16 +1268,18 @@ where
     };
     final_statement.device_authentication_digest = device_authentication_digest;
 
-    let device_signature: P256Signature = device_signing_key
-        .sign_prehash(device_authentication_digest.as_bytes())
-        .map_err(|_| VegaPrivacyActionBuildErrorV1::DeviceAuthenticationSigning)?;
-    let device_signature: [u8; 64] = device_signature
-        .normalize_s()
-        .unwrap_or(device_signature)
-        .to_bytes()
-        .into();
+    let device_signature: Zeroizing<[u8; 64]> = Zeroizing::new({
+        let signature: P256Signature = device_signing_key
+            .sign_prehash(device_authentication_digest.as_bytes())
+            .map_err(|_| VegaPrivacyActionBuildErrorV1::DeviceAuthenticationSigning)?;
+        signature
+            .normalize_s()
+            .unwrap_or(signature)
+            .to_bytes()
+            .into()
+    });
     let witness = witness_material
-        .witness_with_device_signature(&device_signature)
+        .witness_with_device_signature(device_signature)
         .map_err(VegaPrivacyActionBuildErrorV1::from)?;
     let typed_statement = PrivacyStatementV1::VegaExistingCredentialZkV0(final_statement.clone());
     typed_statement

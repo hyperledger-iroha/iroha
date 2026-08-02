@@ -48,11 +48,11 @@ Run the UI directly from cargo:
 cargo run -p mochi-ui --features gui --bin mochi
 ```
 
-By default MOCHI opens on the **Network** page with a single-peer preset rooted at the current
+By default MOCHI opens on the **Network** page with a four-validator BFT preset rooted at the current
 workspace:
 
 - Workspace root: the current working directory.
-- Sandbox root: `<workspace>/.mochi/sandbox/single-peer`.
+- Sandbox root: `<workspace>/.mochi/sandbox/four-peer-bft`.
 - Torii base port: `8080`.
 - P2P base port: `1337`.
 
@@ -102,8 +102,8 @@ The helper uses `python3` for path/JSON handling and detached process launch. Se
 `scripts/mochi_local_sandbox.sh down` can stop the sandbox cleanly with SIGTERM. By default the
 helper uses `<workspace>/.mochi/build-target` as its `CARGO_TARGET_DIR`, which keeps Mochi startup
 isolated from other builds happening in the repo; set `MOCHI_CARGO_TARGET_DIR` if you want a
-different cache location. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal or
-`MOCHI_WORKSPACE_ROOT=/path/to/app` when you are starting the sandbox for another workspace. The
+different cache location. Set `MOCHI_WORKSPACE_ROOT=/path/to/app` when you are starting the
+sandbox for another workspace. The
 repo-shared Codex guidance for this flow lives at
 `skills/mochi-local-sandbox/`; install or symlink it into
 `$CODEX_HOME/skills/mochi-local-sandbox` when you want Codex to use it.
@@ -116,7 +116,7 @@ The rendered local Torii config also enables `[torii.mcp]` with the curated writ
 
 After launch, use the **Devnet quickstart** card on the Network page for the normal local-dev flow:
 
-- Pick `Single Peer` or `Four Peer BFT`.
+- Use the `Four Peer BFT` topology.
 - Adjust the workspace, chain ID, and base ports.
 - Use **Start devnet**, **Restart devnet with this setup**, **Apply without starting**, or
   **Stop devnet**.

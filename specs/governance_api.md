@@ -115,7 +115,7 @@ Endpoints
   - Request (JSON):
     {
       "contract_alias": "router::universal"?,
-      "contract_address": "tairac1..."?,
+      "contract_address": "irohac1..."?,
       "code_hash": "blake2b32:…" | "…64hex",
       "abi_hash": "blake2b32:…" | "…64hex",
       "abi_version": "1",
@@ -334,12 +334,12 @@ Convenience Endpoint
   - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
 
 CLI Helpers
-- `iroha --output-format text app gov deploy audit --contract-address tairac1...`
+- `iroha --output-format text app gov deploy audit --contract-address irohac1...`
   - Fetches the active binding for the governed contract address and cross-checks that:
     - Torii stores bytecode for the active `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
     - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
     - An enacted governance proposal exists for `(contract_address, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
-- `iroha app gov deploy meta --contract-address tairac1... [--approver <i105-account-id> --approver <i105-account-id>]`
+- `iroha app gov deploy meta --contract-address irohac1... [--approver <i105-account-id> --approver <i105-account-id>]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including `gov_contract_address` and optional `gov_manifest_approvers` for satisfying manifest quorum rules.
 - `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <i105-account-id> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Validates canonical I105 account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
@@ -354,7 +354,7 @@ CLI Helpers
 
 Governed Contract Lookup
 - GET `/v1/gov/contracts/{contract_address}` — returns the active governance binding for a canonical contract address.
-  - Response: { "found": bool, "contract_address": "tairac1...", "dataspace": "universal", "code_hash_hex": "…" ? }
+  - Response: { "found": bool, "contract_address": "irohac1...", "dataspace": "universal", "code_hash_hex": "…" ? }
 
 Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`

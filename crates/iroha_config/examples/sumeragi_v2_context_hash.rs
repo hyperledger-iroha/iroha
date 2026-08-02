@@ -103,6 +103,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "{genesis_public}"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "{streaming_public}"

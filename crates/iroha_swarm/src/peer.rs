@@ -3,7 +3,10 @@
 pub type PeerInfo = (PeerName, P2pApiPorts, ExposedKeyPair, PeerPop);
 pub type PeerName = String;
 pub type P2pApiPorts = [u16; 2];
-pub type ExposedKeyPair = (iroha_crypto::PublicKey, iroha_crypto::ExposedPrivateKey);
+pub type ExposedKeyPair = (
+    iroha_crypto::PublicKey,
+    Option<iroha_crypto::ExposedPrivateKey>,
+);
 pub type PeerPop = Vec<u8>;
 
 pub const SERVICE_NAME: &str = "irohad";
@@ -31,7 +34,10 @@ pub fn generate_key_pair(base_seed: Option<&[u8]>, extra_seed: &[u8]) -> Result<
         None => iroha_crypto::KeyPair::try_random()?,
     };
     let (public_key, private_key) = key_pair.into_parts();
-    Ok((public_key, iroha_crypto::ExposedPrivateKey(private_key)))
+    Ok((
+        public_key,
+        Some(iroha_crypto::ExposedPrivateKey(private_key)),
+    ))
 }
 
 pub fn generate_bls_key_pair(
@@ -50,7 +56,10 @@ pub fn generate_bls_key_pair(
     let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())?;
     let (public_key, private_key) = kp.into_parts();
     Ok((
-        (public_key, iroha_crypto::ExposedPrivateKey(private_key)),
+        (
+            public_key,
+            Some(iroha_crypto::ExposedPrivateKey(private_key)),
+        ),
         pop,
     ))
 }

@@ -542,18 +542,18 @@ class TransactionDraft:
     def register_asset_definition(
         self,
         definition_id: str,
-        owner: str,
         *,
-        name: Optional[str] = None,
+        owning_domain: Optional[str],
+        balance_scope_policy: str,
+        name: str,
         description: Optional[str] = None,
         alias: Optional[str] = None,
         scale: Optional[Union[int, str]] = None,
         mintable: Optional[str] = None,
-        balance_scope_policy: Optional[str] = None,
         confidential_policy: Optional[str] = None,
         metadata: MetadataLike = None,
     ) -> TransactionDraft:
-        """Append a `RegisterAssetDefinition` instruction for quantity assets."""
+        """Append an asset definition owned by this transaction's authority."""
 
         normalized_scale: Optional[int]
         if scale is None:
@@ -568,13 +568,31 @@ class TransactionDraft:
         else:
             raise TypeError("scale must be an integer or string when provided")
 
+        normalized_owning_domain = (
+            None
+            if owning_domain is None
+            else _require_exact_non_empty_string(owning_domain, "owning_domain")
+        )
+        if balance_scope_policy not in {"Global", "DataspaceRestricted"}:
+            raise ValueError(
+                "balance_scope_policy must be Global or DataspaceRestricted"
+            )
+        if (
+            balance_scope_policy == "DataspaceRestricted"
+            and normalized_owning_domain is None
+        ):
+            raise ValueError(
+                "owning_domain is required for DataspaceRestricted balances"
+            )
+        normalized_name = _require_exact_non_empty_string(name, "name")
+
         metadata_payload = _normalize_metadata(metadata)
 
         self.add_instruction(
             Instruction.register_asset_definition(
                 definition_id,
-                owner,
-                name=name,
+                owning_domain=normalized_owning_domain,
+                name=normalized_name,
                 description=description,
                 alias=alias,
                 scale=normalized_scale,
@@ -697,10 +715,13 @@ class TransactionDraft:
         *,
         inputs: Iterable[FixedBytesLike],
         proof: Mapping[str, Any],
-        outputs: Optional[Iterable[FixedBytesLike]] = None,
         root_hint: Optional[FixedBytesLike] = None,
     ) -> TransactionDraft:
-        """Append a prepared `Unshield` instruction."""
+        """Append an output-free first-release `Unshield` instruction.
+
+        Private outputs are derived from the verified statement; the retired
+        caller-supplied ``outputs`` keyword is intentionally unsupported.
+        """
 
         if not isinstance(proof, Mapping):
             raise TypeError("proof must be a mapping")
@@ -717,7 +738,6 @@ class TransactionDraft:
                 normalized_public_amount,
                 list(inputs),
                 dict(proof),
-                outputs=list(outputs or []),
                 root_hint=root_hint,
             )
         )

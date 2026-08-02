@@ -377,22 +377,10 @@ fn legacy_transfer_v1_source_scope_for_world<W: WorldReadOnly>(
         return Ok(AssetBalanceScope::Global);
     }
 
-    let dataspace_alias = world
-        .asset_definition_alias_bindings()
-        .get(definition.id())
-        .map(|binding| binding.alias.dataspace_segment().to_owned())
-        .or_else(|| {
-            definition
-                .alias()
-                .as_ref()
-                .map(|alias| alias.dataspace_segment().to_owned())
-        })
-        .or_else(|| {
-            definition
-                .id()
-                .try_domain()
-                .map(|domain| domain.dataspace().as_ref().to_owned())
-        });
+    let dataspace_alias = definition
+        .owning_domain()
+        .as_ref()
+        .map(|domain| domain.dataspace().as_ref().to_owned());
 
     let Some(dataspace_alias) = dataspace_alias else {
         return Err(ivm::VMError::PermissionDenied);
@@ -589,6 +577,13 @@ struct PreparedVerifyingKey {
     ipa_k: Option<u32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ZkRootsSnapshot {
+    tree_profile: crate::state::ConfidentialTreeProfile,
+    root_history: Vec<[u8; 32]>,
+    commitment_count: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostExecutionClass {
     Generic,
@@ -702,7 +697,7 @@ pub struct CoreHostImpl<QS> {
     zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     // Snapshots for state-read syscalls
-    zk_roots: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>,
+    zk_roots: BTreeMap<AssetDefinitionId, ZkRootsSnapshot>,
     zk_elections: BTreeMap<String, (u32, bool, Vec<u64>)>,
     vrf_epoch_seeds: BTreeMap<u64, [u8; 32]>,
     // Registry snapshot of verifying keys.
@@ -718,12 +713,8 @@ pub struct CoreHostImpl<QS> {
     axt_timing: iroha_config::parameters::actual::NexusAxt,
     // Current manifest id for namespace binding (None -> core/built-in).
     current_manifest_id: Option<String>,
-    // Cap for ZK roots read responses
-    zk_root_history_cap: usize,
-    // Optional: include explicit empty-tree root for assets with no commitments
-    zk_include_empty_root_when_empty: bool,
-    // Depth used to compute the explicit empty-tree root when the above is enabled
-    zk_empty_root_depth: u8,
+    // Non-zero retained-root bound for ZK root reads.
+    zk_tree_roots_history_len: NonZeroUsize,
     // Last seen verify envelope hashes per ZK op type (from pointer‑ABI TLVs)
     zk_last_env_hash_transfer: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_unshield: Arc<VecDeque<[u8; 32]>>,
@@ -1725,7 +1716,7 @@ mod durable_state_merge_tests {
     #[test]
     fn scoped_path_and_scan_reject_physical_length_overflow_before_state_access() {
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &ALICE_ID,
             703,
             DataSpaceId::UNIVERSAL,
@@ -2867,9 +2858,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
-            zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
-            zk_include_empty_root_when_empty: false,
-            zk_empty_root_depth: 0,
+            zk_tree_roots_history_len:
+                iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
             zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
@@ -3000,9 +2990,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
-            zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
-            zk_include_empty_root_when_empty: false,
-            zk_empty_root_depth: 0,
+            zk_tree_roots_history_len:
+                iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
             zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
@@ -3086,9 +3075,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
-            zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
-            zk_include_empty_root_when_empty: false,
-            zk_empty_root_depth: 0,
+            zk_tree_roots_history_len:
+                iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
             zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
@@ -4222,9 +4210,38 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Some(map)
     }
 
-    /// Install a read-only snapshot of ZK roots per asset for state-read syscalls.
-    pub fn set_zk_roots_snapshot(&mut self, map: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>) {
-        self.zk_roots = map;
+    /// Install validated confidential-tree snapshots for state-read syscalls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ivm::VMError::NoritoInvalid`] without replacing the current
+    /// snapshots when any tree state is inconsistent with its persisted profile.
+    pub fn set_zk_roots_snapshot(
+        &mut self,
+        map: BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
+    ) -> Result<(), ivm::VMError> {
+        self.zk_roots = Self::validated_zk_roots_snapshot(map)?;
+        Ok(())
+    }
+
+    fn validated_zk_roots_snapshot(
+        map: BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
+    ) -> Result<BTreeMap<AssetDefinitionId, ZkRootsSnapshot>, ivm::VMError> {
+        let mut roots = BTreeMap::new();
+        for (asset_id, state) in map {
+            state
+                .validate_tree_integrity()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            roots.insert(
+                asset_id,
+                ZkRootsSnapshot {
+                    tree_profile: state.tree_profile,
+                    root_history: state.root_history,
+                    commitment_count: state.commitments.len(),
+                },
+            );
+        }
+        Ok(roots)
     }
 
     /// Hydrate VRF epoch seed snapshots from world storage.
@@ -4239,7 +4256,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Hydrate ZK snapshots (roots, elections, verifying keys) from a world view.
     ///
     /// # Errors
-    /// Returns an error if an election shape or verifying key registry entry is inconsistent.
+    /// Returns an error if an election shape, confidential tree, or verifying key
+    /// registry entry is inconsistent.
     pub(crate) fn set_zk_snapshots_from_world(
         &mut self,
         world: &impl WorldReadOnly,
@@ -4252,19 +4270,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             elections.insert(id.clone(), (st.options, st.finalized, st.tally.clone()));
         }
 
-        let mut roots = BTreeMap::new();
-        for (ad, st) in world.zk_assets().iter() {
-            roots.insert(ad.clone(), st.root_history.clone());
-        }
+        let roots = Self::validated_zk_roots_snapshot(
+            world
+                .zk_assets()
+                .iter()
+                .map(|(asset_id, state)| (asset_id.clone(), state.clone()))
+                .collect(),
+        )?;
 
         let mut vks = BTreeMap::new();
         for (id, rec) in world.verifying_keys().iter() {
             vks.insert(id.clone(), rec.clone());
         }
         self.set_verifying_keys(vks)?;
-        self.set_zk_root_history_cap(zk_cfg.root_history_cap);
-        self.set_zk_empty_root_policy(zk_cfg.empty_root_on_empty, zk_cfg.merkle_depth);
-        self.set_zk_roots_snapshot(roots);
+        self.set_zk_tree_roots_history_len(zk_cfg.tree_roots_history_len);
+        self.zk_roots = roots;
         self.set_zk_elections_snapshot(elections)?;
         Ok(())
     }
@@ -4846,19 +4866,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    /// Configure the cap for recent shielded Merkle roots returned by `ZK_ROOTS_GET`.
-    pub fn set_zk_root_history_cap(&mut self, cap: usize) {
-        self.zk_root_history_cap = cap.max(1);
-    }
-
-    /// Optionally include an explicit empty‑tree root for assets with no commitments.
-    /// Disabled by default. When enabled and an asset has zero recorded roots, the
-    /// `ZK_ROOTS_GET` response will contain `latest = R_depth` and `roots = [R_depth]`
-    /// where `R_depth` is computed as repeated `Hash(r||r)` starting from the
-    /// domain‑tagged zero leaf at depth 0.
-    pub fn set_zk_empty_root_policy(&mut self, include: bool, depth: u8) {
-        self.zk_include_empty_root_when_empty = include;
-        self.zk_empty_root_depth = depth;
+    /// Configure the non-zero retained-root bound returned by `ZK_ROOTS_GET`.
+    pub fn set_zk_tree_roots_history_len(&mut self, len: NonZeroUsize) {
+        self.zk_tree_roots_history_len = len;
     }
 
     /// Drain queued ISIs collected during the last VM run.
@@ -5663,28 +5673,31 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .asset_id
             .parse()
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        let roots = self.zk_roots.get(&asset).cloned().unwrap_or_default();
-        let height = Self::len_to_u32(roots.len())?;
-        let latest = if roots.is_empty() && self.zk_include_empty_root_when_empty {
-            iroha_crypto::MerkleTree::<[u8; 32]>::shielded_empty_root(self.zk_empty_root_depth)
-        } else {
-            roots.last().copied().unwrap_or([0; 32])
+        let Some(snapshot) = self.zk_roots.get(&asset) else {
+            return Ok(ivm::zk_verify::RootsGetResponse {
+                latest: [0; 32],
+                roots: Vec::new(),
+                height: 0,
+            });
         };
+        let height = Self::len_to_u32(snapshot.commitment_count)?;
+        let all_roots = if snapshot.commitment_count == 0 {
+            vec![snapshot.tree_profile.empty_root()]
+        } else {
+            snapshot.root_history.clone()
+        };
+        let latest = all_roots.last().copied().unwrap_or([0; 32]);
         let wanted = if request.max == 0 {
-            self.zk_root_history_cap
+            self.zk_tree_roots_history_len.get()
         } else {
-            self.zk_root_history_cap.min(request.max as usize)
+            self.zk_tree_roots_history_len
+                .get()
+                .min(request.max as usize)
         };
-        let roots = if roots.is_empty() && self.zk_include_empty_root_when_empty {
-            if wanted == 0 {
-                Vec::new()
-            } else {
-                vec![latest]
-            }
-        } else if roots.len() <= wanted {
-            roots
+        let roots = if all_roots.len() <= wanted {
+            all_roots
         } else {
-            roots[roots.len() - wanted..].to_vec()
+            all_roots[all_roots.len() - wanted..].to_vec()
         };
         Ok(ivm::zk_verify::RootsGetResponse {
             latest,
@@ -7992,6 +8005,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             context.authority.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
         )
+        .map_err(|_| ivm::VMError::NoritoInvalid)?
         .with_metadata(next_trigger_metadata);
         let trigger = Trigger::new(trigger_id.clone(), action);
         let unregister =
@@ -9205,9 +9219,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn asset_definition_name_for_syscall(id: &AssetDefinitionId) -> String {
-        id.try_name()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| id.canonical_address())
+        id.canonical_address()
     }
 
     #[cfg(test)]
@@ -10350,7 +10362,7 @@ impl<QS> CoreHostImpl<QS> {
         };
 
         let filter = Self::decode_trigger_filter(filter_value)?;
-        Action::try_new(executable, repeats, authority, filter)
+        Action::new(executable, repeats, authority, filter)
             .map(|action| action.with_metadata(metadata))
             .map_err(|_| ivm::VMError::DecodeError)
     }
@@ -10850,7 +10862,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let name = Self::asset_definition_name_for_syscall(&id);
                     let isi = Register::asset_definition({
                         let __asset_definition_id = id;
-                        AssetDefinition::numeric(__asset_definition_id.clone()).with_name(name)
+                        AssetDefinition::numeric(
+                            __asset_definition_id.clone(),
+                            name,
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )
                     });
                     let instr = InstructionBox::from(RegisterBox::from(isi));
                     Ok(self.queue_instruction(instr))
@@ -11520,7 +11537,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                                 to: unshield.to.clone(),
                                 public_amount: unshield.public_amount().clone(),
                                 inputs: unshield.inputs.clone(),
-                                outputs: unshield.outputs.clone(),
                                 proof,
                                 root_hint: unshield.root_hint,
                             });
@@ -12603,7 +12619,7 @@ mod pointer_abi_tests {
     fn call_contract_rejects_at_deterministic_nesting_depth_before_frame_growth() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             42,
             DataSpaceId::UNIVERSAL,
@@ -12842,7 +12858,7 @@ seiyaku ReadOnlyBinding {
     fn reused_host_resets_view_and_contract_provenance_before_generic_execution() {
         let authority = ALICE_ID.clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             47,
             DataSpaceId::UNIVERSAL,
@@ -13015,7 +13031,7 @@ seiyaku ReadOnlyBinding {
         host.queue_instruction(attempted.clone());
 
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             49,
             DataSpaceId::UNIVERSAL,
@@ -13074,7 +13090,7 @@ seiyaku ReadOnlyBinding {
     fn view_effect_artifacts_fail_closed_before_application_or_extraction() {
         let authority = ALICE_ID.clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             48,
             DataSpaceId::UNIVERSAL,
@@ -13140,7 +13156,7 @@ seiyaku ReadOnlyBinding {
     fn prevalidated_runtime_binding_captures_exact_root_authorization() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -13351,7 +13367,7 @@ seiyaku PrivilegedBinding {
     fn contract_runtime_state_rejects_manifest_free_vm_image() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             44,
             DataSpaceId::UNIVERSAL,
@@ -15440,7 +15456,7 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &host.authority,
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -15471,7 +15487,7 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &host.authority,
             1,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -15497,7 +15513,7 @@ seiyaku PrivilegedBinding {
     fn lifecycle_hooks_reject_direct_binding_syscalls_before_metering() {
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             211,
             DataSpaceId::UNIVERSAL,
@@ -15557,7 +15573,7 @@ seiyaku PrivilegedBinding {
     fn lifecycle_hooks_cannot_smuggle_binding_mutations_through_opaque_syscall() {
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             212,
             DataSpaceId::UNIVERSAL,
@@ -15688,10 +15704,11 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let payload = norito_blob(&asset_def);
         let expected_asset_def: AssetDefinitionId =
             norito::decode_from_bytes(&payload).expect("decode canonical asset definition id");
@@ -15700,9 +15717,12 @@ seiyaku PrivilegedBinding {
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
         let expected_name = CoreHost::asset_definition_name_for_syscall(&expected_asset_def);
-        let expected = InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(expected_asset_def.clone()).with_name(expected_name),
-        ));
+        let expected = InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            expected_asset_def.clone(),
+            expected_name,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
@@ -15714,10 +15734,11 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let ptr = store_tlv(
             &mut vm,
             PointerType::AssetDefinitionId,
@@ -15740,7 +15761,7 @@ seiyaku PrivilegedBinding {
 
         let escrow_name = Name::from_str("aitai_offer").expect("fixture escrow name");
         let escrow_id = CoreHost::escrow_id_from_name(&escrow_name);
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
@@ -15909,7 +15930,7 @@ seiyaku PrivilegedBinding {
 
         let escrow_name = Name::from_str("anonymous_aitai_offer").expect("fixture escrow name");
         let escrow_id = CoreHost::escrow_id_from_name(&escrow_name);
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
@@ -16451,7 +16472,8 @@ seiyaku PrivilegedBinding {
                 Repeats::Exactly(1),
                 authority.clone(),
                 DataEventFilter::Any,
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let json = Json::new(trigger.clone());
         let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
@@ -16480,7 +16502,8 @@ seiyaku PrivilegedBinding {
             Repeats::Exactly(1),
             authority.clone(),
             EventFilterBox::Data(DataEventFilter::Any),
-        );
+        )
+        .expect("test data-trigger action satisfies its authority invariant");
         let action_value = norito::json::to_value(&action).expect("serialize specialized action");
         let mut map = BTreeMap::new();
         map.insert(
@@ -16500,6 +16523,7 @@ seiyaku PrivilegedBinding {
             action.authority.clone(),
             action.filter.clone(),
         )
+        .expect("test action reconstructed from a validated specialized action")
         .with_metadata(action.metadata.clone());
         let expected =
             InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
@@ -16524,7 +16548,8 @@ seiyaku PrivilegedBinding {
             Repeats::Exactly(1),
             authority.clone(),
             EventFilterBox::Data(DataEventFilter::Any),
-        );
+        )
+        .expect("test data-trigger action satisfies its authority invariant");
         let mut action_value =
             norito::json::to_value(&action).expect("serialize specialized action");
         let filter_value =
@@ -16554,6 +16579,7 @@ seiyaku PrivilegedBinding {
             action.authority.clone(),
             action.filter.clone(),
         )
+        .expect("test action reconstructed from a validated specialized action")
         .with_metadata(action.metadata.clone());
         let expected =
             InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
@@ -16580,7 +16606,8 @@ seiyaku PrivilegedBinding {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().under_authority(filter_authority),
             ),
-        );
+        )
+        .expect("test by-call action initially has matching filter and action authorities");
         let mut action_value =
             norito::json::to_value(&action).expect("serialize specialized action");
         match &mut action_value {
@@ -16718,10 +16745,11 @@ seiyaku PrivilegedBinding {
 
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
         let amount = Quantity::from(5u64);
@@ -16760,7 +16788,7 @@ seiyaku PrivilegedBinding {
             PointerType::AccountId,
             &norito::to_bytes(&authority).expect("encode account"),
         );
-        let asset_def = AssetDefinitionId::new(
+        let asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("asset name"),
         );
@@ -16803,10 +16831,11 @@ seiyaku PrivilegedBinding {
 
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
 
@@ -17350,7 +17379,7 @@ mod tests {
     fn contract_subject_sysvar_returns_bound_subject_and_fails_outside_contract_scope() {
         let authority = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -17471,11 +17500,6 @@ mod tests {
                 tx.world.insert_domain_entry(domain_id.clone(), domain);
                 tx.world.track_domain_owner(&domain_id, &domain_owner);
             }
-            let domain_selector =
-                AccountDomainSelector::from_domain(&domain_id).expect("fixture domain selector");
-            tx.world
-                .domain_selectors
-                .insert(domain_selector, domain_id.clone());
             let selector =
                 crate::sns::selector_for_domain(&domain_id).expect("SNS domain selector");
             let storage_key = crate::sns::record_storage_key(&selector);
@@ -17606,7 +17630,7 @@ mod tests {
                 iroha_data_model::alias_setup::AliasLeaseAcquisitionV1::new(1, None),
                 iroha_data_model::alias_setup::AliasQuoteGuardV1 {
                     expected_policy_version: 0,
-                    expected_payment_asset: AssetDefinitionId::new(
+                    expected_payment_asset: AssetDefinitionId::derive_from_components(
                         DomainId::try_new("assets", "universal").expect("fixture asset domain"),
                         "xor".parse().expect("fixture asset name"),
                     ),
@@ -17730,7 +17754,7 @@ mod tests {
         manifest = manifest.signed(&fixture_signing_keypair(authority));
         register_manifest(authority, manifest, &mut tx).expect("register contract manifest");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -18682,11 +18706,18 @@ seiyaku OuterCaller {
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(42_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
@@ -18755,9 +18786,17 @@ seiyaku OuterCaller {
         let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_def_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("asset name"),
+        );
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let full_asset_definition_bytes =
             norito::to_bytes(&asset_def).expect("encode full asset definition");
         let projected_asset_definition_bytes = norito::to_bytes(&Some(
@@ -19034,18 +19073,27 @@ seiyaku DedicatedQueryContract {
         let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let asset_definition =
-            AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("asset name"),
+        );
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let asset_id = AssetId::of(asset_definition_id.clone(), authority.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(7_u32));
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("NFT id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
         let missing_account = fixture_account("bob");
         let missing_asset_id = AssetId::of(asset_definition_id.clone(), missing_account.clone());
-        let missing_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "missing".parse().expect("asset name"));
+        let missing_asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "missing".parse().expect("asset name"),
+        );
         let missing_domain_id =
             DomainId::try_new("missing", "universal").expect("missing domain id");
         let missing_nft_id: NftId = "missing$wonderland.universal".parse().expect("NFT id");
@@ -19324,14 +19372,28 @@ seiyaku DedicatedQueryContract {
             .map(|id| Domain::new(id).build(&authority))
             .collect::<Vec<_>>();
         let asset_definition_ids = [
-            AssetDefinitionId::new(domain_ids[0].clone(), "coin".parse().expect("asset name")),
-            AssetDefinitionId::new(domain_ids[1].clone(), "coin".parse().expect("asset name")),
+            AssetDefinitionId::derive_from_components(
+                domain_ids[0].clone(),
+                "coin".parse().expect("asset name"),
+            ),
+            AssetDefinitionId::derive_from_components(
+                domain_ids[1].clone(),
+                "coin".parse().expect("asset name"),
+            ),
         ];
         let asset_definitions = asset_definition_ids
             .iter()
             .rev()
             .cloned()
-            .map(|id| AssetDefinition::numeric(id).build(&authority))
+            .map(|id| {
+                AssetDefinition::numeric(
+                    id,
+                    "coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&authority)
+            })
             .collect::<Vec<_>>();
         let asset_ids = asset_definition_ids
             .iter()
@@ -19437,7 +19499,8 @@ seiyaku DedicatedQueryContract {
                 vm.set_register(10, tag.as_u64());
                 vm.set_register(11, u64::try_from(offset).expect("offset"));
                 vm.set_register(12, 1);
-                host.syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut vm)
+                let gas = host
+                    .syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut vm)
                     .unwrap_or_else(|error| panic!("{tag:?} page {offset}: {error:?}"));
                 let page =
                     ivm::list::read_words(&vm, vm.register(10), layout).expect("read typed page");
@@ -19461,6 +19524,26 @@ seiyaku DedicatedQueryContract {
                     read_option_int(&vm, vm.register(11)),
                     if offset == 0 { Some(1) } else { None },
                     "{tag:?} next_offset at page {offset}"
+                );
+
+                host.reset_core_query_page_metrics();
+                let mut repeated_vm = IVM::new(2_000_000);
+                repeated_vm.set_register(10, tag.as_u64());
+                repeated_vm.set_register(11, u64::try_from(offset).expect("offset"));
+                repeated_vm.set_register(12, 1);
+                let repeated_gas = host
+                    .syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut repeated_vm)
+                    .unwrap_or_else(|error| panic!("repeated {tag:?} page {offset}: {error:?}"));
+                let repeated_metrics = host
+                    .core_query_page_metrics()
+                    .expect("typed page metrics enabled");
+                assert_eq!(
+                    repeated_gas, gas,
+                    "{tag:?} page {offset} gas must be deterministic"
+                );
+                assert_eq!(
+                    repeated_metrics, metrics,
+                    "{tag:?} page {offset} must repeat exactly one query, one projection decode, and the same projected byte counts"
                 );
             }
         }
@@ -19815,14 +19898,16 @@ seiyaku DedicatedQueryContract {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "fixed_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "fixed_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill".parse().unwrap();
@@ -19845,12 +19930,24 @@ seiyaku DedicatedQueryContract {
             }),
         };
 
-        let mut plan_def =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_def = AssetDefinition::new(
+            plan_id.clone(),
+            "fixed_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
-        let charge_def =
-            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let charge_def = AssetDefinition::new(
+            charge_asset_id.clone(),
+            "usd".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(500_u32));
 
@@ -19917,7 +20014,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -19990,6 +20088,7 @@ seiyaku DedicatedQueryContract {
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata({
             let mut metadata = trigger_metadata;
             let registered_height_key: Name = "__registered_block_height".parse().unwrap();
@@ -20043,14 +20142,16 @@ seiyaku DedicatedQueryContract {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "usage_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "usage_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let unit_key: Name = "compute_ms".parse().unwrap();
         let trigger_id: TriggerId = "sub-usage".parse().unwrap();
 
@@ -20072,12 +20173,24 @@ seiyaku DedicatedQueryContract {
             }),
         };
 
-        let mut plan_def =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_def = AssetDefinition::new(
+            plan_id.clone(),
+            "usage_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
-        let charge_def =
-            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let charge_def = AssetDefinition::new(
+            charge_asset_id.clone(),
+            "usd".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let subscriber_asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
         let subscriber_asset = Asset::new(subscriber_asset_id.clone(), Quantity::from(100_u32));
 
@@ -20141,7 +20254,8 @@ seiyaku DedicatedQueryContract {
                 start_ms: 1_000,
                 period_ms: None,
             })),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata;
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -20261,14 +20375,16 @@ seiyaku DedicatedQueryContract {
     fn subscription_plan_metadata_rejects_negative_usage_unit_price() {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "usage_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "usage_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let plan = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -20297,8 +20413,14 @@ seiyaku DedicatedQueryContract {
             "fixture must replace the encoded nominal unit price"
         );
 
-        let mut plan_definition =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_definition = AssetDefinition::new(
+            plan_id.clone(),
+            "usage_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_definition.metadata.insert(
             plan_key,
@@ -20330,14 +20452,16 @@ seiyaku DedicatedQueryContract {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "fixed_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "fixed_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill-fail".parse().unwrap();
@@ -20361,12 +20485,24 @@ seiyaku DedicatedQueryContract {
             }),
         };
 
-        let mut plan_def =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_def = AssetDefinition::new(
+            plan_id.clone(),
+            "fixed_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
-        let charge_def =
-            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let charge_def = AssetDefinition::new(
+            charge_asset_id.clone(),
+            "usd".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(50_u32));
 
@@ -20423,7 +20559,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -20485,6 +20622,7 @@ seiyaku DedicatedQueryContract {
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(trigger_metadata);
         let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
         let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
@@ -20511,14 +20649,16 @@ seiyaku DedicatedQueryContract {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "fixed_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "fixed_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill-suspend".parse().unwrap();
@@ -20541,12 +20681,24 @@ seiyaku DedicatedQueryContract {
             }),
         };
 
-        let mut plan_def =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_def = AssetDefinition::new(
+            plan_id.clone(),
+            "fixed_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
-        let charge_def =
-            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let charge_def = AssetDefinition::new(
+            charge_asset_id.clone(),
+            "usd".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -20607,7 +20759,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -20757,7 +20910,7 @@ seiyaku DedicatedQueryContract {
     fn bind_sccp_test_contract(host: &mut CoreHost, nonce: u64) {
         let authority = host.authority.clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -21011,7 +21164,7 @@ seiyaku DedicatedQueryContract {
         let escrow_name = Name::from_str("extreme_gas_escrow").expect("escrow name");
         let escrow = OpenAnonymousAssetEscrow::with_evidence_hashes(
             CoreHost::escrow_id_from_name(&escrow_name),
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("domain"),
                 "xor".parse().expect("asset name"),
             ),
@@ -21104,7 +21257,7 @@ seiyaku BurnWithMemo {
             .expect("burn_with_memo argument schema");
         let entry_pc = parsed.prefix_len() as u64 + descriptor.entry_pc;
 
-        let settlement_asset_def = AssetDefinitionId::new(
+        let settlement_asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -21517,10 +21670,11 @@ seiyaku OpaqueInstructionSubmission {
 
         let from = authority.clone();
         let to: AccountId = fixture_account("bob");
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let amount = 7_u64;
 
         let from_payload = norito::to_bytes(&from).expect("encode from account");
@@ -21573,18 +21727,21 @@ seiyaku OpaqueInstructionSubmission {
         authority: &AccountId,
         destination: &AccountId,
         asset_def: AssetDefinitionId,
+        asset_name: &str,
         balance_policy: AssetBalancePolicy,
+        owning_domain: Option<DomainId>,
     ) -> State {
-        let domain_id = asset_def
-            .try_domain()
-            .cloned()
-            .unwrap_or_else(fixture_domain_id);
-        let domain = Domain::new(domain_id).build(authority);
+        let domain_id = owning_domain.clone().unwrap_or_else(fixture_domain_id);
+        let domain = Domain::new(domain_id.clone()).build(authority);
         let source_account = build_fixture_account(authority, authority);
         let destination_account = build_fixture_account(destination, authority);
-        let asset_def = AssetDefinition::numeric(asset_def)
-            .with_balance_scope_policy(balance_policy)
-            .build(authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def,
+            asset_name.to_owned(),
+            balance_policy,
+            owning_domain,
+        )
+        .build(authority);
         let world = World::with([domain], [source_account, destination_account], [asset_def]);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -21619,12 +21776,15 @@ seiyaku OpaqueInstructionSubmission {
     fn transfer_asset_scoped_syscall_queues_global_source_for_global_definition() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap());
+        let asset_def =
+            AssetDefinitionId::derive_from_components(fixture_domain_id(), "xor".parse().unwrap());
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "xor",
             AssetBalancePolicy::Global,
+            None,
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21655,12 +21815,15 @@ seiyaku OpaqueInstructionSubmission {
     fn legacy_transfer_v1_syscall_queues_global_source_for_global_definition() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap());
+        let asset_def =
+            AssetDefinitionId::derive_from_components(fixture_domain_id(), "xor".parse().unwrap());
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "xor",
             AssetBalancePolicy::Global,
+            None,
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21692,15 +21855,18 @@ seiyaku OpaqueInstructionSubmission {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
         let (paynet, catalog) = retail_dataspace_catalog();
-        let asset_def = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "paynet").unwrap(),
+        let owning_domain = DomainId::try_new("wonderland", "paynet").unwrap();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "rose".parse().unwrap(),
         );
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         state.nexus.write().dataspace_catalog = catalog;
         let view = state.view();
@@ -21732,13 +21898,19 @@ seiyaku OpaqueInstructionSubmission {
     fn transfer_asset_scoped_syscall_queues_dataspace_source_for_restricted_definition() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "rose".parse().unwrap());
+        let owning_domain = fixture_domain_id();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            "rose".parse().unwrap(),
+        );
         let dataspace = DataSpaceId::new(7);
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21773,12 +21945,18 @@ seiyaku OpaqueInstructionSubmission {
     fn transfer_asset_scoped_syscall_rejects_non_dataspace_r14() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "rose".parse().unwrap());
+        let owning_domain = fixture_domain_id();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            "rose".parse().unwrap(),
+        );
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21815,10 +21993,11 @@ seiyaku OpaqueInstructionSubmission {
 
         let from = authority;
         let to: AccountId = fixture_account("bob");
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let entries = vec![
             TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 1_u64),
             TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 2_u64),
@@ -21868,7 +22047,7 @@ seiyaku OpaqueInstructionSubmission {
             entries: vec![ForgedTransferAssetBatchEntry {
                 from: authority,
                 to: fixture_account("bob"),
-                asset_definition: AssetDefinitionId::new(
+                asset_definition: AssetDefinitionId::derive_from_components(
                     fixture_domain_id(),
                     "xor".parse().unwrap(),
                 ),
@@ -22329,9 +22508,13 @@ seiyaku OpaqueInstructionSubmission {
         let authority_account = Account::new(authority.clone()).build(&authority);
         let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
         let replacement_account = Account::new(replacement_account_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Quantity::from(1_000_u32),
@@ -22457,9 +22640,13 @@ seiyaku OpaqueInstructionSubmission {
                 .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
@@ -22563,9 +22750,13 @@ seiyaku OpaqueInstructionSubmission {
                 .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
@@ -23850,8 +24041,10 @@ seiyaku Callee {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
-        let asset_definition =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let (outer_caller, pool_contract) =
             install_typed_view_fixture(&state, &authority, &asset_definition, &authority);
 
@@ -23911,8 +24104,10 @@ seiyaku Callee {
         let authority: AccountId = fixture_account("alice");
         let mismatched_account: AccountId = fixture_account("bob");
         let state = contract_test_state(&authority);
-        let asset_definition =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let (outer_caller, pool_contract) =
             install_typed_view_fixture(&state, &authority, &asset_definition, &authority);
 
@@ -24130,27 +24325,8 @@ seiyaku StoredAccountView {
     }
 
     #[test]
-    fn call_contract_syscall_unit_return_survives_unaligned_requested_stack_limit() {
-        struct StackLimitGuard {
-            guest_limit: u64,
-            budget_limit: u64,
-        }
-
-        impl Drop for StackLimitGuard {
-            fn drop(&mut self) {
-                ivm::set_guest_stack_limit(self.guest_limit);
-                ivm::Memory::set_stack_budget_limit(self.budget_limit);
-            }
-        }
-
+    fn call_contract_syscall_unit_return_uses_canonical_stack_policy() {
         crate::test_alias::ensure();
-        let _stack_guard = StackLimitGuard {
-            guest_limit: ivm::guest_stack_limit(),
-            budget_limit: ivm::Memory::stack_budget_limit(),
-        };
-        ivm::set_guest_stack_limit(0x60a04);
-        ivm::Memory::set_stack_budget_limit(0x60a04);
-
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -24200,6 +24376,11 @@ seiyaku Callee {
         );
 
         result.expect("unit nested contract call should succeed");
+        assert_eq!(
+            vm.memory.stack_limit(),
+            ivm::IvmStackPolicy::V1.stack_limit_for_gas(1_000_000),
+            "nested execution must use the canonical V1 guest-stack policy",
+        );
         assert_eq!(vm.register(10), 0, "unit return should clear r10");
         assert!(
             durable_state_overlay
@@ -24581,7 +24762,7 @@ seiyaku Callee {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             404,
             DataSpaceId::UNIVERSAL,
@@ -24640,11 +24821,19 @@ seiyaku Callee {
     fn call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -24815,13 +25004,21 @@ seiyaku Callee {
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let replacement_account = fixture_account("carol");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -24973,13 +25170,21 @@ seiyaku AliasPayout {
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let replacement_account = fixture_account("carol");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25133,8 +25338,10 @@ seiyaku AliasPayout {
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let replacement_account = fixture_account("carol");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
@@ -25147,10 +25354,20 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -25316,12 +25533,20 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25429,12 +25654,20 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25515,11 +25748,19 @@ seiyaku AliasPayout {
     fn contract_call_transaction_resolve_account_alias_builtin_invalid_literal_is_rejected() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25591,8 +25832,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
@@ -25604,10 +25847,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -25754,12 +26007,20 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25840,11 +26101,19 @@ seiyaku AliasPayout {
     fn contract_call_transaction_account_id_alias_shorthand_invalid_literal_is_rejected() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25916,8 +26185,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
@@ -25929,10 +26200,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26080,8 +26361,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
@@ -26093,10 +26376,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26241,8 +26534,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
@@ -26254,10 +26549,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26363,8 +26668,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
@@ -26376,10 +26683,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26485,8 +26802,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
@@ -26498,10 +26817,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26645,11 +26974,19 @@ seiyaku AliasPayout {
      {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -26720,11 +27057,19 @@ seiyaku AliasPayout {
      {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -26797,8 +27142,10 @@ seiyaku AliasPayout {
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let replacement_account = fixture_account("carol");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
@@ -26811,10 +27158,20 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -27003,9 +27360,17 @@ seiyaku AliasPayout {
         let outer_account = build_fixture_account(&outer_authority, &outer_authority);
         let nested_account = build_fixture_account(&nested_authority, &outer_authority);
         let recipient_account = build_fixture_account(&recipient, &outer_authority);
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&outer_authority);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&outer_authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), nested_authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let world = World::with_assets(
@@ -28072,7 +28437,7 @@ seiyaku DurableOwner {
         .expect("QueuePlan admission marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             178,
             DataSpaceId::UNIVERSAL,
@@ -28133,7 +28498,7 @@ seiyaku DurableOwner {
             .expect("frontier marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             177,
             DataSpaceId::UNIVERSAL,
@@ -28449,7 +28814,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             701,
             DataSpaceId::UNIVERSAL,
@@ -28553,7 +28918,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             702,
             DataSpaceId::UNIVERSAL,
@@ -28681,7 +29046,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -28877,7 +29242,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -29015,7 +29380,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0x51a7e,
             DataSpaceId::UNIVERSAL,
@@ -29466,7 +29831,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             203,
             DataSpaceId::UNIVERSAL,
@@ -29522,7 +29887,7 @@ seiyaku DurableOwner {
             &norito::to_bytes(&expected).expect("encode state value"),
         );
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             44,
             DataSpaceId::UNIVERSAL,
@@ -29578,7 +29943,7 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             46,
             DataSpaceId::UNIVERSAL,
@@ -29646,7 +30011,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             146,
             DataSpaceId::UNIVERSAL,
@@ -29757,7 +30122,7 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             47,
             DataSpaceId::UNIVERSAL,
@@ -29852,7 +30217,7 @@ seiyaku DurableOwner {
         let path: StatePath = "counter".parse().unwrap();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             45,
             DataSpaceId::UNIVERSAL,
@@ -29924,7 +30289,7 @@ seiyaku DurableOwner {
         let path_ptr = store_state_path_tlv(&mut vm, &path);
 
         let contract_a = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             41,
             DataSpaceId::UNIVERSAL,
@@ -29954,7 +30319,7 @@ seiyaku DurableOwner {
         );
 
         let contract_b = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             42,
             DataSpaceId::UNIVERSAL,
@@ -30049,7 +30414,7 @@ seiyaku DurableOwner {
             CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -30443,12 +30808,18 @@ seiyaku DurableOwner {
             NonZeroU64::new(65_536).expect("non-zero byte limit");
         parameters.commit();
 
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("zkd", "universal").unwrap(),
-            "zcoin".parse().unwrap(),
-        );
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("zkd", "universal").unwrap(),
+                "zcoin".parse().unwrap(),
+            );
         let mut zk_state = ZkAssetState::default();
-        zk_state.root_history = vec![[1u8; 32], [2u8; 32]];
+        zk_state.commitments = vec![[1u8; 32], [2u8; 32]];
+        zk_state.root_history = zk_state
+            .tree_profile
+            .compute_prefix_roots(&zk_state.commitments)
+            .expect("canonical confidential tree roots");
+        let expected_roots = zk_state.root_history.clone();
         world.zk_assets.insert(asset_def_id.clone(), zk_state);
 
         let mut election = ElectionState::default();
@@ -30501,9 +30872,9 @@ seiyaku DurableOwner {
         assert_eq!(
             host.zk_roots
                 .get(&asset_def_id)
-                .cloned()
+                .map(|snapshot| snapshot.root_history.clone())
                 .unwrap_or_default(),
-            vec![[1u8; 32], [2u8; 32]]
+            expected_roots
         );
         let (options, finalized, tally) =
             host.zk_elections
@@ -30540,30 +30911,91 @@ seiyaku DurableOwner {
         assert!(gas <= quote);
         let resp: ivm::zk_verify::RootsGetResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode roots response");
-        assert_eq!(resp.latest, [2u8; 32]);
-        assert_eq!(resp.roots, vec![[1u8; 32], [2u8; 32]]);
+        assert_eq!(resp.latest, *expected_roots.last().expect("latest root"));
+        assert_eq!(resp.roots, expected_roots);
         assert_eq!(resp.height, 2);
+    }
+
+    #[test]
+    fn zk_roots_snapshot_uses_profile_empty_root_and_rejects_drift_atomically() {
+        crate::test_alias::ensure();
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("zkprofile", "universal").expect("domain"),
+            "asset".parse().expect("asset name"),
+        );
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let empty_state = ZkAssetState::default();
+        host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), empty_state.clone())]))
+            .expect("canonical empty tree snapshot");
+
+        let response = host
+            .roots_get_response(&ivm::zk_verify::RootsGetRequest {
+                asset_id: asset.to_string(),
+                max: 0,
+            })
+            .expect("read canonical empty root");
+        let empty_root = empty_state.tree_profile.empty_root();
+        assert_eq!(response.latest, empty_root);
+        assert_eq!(response.roots, vec![empty_root]);
+        assert_eq!(response.height, 0);
+
+        let mut drifted = ZkAssetState::default();
+        drifted.commitments.push([0x25; 32]);
+        drifted.root_history.push([0x66; 32]);
+        assert_eq!(
+            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), drifted)])),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        let mut missing_current_root = ZkAssetState::default();
+        missing_current_root.commitments.push([0x25; 32]);
+        assert_eq!(
+            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), missing_current_root)])),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        let mut drifted_checkpoint = ZkAssetState::default();
+        drifted_checkpoint
+            .frontier_checkpoints
+            .push(crate::state::FrontierCheckpoint {
+                height: 1,
+                commitment_count: 0,
+                root: [0x66; 32],
+            });
+        assert_eq!(
+            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), drifted_checkpoint)])),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        let retained = host
+            .roots_get_response(&ivm::zk_verify::RootsGetRequest {
+                asset_id: asset.to_string(),
+                max: 0,
+            })
+            .expect("prior snapshot remains readable");
+        assert_eq!(retained, response);
     }
 
     #[test]
     fn zk_roots_prepare_reserves_gas_at_history_cap_and_maximal_request() {
         crate::test_alias::ensure();
         let authority = fixture_account("alice");
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("zkquote", "universal").expect("domain"),
             "asset".parse().expect("asset name"),
         );
         let mut host = CoreHost::new(authority);
-        host.zk_root_history_cap = 256;
+        host.zk_tree_roots_history_len = NonZeroUsize::new(256).expect("non-zero root history");
         host.zk_roots.insert(
             asset.clone(),
-            (0..384_u16)
-                .map(|index| {
-                    let mut root = [0_u8; 32];
-                    root[..2].copy_from_slice(&index.to_le_bytes());
-                    root
-                })
-                .collect(),
+            ZkRootsSnapshot {
+                tree_profile: crate::state::ConfidentialTreeProfile::PoseidonPastaV1,
+                root_history: (0..384_u16)
+                    .map(|index| {
+                        let mut root = [0_u8; 32];
+                        root[..2].copy_from_slice(&index.to_le_bytes());
+                        root
+                    })
+                    .collect(),
+                commitment_count: 384,
+            },
         );
         let request = ivm::zk_verify::RootsGetRequest {
             asset_id: asset.to_string(),
@@ -30592,7 +31024,10 @@ seiyaku DurableOwner {
         assert_eq!(response.roots.len(), 256);
         assert_eq!(
             response.latest,
-            *host.zk_roots[&asset].last().expect("latest root")
+            *host.zk_roots[&asset]
+                .root_history
+                .last()
+                .expect("latest root")
         );
     }
 
@@ -32200,7 +32635,7 @@ seiyaku PreparedBoundaryArguments {
         use iroha_data_model::asset::AssetTransferAvailability::{Disabled, Enabled};
 
         let account = fixture_account("alice");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonder", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
@@ -32284,7 +32719,7 @@ seiyaku PreparedBoundaryArguments {
     #[test]
     fn pointer_abi_daily_limit_preserves_some_and_none() {
         let account = fixture_account("alice");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonder", "universal").unwrap(),
             "coin".parse().unwrap(),
         );

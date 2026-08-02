@@ -11,8 +11,8 @@ use norito::{
 };
 
 use super::{
-    AccountAddressError::*, CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG, DomainSelector,
-    compute_local_digest, default_domain_guard, default_domain_name,
+    AccountAddressError::*, CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG,
+    DEFAULT_DOMAIN_NAME, DomainSelector, compute_local_digest,
 };
 use crate::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
@@ -79,7 +79,7 @@ fn json_object(pairs: Vec<(&str, Value)>) -> Value {
 /// Full bundle of deterministic vectors.
 #[derive(Clone, Debug)]
 pub struct AddressVectorBundle {
-    /// Default human-readable label applied when deriving account identifiers.
+    /// Historical default-domain label retained as vector metadata only.
     pub default_domain_label: String,
     /// Network prefix encoded in I105-addressed test vectors.
     pub network_prefix: u16,
@@ -141,7 +141,7 @@ impl AddressVectorBundle {
 /// Deterministic vectors for single-key controllers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SingleKeyVector {
-    /// Domain label used when deriving the account identifier.
+    /// Explicit domain context associated with this fixture, not account identity.
     pub domain_label: &'static str,
     /// Seed byte applied to deterministically derive the key pair.
     pub seed_byte: u8,
@@ -151,7 +151,7 @@ pub struct SingleKeyVector {
     pub canonical_hex: String,
     /// I105-encoded controller address string.
     pub i105: String,
-    /// Domain selector input data required to reproduce the controller address.
+    /// Historical selector diagnostics; canonical controller bytes omit this value.
     pub domain_selector: DomainSelectorVector,
     /// Curve identifier used by the controller's public key.
     pub controller_curve_id: u8,
@@ -192,7 +192,7 @@ impl SingleKeyVector {
 /// Deterministic vectors for multisignature controllers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MultisigVector {
-    /// Domain label used when deriving account identifiers.
+    /// Explicit domain context associated with this fixture, not account identity.
     pub domain_label: &'static str,
     /// Canonical account identifier associated with the multisig controller.
     pub account_id: String,
@@ -200,7 +200,7 @@ pub struct MultisigVector {
     pub canonical_hex: String,
     /// I105-encoded multisig address string.
     pub i105: String,
-    /// Domain selector inputs that reproduce the canonical account.
+    /// Historical selector diagnostics; canonical account bytes omit this value.
     pub domain_selector: DomainSelectorVector,
     /// Multisig version number embedded in the controller payload.
     pub version: u8,
@@ -280,22 +280,22 @@ impl MultisigMemberVector {
     }
 }
 
-/// Domain selector metadata.
+/// Historical domain-selector metadata used by interoperability diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DomainSelectorVector {
-    /// Use the implicit domain identifier derived from `default_domain_label`.
+    /// Record the legacy implicit-default classification.
     ImplicitDefault,
-    /// Embed a canonical digest string directly in the selector.
+    /// Record a legacy canonical digest string.
     LocalDigest {
         /// Hexadecimal representation of the selector digest.
         digest_hex: String,
     },
-    /// Reference a global registry entry by identifier.
+    /// Record a legacy global-registry identifier.
     Global {
         /// Numeric registry identifier describing the selector mapping.
         registry_id: u32,
     },
-    /// Carry an opaque selector tag for forward-compatibility tests.
+    /// Carry an opaque selector tag for strict rejection tests.
     Unknown {
         /// Raw selector tag value supplied by the vector.
         tag: u8,
@@ -373,9 +373,7 @@ impl ErrorVector {
 /// Produce the deterministic ADDR-2 vector bundle.
 #[must_use]
 pub fn build_vector_bundle() -> AddressVectorBundle {
-    let _guard = default_domain_guard(Some("default"));
-
-    let default_domain_label = default_domain_name().as_ref().to_owned();
+    let default_domain_label = DEFAULT_DOMAIN_NAME.to_owned();
 
     let single_key = build_single_key_vectors(DEFAULT_VECTOR_NETWORK_PREFIX);
     let multisig = build_multisig_vectors(DEFAULT_VECTOR_NETWORK_PREFIX);
@@ -921,7 +919,6 @@ mod tests {
 
     #[test]
     fn default_single_vector_matches_fixture() {
-        let _guard = default_domain_guard(Some("default"));
         let bundle = build_vector_bundle();
         assert_eq!(bundle.single_key.len(), VECTOR_SINGLE_DOMAINS.len());
 
@@ -996,7 +993,6 @@ mod tests {
 
         for &seed in &seeds {
             for (label, _) in VECTOR_SINGLE_DOMAINS {
-                let _guard = default_domain_guard(Some("default"));
                 let _domain = domain_id(label);
                 let account = AccountId::new(ed25519_pk_with(seed));
                 let address = AccountAddress::from_account_id(&account)

@@ -191,10 +191,11 @@ mod tests {
     fn risk_query_encodes() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::of(asset_def, account_id.clone());
 
         let query = RiskQuery {
@@ -256,10 +257,11 @@ mod tests {
     fn governance_export_encodes() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let voting_asset = AssetId::of(asset_def, account_id);
 
         let params = GovernanceParameters {

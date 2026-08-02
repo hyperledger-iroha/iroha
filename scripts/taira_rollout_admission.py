@@ -33,9 +33,10 @@ import sys
 import tarfile
 import tempfile
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Mapping, NoReturn, Sequence
+from typing import NoReturn
 
 try:
     from . import taira_release_authority
@@ -86,9 +87,32 @@ except ImportError:
 ADMISSION_SCHEMA = "iroha.taira.rollout_admission"
 ADMISSION_SCHEMA_VERSION = 1
 ADMISSION_MANIFEST_PATH = "taira-rollout-admission-v1.json"
+CONTROLLER_MANIFEST_PATH = "controller/authority-controller-v1.json"
+MACOS_CONTROLLER_FILES = (
+    "configs/soranexus/taira/check_mcp_rollout.sh",
+    "scripts/build_taira_rollout_candidate.py",
+    "scripts/capture_taira_macos_four_peer_receipt.py",
+    "scripts/close_taira_publication_handoff.py",
+    "scripts/close_taira_qualification_handoff.py",
+    "scripts/compute_workspace_source_manifest.py",
+    "scripts/deploy_taira_v21_reset.py",
+    "scripts/extract_authenticated_taira_privacy_release.py",
+    "scripts/generate_release_manifest.py",
+    "scripts/prepare_taira_empty_reset_bundle.py",
+    "scripts/publish_taira_rollout.py",
+    "scripts/release_artifact_contract.py",
+    "scripts/release_manifest_signing.py",
+    "scripts/render_taira_validator_bundle.py",
+    "scripts/seal_taira_release_controllers.py",
+    "scripts/taira_constants.py",
+    "scripts/taira_peer_supervisor.py",
+    "scripts/taira_release_authority.py",
+    "scripts/taira_rollout_admission.py",
+    "scripts/write_release_sha256sums.py",
+)
 MACOS_RECEIPT_SCHEMA = "iroha.taira.macos_arm64_four_peer_receipt"
-MACOS_RECEIPT_SCHEMA_VERSION = 1
-MACOS_RECEIPT_PATH = "macos/four-peer-receipt-v1.json"
+MACOS_RECEIPT_SCHEMA_VERSION = 2
+MACOS_RECEIPT_PATH = "macos/four-peer-receipt-v2.json"
 REPLAY_LEDGER_SCHEMA = "iroha.taira.rollout_admission_replay_ledger"
 REPLAY_LEDGER_SCHEMA_VERSION = 1
 VERIFICATION_SCHEMA = "iroha.taira.rollout_admission_verification"
@@ -102,6 +126,7 @@ FINAL_AUTHORITY_FILES = (
 LINUX_AUTHORITY_DIRECTORY = "linux/authority"
 LINUX_AUTHORITY_PAYLOAD = "artifacts/taira-exact12-release-authority-v1.json"
 LINUX_AUTHORITY_ARTIFACTS = (
+    "authority-controller-v1.json",
     "release_artifact_contract.py",
     "sorafs-validate",
     "taira-exact12-release-authority-v1.json",
@@ -120,6 +145,7 @@ FINAL_ARCHIVE_DIRECTORIES = frozenset(
         "linux/authority",
         "linux/authority/artifacts",
         "macos",
+        "controller",
     }
 )
 
@@ -142,6 +168,7 @@ class TairaRolloutAdmissionError(RuntimeError):
 @dataclass(frozen=True)
 class SourceIdentity:
     commit: str
+    dpn_validator_release_commit: str
     cargo_lock_sha256: str
     workspace_source_manifest_sha256: str
 
@@ -149,6 +176,7 @@ class SourceIdentity:
         return {
             "cargo_lock_sha256": self.cargo_lock_sha256,
             "commit": self.commit,
+            "dpn_validator_release_commit": self.dpn_validator_release_commit,
             "workspace_source_manifest_sha256": (self.workspace_source_manifest_sha256),
         }
 
@@ -223,12 +251,17 @@ def _source_identity(value: object, label: str) -> SourceIdentity:
         {
             "cargo_lock_sha256",
             "commit",
+            "dpn_validator_release_commit",
             "workspace_source_manifest_sha256",
         },
         label,
     )
     return SourceIdentity(
         commit=_commit(value["commit"], f"{label} commit"),
+        dpn_validator_release_commit=_commit(
+            value["dpn_validator_release_commit"],
+            f"{label} DPN validator release commit",
+        ),
         cargo_lock_sha256=_sha256(
             value["cargo_lock_sha256"], f"{label} Cargo.lock digest"
         ),
@@ -245,7 +278,7 @@ def _require_source(
     if actual != expected:
         _fail(
             f"{label} source identity differs from the independently pinned "
-            "commit/Cargo.lock/workspace source triple"
+            "DPN commit/Iroha commit/Cargo.lock/workspace source identity"
         )
 
 
@@ -255,7 +288,7 @@ def compute_macos_receipt_id(receipt_without_id: Mapping[str, object]) -> str:
     if "receipt_id" in receipt_without_id:
         _fail("receipt ID input must omit receipt_id")
     digest = hashlib.sha256()
-    digest.update(b"iroha.taira.macos_arm64_four_peer_receipt.v1\0")
+    digest.update(b"iroha.taira.macos_arm64_four_peer_receipt.v2\0")
     digest.update(canonical_json_bytes(receipt_without_id))
     return digest.hexdigest()
 
@@ -263,9 +296,7 @@ def compute_macos_receipt_id(receipt_without_id: Mapping[str, object]) -> str:
 def canonical_replay_ledger_bytes(consumed_receipt_ids: Sequence[str]) -> bytes:
     """Render the sole canonical first-release replay-ledger representation."""
 
-    consumed = [
-        _sha256(value, "consumed receipt ID") for value in consumed_receipt_ids
-    ]
+    consumed = [_sha256(value, "consumed receipt ID") for value in consumed_receipt_ids]
     if consumed != sorted(set(consumed)):
         _fail("replay ledger receipt IDs must be unique and canonically sorted")
     return canonical_json_bytes(
@@ -275,6 +306,33 @@ def canonical_replay_ledger_bytes(consumed_receipt_ids: Sequence[str]) -> bytes:
             "schema_version": REPLAY_LEDGER_SCHEMA_VERSION,
         }
     )
+
+
+def initialize_empty_replay_ledger(output: Path) -> dict[str, object]:
+    """Create one closed empty ledger without importing workspace code."""
+
+    if not output.is_absolute() or Path(os.path.abspath(output)) != output:
+        _fail("empty replay ledger output must use one absolute lexical path")
+    try:
+        if output.parent.resolve(strict=True) != output.parent:
+            _fail("empty replay ledger parent must use its canonical physical path")
+    except OSError as exc:
+        raise TairaRolloutAdmissionError(
+            f"cannot resolve empty replay ledger parent: {exc}"
+        ) from exc
+    payload = canonical_replay_ledger_bytes(())
+    with exclusive_output_fd(output, mode=0o600) as descriptor:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                _fail("short write while creating the empty replay ledger")
+            view = view[written:]
+    return {
+        "path": str(output),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
+    }
 
 
 def load_replay_ledger(path: Path) -> ReplayLedgerSnapshot:
@@ -330,6 +388,7 @@ def _validate_macos_receipt(
     _exact_fields(
         receipt,
         {
+            "artifact_handoff_sha256",
             "end",
             "expires_at_unix",
             "issued_at_unix",
@@ -395,9 +454,10 @@ def _validate_macos_receipt(
     validator_sha = _sha256(
         receipt["validator_binary_sha256"], "macOS validator binary digest"
     )
-    supervisor_sha = _sha256(
-        receipt["supervisor_sha256"], "macOS supervisor digest"
+    artifact_handoff_sha = _sha256(
+        receipt["artifact_handoff_sha256"], "macOS build handoff digest"
     )
+    supervisor_sha = _sha256(receipt["supervisor_sha256"], "macOS supervisor digest")
     reset_manifest_sha = _sha256(
         receipt["reset_manifest_sha256"], "macOS reset-manifest digest"
     )
@@ -405,7 +465,10 @@ def _validate_macos_receipt(
     expected_config_names = {
         f"taira-validator-{number}" for number in range(1, PEER_COUNT + 1)
     }
-    if not isinstance(config_digests, dict) or set(config_digests) != expected_config_names:
+    if (
+        not isinstance(config_digests, dict)
+        or set(config_digests) != expected_config_names
+    ):
         _fail("macOS receipt must bind the exact four validator config digests")
     normalized_config_digests = {
         name: _sha256(config_digests[name], f"macOS {name} config digest")
@@ -459,6 +522,7 @@ def _validate_macos_receipt(
             _fail("every macOS peer must carry a passed restart proof")
 
     return {
+        "artifact_handoff_sha256": artifact_handoff_sha,
         "end_block_hash": end_hash,
         "end_height": end_height,
         "receipt_id": receipt_id,
@@ -524,57 +588,55 @@ def _extract_final_archive(
     member_count = 0
     logical_bytes = 0
     try:
-        with stable_open_relative(
-            archive_path.parent,
-            archive_path.name,
-            expected=archive_info,
-        ) as descriptor:
-            with os.fdopen(os.dup(descriptor), "rb") as stream:
-                with tarfile.open(fileobj=stream, mode="r:gz") as archive:
-                    for member in archive:
-                        member_count += 1
-                        if member_count > MAX_FINAL_ARCHIVE_MEMBERS:
-                            _fail("candidate archive exceeds its member-count bound")
-                        name = _safe_member_name(member, prefix)
-                        if name in seen:
-                            _fail(f"candidate archive repeats member {name!r}")
-                        seen.add(name)
-                        relative_parts = PurePosixPath(name).parts[1:]
-                        if member.isdir():
-                            if member.size != 0:
-                                _fail(
-                                    "candidate archive directories must have zero size"
-                                )
-                            if not relative_parts:
-                                continue
-                            relative_directory = PurePosixPath(
-                                *relative_parts
-                            ).as_posix()
-                            if relative_directory not in FINAL_ARCHIVE_DIRECTORIES:
-                                _fail(
-                                    "candidate archive contains a directory outside "
-                                    "its exact first-release layout"
-                                )
-                            (destination / Path(*relative_parts)).mkdir(
-                                mode=0o700, parents=True, exist_ok=True
-                            )
+        with (  # noqa: SIM117 -- keep tar parsing visibly inside the pinned stream.
+            stable_open_relative(
+                archive_path.parent,
+                archive_path.name,
+                expected=archive_info,
+            ) as descriptor,
+            os.fdopen(os.dup(descriptor), "rb") as stream,
+        ):
+            with tarfile.open(fileobj=stream, mode="r:gz") as archive:
+                for member in archive:
+                    member_count += 1
+                    if member_count > MAX_FINAL_ARCHIVE_MEMBERS:
+                        _fail("candidate archive exceeds its member-count bound")
+                    name = _safe_member_name(member, prefix)
+                    if name in seen:
+                        _fail(f"candidate archive repeats member {name!r}")
+                    seen.add(name)
+                    relative_parts = PurePosixPath(name).parts[1:]
+                    if member.isdir():
+                        if member.size != 0:
+                            _fail("candidate archive directories must have zero size")
+                        if not relative_parts:
                             continue
-                        if not member.isfile() or member.issparse():
+                        relative_directory = PurePosixPath(*relative_parts).as_posix()
+                        if relative_directory not in FINAL_ARCHIVE_DIRECTORIES:
                             _fail(
-                                "candidate archive must not contain links, sparse "
-                                "files, devices, FIFOs, or sockets"
+                                "candidate archive contains a directory outside "
+                                "its exact first-release layout"
                             )
-                        if not relative_parts or member.size <= 0:
-                            _fail("candidate archive regular files must be non-empty")
-                        logical_bytes += member.size
-                        if logical_bytes > MAX_FINAL_ARCHIVE_LOGICAL_BYTES:
-                            _fail("candidate archive exceeds its logical-size bound")
-                        relative = PurePosixPath(*relative_parts).as_posix()
-                        files[relative] = _write_streamed_member(
-                            archive,
-                            member,
-                            destination / Path(*relative_parts),
+                        (destination / Path(*relative_parts)).mkdir(
+                            mode=0o700, parents=True, exist_ok=True
                         )
+                        continue
+                    if not member.isfile() or member.issparse():
+                        _fail(
+                            "candidate archive must not contain links, sparse "
+                            "files, devices, FIFOs, or sockets"
+                        )
+                    if not relative_parts or member.size <= 0:
+                        _fail("candidate archive regular files must be non-empty")
+                    logical_bytes += member.size
+                    if logical_bytes > MAX_FINAL_ARCHIVE_LOGICAL_BYTES:
+                        _fail("candidate archive exceeds its logical-size bound")
+                    relative = PurePosixPath(*relative_parts).as_posix()
+                    files[relative] = _write_streamed_member(
+                        archive,
+                        member,
+                        destination / Path(*relative_parts),
+                    )
     except (OSError, tarfile.TarError, ReleaseArtifactError) as exc:
         raise TairaRolloutAdmissionError(
             f"cannot safely inspect the candidate archive: {exc}"
@@ -621,10 +683,75 @@ def _validate_inventory(
             _fail(f"admission inventory digest/size mismatch for {row['path']!r}")
 
 
+def _validate_controller_manifest(
+    payload: bytes,
+    *,
+    expected_digest: str,
+    expected_source_commit: str,
+) -> None:
+    manifest = _canonical_object(payload, "sealed macOS controller manifest")
+    _exact_fields(
+        manifest,
+        {"files", "platform", "schema", "schema_version", "source_commit"},
+        "sealed macOS controller manifest",
+    )
+    if (
+        manifest["schema"] != "iroha.taira.release_controller_closure"
+        or _integer(
+            manifest["schema_version"],
+            "sealed controller schema version",
+            minimum=1,
+        )
+        != 1
+        or manifest["platform"] != "macos"
+        or manifest["source_commit"] != expected_source_commit
+    ):
+        _fail("sealed macOS controller manifest identity differs")
+    rows = manifest["files"]
+    if not isinstance(rows, list) or not rows:
+        _fail("sealed macOS controller manifest files must be non-empty")
+    normalized: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            _fail("sealed macOS controller file row must be an object")
+        _exact_fields(row, {"path", "sha256", "size"}, "sealed controller file row")
+        path = row["path"]
+        if not isinstance(path, str):
+            _fail("sealed controller file path must be a string")
+        try:
+            path = canonical_relative_path(path)
+        except ReleaseArtifactError as exc:
+            raise TairaRolloutAdmissionError(str(exc)) from exc
+        normalized.append(
+            {
+                "path": path,
+                "sha256": _sha256(
+                    row["sha256"], f"sealed controller digest for {path}"
+                ),
+                "size": _integer(
+                    row["size"], f"sealed controller size for {path}", minimum=1
+                ),
+            }
+        )
+    if normalized != sorted(normalized, key=lambda row: str(row["path"])):
+        _fail("sealed macOS controller rows are not canonically sorted")
+    paths = [str(row["path"]) for row in normalized]
+    if len(paths) != len(set(paths)):
+        _fail("sealed macOS controller manifest repeats a path")
+    if tuple(paths) != MACOS_CONTROLLER_FILES:
+        _fail("sealed macOS controller manifest is not the exact release closure")
+    actual_digest = hashlib.sha256(
+        b"iroha.taira.release-controller-closure.v1\0" + payload
+    ).hexdigest()
+    if actual_digest != expected_digest:
+        _fail("sealed macOS controller manifest differs from its bound digest")
+
+
 def _validate_admission_manifest(
     payload: bytes,
     *,
     actual_inventory: Mapping[str, ExtractedFile],
+    controller_manifest_payload: bytes,
     expected_source: SourceIdentity,
     expected_receipt_id: str,
     trusted_signing_fingerprint: str,
@@ -634,6 +761,7 @@ def _validate_admission_manifest(
     _exact_fields(
         manifest,
         {
+            "controller",
             "inventory",
             "linux_arm64",
             "macos_arm64",
@@ -653,6 +781,31 @@ def _validate_admission_manifest(
         _fail("admission manifest schema version is unsupported")
     source = _source_identity(manifest["source"], "admission manifest source")
     _require_source(source, expected_source, "admission manifest")
+
+    controller = manifest["controller"]
+    if not isinstance(controller, dict):
+        _fail("admission controller identity must be an object")
+    _exact_fields(
+        controller,
+        {"digest", "manifest_path", "platform", "source_commit"},
+        "admission controller identity",
+    )
+    controller_digest = _sha256(controller["digest"], "controller closure digest")
+    if controller != {
+        "digest": controller_digest,
+        "manifest_path": CONTROLLER_MANIFEST_PATH,
+        "platform": "macos",
+        "source_commit": expected_source.commit,
+    }:
+        _fail("admission controller identity differs")
+    controller_info = actual_inventory.get(CONTROLLER_MANIFEST_PATH)
+    if controller_info is None:
+        _fail("admission controller manifest is missing")
+    _validate_controller_manifest(
+        controller_manifest_payload,
+        expected_digest=controller_digest,
+        expected_source_commit=expected_source.commit,
+    )
 
     trust = manifest["trust"]
     if not isinstance(trust, dict):
@@ -724,6 +877,7 @@ def _validate_admission_manifest(
     _validate_inventory(manifest, actual_inventory)
     required_paths = {
         archive_path,
+        CONTROLLER_MANIFEST_PATH,
         MACOS_RECEIPT_PATH,
         *(f"{LINUX_AUTHORITY_DIRECTORY}/{path}" for path in LINUX_AUTHORITY_FILES),
     }
@@ -731,6 +885,7 @@ def _validate_admission_manifest(
     if actual_paths != required_paths:
         _fail("admission archive does not contain the exact first-release inventory")
     return {
+        "controller_digest": controller_digest,
         "linux_archive_path": archive_path,
         "linux_authority_manifest_sha256": linux["authority_manifest_sha256"],
         "linux_native_verifier_sha256": linux["authority_native_verifier_sha256"],
@@ -742,6 +897,8 @@ def _artifact_descriptor(path: str) -> tuple[str, str, str, str]:
         return ("iroha3", "taira-exact12", "release-evidence", "json")
     if path == "sorafs-validate":
         return ("iroha3", "taira-authority", "reference-validator", "binary")
+    if path == "authority-controller-v1.json":
+        return ("iroha3", "taira-authority", "release-evidence", "json")
     return ("iroha3", "taira-authority", "release-evidence", "binary")
 
 
@@ -852,6 +1009,11 @@ def _verify_closed_linux_authority(
     if authority.get("commit") != expected_source.commit:
         _fail("nested exact-12 authority commit differs from the pinned source")
     if (
+        authority.get("dpn_validator_release_commit")
+        != expected_source.dpn_validator_release_commit
+    ):
+        _fail("nested exact-12 authority DPN release commit differs")
+    if (
         authority.get("workspace_source_manifest_sha256")
         != expected_source.workspace_source_manifest_sha256
     ):
@@ -911,49 +1073,51 @@ def _extract_linux_evidence(archive_path: Path, destination: Path) -> None:
     logical_bytes = 0
     archive_info = stable_hash_path(archive_path)
     try:
-        with stable_open_relative(
-            archive_path.parent, archive_path.name, expected=archive_info
-        ) as descriptor:
-            with os.fdopen(os.dup(descriptor), "rb") as stream:
-                with tarfile.open(fileobj=stream, mode="r:gz") as archive:
-                    for member in archive:
-                        member_count += 1
-                        if member_count > taira_release_authority.MAX_ARCHIVE_MEMBERS:
-                            _fail("nested Linux archive exceeds its member-count bound")
-                        name = _safe_member_name(member, prefix)
-                        if name in seen:
-                            _fail(f"nested Linux archive repeats member {name!r}")
-                        seen.add(name)
-                        if member.isdir():
-                            if member.size != 0:
-                                _fail(
-                                    "nested Linux archive directories must have zero size"
-                                )
-                            if name in expected:
-                                _fail("nested Linux evidence must be a regular file")
-                            continue
-                        if not member.isfile() or member.issparse():
+        with (  # noqa: SIM117 -- keep tar parsing visibly inside the pinned stream.
+            stable_open_relative(
+                archive_path.parent, archive_path.name, expected=archive_info
+            ) as descriptor,
+            os.fdopen(os.dup(descriptor), "rb") as stream,
+        ):
+            with tarfile.open(fileobj=stream, mode="r:gz") as archive:
+                for member in archive:
+                    member_count += 1
+                    if member_count > taira_release_authority.MAX_ARCHIVE_MEMBERS:
+                        _fail("nested Linux archive exceeds its member-count bound")
+                    name = _safe_member_name(member, prefix)
+                    if name in seen:
+                        _fail(f"nested Linux archive repeats member {name!r}")
+                    seen.add(name)
+                    if member.isdir():
+                        if member.size != 0:
                             _fail(
-                                "nested Linux archive contains a link, sparse file, "
-                                "device, FIFO, or socket"
+                                "nested Linux archive directories must have zero size"
                             )
-                        logical_bytes += member.size
-                        if (
-                            logical_bytes
-                            > taira_release_authority.MAX_ARCHIVE_LOGICAL_BYTES
-                        ):
-                            _fail("nested Linux archive exceeds its logical-size bound")
-                        relative = expected.get(name)
-                        if relative is None:
-                            continue
-                        if member.size <= 0:
-                            _fail("nested Linux evidence files must be non-empty")
-                        _write_streamed_member(
-                            archive,
-                            member,
-                            destination / Path(*PurePosixPath(relative).parts),
+                        if name in expected:
+                            _fail("nested Linux evidence must be a regular file")
+                        continue
+                    if not member.isfile() or member.issparse():
+                        _fail(
+                            "nested Linux archive contains a link, sparse file, "
+                            "device, FIFO, or socket"
                         )
-                        extracted_expected.add(name)
+                    logical_bytes += member.size
+                    if (
+                        logical_bytes
+                        > taira_release_authority.MAX_ARCHIVE_LOGICAL_BYTES
+                    ):
+                        _fail("nested Linux archive exceeds its logical-size bound")
+                    relative = expected.get(name)
+                    if relative is None:
+                        continue
+                    if member.size <= 0:
+                        _fail("nested Linux evidence files must be non-empty")
+                    _write_streamed_member(
+                        archive,
+                        member,
+                        destination / Path(*PurePosixPath(relative).parts),
+                    )
+                    extracted_expected.add(name)
     except (OSError, tarfile.TarError, ReleaseArtifactError) as exc:
         raise TairaRolloutAdmissionError(
             f"cannot safely inspect the nested Linux archive: {exc}"
@@ -982,6 +1146,8 @@ def _verify_existing_linux_authority(
             str(evidence_root),
             "--commit",
             expected_source.commit,
+            "--dpn-validator-release-commit",
+            expected_source.dpn_validator_release_commit,
             "--signing-fingerprint",
             trusted_signing_fingerprint,
             "--native-verifier-sha256",
@@ -1085,6 +1251,10 @@ def verify_admission(
 
     expected_source = SourceIdentity(
         commit=_commit(expected_source.commit, "expected source commit"),
+        dpn_validator_release_commit=_commit(
+            expected_source.dpn_validator_release_commit,
+            "expected DPN validator release commit",
+        ),
         cargo_lock_sha256=_sha256(
             expected_source.cargo_lock_sha256, "expected Cargo.lock digest"
         ),
@@ -1162,9 +1332,17 @@ def verify_admission(
             return_payload=True,
         )
         assert admission_payload is not None
+        _, controller_manifest_payload = stable_read_relative(
+            root,
+            CONTROLLER_MANIFEST_PATH,
+            max_size=MAX_JSON_BYTES,
+            return_payload=True,
+        )
+        assert controller_manifest_payload is not None
         admission = _validate_admission_manifest(
             admission_payload,
             actual_inventory=actual_inventory,
+            controller_manifest_payload=controller_manifest_payload,
             expected_source=expected_source,
             expected_receipt_id=expected_receipt_id,
             trusted_signing_fingerprint=trusted_signing_fingerprint,
@@ -1244,6 +1422,7 @@ def verify_admission(
         _fail("replay ledger changed during admission verification")
 
     return {
+        "artifact_handoff_sha256": receipt["artifact_handoff_sha256"],
         "archive_sha256": archive_info.sha256,
         "deployment_performed": False,
         "linux_authority_manifest_sha256": nested["manifest_sha256"],
@@ -1273,6 +1452,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--archive", type=Path, required=True)
     verify.add_argument("--authority-dir", type=Path, required=True)
     verify.add_argument("--expected-source-commit", required=True)
+    verify.add_argument("--expected-dpn-validator-release-commit", required=True)
     verify.add_argument("--expected-cargo-lock-sha256", required=True)
     verify.add_argument("--expected-workspace-source-manifest-sha256", required=True)
     verify.add_argument("--expected-receipt-id", required=True)
@@ -1280,34 +1460,43 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--trusted-signing-fingerprint", required=True)
     verify.add_argument("--release-manifest-verifier", type=Path, required=True)
     verify.add_argument("--trusted-release-manifest-verifier-sha256", required=True)
+    initialize = subparsers.add_parser("init-replay-ledger", allow_abbrev=False)
+    initialize.add_argument("--output", type=Path, required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        source = SourceIdentity(
-            commit=_commit(args.expected_source_commit, "expected source commit"),
-            cargo_lock_sha256=_sha256(
-                args.expected_cargo_lock_sha256, "expected Cargo.lock digest"
-            ),
-            workspace_source_manifest_sha256=_sha256(
-                args.expected_workspace_source_manifest_sha256,
-                "expected workspace-source-manifest digest",
-            ),
-        )
-        result = verify_admission(
-            archive_path=args.archive,
-            authority_dir=args.authority_dir,
-            expected_source=source,
-            expected_receipt_id=args.expected_receipt_id,
-            replay_ledger_path=args.replay_ledger,
-            trusted_signing_fingerprint=args.trusted_signing_fingerprint,
-            release_manifest_verifier_path=args.release_manifest_verifier,
-            trusted_release_manifest_verifier_sha256=(
-                args.trusted_release_manifest_verifier_sha256
-            ),
-        )
+        if args.command == "init-replay-ledger":
+            result = initialize_empty_replay_ledger(args.output)
+        else:
+            source = SourceIdentity(
+                commit=_commit(args.expected_source_commit, "expected source commit"),
+                dpn_validator_release_commit=_commit(
+                    args.expected_dpn_validator_release_commit,
+                    "expected DPN validator release commit",
+                ),
+                cargo_lock_sha256=_sha256(
+                    args.expected_cargo_lock_sha256, "expected Cargo.lock digest"
+                ),
+                workspace_source_manifest_sha256=_sha256(
+                    args.expected_workspace_source_manifest_sha256,
+                    "expected workspace-source-manifest digest",
+                ),
+            )
+            result = verify_admission(
+                archive_path=args.archive,
+                authority_dir=args.authority_dir,
+                expected_source=source,
+                expected_receipt_id=args.expected_receipt_id,
+                replay_ledger_path=args.replay_ledger,
+                trusted_signing_fingerprint=args.trusted_signing_fingerprint,
+                release_manifest_verifier_path=args.release_manifest_verifier,
+                trusted_release_manifest_verifier_sha256=(
+                    args.trusted_release_manifest_verifier_sha256
+                ),
+            )
     except (
         OSError,
         ReleaseArtifactError,

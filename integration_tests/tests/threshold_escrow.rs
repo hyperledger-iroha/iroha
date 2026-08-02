@@ -438,10 +438,12 @@ async fn setup_ledger_for_sample(
     }
     if !asset_definition_exists(client, asset_definition_id)? {
         instructions.push(
-            Register::asset_definition(
-                AssetDefinition::numeric(asset_definition_id.clone())
-                    .with_name("threshold_escrow_asset".to_owned()),
-            )
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "threshold_escrow_asset".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
             .into(),
         );
     }

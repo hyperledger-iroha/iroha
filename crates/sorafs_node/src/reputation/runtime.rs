@@ -6208,6 +6208,7 @@ impl StoredReputationGovernanceDagTargetBlockV1 {
                 prev_cid: self.prev_node_cid.clone(),
                 timestamp: self.node_timestamp,
                 publisher_peer_id: self.publisher_peer_id.clone(),
+                submission_provenance: None,
                 payload: GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone()),
                 publisher_signature: self.node_publisher_signature.clone(),
             },
@@ -8999,6 +9000,7 @@ mod tests {
             prev_cid: previous.map(|block| block.node.node_cid.clone()),
             timestamp: publication_timestamp,
             publisher_peer_id: publisher_peer_id.clone(),
+            submission_provenance: None,
             payload: GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone()),
             publisher_signature: empty_governance_signature(),
         };

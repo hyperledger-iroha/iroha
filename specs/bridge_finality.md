@@ -52,11 +52,18 @@ The Sumeragi-v2 apply service constructs the artifact from the frozen height
 context, exact decided subject, and exact CommitQC and validates it. Before
 publishing finality, Kura durably creates an immutable retained-block record
 containing the exact canonical header and the block's canonical SCCP outbox
-archive in commitment-index order. The same retained record must exist before
-Kura may evict the historical block body. Kura then stores the validated
+archive in commitment-index order. Version 3 also retains the optional compact
+merge-ledger reference extracted from the canonical body for bounded local
+historical-sidecar service; unlike the SCCP archive, that field is not exported
+as a standalone inclusion proof and requesters revalidate it against their own
+carrier. The same retained record must exist before Kura may evict the
+historical block body. Kura then stores the validated
 artifact in a separate immutable finality record with the same header. Both
 writes are idempotent no-clobber operations; a conflicting record at the same
-height is rejected.
+height is rejected. Canonical version-2 retained records remain readable. When
+the exact body still exists, pre-eviction retention performs a checked, atomic
+version-3 replacement; a remote-only version-2 record remains valid
+finality/SCCP evidence but cannot claim a merge witness it never contained.
 
 Application requires its durable manifest, body frame, deterministic validation
 receipt, and execution commitment to match the CommitQC's authenticated
@@ -89,7 +96,7 @@ closed.
 structural and cryptographic checks:
 
 1. Require proof schema version `1`, finality-artifact format version `3`, and
-   Sumeragi protocol version `3` in both the artifact and height context.
+   live Sumeragi protocol version `4` in both the artifact and height context.
 2. Validate the height context, its ordered powered roster, canonical dual
    quorum, parent certificate rules, DA layout, and epoch bounds.
 3. Require the artifact height, context id, block subject, repeated block hash,
@@ -118,7 +125,7 @@ the following Norito payload:
 
 ```text
 {
-  protocol_version: 3,
+  protocol_version: 4,
   round: { context_id, height, view },
   proposal_round: { context_id, height, view },
   phase: Commit,
@@ -189,10 +196,14 @@ artifact's frozen roster.
 
 Self-consistency is not the SCCP trust decision. Each governed outbound route
 pins an `SccpSoraFinalityAnchorV1` containing the exact Taira source network,
-protocol version `3`, Taira chain-id hash, checkpoint height and block hash,
-checkpoint `HeightContextId`, and a domain-separated hash of the canonical
-checkpoint finality artifact. The governed semantic circuit exposes the hash of
-this typed anchor as its final public signal.
+protocol version `3` for a retained historical anchor or `4` for a fresh
+checkpoint, Taira chain-id hash, checkpoint height and block hash, checkpoint
+`HeightContextId`, and a domain-separated hash of the canonical checkpoint
+finality artifact. The governed semantic circuit exposes the hash of this typed
+anchor as its final public signal. SCCP admits exactly revisions `3` and `4` so
+existing signed route fixtures remain verifiable, but fresh anchors and live
+finality artifacts use revision `4`; this compatibility policy does not permit
+live consensus or status to negotiate revision `3`.
 
 Admission must resolve that anchor from historical governed route state,
 authenticate the checkpoint artifact, and establish an immediate-successor

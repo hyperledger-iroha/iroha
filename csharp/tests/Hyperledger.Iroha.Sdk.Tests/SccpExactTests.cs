@@ -14,6 +14,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class SccpExactTests
 {
+    private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
     private static readonly string MessageId = SccpV1.LowerHex(SccpV1.MessageId(BundleLane(), ExactTransfer()));
     private static readonly FeePaymentIntent BridgeFeePayment = FeePaymentIntent.Authority([]);
 
@@ -316,6 +317,21 @@ public sealed class SccpExactTests
             signature,
             Convert.ToBase64String(transaction),
             creationTimeMs: 7);
+        foreach (var invalidTimeToLiveMilliseconds in new ulong?[] { null, 99_999 })
+        {
+            var invalidTransaction = CanonicalTransactionPayload(
+                7,
+                destinationProof: true,
+                timeToLiveMilliseconds: invalidTimeToLiveMilliseconds);
+            Assert.Throws<ArgumentException>(() => BridgeProofRequest(
+                authority,
+                artifact,
+                Convert.ToBase64String(Ed25519Signer.Sign(
+                    IrohaHash.Hash(invalidTransaction),
+                    pair.PrivateKeySeed)),
+                Convert.ToBase64String(invalidTransaction),
+                creationTimeMs: 7));
+        }
         Assert.Equal(nativeArtifact, BridgeMessageRequest(authority, nativeArtifact).NativeProofBase64);
         using var json = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(request));
         var fields = json.RootElement.EnumerateObject()
@@ -922,6 +938,11 @@ public sealed class SccpExactTests
             Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
         Assert.Equal("0xc4b540323ca41631f036ca1fe2c99723632d176f801ff6a6f912c597636b4f49", parsed.StatementHash);
         Assert.Equal("0x51a5a484ea19820bd95e6e9f7c9eb83e3369d2dbc2e83b0399462cde84db1c2a", parsed.RequestHash);
+        var current = SccpGroth16ProofRequestV1.Parse(Json(ProofRequestObject(4)));
+        Assert.Equal((ushort)4, current.SoraFinalityAnchor.ProtocolVersion);
+        Assert.False(current.SoraFinalityAnchor.AnchorHash.AsSpan()
+            .SequenceEqual(parsed.SoraFinalityAnchor.AnchorHash));
+        Assert.Throws<ArgumentException>(() => ProofRequestObject(5));
         var mutations = new Action<Dictionary<string, object?>>[]
         {
             value => value["allow_unready"] = true,
@@ -939,6 +960,7 @@ public sealed class SccpExactTests
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)value["semantic_proof_profile"]!)["commitments"]!)["circuit_commitment"] = Upper(0xc2, 32),
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_height"] = 0,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 1,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 5,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "3",
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = true,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["validator_set_epoch"] = 2,
@@ -1269,6 +1291,17 @@ public sealed class SccpExactTests
             Convert.ToBase64String(transaction),
             Convert.ToBase64String(IrohaHash.Hash(transaction)));
         Assert.False(SccpBridgeSubmitResponse.Parse(prepared).Submitted);
+        foreach (var invalidTimeToLiveMilliseconds in new ulong?[] { null, 99_999 })
+        {
+            var invalidTransaction = CanonicalTransactionPayload(
+                7,
+                timeToLiveMilliseconds: invalidTimeToLiveMilliseconds);
+            Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(ResponseJson(
+                false,
+                null,
+                Convert.ToBase64String(invalidTransaction),
+                Convert.ToBase64String(IrohaHash.Hash(invalidTransaction)))));
+        }
         var preparedAuthority = Ed25519KeyPair
             .FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray())
             .ToAccountAddress()
@@ -1821,10 +1854,10 @@ public sealed class SccpExactTests
         ["native_message_submit_path"] = "/v1/bridge/messages",
     };
 
-    private static Dictionary<string, object?> ProofRequestObject()
+    private static Dictionary<string, object?> ProofRequestObject(ushort protocolVersion = 3)
     {
         var key = VerifyingKey();
-        var policy = OutboundPolicy();
+        var policy = OutboundPolicy(protocolVersion);
         var semantic = (Dictionary<string, object?>)policy["semantic_profile"]!;
         var anchor = (Dictionary<string, object?>)policy["sora_finality_anchor"]!;
         var bundleBytes = CanonicalBundleBytes();
@@ -2402,9 +2435,9 @@ public sealed class SccpExactTests
         return result;
     }
 
-    private static Dictionary<string, object?> OutboundPolicy()
+    private static Dictionary<string, object?> OutboundPolicy(ushort protocolVersion = 3)
     {
-        var anchor = FinalityAnchor();
+        var anchor = FinalityAnchor(protocolVersion);
         return new Dictionary<string, object?>
         {
             ["version"] = 1,
@@ -2423,14 +2456,14 @@ public sealed class SccpExactTests
         };
     }
 
-    private static Dictionary<string, object?> FinalityAnchor()
+    private static Dictionary<string, object?> FinalityAnchor(ushort protocolVersion = 3)
     {
         var chainHash = SccpV1.Keccak256(Convert.FromHexString("FC56984B2BE7431D840E21514D1883F0"));
         return new Dictionary<string, object?>
         {
             ["version"] = 1,
             ["source_network"] = Network("sora-taira"),
-            ["protocol_version"] = 3,
+            ["protocol_version"] = protocolVersion,
             ["chain_id_hash"] = Convert.ToHexString(chainHash),
             ["checkpoint_height"] = 7,
             ["checkpoint_block_hash"] = Upper(0xa1, 32),
@@ -2581,7 +2614,8 @@ public sealed class SccpExactTests
         bool destinationProof = false,
         uint? payloadKindOverride = null,
         string chainId = "fc56984b-2be7-431d-840e-21514d1883f0",
-        FeePaymentIntent? feePayment = null)
+        FeePaymentIntent? feePayment = null,
+        ulong? timeToLiveMilliseconds = DefaultTransactionTimeToLiveMilliseconds)
     {
         const string submitBridgeProof = "iroha_data_model::isi::bridge::SubmitBridgeProof";
         var pair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
@@ -2619,7 +2653,9 @@ public sealed class SccpExactTests
         var executable = Concat(UInt32(0), CompactField(instructions));
         Span<byte> creation = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(creation, creationTimeMs);
-        var ttl = new byte[] { 0 };
+        byte[] ttl = timeToLiveMilliseconds is { } value
+            ? Concat([(byte)1], CompactField(UInt64(value)))
+            : [0];
         var nonce = new byte[] { 0 };
         var encodedFeePayment = CanonicalFeePayment(
             feePayment ?? FeePaymentIntent.Authority([]),

@@ -26,11 +26,14 @@ fn build_world() -> (
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
+        "coin".to_owned(),
         NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(&alice_id);
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
@@ -53,7 +56,7 @@ fn make_block(
 ) -> iroha_data_model::block::SignedBlock {
     // Two simple instructions to ensure a non-empty overlay
     let asset = AssetId::of(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),

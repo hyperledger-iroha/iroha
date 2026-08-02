@@ -1014,11 +1014,15 @@ impl RuntimeRetentionPolicy {
         state_entry_limit: usize,
         checkpoint_max_bytes: u64,
     ) -> Self {
-        let event_history_limit = event_history_limit.max(1);
+        let state_entry_limit = state_entry_limit.clamp(
+            1,
+            iroha_config::parameters::defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX,
+        );
+        let event_history_limit = event_history_limit.clamp(1, state_entry_limit);
         let defaults = actual::SorafsRuntimeRetention::default();
         Self {
             event_history_limit,
-            state_entry_limit: state_entry_limit.max(event_history_limit),
+            state_entry_limit,
             checkpoint_max_bytes: checkpoint_max_bytes.max(1),
             proof_outcome_forwarder_interval: defaults.proof_outcome_forwarder_interval,
             proof_outcome_max_attempts: defaults.proof_outcome_max_attempts.max(1),
@@ -2373,6 +2377,13 @@ mod tests {
             Duration::from_secs(1)
         );
         assert_eq!(policy.proof_outcome_max_attempts(), 8);
+
+        let maximum =
+            iroha_config::parameters::defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX;
+        let bounded =
+            RuntimeRetentionPolicy::new(maximum.saturating_add(10), maximum.saturating_add(20), 1);
+        assert_eq!(bounded.state_entry_limit(), maximum);
+        assert_eq!(bounded.event_history_limit(), maximum);
     }
 
     #[test]

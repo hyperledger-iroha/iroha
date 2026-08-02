@@ -103,6 +103,25 @@ const TTL_SECS: u64 = 3_600;
 const STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
 
+trait ProviderAdvertCacheTestExt {
+    fn ingest(
+        &mut self,
+        advert: ProviderAdvertV1,
+        now: u64,
+    ) -> Result<AdvertIngestResult, AdvertError>;
+}
+
+impl ProviderAdvertCacheTestExt for ProviderAdvertCache {
+    fn ingest(
+        &mut self,
+        advert: ProviderAdvertV1,
+        now: u64,
+    ) -> Result<AdvertIngestResult, AdvertError> {
+        let prepared = self.validation_policy().prepare(advert, now)?;
+        self.commit_prepared(prepared, now)
+    }
+}
+
 fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_TORII_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")
 }
@@ -2222,20 +2241,12 @@ fn ensure_authority_registered(
             .insert_account_for_testing(account_id, account_value);
     }
 
-    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
-        && tx.world().domains().get(&domain_id).is_none()
-    {
-        dm::Register::domain(dm::Domain::new(domain_id))
-            .execute(&authority.account, &mut tx)
-            .expect("register SoraFS fee asset domain");
-    }
-
     if !fee_asset_exists {
-        let definition = dm::AssetDefinition::numeric(fee_asset_id.clone()).with_name(
-            fee_asset_id
-                .try_name()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "xor".to_owned()),
+        let definition = dm::AssetDefinition::numeric(
+            fee_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         );
         dm::Register::asset_definition(definition)
             .execute(&authority.account, &mut tx)

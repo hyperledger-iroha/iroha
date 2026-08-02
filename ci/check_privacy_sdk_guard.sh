@@ -1408,16 +1408,29 @@ def check(overrides: dict[str, str] | None = None) -> None:
             )
 
     mobile_capability_files = (
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-        "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
-        "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyProtocolIdV1.java",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyIdsV1.kt",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+            "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
+            "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
+        ),
     )
-    for relative in mobile_capability_files:
+    for relative, registry_relative in mobile_capability_files:
         source = read(relative, overrides)
+        registry_source = read(registry_relative, overrides)
         require(
-            unique_expected_ids_in_source(source) == EXPECTED_IDS,
-            f"{relative} must expose the exact 12 canonical IDs in order",
+            unique_expected_ids_in_source(registry_source) == EXPECTED_IDS,
+            f"{registry_relative} must expose the exact 12 canonical IDs in order",
             errors,
         )
         for symbol in RETIRED_PUBLIC_SYMBOLS:
@@ -1428,8 +1441,8 @@ def check(overrides: dict[str, str] | None = None) -> None:
             )
         for protocol_id in RETIRED_IDS:
             require(
-                protocol_id not in source,
-                f"{relative} must not accept retired ID {protocol_id}",
+                protocol_id not in source and protocol_id not in registry_source,
+                f"{relative} and its closed registry must not accept retired ID {protocol_id}",
                 errors,
             )
         for marker in (
@@ -1611,6 +1624,27 @@ def check(overrides: dict[str, str] | None = None) -> None:
                 f"{relative} retains retired generic privacy route {symbol}",
                 errors,
             )
+
+    swift_native_bridge = read(
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", overrides
+    )
+    require(
+        "privacyFreeFn ?? freeFn" not in swift_native_bridge,
+        "Swift privacy buffers must never fall back to connect_norito_free",
+        errors,
+    )
+    require(
+        "&& privacyFreeFn != nil" in swift_native_bridge
+        and "let privacyFreeFn else" in swift_native_bridge,
+        "Swift privacy availability and archive consumers must require the dedicated zeroizing free",
+        errors,
+    )
+    require(
+        "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
+        in swift_native_bridge,
+        "Swift privacy availability must require exact first-release ABI 21",
+        errors,
+    )
 
     c_header = read(
         "crates/connect_norito_bridge/include/connect_norito_bridge.h", overrides

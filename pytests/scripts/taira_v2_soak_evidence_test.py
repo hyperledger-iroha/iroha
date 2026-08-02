@@ -25,7 +25,7 @@ def valid_status_snapshot(validator_index: int, blocker: str | None = None) -> d
     snapshot = {
         "validator_index": validator_index,
         "status": {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "restart_required": False,
             "height": 10,
             "view": 0,

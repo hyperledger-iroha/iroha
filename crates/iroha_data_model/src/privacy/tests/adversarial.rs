@@ -135,7 +135,7 @@ fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
     tampered.authorization_epoch = 2;
     tamperings.push(tampered);
     let mut tampered = record.clone();
-    tampered.asset_definition_id = AssetDefinitionId::new(
+    tampered.asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").expect("domain"),
         Name::from_str("other_asset").expect("asset name"),
     );
@@ -409,7 +409,7 @@ fn zk_ace_revocation_is_one_step_terminal_and_content_preserving() {
     redigest_zk_ace_policy(&mut changed_policy_digest);
     mutations.push(changed_policy_digest);
     let mut changed_asset = successor.clone();
-    changed_asset.asset_definition_id = AssetDefinitionId::new(
+    changed_asset.asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").expect("domain"),
         Name::from_str("other_asset").expect("asset name"),
     );

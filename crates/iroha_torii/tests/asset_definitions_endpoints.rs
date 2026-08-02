@@ -51,21 +51,29 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
 
-    let cbdc_id = dm::AssetDefinitionId::new(
+    let cbdc_id = dm::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "cbdc".parse().expect("asset name"),
     );
-    let cbdc = dm::AssetDefinition::numeric(cbdc_id.clone())
-        .with_name("CBDC".to_owned())
-        .build(&authority);
+    let cbdc = dm::AssetDefinition::numeric(
+        cbdc_id.clone(),
+        "CBDC".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
 
-    let usd_id = dm::AssetDefinitionId::new(
+    let usd_id = dm::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "usd".parse().expect("asset name"),
     );
-    let usd = dm::AssetDefinition::numeric(usd_id.clone())
-        .with_name("USD".to_owned())
-        .build(&authority);
+    let usd = dm::AssetDefinition::numeric(
+        usd_id.clone(),
+        "USD".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
 
     let state = Arc::new(State::new_for_testing(
         World::with([domain], [account], [cbdc, usd]),
@@ -267,16 +275,29 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
 
-    let cbdc_id =
-        dm::AssetDefinitionId::new(domain_id.clone(), "cbdc".parse().expect("asset name"));
-    let cbdc = dm::AssetDefinition::numeric(cbdc_id.clone())
-        .with_name("CBDC".to_owned())
-        .build(&authority);
+    let cbdc_id = dm::AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "cbdc".parse().expect("asset name"),
+    );
+    let cbdc = dm::AssetDefinition::numeric(
+        cbdc_id.clone(),
+        "CBDC".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
 
-    let usd_id = dm::AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
-    let usd = dm::AssetDefinition::numeric(usd_id.clone())
-        .with_name("usd".to_owned())
-        .build(&authority);
+    let usd_id = dm::AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "usd".parse().expect("asset name"),
+    );
+    let usd = dm::AssetDefinition::numeric(
+        usd_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
 
     let state = Arc::new(State::new_for_testing(
         World::with([domain], [account], [cbdc, usd]),

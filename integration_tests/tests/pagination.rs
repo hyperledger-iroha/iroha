@@ -84,13 +84,17 @@ fn pagination_behaves() -> Result<()> {
 fn register_assets(client: &Client) -> Result<()> {
     const MAX_INSTRUCTIONS_PER_TX: usize = 5;
 
-    let register: Vec<InstructionBox> = pagination_asset_definition_ids()
+    let register: Vec<InstructionBox> = pagination_asset_definitions()
         .into_iter()
-        .map(|asset_definition_id: AssetDefinitionId| {
+        .map(|(asset_definition_id, name)| {
             Register::asset_definition({
                 let __asset_definition_id = asset_definition_id;
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    name,
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .into()
         })
@@ -106,23 +110,24 @@ fn register_assets(client: &Client) -> Result<()> {
     Ok(())
 }
 
-fn pagination_asset_definition_ids() -> Vec<AssetDefinitionId> {
+fn pagination_asset_definitions() -> Vec<(AssetDefinitionId, String)> {
     ('a'..='j')
         .map(|c| c.to_string())
         .map(|name| {
-            AssetDefinitionId::new(
+            let id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("wonderland domain is valid"),
                 name.parse::<Name>().expect("single-letter name is valid"),
-            )
+            );
+            (id, name)
         })
         .collect()
 }
 
 #[test]
 fn pagination_asset_definition_ids_are_canonical_base58_literals() {
-    let ids = pagination_asset_definition_ids();
-    assert_eq!(ids.len(), 10);
-    for id in ids {
+    let definitions = pagination_asset_definitions();
+    assert_eq!(definitions.len(), 10);
+    for (id, _) in definitions {
         let literal = id.to_string();
         assert!(!literal.contains(':'));
         assert_eq!(literal.parse::<AssetDefinitionId>().expect("canonical"), id);

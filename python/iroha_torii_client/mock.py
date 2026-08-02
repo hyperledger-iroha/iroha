@@ -341,7 +341,7 @@ class _MockState:
                 "code_hash_hex": "22" * 32,
                 "abi_hash_hex": "33" * 32,
                 "creation_time_ms": 0,
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 "tx_hash_hex": None,
                 "pipeline_status": None,
                 "entrypoint": "ping",
@@ -356,7 +356,7 @@ class _MockState:
                     "transport": "torii",
                     "dataspace": "universal",
                     "contract_alias": "router::universal",
-                    "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                    "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                     "code_hash_hex": "22" * 32,
                     "abi_hash_hex": "33" * 32,
                     "tx_hash_hex": None,
@@ -1583,7 +1583,7 @@ class _MockState:
             "payload_hash": _canonical_hash(0x33),
         }
         self.sumeragi_status = {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "node_fingerprint": _canonical_hash(0x11),
             "build_fingerprint": _canonical_hash(0x12),
             "config_fingerprint": _canonical_hash(0x13),

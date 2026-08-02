@@ -5,11 +5,13 @@ use core::{
     ops::{Add, Neg as _, Sub},
 };
 
+#[cfg(test)]
+use halo2curves::t256::Fp;
 use halo2curves::{
     Coordinates, CurveAffine, CurveExt,
     ff::PrimeField,
     group::{Curve as _, Group as _, GroupEncoding as _},
-    t256::{Fp, T256, T256Affine},
+    t256::{T256, T256Affine},
 };
 use thiserror::Error;
 
@@ -21,6 +23,7 @@ pub const VEGA_T256_BASE_MODULUS_BE_V1: [u8; 32] = [
     0x7e, 0x72, 0xb4, 0x2b, 0x30, 0xe7, 0x31, 0x77, 0x93, 0x13, 0x56, 0x61, 0xb1, 0xc4, 0xb1, 0x17,
 ];
 
+#[cfg(test)]
 const CANONICAL_GENERATOR_Y_BE_V1: [u8; 32] = [
     0x5a, 0x6d, 0xd3, 0x2d, 0xf5, 0x87, 0x08, 0xe6, 0x4e, 0x97, 0x34, 0x5c, 0xbe, 0x66, 0x60, 0x0d,
     0xec, 0xd9, 0xd5, 0x38, 0xa3, 0x51, 0xbb, 0x3c, 0x30, 0xb4, 0x95, 0x49, 0x25, 0xb1, 0xf0, 0x2d,
@@ -64,7 +67,9 @@ pub enum VegaCurveError {
     #[error("T256 generator count must be in 1..={MAX_VEGA_T256_GENERATORS_V1}")]
     InvalidGeneratorCount,
     /// Fixed canonical generator constants no longer form a point under the
-    /// linked curve implementation.
+    /// linked curve implementation. This is retained only for the independent
+    /// group-law known-answer tests; production generators use SHAKE256.
+    #[cfg(test)]
     #[error("linked T256 implementation disagrees with the canonical x=3 generator")]
     CanonicalGeneratorMismatch,
 }
@@ -84,6 +89,7 @@ impl VegaT256PointV1 {
     ///
     /// Returns [`VegaCurveError::CanonicalGeneratorMismatch`] if the fixed
     /// protocol coordinates do not validate under the linked curve arithmetic.
+    #[cfg(test)]
     pub fn canonical_generator() -> Result<Self, VegaCurveError> {
         let mut x = [0_u8; 32];
         x[31] = 3;
@@ -304,6 +310,7 @@ pub fn derive_t256_generators_v1(
         .collect()
 }
 
+#[cfg(test)]
 fn base_from_be_exact(bytes: [u8; 32]) -> Option<Fp> {
     if bytes >= VEGA_T256_BASE_MODULUS_BE_V1 {
         return None;

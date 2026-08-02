@@ -110,7 +110,7 @@ for task in "${tasks[@]}"; do
             do_check "$cmd_kagami_help" "crates/iroha_kagami/CommandLineHelp.md"
             ;;
         "docker-compose")
-            do_check_swarm 1 hyperledger/iroha:local "--build ." "defaults/docker-compose.single.yml"
+            do_check_swarm 4 hyperledger/iroha:local "--build ." "defaults/docker-compose.single.yml"
             do_check_swarm 4 hyperledger/iroha:local "--build ." "defaults/docker-compose.local.yml"
             do_check_swarm 4 hyperledger/iroha:dev "" "defaults/docker-compose.yml"
             ;;

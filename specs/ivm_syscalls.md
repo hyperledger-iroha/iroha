@@ -93,14 +93,15 @@ Notes
 - `CORE_QUERY_GET` (`0x010001`) accepts stable entity tag `1..=5` for account,
   asset, asset definition, domain, or NFT plus that family's exact typed ID,
   and returns a compiler-owned `Option<View>` handle. `CORE_QUERY_PAGE`
-  (`0x010002`) accepts the same tag with `offset >= 0` and `limit` in `1..=64`,
-  and returns `List<View, 64>` plus `Option<int>` continuation handles. The
-  host orders canonical IDs, performs one ledger query, decodes its canonical
-  Norito response exactly once, and materializes only the requested projection
-  into guest handles. The precise view and `QueryPage<T>` field layouts are
-  normative in `specs/kotodama_grammar.md`; those layouts and stable
-  entity tags are bound into the ABI hash. Query families outside these five
-  remain explicit `NoritoBytes` specialist APIs.
+  (`0x010002`) accepts the same tag with `offset` in `0..=i64::MAX`, `limit` in
+  `1..=64`, and `offset + limit` fitting `i64`; it returns `List<View, 64>` plus
+  `Option<int>` continuation handles. The host orders canonical IDs, performs
+  one ledger query, decodes the canonical host-created projection exactly once, and
+  materializes only the requested projection into guest handles. The precise
+  view and `QueryPage<T>` field layouts are normative in
+  `specs/kotodama_grammar.md`; those layouts and stable entity tags are bound
+  into the ABI hash. Query families outside these five remain explicit
+  `NoritoBytes` specialist APIs.
 - Exact gas constants (`G_*`) are defined by the active gas schedule; see `ivm.md`.
 
 Errors

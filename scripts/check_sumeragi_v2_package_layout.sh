@@ -15,11 +15,34 @@ if [[ ! -f "$CORE_MODULE" || -L "$CORE_MODULE" ]]; then
   exit 1
 fi
 
-# `cargo package` only carries files under the package root. Reject source
-# indirection that could compile in the repository while disappearing from a
-# published `iroha_core` archive.
+# `cargo package` only carries files under the package root. The sole reviewed
+# path override is the package-local refinement test split; reject every other
+# path override and every parent-relative include.
+REFINEMENT_TESTS="$CORE_DIR/refinement_cases.rs"
+if [[ ! -f "$REFINEMENT_TESTS" || -L "$REFINEMENT_TESTS" ]]; then
+  echo "missing package-local regular refinement test source: $REFINEMENT_TESTS" >&2
+  exit 1
+fi
+path_attribute_hits="$(
+  rg -n '#\[path[[:space:]]*=' "$CORE_MODULE" "$CORE_DIR" || true
+)"
+path_attribute_count="$(
+  printf '%s\n' "$path_attribute_hits" \
+    | awk 'NF { count += 1 } END { print count + 0 }'
+)"
+reviewed_path_count="$(
+  rg -F -c '#[path = "refinement_cases.rs"]' "$CORE_DIR/refinement.rs" || true
+)"
+if [[ "$path_attribute_count" != 1 || "$reviewed_path_count" != 1 ]] \
+  || ! rg -U -q \
+    '^#\[cfg\(test\)\]\n#\[path = "refinement_cases.rs"\]\nmod tests;$' \
+    "$CORE_DIR/refinement.rs"; then
+  printf '%s\n' "$path_attribute_hits" >&2
+  echo "production Sumeragi v2 reducer must use only the reviewed package-local refinement test split" >&2
+  exit 1
+fi
 if rg -n \
-  '#\[path[[:space:]]*=|include(_str|_bytes)?![[:space:]]*\([[:space:]]*"\.\.' \
+  'include(_str|_bytes)?![[:space:]]*\([[:space:]]*"\.\.' \
   "$CORE_MODULE" "$CORE_DIR"; then
   echo "production Sumeragi v2 reducer must not load source outside iroha_core" >&2
   exit 1

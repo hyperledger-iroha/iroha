@@ -5,6 +5,7 @@ import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
+export * from "./bootle-lantern-issuance.js";
 
 export type JsonValue =
   | null
@@ -172,7 +173,11 @@ export type {
   PrivacyConsensusLimitsV1,
   PrivacyConsensusPolicyTighteningV1,
   PrivacyConsensusPolicyV1,
+  PrivacyEngineIdV1,
+  PrivacyEngineTagV1,
   PrivacyFixed32BytesV1,
+  PrivacyProofSystemIdV1,
+  PrivacyProofSystemTagV1,
   PrivacyProtocolActivationRecordV1,
   PrivacyProtocolIdV1,
   PrivacyProtocolLifecycleV1,
@@ -828,7 +833,7 @@ export interface SccpSemanticProofProfileV1 {
 export interface SccpSoraFinalityAnchorV1 {
   readonly version: 1;
   readonly source_network: SccpNetworkV1;
-  readonly protocol_version: 3;
+  readonly protocol_version: 3 | 4;
   readonly chain_id_hash: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
@@ -1566,32 +1571,26 @@ export interface AssetHolderIteratorOptions extends PaginationIteratorOptions {
 }
 
 export interface ExplorerNftListOptions {
-  page?: NumericLike;
-  perPage?: NumericLike;
   limit?: NumericLike;
-  offset?: NumericLike;
+  cursor?: string;
   ownedBy?: string;
   domainId?: string;
   signal?: AbortSignal;
 }
 
 export interface ExplorerNftIteratorOptions extends ExplorerNftListOptions {
-  pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
 
 export interface ExplorerRwaListOptions {
-  page?: NumericLike;
-  perPage?: NumericLike;
   limit?: NumericLike;
-  offset?: NumericLike;
+  cursor?: string;
   ownedBy?: string;
   domainId?: string;
   signal?: AbortSignal;
 }
 
 export interface ExplorerRwaIteratorOptions extends ExplorerRwaListOptions {
-  pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
 
@@ -2474,6 +2473,13 @@ export interface ToriiExplorerPaginationMeta {
   totalItems: number;
 }
 
+/** Seek-pagination metadata for canonical Explorer world collections. */
+export interface ToriiExplorerCursorMeta {
+  limit: number;
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export interface ToriiExplorerNft {
   id: string;
   ownedBy: string;
@@ -2481,7 +2487,7 @@ export interface ToriiExplorerNft {
 }
 
 export interface ToriiExplorerNftsPage {
-  pagination: ToriiExplorerPaginationMeta;
+  pagination: ToriiExplorerCursorMeta;
   items: ReadonlyArray<ToriiExplorerNft>;
 }
 
@@ -2498,7 +2504,7 @@ export interface ToriiExplorerRwa {
 }
 
 export interface ToriiExplorerRwasPage {
-  pagination: ToriiExplorerPaginationMeta;
+  pagination: ToriiExplorerCursorMeta;
   items: ReadonlyArray<ToriiExplorerRwa>;
 }
 
@@ -2541,14 +2547,17 @@ export interface ToriiVpnProfile {
   tunnelAddresses: ReadonlyArray<string>;
   mtuBytes: number;
   displayBillingLabel: string;
-  feeAssetId: string;
-  escrowAccountId: string;
   operatorAccountId: string;
   leaseFee: string;
   settlementGraceSecs: number;
   flowLabelBits: number;
   paddingBudgetMs: number;
-  relayTlsSpkiSha256Hex: string | null;
+  relayIdHex: string;
+  descriptorCommitHex: string;
+  tlsServerName: string;
+  relayTlsSpkiSha256Hex: string;
+  relayCertificateSha256Hex: string;
+  directorySnapshotDigestHex: string;
 }
 
 export interface ToriiVpnTxInstruction {
@@ -2578,10 +2587,14 @@ export interface ToriiVpnQuote {
   meterFamily: string;
   flowLabelBits: number;
   paddingBudgetMs: number;
-  relayTlsSpkiSha256Hex: string | null;
+  relayIdHex: string;
+  descriptorCommitHex: string;
+  tlsServerName: string;
+  relayTlsSpkiSha256Hex: string;
+  relayCertificateSha256Hex: string;
+  directorySnapshotDigestHex: string;
   meteringPublicKeyHex: string;
-  openLeaseInstruction: ToriiVpnTxInstruction | null;
-  txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
+  openLeaseInstruction: ToriiVpnTxInstruction;
 }
 
 export interface ToriiVpnSession {
@@ -2602,7 +2615,12 @@ export interface ToriiVpnSession {
   leaseFee: string;
   flowLabelBits: number;
   paddingBudgetMs: number;
-  relayTlsSpkiSha256Hex: string | null;
+  relayIdHex: string;
+  descriptorCommitHex: string;
+  tlsServerName: string;
+  relayTlsSpkiSha256Hex: string;
+  relayCertificateSha256Hex: string;
+  directorySnapshotDigestHex: string;
   routePushes: ReadonlyArray<string>;
   excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
@@ -2637,7 +2655,6 @@ export interface ToriiVpnReceipt {
   refundedFee: string;
   leaseIdHex: string;
   settleLeaseInstruction: ToriiVpnTxInstruction | null;
-  txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
 }
 
 export interface ToriiVpnReceiptListResponse {
@@ -5868,6 +5885,7 @@ export type ToriiSumeragiV2LivenessBlocker = Readonly<{
     | "timeout_certificate_missing"
     | "scheduler_starvation"
     | "application_pending"
+    | "successor_activation_pending"
     | "local_control_pending";
   details: null;
 }>;
@@ -6023,7 +6041,7 @@ export interface ToriiSumeragiSafetyHaltStatus {
 }
 
 export interface ToriiSumeragiStatus {
-  protocol_version: 3;
+  protocol_version: 4;
   node_fingerprint: string;
   build_fingerprint: string;
   config_fingerprint: string;
@@ -7379,11 +7397,14 @@ interface RegisterAssetDefinitionAndMintInputBase {
   authority: string;
   assetDefinition: {
     assetDefinitionId: string;
+    /** Immutable ownership intent; null means intentionally unowned global. */
+    owningDomain: string | null;
     metadata?: object;
     mintable?: string;
     logo?: string | null;
     spec?: object;
     confidentialPolicy?: object;
+    balanceScopePolicy: string;
   };
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -7633,7 +7654,6 @@ export interface UnshieldInstructionInput {
   destinationAccountId: string;
   publicAmount: QuantityInput;
   inputs: ReadonlyArray<BinaryLike>;
-  outputs?: ReadonlyArray<BinaryLike>;
   proof: ProofAttachmentInput;
   rootHint?: BinaryLike | null;
 }
@@ -8645,13 +8665,17 @@ export interface SorafsPorStatusOptions {
   epoch?: NumericLike;
   status?: string;
   limit?: NumericLike;
-  pageTokenHex?: string | null;
+  maxBytes?: NumericLike;
+  cursor?: string | null;
   signal?: AbortSignal;
 }
 
 export interface SorafsPorExportOptions {
   startEpoch?: NumericLike;
   endEpoch?: NumericLike;
+  limit?: NumericLike;
+  maxBytes?: NumericLike;
+  cursor?: string | null;
   signal?: AbortSignal;
 }
 
@@ -10011,6 +10035,69 @@ export interface ToriiBrowserRequestOptions {
   successStatuses?: ReadonlyArray<number>;
 }
 
+export interface ToriiBrowserExplorerCursorOptions {
+  cursor?: string;
+  limit?: NumericLike;
+  signal?: AbortSignal;
+}
+
+export interface ToriiBrowserExplorerAccountsOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  domain?: string;
+  withAsset?: string;
+  addressFormat?: string;
+}
+
+export interface ToriiBrowserExplorerDomainsOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  ownedBy?: string;
+}
+
+export interface ToriiBrowserExplorerAssetDefinitionsOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  owningDomain?: string;
+  owning_domain?: string;
+  ownedBy?: string;
+}
+
+export interface ToriiBrowserExplorerAssetsOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  ownedBy?: string;
+  definition?: string;
+  assetId?: string;
+}
+
+export interface ToriiBrowserExplorerOwnedDomainOptions
+  extends ToriiBrowserExplorerCursorOptions {
+  ownedBy?: string;
+  domain?: string;
+}
+
+export interface ToriiBrowserExplorerCursorMeta {
+  limit: number;
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface ToriiBrowserExplorerCursorPage<T = unknown> {
+  pagination: ToriiBrowserExplorerCursorMeta;
+  items: ReadonlyArray<T>;
+}
+
+export interface ToriiBrowserExplorerAssetDefinition {
+  readonly id: string;
+  /** Null denotes an intentionally unowned global definition. */
+  readonly owning_domain: string | null;
+  readonly mintable: string;
+  readonly logo: string | null;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly owned_by: string;
+  readonly assets: number;
+  readonly total_quantity: string;
+  readonly locked_quantity: string | null;
+  readonly circulating_quantity: string | null;
+}
+
 export interface ToriiLedgerHeadersOptions {
   from?: number | string | bigint;
   limit?: number | string | bigint;
@@ -10025,6 +10112,11 @@ export interface ToriiBlockMerkleProof {
 export interface ToriiBlockReceiptProof {
   readonly leaf: string;
   readonly proof: ToriiBlockMerkleProof;
+}
+
+export interface ToriiBlockMerkleCommitment {
+  readonly root: string;
+  readonly leaf_count: string;
 }
 
 export interface ToriiBlockProofTransferSmtWitness {
@@ -10056,23 +10148,103 @@ export interface ToriiBlockProofTransferTranscript {
 
 export interface ToriiBlockProofs {
   readonly block_height: string;
+  readonly block_hash: string;
+  readonly executed_block_wire_hash: string;
   readonly entry_hash: string;
-  readonly entry_root: string;
+  readonly entry_commitment: ToriiBlockMerkleCommitment;
   readonly entry_proof: ToriiBlockReceiptProof;
-  readonly result_root: string | null;
-  readonly result_proof: ToriiBlockReceiptProof | null;
+  readonly result_commitment: ToriiBlockMerkleCommitment;
+  readonly result_proof: ToriiBlockReceiptProof;
   readonly fastpq_transcripts: Readonly<
     Record<string, ReadonlyArray<ToriiBlockProofTransferTranscript>>
   >;
 }
 
+/**
+ * Structural anchor for local BlockProofs consistency checks.
+ *
+ * The SDK does not authenticate this value or block finality. It must come
+ * from an independently authenticated block and must never be copied from the
+ * ToriiBlockProofs response being checked.
+ */
+export interface ToriiBlockProofTrustedAnchor {
+  readonly block_height: string;
+  readonly block_hash: string;
+  readonly executed_block_wire_hash: string;
+  readonly entry_hash: string;
+  readonly entry_index: number;
+  readonly entry_commitment: ToriiBlockMerkleCommitment;
+  readonly result_commitment: ToriiBlockMerkleCommitment;
+  readonly fastpq_transcripts: ToriiBlockProofs["fastpq_transcripts"];
+}
+
 export interface ToriiBlockProofVerification {
+  /** Consistency with the supplied anchor; this is not a finality verdict. */
   readonly valid: boolean;
+  readonly anchor_matches: boolean;
   readonly entry_hash_matches: boolean;
   readonly entry_proof_valid: boolean;
   readonly result_pair_consistent: boolean;
-  readonly result_proof_valid: boolean | null;
+  readonly result_proof_valid: boolean;
 }
+
+/** First-release native authenticated BlockProofs verifier version. */
+export const AUTHENTICATED_BLOCK_PROOFS_VERSION_V1: 1;
+/** Maximum exact executed SignedBlockWire bytes accepted by the native verifier. */
+export const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1: 33554432;
+/** Maximum canonical Norito bytes accepted for one BridgeFinalityProof. */
+export const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1: 9437184;
+/** Maximum canonical Norito bytes accepted for one BlockProofs response. */
+export const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: 16777216;
+
+export interface AuthenticatedBlockProofInputV1 {
+  readonly version: 1;
+  /** Application-pinned canonical ChainId; this must not be sourced from the response. */
+  readonly chainId: string;
+  /** Application-pinned marked 32-byte HeightContextId. */
+  readonly trustedContextId: ArrayBufferView | ArrayBuffer | Buffer;
+  /** Application-selected marked 32-byte transaction entrypoint hash. */
+  readonly expectedEntryHash: ArrayBufferView | ArrayBuffer | Buffer;
+  /**
+   * Optional last verified BridgeFinalityProof. When present, the target proof
+   * must be its immediate cryptographic successor.
+   */
+  readonly previousFinalityProofNorito?:
+    | ArrayBufferView
+    | ArrayBuffer
+    | Buffer
+    | null;
+  /** Canonical Norito BridgeFinalityProof for the target block. */
+  readonly finalityProofNorito: ArrayBufferView | ArrayBuffer | Buffer;
+  /** Exact canonical executed SignedBlockWire for the target block. */
+  readonly executedBlockWire: ArrayBufferView | ArrayBuffer | Buffer;
+  /** Canonical Norito BlockProofs response returned by Torii. */
+  readonly blockProofsNorito: ArrayBufferView | ArrayBuffer | Buffer;
+}
+
+export interface AuthenticatedBlockProofVerdictV1 {
+  /** Finality is authenticated whenever a verdict resolves; this additionally covers BlockProofs. */
+  readonly valid: boolean;
+  readonly code: "valid" | "block_proofs_mismatch";
+  readonly blockHeight: string;
+  readonly blockHashHex: string;
+  readonly executedBlockWireHashHex: string;
+  readonly entryHashHex: string;
+  /** Verified context to retain alongside the accepted finality proof for successor state. */
+  readonly heightContextIdHex: string;
+}
+
+/**
+ * Verify Torii BlockProofs through the native Rust Sumeragi-v2 finality path.
+ *
+ * The promise rejects on malformed, non-canonical, wrong-chain, wrong-context,
+ * stale/skipped, or cryptographically invalid finality material. A valid
+ * finality chain carrying inconsistent Merkle/result/transcript proofs resolves
+ * to a verdict whose `valid` field is false.
+ */
+export function verifyAuthenticatedBlockProofsV1(
+  input: Readonly<AuthenticatedBlockProofInputV1>,
+): Promise<Readonly<AuthenticatedBlockProofVerdictV1>>;
 
 export interface ToriiBrowserTransactionStatusOptions
   extends ToriiBrowserRequestOptions {
@@ -10232,17 +10404,23 @@ export declare class ToriiBrowserClient {
     operationId: string,
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaOperationStatus>;
-  listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAccounts<T = unknown>(
+    options?: ToriiBrowserExplorerAccountsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAccount(
     accountId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerDomains(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerDomains<T = unknown>(
+    options?: ToriiBrowserExplorerDomainsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerDomain(
     domainId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssets(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAssets<T = unknown>(
+    options?: ToriiBrowserExplorerAssetsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAsset(
     assetId: string,
     options?: Record<string, unknown>,
@@ -10296,9 +10474,9 @@ export declare class ToriiBrowserClient {
     aliasOrRequest: string | Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssetDefinitions(
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  listExplorerAssetDefinitions<T = ToriiBrowserExplorerAssetDefinition>(
+    options?: ToriiBrowserExplorerAssetDefinitionsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAssetDefinitionEconometrics(
     assetDefinitionId: string,
     options?: Record<string, unknown>,
@@ -10307,12 +10485,16 @@ export declare class ToriiBrowserClient {
     assetDefinitionId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerNfts(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerNfts<T = unknown>(
+    options?: ToriiBrowserExplorerOwnedDomainOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerNft(
     nftId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerRwas(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerRwas<T = unknown>(
+    options?: ToriiBrowserExplorerOwnedDomainOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerRwa(
     rwaId: string,
     options?: Record<string, unknown>,
@@ -10331,6 +10513,11 @@ export declare class ToriiBrowserClient {
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
   ): Promise<unknown>;
+  /** Exact canonical result-bearing SignedBlockWire at a finalized height. */
+  getLedgerExecutedBlockWire(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<Buffer>;
   getLedgerBlockProof(
     height: number | string | bigint,
     entryHash: string,
@@ -11440,6 +11627,11 @@ export declare class ToriiClient {
     asText?: boolean;
     signal?: AbortSignal;
   }): Promise<unknown>;
+  /** Exact canonical result-bearing SignedBlockWire at a finalized height. */
+  getLedgerExecutedBlockWire(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<Buffer>;
   getBlock(
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
@@ -12022,10 +12214,15 @@ export function noritoDecodeBlockProofs(
 export function verifyBlockMerkleProof(
   leaf: string | ArrayBufferView | ArrayBuffer | Buffer,
   proof: ToriiBlockMerkleProof,
-  root: string | ArrayBufferView | ArrayBuffer | Buffer,
+  commitment: ToriiBlockMerkleCommitment,
 ): boolean;
+/**
+ * Perform pure local Merkle consistency checks against a caller-authenticated
+ * anchor. This function does not authenticate the anchor or verify finality.
+ */
 export function verifyBlockProofs(
   proofs: ToriiBlockProofs,
+  trustedAnchor: ToriiBlockProofTrustedAnchor,
 ): ToriiBlockProofVerification;
 /** Encode a canonical compact `InstructionBox` archive for a transaction. */
 export function noritoEncodeInstructionBoxArchive(
@@ -13019,8 +13216,10 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   mintable?: string;
   mintOnce?: boolean;
   metadata?: object | null;
-  balanceScopePolicy?: string;
+  balanceScopePolicy: string;
   balance_scope_policy?: string;
+  /** Immutable ownership intent; null means intentionally unowned global. */
+  owningDomain: string | null;
   confidentialPolicy?: object;
   confidential_policy?: object;
 }): object;

@@ -201,7 +201,7 @@ enum CorridorRunMode {
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
@@ -212,7 +212,7 @@ fn stake_asset_id_literal() -> String {
 }
 
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
@@ -572,11 +572,11 @@ fn npos_multilane_genesis_post_topology_transactions(
     let ds2_domain: DomainId = DomainId::try_new("ds2", "universal").expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
-    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
     );
-    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds2coin".parse().expect("asset definition name"),
     );
@@ -587,26 +587,42 @@ fn npos_multilane_genesis_post_topology_transactions(
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = fee_asset_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = ds1_asset_def.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "ds1coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Register::asset_definition({
             let __asset_definition_id = ds2_asset_def.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "ds2coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         })
         .into(),
         Mint::asset_quantity(
@@ -4750,7 +4766,7 @@ fn exact_autoscale_carrier_height_context(
                 && context.epoch == expected_context.epoch
                 && context.roster == expected_context.roster
                 && context.quorum == expected_context.quorum,
-            "peer {peer_index} disagrees on the exact canonical carrier block or frozen powered height context"
+            "peer {peer_index} disagrees on the exact canonical carrier block or frozen equal-vote height context"
         );
     }
     Ok(expected_context.clone())
@@ -4778,15 +4794,15 @@ fn validate_autoscale_merge_qc_height_context_binding(
                 .all(|(actual, frozen)| actual == &frozen.validator),
         "merge QC validator set differs from the exact frozen carrier-height roster"
     );
-    let weighted_signers = signer_indices
+    let signers = signer_indices
         .iter()
         .copied()
         .map(u32::try_from)
         .collect::<std::result::Result<Vec<_>, _>>()
         .wrap_err("merge QC signer index exceeds the historical context range")?;
     context
-        .validate_signers(&weighted_signers)
-        .map_err(|err| eyre!("merge QC fails the historical count-and-power quorum: {err}"))
+        .validate_signers(&signers)
+        .map_err(|err| eyre!("merge QC fails the historical equal-vote quorum: {err}"))
 }
 
 fn validate_autoscale_merge_qc(
@@ -6049,11 +6065,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             ds2_progress.commit_qc_signer_count,
         );
     }
-    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition"),
         "ds1coin".parse().expect("asset definition"),
     );
-    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("asset definition"),
         "ds2coin".parse().expect("asset definition"),
     );
@@ -7563,13 +7579,15 @@ mod tests {
             .collect()
     }
 
-    fn weighted_height_context(powers: &[u64]) -> HeightContext {
-        let mut validators = deterministic_topology(powers.len());
+    fn equal_vote_height_context() -> HeightContext {
+        let mut validators = deterministic_topology(4);
         validators.sort();
         let roster = validators
             .into_iter()
-            .zip(powers.iter().copied())
-            .map(|(validator, power)| ValidatorPower { validator, power })
+            .map(|validator| ValidatorPower {
+                validator,
+                power: 1,
+            })
             .collect::<Vec<_>>();
         HeightContext {
             chain_id: ChainId::from("g12p-historical-roster-test"),
@@ -7581,17 +7599,17 @@ mod tests {
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
             snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("valid weighted fixture roster"),
+            quorum: DualQuorum::from_roster(&roster).expect("valid equal-vote fixture roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"g12p historical roster"),
             execution_policy_hash: Hash::new(b"g12p historical roster execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 4,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 1024,
-                max_chunk_count: 256,
+                max_chunk_count: 512,
             },
             leader_seed: [0xA5; 32],
         }
@@ -8319,8 +8337,8 @@ mod tests {
     }
 
     #[test]
-    fn merge_qc_binding_uses_exact_historical_weighted_height_context() {
-        let historical = weighted_height_context(&[8, 1, 1, 1]);
+    fn merge_qc_binding_uses_exact_historical_equal_vote_height_context() {
+        let historical = equal_vote_height_context();
         historical.validate().expect("valid historical context");
         let historical_validators = historical
             .roster
@@ -8335,23 +8353,23 @@ mod tests {
             &historical_validators,
             &[0, 1, 2],
         )
-        .expect("exact historical powered quorum should pass");
+        .expect("exact historical equal-vote quorum should pass");
 
-        let count_only_error = validate_autoscale_merge_qc_height_context_binding(
+        let subquorum_error = validate_autoscale_merge_qc_height_context_binding(
             &historical.chain_id,
             &historical,
             historical.height,
             historical.epoch,
             &historical_validators,
-            &[1, 2, 3],
+            &[1, 2],
         )
-        .expect_err("three low-power signers must not satisfy weighted quorum");
+        .expect_err("two signers must not satisfy the three-vote quorum");
         assert!(
-            count_only_error.to_string().contains("count-and-power"),
-            "unexpected weighted-quorum rejection: {count_only_error}"
+            subquorum_error.to_string().contains("equal-vote"),
+            "unexpected equal-vote quorum rejection: {subquorum_error}"
         );
 
-        let mut current_rotated = weighted_height_context(&[8, 1, 1, 1]);
+        let mut current_rotated = equal_vote_height_context();
         current_rotated.height = 2;
         current_rotated.epoch = historical.epoch + 1;
         let replacement = KeyPair::try_from_seed(vec![0xF4; 32], Algorithm::Ed25519)

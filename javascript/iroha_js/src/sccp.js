@@ -883,7 +883,7 @@ function parseSoraFinalityAnchor(value, label) {
     record.protocol_version,
     `${label}.protocol_version`,
     3,
-    3,
+    4,
   );
   const chainHash = bytesFromUpperHex(record.chain_id_hash, `${label}.chain_id_hash`, 32);
   if (record.chain_id_hash !== SORA_TAIRA_CHAIN_ID_HASH) {

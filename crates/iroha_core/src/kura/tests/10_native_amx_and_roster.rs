@@ -84,6 +84,94 @@ fn native_amx_manifest_artifact_rejects_leaf_or_proof_tampering() {
     );
 }
 
+#[test]
+fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
+    let temp_dir = TempDir::new().expect("same-depth Native manifest Kura directory");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+        .expect("initialize same-depth Native manifest Kura");
+    let entry = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("same-depth Native manifest primary lane entry");
+    let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3, 4]);
+    assert_eq!(receipts.len(), 4);
+
+    let manifests = (1..=4)
+        .map(|participant_height| {
+            let path = Kura::native_amx_application_manifest_path_for_entry(
+                &entry,
+                &kura.store_root,
+                participant_height,
+            );
+            norito::decode_canonical::<NativeAmxParticipantApplicationManifestArtifactV1>(
+                &fs::read(path).expect("read four-leaf Native manifest artifact"),
+            )
+            .expect("decode four-leaf Native manifest artifact")
+        })
+        .collect::<Vec<_>>();
+    let qc_manifest = manifests
+        .first()
+        .expect("four-leaf Native manifest fixture")
+        .clone();
+    assert_eq!(qc_manifest.manifest_leaf_count, 4);
+    Kura::validate_native_amx_participant_application_manifest_artifact(&qc_manifest)
+        .expect("QC-backed four-leaf manifest artifact is self-consistent");
+
+    let substituted_tree = manifests
+        .iter()
+        .take(3)
+        .map(|artifact| HashOf::new(&artifact.leaf))
+        .collect::<MerkleTree<_>>();
+    let mut substituted = qc_manifest.clone();
+    substituted.proof = substituted_tree
+        .get_proof(substituted.leaf_index)
+        .expect("three-leaf same-depth proof");
+    substituted.manifest_root = substituted_tree
+        .root()
+        .map(Hash::from)
+        .expect("three-leaf same-depth root");
+    substituted.manifest_leaf_count = 3;
+
+    assert_eq!(qc_manifest.proof.audit_path().len(), 2);
+    assert_eq!(
+        substituted.proof.audit_path().len(),
+        qc_manifest.proof.audit_path().len(),
+        "three- and four-leaf manifests deliberately have the same proof depth"
+    );
+    assert_ne!(substituted.manifest_root, qc_manifest.manifest_root);
+    Kura::validate_native_amx_participant_application_manifest_artifact(&substituted)
+        .expect("substituted three-leaf root/count/proof are internally self-consistent");
+
+    let finality = kura
+        .v2_finality_artifact(qc_manifest.leaf.application_block_height)
+        .expect("read Native finality")
+        .expect("Native finality exists");
+    let qc_execution = finality.commit_qc.execution_commitment;
+    assert_eq!(
+        qc_execution.native_amx_application_manifest_root,
+        qc_manifest.manifest_root
+    );
+    assert_eq!(
+        qc_execution.native_amx_application_manifest_count,
+        qc_manifest.manifest_leaf_count
+    );
+
+    let _prune_guard = kura.prune_lock.lock();
+    let _canonical_chain_guard = kura.canonical_chain_lock.lock();
+    assert!(
+        kura.native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
+            &qc_manifest,
+        ),
+        "the exact four-leaf manifest commitment must pass its QC finality gate"
+    );
+    assert!(
+        !kura.native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
+            &substituted,
+        ),
+        "an internally valid same-depth three-leaf commitment must not substitute for the four-leaf QC execution commitment"
+    );
+}
+
 fn install_native_amx_latest_index_evidence_fixture(
     kura: &Kura,
     entry: &LaneConfigEntry,
@@ -3052,12 +3140,12 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
         nexus_amx_context_hash: Hash::new(b"Native frontier token AMX context"),
         execution_policy_hash: Hash::new(b"Native frontier token execution policy"),
         da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
+            encoding: PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 1024,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 4096,
-            max_chunk_count: 4,
+            max_chunk_count: 8,
         },
         leader_seed: [0xA5; 32],
     };

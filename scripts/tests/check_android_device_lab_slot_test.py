@@ -545,7 +545,7 @@ def required_artifact_digests(slot: Path) -> dict[str, str]:
     required_paths = set(
         device_lab._required_signed_evidence_digest_paths(slot)  # type: ignore[attr-defined]
     )
-    stage_manifest = device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+    stage_manifest = device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2
     if (slot / stage_manifest).is_file():
         required_paths.add(stage_manifest)
     for relative in sorted(required_paths):
@@ -818,16 +818,14 @@ def signed_candidate_apk_fixture() -> tuple[bytes, bytes, str]:
             if value
         )
     )
-    apksigner = shutil.which("apksigner")
-    if apksigner is None:
-        candidates = sorted(
-            candidate
-            for sdk_root in sdk_roots
-            for candidate in (sdk_root / "build-tools").glob("*/apksigner")
-            if candidate.is_file() and os.access(candidate, os.X_OK)
-        )
-        if candidates:
-            apksigner = str(candidates[-1])
+    authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+    if authority is None:
+        raise AssertionError("Android authority is not configured")
+    apksigner_command = [
+        os.fspath(authority["java"]["path"]),
+        "-jar",
+        os.fspath(authority["apksigner_jar"]["path"]),
+    ]
     aapt2 = shutil.which("aapt2")
     if aapt2 is None:
         candidates = sorted(
@@ -844,11 +842,10 @@ def signed_candidate_apk_fixture() -> tuple[bytes, bytes, str]:
         for candidate in (sdk_root / "platforms").glob("android-*/android.jar")
         if candidate.is_file()
     )
-    keytool = shutil.which("keytool")
-    if apksigner is None or aapt2 is None or not android_jars or keytool is None:
+    keytool = Path(authority["java"]["path"]).with_name("keytool")
+    if aapt2 is None or not android_jars or not keytool.is_file():
         raise AssertionError(
-            "candidate APK validator tests require apksigner, aapt2, android.jar, "
-            "and keytool"
+            "candidate APK validator tests require aapt2, android.jar, and keytool"
         )
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -865,7 +862,7 @@ def signed_candidate_apk_fixture() -> tuple[bytes, bytes, str]:
         keystore = root / "candidate-lab-test.p12"
         subprocess.run(
             [
-                keytool,
+                str(keytool),
                 "-genkeypair",
                 "-alias",
                 "candidate-lab",
@@ -912,7 +909,7 @@ def signed_candidate_apk_fixture() -> tuple[bytes, bytes, str]:
                 archive.writestr("fixture.txt", f"candidate-lab-{label}\n")
             subprocess.run(
                 [
-                    apksigner,
+                    *apksigner_command,
                     "sign",
                     "--min-sdk-version",
                     "28",
@@ -954,8 +951,9 @@ def signed_wallet_apk_fixture() -> tuple[bytes, str]:
     authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
     if authority is None:
         raise AssertionError("Android authority is not configured")
-    apksigner = authority["apksigner"]["path"]
-    keytool = shutil.which("keytool")
+    java = authority["java"]["path"]
+    apksigner_jar = authority["apksigner_jar"]["path"]
+    keytool = Path(java).with_name("keytool")
     sdk_roots = tuple(
         Path(value).expanduser()
         for value in (
@@ -977,7 +975,7 @@ def signed_wallet_apk_fixture() -> tuple[bytes, str]:
         for candidate in (sdk_root / "platforms").glob("android-*/android.jar")
         if candidate.is_file()
     )
-    if keytool is None or not aapt_candidates or not android_jars:
+    if not keytool.is_file() or not aapt_candidates or not android_jars:
         raise AssertionError("wallet APK fixture requires keytool, aapt2, and android.jar")
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
@@ -1012,7 +1010,7 @@ def signed_wallet_apk_fixture() -> tuple[bytes, str]:
         keystore = root / "wallet-test.p12"
         subprocess.run(
             [
-                keytool,
+                str(keytool),
                 "-genkeypair",
                 "-alias",
                 "wallet",
@@ -1038,7 +1036,9 @@ def signed_wallet_apk_fixture() -> tuple[bytes, str]:
         )
         subprocess.run(
             [
-                str(apksigner),
+                str(java),
+                "-jar",
+                str(apksigner_jar),
                 "sign",
                 "--min-sdk-version",
                 "28",
@@ -1071,7 +1071,7 @@ def write_candidate_binding_v2(
 
     candidate_record_path = "evidence/candidate/candidate-v4.norito"
     candidate_manifest_path = "evidence/candidate/manifest-v4.norito"
-    candidate_validation_path = "evidence/candidate/candidate-validation-v1.json"
+    candidate_validation_path = device_lab.KAGEMUSHA_CANDIDATE_VALIDATION_REPORT_PATH_V2
     native_library_path = (
         "evidence/candidate/lib/arm64-v8a/libconnect_norito_bridge.so"
     )
@@ -1082,10 +1082,11 @@ def write_candidate_binding_v2(
     generation = f"candidate-{slot_id}"
     write_text(slot / candidate_record_path, f"{slot_id}:candidate-v4\n")
     write_text(slot / candidate_manifest_path, f"{slot_id}:manifest-v4\n")
-    write_json(
-        slot / candidate_validation_path,
-        {"schema": "candidate-validation-test-v1", "slot_id": slot_id},
+    qualification_receipt_path = (
+        "evidence/candidate/"
+        f"{device_lab.KAGEMUSHA_QUALIFICATION_RECEIPT_FILE_NAME_V4}"
     )
+    write_text(slot / qualification_receipt_path, f"{slot_id}:qualification-receipt\n")
     candidate_record_sha256 = hashlib.sha256(
         (slot / candidate_record_path).read_bytes()
     ).hexdigest()
@@ -1117,6 +1118,55 @@ def write_candidate_binding_v2(
         inventory.append({"path": relative, **measurement})
     inventory_sha256 = device_lab._candidate_inventory_sha256(measured_inventory)
 
+    qualification_receipt_sha256 = hashlib.sha256(
+        (slot / qualification_receipt_path).read_bytes()
+    ).hexdigest()
+    qualified_candidate_sha256 = (
+        device_lab.derive_kagemusha_qualified_candidate_sha256_v4(
+            candidate_record_sha256,
+            qualification_receipt_sha256,
+        )
+    )
+    report_artifacts = [
+        {
+            "role": role,
+            "file_name": file_name,
+            **measurement,
+        }
+        for role, file_name, measurement in zip(
+            device_lab.KAGEMUSHA_CANDIDATE_ARTIFACT_ROLES_V4,
+            device_lab.KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4,
+            measured_inventory,
+        )
+    ]
+    write_json(
+        slot / candidate_validation_path,
+        {
+            "schema": device_lab.KAGEMUSHA_CANDIDATE_VALIDATION_REPORT_SCHEMA_V2,
+            "candidate_record_sha256": candidate_record_sha256,
+            "candidate_manifest_sha256": candidate_manifest_sha256,
+            "qualification_receipt_file_name": (
+                device_lab.KAGEMUSHA_QUALIFICATION_RECEIPT_FILE_NAME_V4
+            ),
+            "qualification_receipt_sha256": qualification_receipt_sha256,
+            "qualified_candidate_sha256": qualified_candidate_sha256,
+            "source_commit": source_commit,
+            "source_tree_sha256": source_tree_sha256,
+            "source_repo_dirty": False,
+            "generation": generation,
+            "generation_memory_limit_bytes": 6 * 1024 * 1024 * 1024,
+            "generation_memory_enforcement_profile": (
+                device_lab.KAGEMUSHA_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V1
+            ),
+            "bridge_abi_version": 21,
+            "artifact_count": len(report_artifacts),
+            "artifacts": report_artifacts,
+            "topup_finality_roster_file_name": "topup-finality-roster-v4.norito",
+            "topup_finality_roster_size_bytes": 1,
+            "topup_finality_roster_sha256": hashlib.sha256(b"r").hexdigest(),
+        },
+    )
+
     for file_name in device_lab.KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1:
         write_text(slot / "scenario" / file_name, f"{slot_id}:{file_name}\n")
 
@@ -1125,6 +1175,7 @@ def write_candidate_binding_v2(
             candidate_record_path,
             candidate_manifest_path,
             candidate_validation_path,
+            qualification_receipt_path,
             *(
                 f"evidence/candidate/artifacts/{name}"
                 for name in device_lab.KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4
@@ -1160,9 +1211,9 @@ def write_candidate_binding_v2(
         scenario_digest.update(int(entry["size_bytes"]).to_bytes(8, "big"))
         scenario_digest.update(bytes.fromhex(str(entry["sha256"])))
     stage_manifest: dict[str, object] = {
-        "schema": device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V1,
-        "version": 1,
-        "stage_manifest_path": device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1,
+        "schema": device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V2,
+        "version": 2,
+        "stage_manifest_path": device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2,
         "stage_manifest_mode": "0600",
         "stage_manifest_size_bytes": 0,
         "candidate_record_sha256": candidate_record_sha256,
@@ -1170,6 +1221,8 @@ def write_candidate_binding_v2(
         "candidate_validation_report_sha256": hashlib.sha256(
             (slot / candidate_validation_path).read_bytes()
         ).hexdigest(),
+        "qualification_receipt_sha256": qualification_receipt_sha256,
+        "qualified_candidate_sha256": qualified_candidate_sha256,
         "scenario_inventory_sha256": scenario_digest.hexdigest(),
         "source_commit": source_commit,
         "source_tree_sha256": source_tree_sha256,
@@ -1210,7 +1263,7 @@ def write_candidate_binding_v2(
         if stage_manifest["stage_manifest_size_bytes"] == len(encoded_manifest):
             break
         stage_manifest["stage_manifest_size_bytes"] = len(encoded_manifest)
-    stage_manifest_path = slot / device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+    stage_manifest_path = slot / device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2
     stage_manifest_path.write_bytes(encoded_manifest)
     stage_manifest_path.chmod(0o600)
     stage_manifest_sha256 = hashlib.sha256(encoded_manifest).hexdigest()
@@ -1378,7 +1431,7 @@ def write_candidate_binding_v2(
             "candidate_record_sha256": candidate_record_sha256,
             "candidate_manifest_sha256": candidate_manifest_sha256,
             "candidate_stage_manifest_path": (
-                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2
             ),
             "candidate_stage_manifest_sha256": stage_manifest_sha256,
             "candidate_inventory_sha256": inventory_sha256,
@@ -1421,7 +1474,7 @@ def write_candidate_binding_v2(
             "candidate_manifest_path": candidate_manifest_path,
             "candidate_manifest_sha256": candidate_manifest_sha256,
             "candidate_stage_manifest_path": (
-                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2
             ),
             "candidate_stage_manifest_sha256": stage_manifest_sha256,
             "source_commit": source_commit,
@@ -1462,7 +1515,7 @@ def write_candidate_binding_v2(
         "candidate_manifest_path": candidate_manifest_path,
         "candidate_manifest_sha256": candidate_manifest_sha256,
         "candidate_stage_manifest_path": (
-            device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+            device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2
         ),
         "candidate_stage_manifest_sha256": stage_manifest_sha256,
         "candidate_source_commit": source_commit,
@@ -1540,7 +1593,7 @@ def summary_release_report(
             "candidate_manifest_path": "evidence/candidate/manifest-v4.norito",
             "candidate_manifest_sha256": "b" * 64,
             "candidate_stage_manifest_path": (
-                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2
             ),
             "candidate_stage_manifest_sha256": "c" * 64,
             "candidate_source_commit": "c" * 40,
@@ -2120,11 +2173,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 "source_tree_sha256": str(binding["candidate_source_tree_sha256"]),
             }
             with self.assertRaisesRegex(ValueError, "digest is not exact"):
-                device_lab.validate_kagemusha_candidate_stage_manifest_v1(
+                device_lab.validate_kagemusha_candidate_stage_manifest_v2(
                     slot,
                     **arguments,
                 )
-            manifest = device_lab.validate_kagemusha_candidate_stage_manifest_v1(
+            manifest = device_lab.validate_kagemusha_candidate_stage_manifest_v2(
                 slot,
                 verify_entry_digests=False,
                 **arguments,
@@ -2141,7 +2194,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             artifact_parent.rename(real_parent)
             artifact_parent.symlink_to(real_parent, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "parent is not a real directory"):
-                device_lab.validate_kagemusha_candidate_stage_manifest_v1(
+                device_lab.validate_kagemusha_candidate_stage_manifest_v2(
                     slot,
                     candidate_sha256=str(binding["candidate_record_sha256"]),
                     stage_sha256=str(binding["candidate_stage_manifest_sha256"]),
@@ -2180,6 +2233,33 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         if not apksigners:
             raise unittest.SkipTest("Android build-tools apksigner is required")
         apksigner = apksigners[-1]
+        apksigner_jar = (apksigner.parent / "lib" / "apksigner.jar").resolve(
+            strict=True
+        )
+        java_candidates = []
+        if os.environ.get("JAVA_HOME"):
+            java_candidates.append(Path(os.environ["JAVA_HOME"]) / "bin" / "java")
+        java_candidates.extend(
+            (
+                Path("/opt/homebrew/opt/openjdk@21/bin/java"),
+                Path("/opt/homebrew/opt/openjdk/bin/java"),
+                Path("/usr/local/opt/openjdk@21/bin/java"),
+                Path("/usr/local/opt/openjdk/bin/java"),
+            )
+        )
+        java_found = shutil.which("java")
+        if java_found is not None:
+            java_candidates.append(Path(java_found))
+        java = next(
+            (
+                candidate.resolve(strict=True)
+                for candidate in java_candidates
+                if candidate.is_file() and os.access(candidate, os.X_OK)
+            ),
+            None,
+        )
+        if java is None:
+            raise unittest.SkipTest("a Java executable is required")
         root_key = authority / "android-attestation-test-root.key"
         root_cert = authority / "android-attestation-test-root.pem"
         subprocess.run(
@@ -2214,8 +2294,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         status = authority / "android-attestation-status.json"
         write_json(status, {"entries": {}})
         cls._authority_kwargs = {
-            "apksigner": apksigner,
-            "apksigner_sha256": hashlib.sha256(apksigner.read_bytes()).hexdigest(),
+            "java": java,
+            "java_sha256": hashlib.sha256(java.read_bytes()).hexdigest(),
+            "apksigner_jar": apksigner_jar,
+            "apksigner_jar_sha256": hashlib.sha256(
+                apksigner_jar.read_bytes()
+            ).hexdigest(),
             "openssl": openssl,
             "openssl_sha256": hashlib.sha256(openssl.read_bytes()).hexdigest(),
             "attestation_trust_roots": [root_cert],
@@ -2236,8 +2320,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         _TEST_ATTESTATION_ROOT_KEY = root_key
         _TEST_ATTESTATION_ROOT_CERT = root_cert
         cls._authority_cli_args = [
-            "--apksigner", str(apksigner),
-            "--apksigner-sha256", cls._authority_kwargs["apksigner_sha256"],
+            "--java", str(java),
+            "--java-sha256", cls._authority_kwargs["java_sha256"],
+            "--apksigner-jar", str(apksigner_jar),
+            "--apksigner-jar-sha256",
+            cls._authority_kwargs["apksigner_jar_sha256"],
             "--openssl", str(openssl),
             "--openssl-sha256", cls._authority_kwargs["openssl_sha256"],
             "--android-attestation-trust-root", str(root_cert),
@@ -2281,6 +2368,54 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
     def test_kagemusha_production_evidence_requires_current_v4_bridge(self) -> None:
         self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 21)
+
+    def test_apk_verifier_executes_the_complete_pinned_java_jar_authority(self) -> None:
+        main_apk, _, certificate_sha256 = signed_candidate_apk_fixture()
+        authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+        assert authority is not None
+        with tempfile.TemporaryDirectory() as temporary:
+            apk = Path(temporary) / "candidate.apk"
+            apk.write_bytes(main_apk)
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=(
+                    "Signer #1 certificate SHA-256 digest: "
+                    f"{certificate_sha256}\n"
+                ),
+                stderr="",
+            )
+            with (
+                mock.patch.object(
+                    device_lab.subprocess,
+                    "run",
+                    return_value=completed,
+                ) as run,
+                mock.patch.object(
+                    device_lab,
+                    "_read_pinned_authority_file",
+                    wraps=device_lab._read_pinned_authority_file,
+                ) as authenticate,
+            ):
+                measured = device_lab.extract_apk_signing_certificate_sha256(apk)
+
+        self.assertEqual(measured, certificate_sha256)
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command[:3],
+            [
+                os.fspath(authority["java"]["path"]),
+                "-jar",
+                os.fspath(authority["apksigner_jar"]["path"]),
+            ],
+        )
+        self.assertEqual(
+            run.call_args.kwargs["env"],
+            {"HOME": "/var/empty", "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        )
+        labels = [call.kwargs["label"] for call in authenticate.call_args_list]
+        self.assertEqual(labels.count("configured Java executable"), 2)
+        self.assertEqual(labels.count("configured apksigner.jar"), 2)
 
     def test_candidate_bound_v2_slot_passes_exact_inventory_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2370,10 +2505,14 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
     def test_confirmation_mode_delegates_authority_configuration_once(self) -> None:
         authority_args = [
-            "--apksigner",
-            "/authority/apksigner",
-            "--apksigner-sha256",
+            "--java",
+            "/authority/java",
+            "--java-sha256",
             "11" * 32,
+            "--apksigner-jar",
+            "/authority/apksigner.jar",
+            "--apksigner-jar-sha256",
+            "12" * 32,
             "--openssl",
             "/authority/openssl",
             "--openssl-sha256",
@@ -2425,7 +2564,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_slot_mode_delegates_authority_configuration_once(self) -> None:
         def install_authority(_args: argparse.Namespace) -> list[str]:
             device_lab._ANDROID_EVIDENCE_AUTHORITY = {
-                "apksigner": {"sha256": "11" * 32},
+                "java": {"sha256": "11" * 32},
+                "apksigner_jar": {"sha256": "12" * 32},
                 "openssl": {"sha256": "22" * 32},
                 "attestation_trust_roots": (),
                 "attestation_revocation_status": {"sha256": "33" * 32},
@@ -2465,10 +2605,14 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                         "--root",
                         str(root),
                         "--require-kagemusha-production-evidence",
-                        "--apksigner",
-                        "/authority/apksigner",
-                        "--apksigner-sha256",
+                        "--java",
+                        "/authority/java",
+                        "--java-sha256",
                         "11" * 32,
+                        "--apksigner-jar",
+                        "/authority/apksigner.jar",
+                        "--apksigner-jar-sha256",
+                        "12" * 32,
                         "--openssl",
                         "/authority/openssl",
                         "--openssl-sha256",

@@ -246,7 +246,7 @@ public final class TransactionPayloadFixtureTests {
         assert items.get(1).isContractCall() : name + ": second item must be a ContractCall";
         assert items.get(2).isInstruction() : name + ": third item must be an Instruction";
         final ContractInvocation invocation = items.get(1).contractInvocation();
-        assert "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+        assert "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
             .equals(invocation.contractAddress()) : name + ": contract address mismatch";
         assert Arrays.equals(
                 HashLiteral.decode(

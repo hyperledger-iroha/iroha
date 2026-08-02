@@ -28,7 +28,7 @@ fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId 
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
     let asset_name = Name::from_str(name).expect("default asset definition name");
-    AssetDefinitionId::new(domain_id, asset_name)
+    AssetDefinitionId::derive_from_components(domain_id, asset_name)
 }
 
 fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
@@ -102,15 +102,6 @@ pub mod crypto {
 
 /// Common configuration defaults shared across components.
 pub mod common {
-    /// Default dataspace-qualified domain used when configuration omits the AccountAddress
-    /// selector override.
-    pub fn default_account_domain_label() -> String {
-        format!(
-            "{}.universal",
-            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
-        )
-    }
-
     /// Default chain discriminant / I105 network prefix (Sora Nexus global).
     pub const CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
@@ -122,8 +113,6 @@ pub mod common {
 
 /// IVM- and banner-related defaults.
 pub mod ivm {
-    use super::Name;
-
     /// Startup banner settings.
     pub mod banner {
         /// Show startup banners by default.
@@ -140,11 +129,6 @@ pub mod ivm {
         pub const fn beep() -> bool {
             BEEP
         }
-    }
-
-    /// Default compute resource profile used to cap IVM guest stack budgets.
-    pub fn memory_budget_profile() -> Name {
-        super::compute::default_resource_profile()
     }
 }
 
@@ -1616,6 +1600,8 @@ pub mod sorafs {
         pub const RUNTIME_EVENT_HISTORY_LIMIT: usize = 4_096;
         /// Maximum entries retained in each auxiliary runtime state index.
         pub const RUNTIME_STATE_ENTRY_LIMIT: usize = 65_536;
+        /// First-release hard ceiling shared by node and Torii PoR projections.
+        pub const RUNTIME_STATE_ENTRY_LIMIT_MAX: usize = 65_536;
         /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
         pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
         /// Finalized reconciliation cadence for durable proof-outcome delivery.
@@ -2294,6 +2280,44 @@ pub mod torii {
         }
     }
 
+    /// Native Bootle/Lantern blind-issuance service defaults.
+    pub mod privacy_bootle_lantern_issuer {
+        use std::path::PathBuf;
+
+        use iroha_config_base::util::Bytes;
+
+        /// Issuance is opt-in and fails closed without its runtime provider registry.
+        pub const ENABLED: bool = false;
+        /// Default durable one-shot authorization store directory.
+        pub fn state_dir() -> PathBuf {
+            PathBuf::from("./storage/privacy_bootle_lantern_issuer")
+        }
+        /// Default validity window for one authenticated issuance authorization.
+        pub const AUTHORIZATION_LIFETIME_BLOCKS: u64 = 300;
+        /// Default maximum retained authorization count.
+        pub const MAX_RECORDS: usize = 4_096;
+        /// Exact worst-case ILS1 reservation for every default authorization slot.
+        pub const MAX_TOTAL_BYTES: Bytes<u64> = Bytes(3_310 * MAX_RECORDS as u64);
+        /// Default terminal-record retention after its authoritative horizon.
+        pub const TERMINAL_RETENTION_BLOCKS: u64 = 4_096;
+
+        /// First-release concurrent native-issuance hard ceiling.
+        ///
+        /// There is deliberately no operational default: an enabled issuer
+        /// must choose its deployment-specific bound explicitly.
+        pub const MAX_INFLIGHT_HARD: usize = 64;
+        /// First-release authorization lifetime hard ceiling.
+        pub const AUTHORIZATION_LIFETIME_BLOCKS_MAX: u64 = 4_096;
+        /// First-release durable store record-count hard ceiling.
+        pub const MAX_RECORDS_HARD: usize = 1_000_000;
+        /// Largest canonical ILS1 record, including one exact ILR1 response.
+        pub const MAX_RECORD_BYTES: u64 = 3_310;
+        /// First-release durable store byte hard ceiling.
+        pub const MAX_TOTAL_BYTES_HARD: u64 = MAX_RECORD_BYTES * MAX_RECORDS_HARD as u64;
+        /// First-release terminal-retention hard ceiling.
+        pub const TERMINAL_RETENTION_BLOCKS_MAX: u64 = u32::MAX as u64;
+    }
+
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {
         use url::Url;
@@ -2533,6 +2557,12 @@ pub mod torii {
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
     /// Time to ban IPs that exceed pre-auth rate limits.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
+    /// Maximum number of temporary pre-auth bans retained in memory.
+    pub const PREAUTH_BAN_CAPACITY: NonZeroUsize = nonzero!(4096usize);
+    /// Exact transport source hosts trusted for internal Torii reads and privileged routing.
+    pub fn internal_api_trusted_cidrs() -> Vec<String> {
+        vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
+    }
     /// Enable app-facing webhook routes and workers. Disabled by default.
     pub const WEBHOOKS_ENABLED: bool = false;
     /// Enable app-facing ZK attachment routes and workers. Disabled by default.
@@ -3637,12 +3667,6 @@ pub mod concurrency {
     pub const SUMERAGI_STACK_BYTES_MIN: usize = 64 * 1024 * 1024;
     /// Maximum allowed Sumeragi helper-thread stack size.
     pub const SUMERAGI_STACK_BYTES_MAX: usize = 64 * 1024 * 1024;
-    /// Default guest stack size (bytes) for IVM instances.
-    pub const GUEST_STACK_BYTES: u64 = 4 * 1024 * 1024;
-    /// Maximum guest stack size (bytes) allowed by config (guard runaway reservations).
-    pub const GUEST_STACK_BYTES_MAX: u64 = 64 * 1024 * 1024;
-    /// Default gas→stack multiplier (bytes of stack available per unit of gas).
-    pub const GAS_TO_STACK_MULTIPLIER: u64 = 4;
 }
 
 /// Norito codec defaults.
@@ -3826,16 +3850,6 @@ pub mod zk {
         /// If non-zero and the proof size exceeds this budget, `PreverifyBudgetExceeded` is returned.
         pub const BUDGET_BYTES: u64 = 0;
     }
-    /// Shielded ledger/state defaults.
-    pub mod ledger {
-        /// Maximum number of recent Merkle roots to keep for shielded assets.
-        /// Kept modest to bound memory while allowing lookback for typical proofs.
-        pub const ROOT_HISTORY_CAP: usize = 2048;
-        /// Whether to include an explicit empty-tree root in read APIs when an asset has no commitments.
-        pub const EMPTY_ROOT_ON_EMPTY: bool = false;
-        /// Default depth to use when computing the explicit empty-tree root.
-        pub const EMPTY_ROOT_DEPTH: u8 = 0;
-    }
     /// ZK voting/election defaults.
     pub mod vote {
         /// Maximum number of recent ballot ciphertexts to keep per election.
@@ -3872,7 +3886,7 @@ pub mod sumeragi {
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 3;
+    pub const PROTOCOL_VERSION: u32 = 4;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// The view-zero round deadline is ten signed block-cadence intervals.
@@ -4110,8 +4124,8 @@ pub mod sumeragi {
         pub const VRF_COMMIT_WINDOW_BLOCKS: u64 = 100;
         /// VRF reveal window size after the commitment window.
         pub const VRF_REVEAL_WINDOW_BLOCKS: u64 = 40;
-        /// Maximum validators elected for an epoch (`0` means no configured cap).
-        pub const MAX_VALIDATORS: u32 = 128;
+        /// Exact bounded `3f + 1` ceiling for an epoch committee.
+        pub const MAX_VALIDATORS: u32 = 31;
         /// Minimum validator self-bond.
         pub const MIN_SELF_BOND: u64 = 1_000;
         /// Minimum nomination bond.
@@ -4148,11 +4162,7 @@ pub mod governance {
     }
 
     fn account_id_from_public_key(public_key: &str) -> AccountId {
-        let domain =
-            DomainId::parse_fully_qualified(&super::common::default_account_domain_label())
-                .expect("default governance account domain");
         let public_key = public_key.parse().expect("default governance public key");
-        let _ = domain;
         AccountId::new(public_key)
     }
 
@@ -4522,8 +4532,8 @@ pub mod confidential {
     pub const POLICY_TRANSITION_DELAY_BLOCKS: u64 = 100;
     /// Grace window around policy activation for conversions.
     pub const POLICY_TRANSITION_WINDOW_BLOCKS: u64 = 200;
-    /// Commitment tree root history length retained.
-    pub const TREE_ROOTS_HISTORY_LEN: u64 = 10_000;
+    /// Non-zero commitment tree root history length retained.
+    pub const TREE_ROOTS_HISTORY_LEN: NonZeroUsize = nonzero!(10_000_usize);
     /// Commitment tree frontier checkpoint interval.
     pub const TREE_FRONTIER_CHECKPOINT_INTERVAL: u64 = 100;
     /// Maximum verifier entries in registry.
@@ -4617,16 +4627,6 @@ pub mod soranet {
         }
         /// Default settlement grace after disconnect before escrow is refundable.
         pub const SETTLEMENT_GRACE_SECS: u64 = 60;
-
-        /// XOR asset definition used for VPN escrow.
-        pub fn fee_asset_id() -> String {
-            "xor#universal.universal".to_string()
-        }
-
-        /// Account that receives VPN escrow payments before receipt settlement.
-        pub fn escrow_account_id() -> String {
-            super::super::governance::bond_escrow_account()
-        }
 
         /// Default operator account used when an enabled deployment does not override it.
         pub fn operator_account_id() -> String {

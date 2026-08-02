@@ -176,6 +176,20 @@ pub mod action {
         },
     };
 
+    /// Failure to construct or decode a trigger action that violates its invariants.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+    pub enum ActionValidationError {
+        /// Trigger-completed events are notifications and cannot recursively trigger actions.
+        #[error("TriggerCompleted cannot be used as filter for triggering actions")]
+        TriggerCompletedFilter,
+        /// An execute-trigger filter names a different authority than the action.
+        #[error("ExecuteTrigger filter authority must match trigger owner")]
+        ExecuteTriggerAuthorityMismatch,
+        /// Retry policies are only meaningful for scheduled time triggers.
+        #[error("retry policy is only supported for scheduled time-trigger actions")]
+        RetryPolicyRequiresScheduledTimeTrigger,
+    }
+
     /// Ensures that trigger filters enforce the declared action authority when applicable.
     pub trait EnsureTriggerAuthority: Sized {
         /// Returns a filter bound to the provided authority, or an error if the filter already
@@ -184,14 +198,21 @@ pub mod action {
         /// # Errors
         ///
         /// Returns an error when the filter already specifies an incompatible authority.
-        fn ensure_trigger_authority(self, authority: &AccountId) -> Result<Self, &'static str>;
+        fn ensure_trigger_authority(
+            self,
+            authority: &AccountId,
+        ) -> Result<Self, ActionValidationError>;
     }
 
     impl EnsureTriggerAuthority for EventFilterBox {
-        fn ensure_trigger_authority(self, authority: &AccountId) -> Result<Self, &'static str> {
+        fn ensure_trigger_authority(
+            self,
+            authority: &AccountId,
+        ) -> Result<Self, ActionValidationError> {
             match self {
                 EventFilterBox::ExecuteTrigger(filter) => filter
                     .ensure_authority(authority)
+                    .map_err(|_| ActionValidationError::ExecuteTriggerAuthorityMismatch)
                     .map(EventFilterBox::ExecuteTrigger),
                 other => Ok(other),
             }
@@ -199,25 +220,38 @@ pub mod action {
     }
 
     impl EnsureTriggerAuthority for ExecuteTriggerEventFilter {
-        fn ensure_trigger_authority(self, authority: &AccountId) -> Result<Self, &'static str> {
+        fn ensure_trigger_authority(
+            self,
+            authority: &AccountId,
+        ) -> Result<Self, ActionValidationError> {
             self.ensure_authority(authority)
+                .map_err(|_| ActionValidationError::ExecuteTriggerAuthorityMismatch)
         }
     }
 
     impl EnsureTriggerAuthority for DataEventFilter {
-        fn ensure_trigger_authority(self, _authority: &AccountId) -> Result<Self, &'static str> {
+        fn ensure_trigger_authority(
+            self,
+            _authority: &AccountId,
+        ) -> Result<Self, ActionValidationError> {
             Ok(self)
         }
     }
 
     impl EnsureTriggerAuthority for PipelineEventFilterBox {
-        fn ensure_trigger_authority(self, _authority: &AccountId) -> Result<Self, &'static str> {
+        fn ensure_trigger_authority(
+            self,
+            _authority: &AccountId,
+        ) -> Result<Self, ActionValidationError> {
             Ok(self)
         }
     }
 
     impl EnsureTriggerAuthority for TimeEventFilter {
-        fn ensure_trigger_authority(self, _authority: &AccountId) -> Result<Self, &'static str> {
+        fn ensure_trigger_authority(
+            self,
+            _authority: &AccountId,
+        ) -> Result<Self, ActionValidationError> {
             Ok(self)
         }
     }
@@ -309,19 +343,19 @@ pub mod action {
     }
 
     impl Action {
-        /// Try to construct an action given `executable`, `repeats`, `authority` and `filter`.
+        /// Construct an action given `executable`, `repeats`, `authority` and `filter`.
         ///
         /// # Errors
         ///
         /// Returns an error if the filter is not valid for triggers, if the filter-bound
         /// authority conflicts with the trigger authority, or if retry policy constraints
         /// are violated.
-        pub fn try_new(
+        pub fn new(
             executable: impl Into<Executable>,
             repeats: impl Into<Repeats>,
             authority: AccountId,
             filter: impl Into<EventFilterBox>,
-        ) -> Result<Self, &'static str> {
+        ) -> Result<Self, ActionValidationError> {
             let filter = filter.into().ensure_trigger_authority(&authority)?;
             candidate::ActionCandidate {
                 executable: executable.into(),
@@ -332,22 +366,6 @@ pub mod action {
                 metadata: Metadata::default(),
             }
             .validate()
-        }
-
-        /// Construct an action given `executable`, `repeats`, `authority` and `filter`.
-        /// Filter of type [`EventFilterBox::TriggerCompleted`] is not allowed.
-        ///
-        /// # Panics
-        ///
-        /// - if filter matches [`EventFilterBox::TriggerCompleted`]
-        /// - if the filter-bound authority conflicts with `authority`
-        pub fn new(
-            executable: impl Into<Executable>,
-            repeats: impl Into<Repeats>,
-            authority: AccountId,
-            filter: impl Into<EventFilterBox>,
-        ) -> Self {
-            Self::try_new(executable, repeats, authority, filter).unwrap()
         }
 
         /// Add [`Metadata`] to the trigger replacing previously defined
@@ -362,8 +380,14 @@ pub mod action {
         /// Only scheduled time triggers accept retry policies. Runtime retry
         /// state is tracked internally; query surfaces continue exposing only
         /// the configured policy.
-        #[must_use]
-        pub fn with_retry_policy(self, retry_policy: TimeTriggerRetryPolicy) -> Self {
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when this is not a scheduled time-trigger action.
+        pub fn with_retry_policy(
+            self,
+            retry_policy: TimeTriggerRetryPolicy,
+        ) -> Result<Self, ActionValidationError> {
             candidate::ActionCandidate {
                 executable: self.executable,
                 repeats: self.repeats,
@@ -373,7 +397,6 @@ pub mod action {
                 metadata: self.metadata,
             }
             .validate()
-            .unwrap()
         }
     }
 
@@ -417,7 +440,8 @@ pub mod action {
                 Repeats::Exactly(1),
                 authority.clone(),
                 filter,
-            );
+            )
+            .expect("execute-trigger fixture has a matching authority");
 
             let EventFilterBox::ExecuteTrigger(bound) = action.filter().clone() else {
                 panic!("expected execute trigger filter");
@@ -426,10 +450,10 @@ pub mod action {
         }
 
         #[test]
-        fn try_new_rejects_mismatched_execute_trigger_authority() {
+        fn new_rejects_mismatched_execute_trigger_authority() {
             let authority = account_in("wonderland");
             let other = account_in("wonderland");
-            let err = Action::try_new(
+            let err = Action::new(
                 sample_executable(),
                 Repeats::Exactly(1),
                 authority,
@@ -437,16 +461,13 @@ pub mod action {
             )
             .expect_err("mismatched authority must be rejected");
 
-            assert_eq!(
-                err,
-                "ExecuteTrigger filter authority must match trigger owner"
-            );
+            assert_eq!(err, ActionValidationError::ExecuteTriggerAuthorityMismatch);
         }
 
         #[test]
-        fn try_new_rejects_trigger_completed_filter() {
+        fn new_rejects_trigger_completed_filter() {
             let authority = account_in("wonderland");
-            let err = Action::try_new(
+            let err = Action::new(
                 sample_executable(),
                 Repeats::Exactly(1),
                 authority,
@@ -454,23 +475,7 @@ pub mod action {
             )
             .expect_err("trigger-completed filters must be rejected");
 
-            assert!(
-                err.contains("TriggerCompleted cannot be used as filter"),
-                "unexpected error: {err}"
-            );
-        }
-
-        #[test]
-        #[should_panic(expected = "ExecuteTrigger filter authority must match trigger owner")]
-        fn reject_mismatched_execute_trigger_authority() {
-            let authority = account_in("wonderland");
-            let other = account_in("wonderland");
-            Action::new(
-                sample_executable(),
-                Repeats::Exactly(1),
-                authority,
-                ExecuteTriggerEventFilter::new().under_authority(other),
-            );
+            assert_eq!(err, ActionValidationError::TriggerCompletedFilter);
         }
 
         #[test]
@@ -488,15 +493,14 @@ pub mod action {
                     std::time::Duration::from_millis(5),
                 ))),
             )
-            .with_retry_policy(retry_policy);
+            .expect("scheduled time-trigger fixture is valid")
+            .with_retry_policy(retry_policy)
+            .expect("scheduled time triggers accept retry policies");
 
             assert_eq!(action.retry_policy(), Some(retry_policy));
         }
 
         #[test]
-        #[should_panic(
-            expected = "retry policy is only supported for scheduled time-trigger actions"
-        )]
         fn retry_policy_rejects_non_scheduled_trigger() {
             let authority = account_in("wonderland");
             let retry_policy = TimeTriggerRetryPolicy {
@@ -509,8 +513,15 @@ pub mod action {
                 Repeats::Exactly(1),
                 authority,
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id),
+            )
+            .expect("by-call trigger fixture is valid without a retry policy");
+            let error = action
+                .with_retry_policy(retry_policy)
+                .expect_err("retry policy on a by-call trigger must be rejected");
+            assert_eq!(
+                error,
+                ActionValidationError::RetryPolicyRequiresScheduledTimeTrigger
             );
-            let _ = action.with_retry_policy(retry_policy);
         }
 
         #[test]
@@ -529,7 +540,9 @@ pub mod action {
                         .with_period(std::time::Duration::from_secs(5)),
                 )),
             )
-            .with_retry_policy(retry_policy);
+            .expect("scheduled time-trigger fixture is valid")
+            .with_retry_policy(retry_policy)
+            .expect("scheduled time triggers accept retry policies");
 
             let bytes = norito::to_bytes(&action).expect("serialize action");
             let decoded = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
@@ -636,7 +649,9 @@ pub mod action {
                     std::time::Duration::from_millis(25),
                 ))),
             )
-            .with_retry_policy(retry_policy);
+            .expect("scheduled time-trigger fixture is valid")
+            .with_retry_policy(retry_policy)
+            .expect("scheduled time triggers accept retry policies");
 
             let json = norito::json::to_json(&action).expect("serialize action to json");
             let restored: Action = norito::json::from_json(&json).expect("deserialize action");
@@ -929,9 +944,9 @@ pub mod action {
         }
 
         impl ActionCandidate {
-            pub(super) fn validate(self) -> Result<Action, &'static str> {
+            pub(super) fn validate(self) -> Result<Action, ActionValidationError> {
                 if matches!(self.filter, EventFilterBox::TriggerCompleted(_)) {
-                    return Err("TriggerCompleted cannot be used as filter for triggering actions");
+                    return Err(ActionValidationError::TriggerCompletedFilter);
                 }
 
                 if self.retry_policy.is_some()
@@ -942,9 +957,7 @@ pub mod action {
                         ))
                     )
                 {
-                    return Err(
-                        "retry policy is only supported for scheduled time-trigger actions",
-                    );
+                    return Err(ActionValidationError::RetryPolicyRequiresScheduledTimeTrigger);
                 }
 
                 let Self {
@@ -981,7 +994,9 @@ pub mod action {
                     <ActionCandidate as norito::core::NoritoDeserialize>::try_deserialize(
                         archived.cast(),
                     )?;
-                candidate.validate().map_err(norito::core::Error::from)
+                candidate
+                    .validate()
+                    .map_err(|error| norito::core::Error::Message(error.to_string()))
             }
         }
 
@@ -1005,7 +1020,7 @@ pub mod action {
 
     pub mod prelude {
         //! Re-exports of commonly used types.
-        pub use super::{Action, Repeats, TimeTriggerRetryPolicy};
+        pub use super::{Action, ActionValidationError, Repeats, TimeTriggerRetryPolicy};
     }
 }
 

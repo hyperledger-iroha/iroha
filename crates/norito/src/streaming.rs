@@ -32,6 +32,46 @@ use crate::{
 };
 /// Blake3-based 32-byte hash used across NSC metadata (chunk commitments, IDs, etc.).
 pub type Hash = [u8; 32];
+/// Compute the canonical BLAKE3 digest used by content-addressed streaming artifacts.
+///
+/// Keeping this adapter in Norito gives direct dependants one pinned,
+/// deterministic implementation without duplicating the hash function or
+/// changing their dependency graph.
+#[must_use]
+pub fn blake3_hash(bytes: &[u8]) -> Hash {
+    blake3::hash(bytes).into()
+}
+/// Opaque incremental BLAKE3 state for bounded content-addressed readers.
+///
+/// This keeps the concrete hashing dependency inside Norito while allowing
+/// consumers to authenticate artifacts that cannot safely be materialized as
+/// one contiguous allocation.
+pub struct Blake3Hasher(blake3::Hasher);
+
+impl Blake3Hasher {
+    /// Start a canonical unkeyed BLAKE3 digest.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(blake3::Hasher::new())
+    }
+
+    /// Absorb the next exact byte range in canonical order.
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    /// Finish and return the canonical 32-byte digest.
+    #[must_use]
+    pub fn finalize(self) -> Hash {
+        self.0.finalize().into()
+    }
+}
+
+impl Default for Blake3Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 /// Ed25519 signature bytes as specified for manifests and control frames.
 pub type Signature = [u8; 64];
 /// Timestamp field used by manifests. The spec leaves the exact unit to deployments; NSC uses unix time.
@@ -3557,6 +3597,16 @@ pub mod codec {
         /// Declared stream lengths do not match the payload.
         #[error("bundle rANS stream length mismatch")]
         LengthMismatch,
+        /// A bundle record advertises a width outside the authenticated table domain.
+        #[error("invalid bundle bit length at index {index}: found {bit_len}, expected 1..={max}")]
+        InvalidBitLength {
+            /// Position within the bundle record stream.
+            index: u32,
+            /// Width advertised by the record.
+            bit_len: u8,
+            /// Maximum width authenticated by the selected tables.
+            max: u8,
+        },
         /// Table checksum does not match the telemetry-provided checksum.
         #[error("bundle table checksum mismatch: expected {expected:?}, found {found:?}")]
         ChecksumMismatch { expected: Hash, found: Hash },
@@ -8029,6 +8079,16 @@ pub mod codec {
         bundles: &[BundleRecord],
         tables: &BundleAnsTables,
     ) -> Result<Vec<u8>, BundleDecodeError> {
+        let max_width = tables.max_width();
+        for (index, record) in bundles.iter().enumerate() {
+            if record.bit_len == 0 || record.bit_len > max_width {
+                return Err(BundleDecodeError::InvalidBitLength {
+                    index: saturating_usize_to_u32(index),
+                    bit_len: record.bit_len,
+                    max: max_width,
+                });
+            }
+        }
         if bundles
             .iter()
             .any(|record| matches!(record.bundle_type, BundleType::SignificanceRle))
@@ -10604,6 +10664,29 @@ mod tests {
     }
 
     #[test]
+    fn shared_blake3_adapter_matches_official_vectors() {
+        assert_eq!(
+            hex_encode(blake3_hash(b"")),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        );
+        assert_eq!(
+            hex_encode(blake3_hash(b"abc")),
+            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+        );
+
+        let message = b"incremental content-addressed artifact verification";
+        let mut incremental = Blake3Hasher::new();
+        for chunk in message.chunks(3) {
+            incremental.update(chunk);
+        }
+        assert_eq!(incremental.finalize(), blake3_hash(message));
+
+        let mut empty = Blake3Hasher::default();
+        empty.update(&[]);
+        assert_eq!(empty.finalize(), blake3_hash(b""));
+    }
+
+    #[test]
     fn decode_from_slice_rejects_short_payloads() {
         let err = <SoranetRoute as crate::core::DecodeFromSlice>::decode_from_slice(&[])
             .expect_err("short soranet route");
@@ -10627,6 +10710,53 @@ mod tests {
         let err =
             codec::decode_bundle_stream(&stream, &bundles, tables.as_ref()).expect_err("bad len");
         assert!(matches!(err, codec::BundleDecodeError::LengthMismatch));
+    }
+
+    #[test]
+    fn decode_bundle_stream_rejects_zero_bit_length_before_rle_shift() {
+        let tables = codec::default_bundle_tables();
+        let bundles = [codec::BundleRecord {
+            bundle_type: codec::BundleType::SignificanceRle,
+            context: codec::BundleContextId::new(0),
+            bits: u8::MAX,
+            bit_len: 0,
+            flush: codec::BundleFlushReason::EndOfBlock,
+        }];
+
+        let err = codec::decode_bundle_stream(&[], &bundles, tables.as_ref())
+            .expect_err("zero-width records must fail before shifting");
+        assert_eq!(
+            err,
+            codec::BundleDecodeError::InvalidBitLength {
+                index: 0,
+                bit_len: 0,
+                max: tables.max_width(),
+            }
+        );
+    }
+
+    #[test]
+    fn decode_bundle_stream_rejects_width_above_authenticated_tables() {
+        let tables = codec::default_bundle_tables();
+        let invalid_width = tables.max_width().checked_add(1).expect("bounded width");
+        let bundles = [codec::BundleRecord {
+            bundle_type: codec::BundleType::SignificanceRle,
+            context: codec::BundleContextId::new(0),
+            bits: u8::MAX,
+            bit_len: invalid_width,
+            flush: codec::BundleFlushReason::EndOfBlock,
+        }];
+
+        let err = codec::decode_bundle_stream(&[], &bundles, tables.as_ref())
+            .expect_err("out-of-domain widths must fail before shifting");
+        assert_eq!(
+            err,
+            codec::BundleDecodeError::InvalidBitLength {
+                index: 0,
+                bit_len: invalid_width,
+                max: tables.max_width(),
+            }
+        );
     }
 
     #[test]

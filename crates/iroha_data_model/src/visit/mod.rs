@@ -17,15 +17,17 @@ use crate::{
             MutateSoracloudState, PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
             RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
-            RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
-            RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
-            RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
-            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
-            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
-            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
-            RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
-            SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudTrainingJob,
-            UpgradeSoracloudService, WithdrawSoracloudInrouHost, WithdrawSoracloudModelHost,
+            RecordSoracloudRuntimeReceipt, RegisterSoracloudFhePolicy,
+            RegisterSoracloudModelArtifact, RegisterSoracloudModelWeight,
+            RegisterSoracloudUploadedModelBundle, RenewSoracloudAgentLease,
+            RenewSoracloudHfSharedLease, ReportSoracloudServiceLeaseUsage,
+            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
+            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RevokeSoracloudFhePolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RotateSoracloudFhePolicy,
+            RunSoracloudAgentAutonomy, RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState,
+            SetSoracloudRuntimeState, SetSoracloudServiceConfig, SetSoracloudServiceSecret,
+            StartSoracloudTrainingJob, UpgradeSoracloudService, WithdrawSoracloudInrouHost,
+            WithdrawSoracloudModelHost,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
@@ -66,6 +68,14 @@ pub trait Visit {
     /// Visit a single instruction.
     fn visit_instruction(&mut self, operation: &InstructionBox) {
         visit_instruction(self, operation);
+    }
+    /// Visit an instruction for which this generic walker has no typed hook.
+    ///
+    /// This is distinct from an invalid instruction: an [`InstructionBox`] may
+    /// contain a registered native extension that was added after this walker.
+    /// Override this hook when complete instruction coverage matters.
+    fn visit_unclassified_instruction(&mut self, operation: &InstructionBox) {
+        visit_unclassified_instruction(self, operation);
     }
     /// Visit IVM bytecode payload.
     fn visit_ivm(&mut self, operation: &IvmBytecode) {

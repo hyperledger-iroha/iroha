@@ -6,7 +6,8 @@ The auxiliary first-message cases are named explicitly because they are the
 boundary where an empty lane trades one protected owner for the newly admitted
 item.  These corollaries prevent later changes from covering only one progress
 class while silently regressing the first timeout vote, ordinary proposal, or
-roster-origin completion relayed through the aggregate untrusted hop.
+authenticated transport completion relayed through the aggregate untrusted
+hop.
 ***************************************************************************)
 THEOREM AdmitFirstTimeoutVotePreservesIngressCapacityType ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:

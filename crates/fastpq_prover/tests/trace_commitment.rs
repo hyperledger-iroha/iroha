@@ -116,7 +116,7 @@ fn u64_bytes(value: u64) -> Vec<u8> {
 }
 
 fn sample_transfer_transcript() -> TransferTranscript {
-    let asset_definition = AssetDefinitionId::new(
+    let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fixture", "universal").unwrap(),
         "xor".parse().unwrap(),
     );

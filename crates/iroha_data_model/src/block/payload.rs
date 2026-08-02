@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::BTreeMap, fmt, vec::Vec};
 
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -511,13 +511,24 @@ impl SignedBlock {
         &self,
     ) -> impl ExactSizeIterator<Item = HashOf<TransactionEntrypoint>> + DoubleEndedIterator + '_
     {
-        self.result_ref().merkle.leaves()
+        self.entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
     }
 
     /// Merkle root over external transactions followed by time-triggered entrypoints.
     #[inline]
     pub fn full_entry_merkle_root(&self) -> Option<HashOf<MerkleTree<TransactionEntrypoint>>> {
         self.result.as_ref().and_then(|result| result.merkle.root())
+    }
+
+    /// Root and exact leaf count over external and time-triggered entrypoints.
+    #[inline]
+    pub fn full_entry_merkle_commitment(
+        &self,
+    ) -> Option<MerkleTreeCommitment<TransactionEntrypoint>> {
+        self.result
+            .as_ref()
+            .and_then(|result| result.merkle.commitment())
     }
 
     /// Merkle proofs for each transaction entrypoint (external and time-triggered) in execution order.
@@ -529,8 +540,7 @@ impl SignedBlock {
         let n_leaves: u32 = self
             .result_ref()
             .merkle
-            .leaves()
-            .len()
+            .leaf_count()
             .try_into()
             .expect("bug: leaf count exceeded u32::MAX");
         (0..n_leaves).map(|i| {
@@ -555,7 +565,18 @@ impl SignedBlock {
     pub fn result_hashes(
         &self,
     ) -> impl ExactSizeIterator<Item = HashOf<TransactionResult>> + DoubleEndedIterator + '_ {
-        self.result_ref().result_merkle.leaves()
+        self.result_ref()
+            .transaction_results
+            .iter()
+            .map(TransactionResult::hash)
+    }
+
+    /// Root and exact leaf count over transaction execution results.
+    #[inline]
+    pub fn result_merkle_commitment(&self) -> Option<MerkleTreeCommitment<TransactionResult>> {
+        self.result
+            .as_ref()
+            .and_then(|result| result.result_merkle.commitment())
     }
 
     /// Merkle proofs for each transaction result in execution order.
@@ -567,8 +588,7 @@ impl SignedBlock {
         let n_leaves: u32 = self
             .result_ref()
             .result_merkle
-            .leaves()
-            .len()
+            .leaf_count()
             .try_into()
             .expect("bug: leaf count exceeded u32::MAX");
         (0..n_leaves).map(|i| {
@@ -818,33 +838,17 @@ impl ExactSizeIterator for EntrypointIterator {
 
 impl EntrypointIterator {
     fn new(block: &SignedBlock) -> Self {
-        let entries: Vec<TransactionEntrypoint> = if block.has_results() {
-            let mut tx_by_hash: BTreeMap<_, usize> = BTreeMap::new();
-            for (idx, entry) in block.external_entrypoints_cloned().enumerate() {
-                tx_by_hash.insert(entry.hash(), idx);
-            }
-            let result = block.result_ref();
-            let mut trig_by_hash: BTreeMap<_, usize> = BTreeMap::new();
-            for (idx, trig) in result.time_triggers.iter().enumerate() {
-                trig_by_hash.insert(trig.hash_as_entrypoint(), idx);
-            }
-            let external_entries: Vec<TransactionEntrypoint> =
-                block.external_entrypoints_cloned().collect();
-            block
-                .entrypoint_hashes()
-                .map(|hash| {
-                    if let Some(&idx) = tx_by_hash.get(&hash) {
-                        external_entries[idx].clone()
-                    } else if let Some(&idx) = trig_by_hash.get(&hash) {
-                        TransactionEntrypoint::from(result.time_triggers[idx].clone())
-                    } else {
-                        panic!("entrypoint hash missing from block contents");
-                    }
-                })
-                .collect()
-        } else {
-            block.external_entrypoints_cloned().collect()
-        };
+        let mut entries: Vec<TransactionEntrypoint> = block.external_entrypoints_cloned().collect();
+        if block.has_results() {
+            entries.extend(
+                block
+                    .result_ref()
+                    .time_triggers
+                    .iter()
+                    .cloned()
+                    .map(TransactionEntrypoint::from),
+            );
+        }
         let len = entries.len();
         Self {
             entries,

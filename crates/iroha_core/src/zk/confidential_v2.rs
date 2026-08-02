@@ -40,55 +40,239 @@ pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 13;
 pub const CONFIDENTIAL_UNSHIELD_V3_IPA_K: u32 = 13;
 /// IPA domain exponent for Kagemusha top-up shielding.
 pub const KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K: u32 = 13;
+/// Reviewed digest of the canonical Kagemusha top-up verifier key.
+pub const KAGEMUSHA_TOPUP_SHIELD_V2_VK_DIGEST_V1: [u8; 32] = [
+    0x26, 0xc4, 0xdf, 0x74, 0x41, 0xa0, 0xf0, 0x29, 0xf3, 0x6f, 0x51, 0x21, 0x67, 0x64, 0x60, 0x5f,
+    0xc9, 0x93, 0xad, 0x6d, 0xaf, 0x57, 0x39, 0xd3, 0x61, 0x60, 0x4b, 0x25, 0x56, 0x58, 0x66, 0x32,
+];
+/// Reviewed digest of the canonical full-unshield verifier key.
+pub const CONFIDENTIAL_UNSHIELD_V2_VK_DIGEST_V1: [u8; 32] = [
+    0xab, 0xd2, 0xc9, 0xf8, 0x0e, 0x4d, 0xea, 0xa9, 0x6d, 0xa6, 0xe2, 0x9c, 0xfc, 0x56, 0xcd, 0xf6,
+    0x7f, 0x07, 0xc6, 0xf1, 0x2e, 0x01, 0xd7, 0x3d, 0x8b, 0x51, 0xcf, 0x56, 0xc8, 0xd7, 0x01, 0xaa,
+];
+/// Reviewed digest of the canonical change-unshield verifier key.
+pub const CONFIDENTIAL_UNSHIELD_V3_VK_DIGEST_V1: [u8; 32] = [
+    0xc6, 0x39, 0xe8, 0x67, 0x50, 0xc1, 0x8b, 0x20, 0x67, 0xae, 0x7d, 0x4f, 0x24, 0xa2, 0x23, 0xa4,
+    0xdd, 0x54, 0xde, 0x94, 0x78, 0x2c, 0xe8, 0xb2, 0x78, 0x15, 0x5e, 0x42, 0x28, 0xb4, 0x9d, 0x49,
+];
 /// Fixed depth of the confidential commitment tree.
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 /// Maximum number of leaves in the confidential commitment tree.
 pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2;
+
+/// Unsigned range families shared by the public schema, standalone circuits,
+/// and Kagemusha recursive adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfidentialUnsignedRangeV1 {
+    /// Atomic confidential amounts and public redemption amounts.
+    Amount,
+    /// Fixed-point asset scale.
+    AssetScale,
+    /// Commitment-tree leaf position.
+    LeafIndex,
+}
+
+impl ConfidentialUnsignedRangeV1 {
+    /// Exact bit width enforced by every circuit projection.
+    pub(crate) const fn bits(self) -> usize {
+        match self {
+            Self::Amount => 128,
+            Self::AssetScale => 32,
+            Self::LeafIndex => CONFIDENTIAL_TREE_DEPTH_V2,
+        }
+    }
+}
+
+macro_rules! define_confidential_public_input_spec {
+    (
+        $(#[$struct_meta:meta])*
+        $visibility:vis struct $values:ident;
+        $field_visibility:vis enum $field:ident;
+        constants $constant_visibility:vis const;
+        count $count:literal;
+        order $order:ident;
+        schema $schema:ident = $prefix:literal, $suffix:literal;
+        first $first_variant:ident => $first_member:ident,
+            $first_name:literal, $first_doc:literal, $first_range:expr;
+        rest $(
+            $variant:ident => $member:ident,
+                $name:literal, $doc:literal, $range:expr;
+        )+
+    ) => {
+        $(#[$struct_meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        $visibility struct $values<T = [u8; 32]> {
+            #[doc = $first_doc]
+            pub $first_member: T,
+            $(
+                #[doc = $doc]
+                pub $member: T,
+            )+
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        $field_visibility enum $field {
+            $first_variant,
+            $($variant,)+
+        }
+
+        impl $field {
+            $field_visibility const ALL: [Self; $count] = [
+                Self::$first_variant,
+                $(Self::$variant,)+
+            ];
+
+            $field_visibility const fn index(self) -> usize {
+                self as usize
+            }
+
+            $field_visibility const fn name(self) -> &'static str {
+                match self {
+                    Self::$first_variant => $first_name,
+                    $(Self::$variant => $name,)+
+                }
+            }
+
+            $field_visibility const fn range(self) -> Option<ConfidentialUnsignedRangeV1> {
+                match self {
+                    Self::$first_variant => $first_range,
+                    $(Self::$variant => $range,)+
+                }
+            }
+        }
+
+        impl<T> $values<T> {
+            $field_visibility fn into_array(self) -> [T; $count] {
+                [self.$first_member, $(self.$member,)+]
+            }
+
+            $field_visibility fn from_array(values: [T; $count]) -> Self {
+                let [$first_member, $($member,)+] = values;
+                Self {
+                    $first_member,
+                    $($member,)+
+                }
+            }
+
+            $field_visibility fn try_map<U, E>(
+                self,
+                mut map: impl FnMut($field, T) -> Result<U, E>,
+            ) -> Result<$values<U>, E> {
+                Ok($values {
+                    $first_member: map($field::$first_variant, self.$first_member)?,
+                    $($member: map($field::$variant, self.$member)?,)+
+                })
+            }
+        }
+
+        #[doc = concat!("Public-column order generated from `", stringify!($values), "`.")]
+        $constant_visibility const $order: &[&str] = &[$first_name, $($name,)+];
+        #[doc = concat!("Canonical schema generated from `", stringify!($values), "`.")]
+        $constant_visibility const $schema: &[u8] = concat!(
+            $prefix,
+            "\"", $first_name, "\"",
+            $(",\"", $name, "\"",)+
+            $suffix,
+        )
+        .as_bytes();
+    };
+}
 /// Canonical public-input schema for confidential transfer V2.
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v3","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
-/// Canonical public-input schema for confidential unshield V2.
-pub const CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_full_v3","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","root","public_amount","asset_tag","chain_tag"]}"#;
-/// Public-column order authenticated by the confidential full-unshield schema.
-pub const CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1: &[&str] = &[
-    "input_commitment_0",
-    "input_commitment_1",
-    "nullifier_0",
-    "nullifier_1",
-    "root",
-    "public_amount",
-    "asset_tag",
-    "chain_tag",
-];
-/// Canonical public-input schema for confidential unshield V3.
-pub const CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_change_v4","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","change_commitment_0","root","public_amount","asset_tag","chain_tag"]}"#;
-/// Public-column order authenticated by the confidential change-unshield schema.
-pub const CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUT_ORDER_V1: &[&str] = &[
-    "input_commitment_0",
-    "input_commitment_1",
-    "nullifier_0",
-    "nullifier_1",
-    "change_commitment_0",
-    "root",
-    "public_amount",
-    "asset_tag",
-    "chain_tag",
-];
-/// Canonical public-input schema for Kagemusha top-up shielding.
-pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"kagemusha_topup_shield_v3","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["output_commitment","spend_nullifier","initial_root","finalized_root","atomic_amount","asset_scale","leaf_index","asset_tag","chain_tag","payer_tag","operation_tag"]}"#;
-/// Public-column order authenticated by the Kagemusha top-up schema.
-pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUT_ORDER_V1: &[&str] = &[
-    "output_commitment",
-    "spend_nullifier",
-    "initial_root",
-    "finalized_root",
-    "atomic_amount",
-    "asset_scale",
-    "leaf_index",
-    "asset_tag",
-    "chain_tag",
-    "payer_tag",
-    "operation_tag",
-];
+define_confidential_public_input_spec! {
+    /// Parsed public inputs for one Kagemusha top-up shield proof.
+    pub struct KagemushaTopUpShieldPublicInputsV2;
+    pub(crate) enum KagemushaTopUpPublicInputV1;
+    constants pub const;
+    count 11;
+    order KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUT_ORDER_V1;
+    schema KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1 =
+        "{\"schema\":\"kagemusha_topup_shield_v3\",\"hash\":\"axiom_poseidon_t3_r2_rf8_rp57_mds0\",\"merkle_leaf_domain\":\"cfleaf03\",\"merkle_node_domain\":\"cfnode03\",\"public_inputs\":[",
+        "]}";
+    first OutputCommitment => output_commitment,
+        "output_commitment", "Newly inserted confidential note commitment.", None;
+    rest
+        SpendNullifier => spend_nullifier,
+            "spend_nullifier", "Nullifier derived for the inserted note.", None;
+        InitialRoot => initial_root,
+            "initial_root", "Root before insertion.", None;
+        FinalizedRoot => finalized_root,
+            "finalized_root", "Root after insertion.", None;
+        AtomicAmount => atomic_amount,
+            "atomic_amount", "Canonically encoded atomic amount.", Some(ConfidentialUnsignedRangeV1::Amount);
+        AssetScale => asset_scale,
+            "asset_scale", "Canonically encoded asset scale.", Some(ConfidentialUnsignedRangeV1::AssetScale);
+        LeafIndex => leaf_index,
+            "leaf_index", "Canonically encoded leaf index.", Some(ConfidentialUnsignedRangeV1::LeafIndex);
+        AssetTag => asset_tag,
+            "asset_tag", "Asset-domain tag.", None;
+        ChainTag => chain_tag,
+            "chain_tag", "Chain-domain tag.", None;
+        PayerTag => payer_tag,
+            "payer_tag", "Payer identity tag.", None;
+        OperationTag => operation_tag,
+            "operation_tag", "Top-up operation tag.", None;
+}
+
+define_confidential_public_input_spec! {
+    /// Typed full-unshield public-input contract.
+    pub(crate) struct ConfidentialUnshieldFullPublicInputsV1;
+    pub(crate) enum ConfidentialUnshieldFullPublicInputV1;
+    constants pub const;
+    count 8;
+    order CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1;
+    schema CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1 =
+        "{\"schema\":\"confidential_unshield_full_v3\",\"hash\":\"axiom_poseidon_t3_r2_rf8_rp57_mds0\",\"merkle_leaf_domain\":\"cfleaf03\",\"merkle_node_domain\":\"cfnode03\",\"public_inputs\":[",
+        "]}";
+    first InputCommitment0 => input_commitment_0,
+        "input_commitment_0", "First authenticated input commitment.", None;
+    rest
+        InputCommitment1 => input_commitment_1,
+            "input_commitment_1", "Optional second authenticated input commitment.", None;
+        Nullifier0 => nullifier_0,
+            "nullifier_0", "First authenticated spend nullifier.", None;
+        Nullifier1 => nullifier_1,
+            "nullifier_1", "Optional second authenticated spend nullifier.", None;
+        Root => root,
+            "root", "Authenticated commitment-tree root.", None;
+        PublicAmount => public_amount,
+            "public_amount", "Exact public redemption amount.", Some(ConfidentialUnsignedRangeV1::Amount);
+        AssetTag => asset_tag,
+            "asset_tag", "Asset-domain tag.", None;
+        ChainTag => chain_tag,
+            "chain_tag", "Chain-domain tag.", None;
+}
+
+define_confidential_public_input_spec! {
+    /// Typed change-unshield public-input contract.
+    pub(crate) struct ConfidentialUnshieldChangePublicInputsV1;
+    pub(crate) enum ConfidentialUnshieldChangePublicInputV1;
+    constants pub const;
+    count 9;
+    order CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUT_ORDER_V1;
+    schema CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1 =
+        "{\"schema\":\"confidential_unshield_change_v4\",\"hash\":\"axiom_poseidon_t3_r2_rf8_rp57_mds0\",\"merkle_leaf_domain\":\"cfleaf03\",\"merkle_node_domain\":\"cfnode03\",\"public_inputs\":[",
+        "]}";
+    first InputCommitment0 => input_commitment_0,
+        "input_commitment_0", "First authenticated input commitment.", None;
+    rest
+        InputCommitment1 => input_commitment_1,
+            "input_commitment_1", "Optional second authenticated input commitment.", None;
+        Nullifier0 => nullifier_0,
+            "nullifier_0", "First authenticated spend nullifier.", None;
+        Nullifier1 => nullifier_1,
+            "nullifier_1", "Optional second authenticated spend nullifier.", None;
+        ChangeCommitment0 => change_commitment_0,
+            "change_commitment_0", "Sole proof-authenticated change commitment.", None;
+        Root => root,
+            "root", "Authenticated commitment-tree root.", None;
+        PublicAmount => public_amount,
+            "public_amount", "Exact public redemption amount.", Some(ConfidentialUnsignedRangeV1::Amount);
+        AssetTag => asset_tag,
+            "asset_tag", "Asset-domain tag.", None;
+        ChainTag => chain_tag,
+            "chain_tag", "Chain-domain tag.", None;
+}
 /// Compatibility name for the second Kagemusha top-up schema contract.
 ///
 /// The secure-relation rollout changed the authenticated schema contents while
@@ -215,33 +399,6 @@ pub struct KagemushaTopUpShieldProofV2 {
     pub leaf_index: u32,
     /// Encoded Halo2 proof envelope.
     pub proof: ProofBox,
-}
-
-/// Parsed public inputs for one Kagemusha top-up shield proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KagemushaTopUpShieldPublicInputsV2 {
-    /// Newly inserted confidential note commitment.
-    pub output_commitment: [u8; 32],
-    /// Nullifier derived for the inserted note.
-    pub spend_nullifier: [u8; 32],
-    /// Root before insertion.
-    pub initial_root: [u8; 32],
-    /// Root after insertion.
-    pub finalized_root: [u8; 32],
-    /// Canonically encoded atomic amount.
-    pub atomic_amount: [u8; 32],
-    /// Canonically encoded asset scale.
-    pub asset_scale: [u8; 32],
-    /// Canonically encoded leaf index.
-    pub leaf_index: [u8; 32],
-    /// Asset-domain tag.
-    pub asset_tag: [u8; 32],
-    /// Chain-domain tag.
-    pub chain_tag: [u8; 32],
-    /// Payer identity tag.
-    pub payer_tag: [u8; 32],
-    /// Top-up operation tag.
-    pub operation_tag: [u8; 32],
 }
 
 /// Secret opening and tree position for one unshield input.
@@ -505,7 +662,15 @@ pub fn ensure_kagemusha_topup_shield_v2_canonical_vk_box(
             "Kagemusha top-up shield v2",
         )?;
         let canonical = kagemusha_topup_shield_v2_vk_box()?;
-        if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+        if super::hash_vk(&canonical) != KAGEMUSHA_TOPUP_SHIELD_V2_VK_DIGEST_V1 {
+            return Err(
+                "generated Kagemusha top-up shield v2 verifier key diverges from its reviewed digest"
+                    .to_owned(),
+            );
+        }
+        if super::hash_vk(vk_box) != KAGEMUSHA_TOPUP_SHIELD_V2_VK_DIGEST_V1
+            || vk_box.bytes != canonical.bytes
+        {
             return Err(
                 "Kagemusha top-up shield v2 verifier key must match the canonical issuance circuit key"
                     .to_owned(),
@@ -603,7 +768,15 @@ pub fn ensure_confidential_unshield_v2_canonical_vk_box(
             "Confidential unshield v2",
         )?;
         let canonical = confidential_unshield_v2_vk_box()?;
-        if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+        if super::hash_vk(&canonical) != CONFIDENTIAL_UNSHIELD_V2_VK_DIGEST_V1 {
+            return Err(
+                "generated confidential unshield v2 verifier key diverges from its reviewed digest"
+                    .to_owned(),
+            );
+        }
+        if super::hash_vk(vk_box) != CONFIDENTIAL_UNSHIELD_V2_VK_DIGEST_V1
+            || vk_box.bytes != canonical.bytes
+        {
             return Err(
                 "Confidential unshield v2 verifier key must match the canonical semantic circuit key"
                     .to_owned(),
@@ -661,7 +834,15 @@ pub fn ensure_confidential_unshield_v3_canonical_vk_box(
             "Confidential unshield v3",
         )?;
         let canonical = confidential_unshield_v3_vk_box()?;
-        if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+        if super::hash_vk(&canonical) != CONFIDENTIAL_UNSHIELD_V3_VK_DIGEST_V1 {
+            return Err(
+                "generated confidential unshield v3 verifier key diverges from its reviewed digest"
+                    .to_owned(),
+            );
+        }
+        if super::hash_vk(vk_box) != CONFIDENTIAL_UNSHIELD_V3_VK_DIGEST_V1
+            || vk_box.bytes != canonical.bytes
+        {
             return Err(
                 "Confidential unshield v3 verifier key must match the canonical semantic circuit key"
                     .to_owned(),
@@ -802,27 +983,12 @@ pub fn parse_transfer_public_inputs(
 pub fn parse_kagemusha_topup_shield_public_inputs_v2(
     proof_bytes: &[u8],
 ) -> Result<KagemushaTopUpShieldPublicInputsV2, String> {
-    let columns = extract_confidential_public_columns(proof_bytes)
-        .ok_or_else(|| "failed to decode Kagemusha top-up shield public inputs".to_owned())?;
-    if columns.len() != 11 || columns.iter().any(|column| column.len() != 1) {
-        return Err(
-            "Kagemusha top-up shield proof must expose exactly 11 single-row instance columns"
-                .to_owned(),
-        );
-    }
-    Ok(KagemushaTopUpShieldPublicInputsV2 {
-        output_commitment: columns[0][0],
-        spend_nullifier: columns[1][0],
-        initial_root: columns[2][0],
-        finalized_root: columns[3][0],
-        atomic_amount: columns[4][0],
-        asset_scale: columns[5][0],
-        leaf_index: columns[6][0],
-        asset_tag: columns[7][0],
-        chain_tag: columns[8][0],
-        payer_tag: columns[9][0],
-        operation_tag: columns[10][0],
-    })
+    exact_confidential_public_columns::<11>(
+        proof_bytes,
+        "Kagemusha top-up shield",
+        KagemushaTopUpPublicInputV1::ALL.map(KagemushaTopUpPublicInputV1::name),
+    )
+    .map(KagemushaTopUpShieldPublicInputsV2::from_array)
 }
 
 /// Parse the exact public columns from a full-unshield proof envelope.
@@ -839,18 +1005,19 @@ pub fn parse_unshield_public_inputs(
     ),
     String,
 > {
-    let columns = extract_confidential_public_columns(proof_bytes)
-        .ok_or_else(|| "failed to decode unshield proof public inputs".to_owned())?;
-    if columns.len() < 8 || columns.iter().take(8).any(|column| column.len() != 1) {
-        return Err("unshield proof must expose 8 single-row instance columns".to_owned());
-    }
+    let public = exact_confidential_public_columns::<8>(
+        proof_bytes,
+        "full unshield",
+        ConfidentialUnshieldFullPublicInputV1::ALL.map(ConfidentialUnshieldFullPublicInputV1::name),
+    )
+    .map(ConfidentialUnshieldFullPublicInputsV1::from_array)?;
     Ok((
-        [columns[0][0], columns[1][0]],
-        [columns[2][0], columns[3][0]],
-        columns[4][0],
-        columns[5][0],
-        columns[6][0],
-        columns[7][0],
+        [public.input_commitment_0, public.input_commitment_1],
+        [public.nullifier_0, public.nullifier_1],
+        public.root,
+        public.public_amount,
+        public.asset_tag,
+        public.chain_tag,
     ))
 }
 
@@ -869,20 +1036,47 @@ pub fn parse_unshield_public_inputs_v3(
     ),
     String,
 > {
-    let columns = extract_confidential_public_columns(proof_bytes)
-        .ok_or_else(|| "failed to decode unshield proof public inputs".to_owned())?;
-    if columns.len() < 9 || columns.iter().take(9).any(|column| column.len() != 1) {
-        return Err("unshield proof must expose 9 single-row instance columns".to_owned());
-    }
+    let public = exact_confidential_public_columns::<9>(
+        proof_bytes,
+        "change unshield",
+        ConfidentialUnshieldChangePublicInputV1::ALL
+            .map(ConfidentialUnshieldChangePublicInputV1::name),
+    )
+    .map(ConfidentialUnshieldChangePublicInputsV1::from_array)?;
     Ok((
-        [columns[0][0], columns[1][0]],
-        [columns[2][0], columns[3][0]],
-        columns[4][0],
-        columns[5][0],
-        columns[6][0],
-        columns[7][0],
-        columns[8][0],
+        [public.input_commitment_0, public.input_commitment_1],
+        [public.nullifier_0, public.nullifier_1],
+        public.change_commitment_0,
+        public.root,
+        public.public_amount,
+        public.asset_tag,
+        public.chain_tag,
     ))
+}
+
+fn exact_confidential_public_columns<const N: usize>(
+    proof_bytes: &[u8],
+    label: &str,
+    field_names: [&str; N],
+) -> Result<[[u8; 32]; N], String> {
+    let columns = extract_confidential_public_columns(proof_bytes)
+        .ok_or_else(|| format!("failed to decode {label} proof public inputs"))?;
+    if columns.len() != N {
+        return Err(format!(
+            "{label} proof must expose exactly {N} public-input columns; found {}",
+            columns.len()
+        ));
+    }
+    let mut values = [[0; 32]; N];
+    for (index, (column, field_name)) in columns.iter().zip(field_names).enumerate() {
+        let [value] = column.as_slice() else {
+            return Err(format!(
+                "{label} public input '{field_name}' at column {index} must contain exactly one row"
+            ));
+        };
+        values[index] = *value;
+    }
+    Ok(values)
 }
 
 fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
@@ -1135,8 +1329,11 @@ pub(in crate::zk) mod secure_relation_v3 {
         CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
         CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3, CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
         CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, ConfidentialMerklePathV2,
-        ConfidentialTransferWitnessV2, ConfidentialUnshieldWitnessV2,
-        ConfidentialUnshieldWitnessV3, KagemushaTopUpShieldWitnessV2, Scalar,
+        ConfidentialTransferWitnessV2, ConfidentialUnshieldChangePublicInputV1,
+        ConfidentialUnshieldChangePublicInputsV1, ConfidentialUnshieldFullPublicInputV1,
+        ConfidentialUnshieldFullPublicInputsV1, ConfidentialUnshieldWitnessV2,
+        ConfidentialUnshieldWitnessV3, ConfidentialUnsignedRangeV1, KagemushaTopUpPublicInputV1,
+        KagemushaTopUpShieldPublicInputsV2, KagemushaTopUpShieldWitnessV2, Scalar,
         confidential_relation_gadget, scalar_from_repr, scalar_from_u128,
     };
 
@@ -1527,7 +1724,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         ]
         .map(|amount| ctx.load_witness(scalar_from_u128(amount)));
         for amount in amounts {
-            range.range_check(ctx, amount, 128);
+            range.range_check(ctx, amount, ConfidentialUnsignedRangeV1::Amount.bits());
         }
         assert_nonzero(ctx, &range, amounts[0]);
         constrain_optional_nonzero(ctx, &range, amounts[1], present_input_1);
@@ -1730,75 +1927,53 @@ pub(in crate::zk) mod secure_relation_v3 {
         Ok(builder)
     }
 
-    /// Named public cells produced by the secure Kagemusha top-up relation.
-    #[derive(Clone, Debug)]
-    pub(crate) struct AssignedKagemushaTopUpShieldV3 {
-        /// Output note commitment.
-        pub(crate) output_commitment: AssignedValue<Scalar>,
-        /// Output note spend nullifier.
-        pub(crate) spend_nullifier: AssignedValue<Scalar>,
-        /// Commitment-tree root before insertion.
-        pub(crate) initial_root: AssignedValue<Scalar>,
-        /// Commitment-tree root after insertion.
-        pub(crate) finalized_root: AssignedValue<Scalar>,
-        /// Issued atomic amount.
-        pub(crate) atomic_amount: AssignedValue<Scalar>,
-        /// Asset scale.
-        pub(crate) asset_scale: AssignedValue<Scalar>,
-        /// Inserted leaf index.
-        pub(crate) leaf_index: AssignedValue<Scalar>,
-        /// Asset-domain tag.
-        pub(crate) asset_tag: AssignedValue<Scalar>,
-        /// Chain-domain tag.
-        pub(crate) chain_tag: AssignedValue<Scalar>,
-        /// Payer-domain tag.
-        pub(crate) payer_tag: AssignedValue<Scalar>,
-        /// Operation-domain tag.
-        pub(crate) operation_tag: AssignedValue<Scalar>,
-    }
-
-    impl AssignedKagemushaTopUpShieldV3 {
-        fn public_columns(&self) -> [AssignedValue<Scalar>; 11] {
-            [
-                self.output_commitment,
-                self.spend_nullifier,
-                self.initial_root,
-                self.finalized_root,
-                self.atomic_amount,
-                self.asset_scale,
-                self.leaf_index,
-                self.asset_tag,
-                self.chain_tag,
-                self.payer_tag,
-                self.operation_tag,
-            ]
-        }
-    }
-
     /// Assign the complete secure Kagemusha top-up relation into an existing
     /// Eq/Fp builder and return named public cells.
     pub(crate) fn assign_kagemusha_topup_shield_v3<const DEPTH: usize>(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
         witness: Option<&KagemushaTopUpShieldWitnessV2>,
-    ) -> Result<AssignedKagemushaTopUpShieldV3, String> {
+    ) -> Result<KagemushaTopUpShieldPublicInputsV2<AssignedValue<Scalar>>, String> {
         if let Some(witness) = witness {
             validate_topup_witness::<DEPTH>(witness)?;
         }
         let gate = range.gate();
 
         let amount = ctx.load_witness(scalar_from_u128(witness.map_or(0, |value| value.amount)));
-        range.range_check(ctx, amount, 128);
+        range.range_check(
+            ctx,
+            amount,
+            KagemushaTopUpPublicInputV1::AtomicAmount
+                .range()
+                .expect("top-up amount range is specified")
+                .bits(),
+        );
         assert_nonzero(ctx, &range, amount);
         let scale = ctx.load_witness(Scalar::from(u64::from(
             witness.map_or(0, |value| value.asset_scale),
         )));
-        range.range_check(ctx, scale, 32);
+        range.range_check(
+            ctx,
+            scale,
+            KagemushaTopUpPublicInputV1::AssetScale
+                .range()
+                .expect("top-up scale range is specified")
+                .bits(),
+        );
         let leaf_index = ctx.load_witness(Scalar::from(u64::from(
             witness.map_or(0, |value| value.leaf_index),
         )));
-        range.range_check(ctx, leaf_index, DEPTH);
-        let index_bits = gate.num_to_bits(ctx, leaf_index, DEPTH);
+        let leaf_index_bits = KagemushaTopUpPublicInputV1::LeafIndex
+            .range()
+            .expect("top-up leaf-index range is specified")
+            .bits();
+        if DEPTH != leaf_index_bits {
+            return Err(
+                "Kagemusha top-up circuit depth does not match its public-input spec".into(),
+            );
+        }
+        range.range_check(ctx, leaf_index, leaf_index_bits);
+        let index_bits = gate.num_to_bits(ctx, leaf_index, leaf_index_bits);
 
         let rho = ctx.load_witness(if let Some(witness) = witness {
             super::hash_to_scalar(b"iroha.confidential.v3.note_rho", &[&witness.rho])
@@ -1932,7 +2107,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         let roots_equal = gate.is_equal(ctx, initial_node, final_node);
         gate.assert_is_const(ctx, &roots_equal, &Scalar::ZERO);
 
-        Ok(AssignedKagemushaTopUpShieldV3 {
+        Ok(KagemushaTopUpShieldPublicInputsV2 {
             output_commitment,
             spend_nullifier,
             initial_root: initial_node,
@@ -1957,7 +2132,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             .use_instance_columns(11);
         let range = builder.range_chip();
         let bindings = assign_kagemusha_topup_shield_v3::<DEPTH>(builder.main(0), &range, witness)?;
-        builder.assigned_instances = bindings.public_columns().map(|value| vec![value]).to_vec();
+        builder.assigned_instances = bindings.into_array().map(|value| vec![value]).to_vec();
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
         // `halo2-base` estimates packed advice columns from the raw cell
         // count. This relation crosses a gate-enabled column boundary, where
@@ -1998,39 +2173,44 @@ pub(in crate::zk) mod secure_relation_v3 {
     }
 
     impl AssignedUnshieldRelationV4 {
-        fn full_public_columns(&self) -> Result<[AssignedValue<Scalar>; 8], String> {
+        fn full_public_inputs(
+            &self,
+        ) -> Result<ConfidentialUnshieldFullPublicInputsV1<AssignedValue<Scalar>>, String> {
             if self.change_commitment_0.is_some() {
                 return Err(
                     "full-unshield relation unexpectedly produced a change commitment".to_owned(),
                 );
             }
-            Ok([
-                self.input_commitment_0,
-                self.input_commitment_1,
-                self.nullifier_0,
-                self.nullifier_1,
-                self.root,
-                self.public_amount,
-                self.asset_tag,
-                self.chain_tag,
-            ])
+            Ok(ConfidentialUnshieldFullPublicInputsV1 {
+                input_commitment_0: self.input_commitment_0,
+                input_commitment_1: self.input_commitment_1,
+                nullifier_0: self.nullifier_0,
+                nullifier_1: self.nullifier_1,
+                root: self.root,
+                public_amount: self.public_amount,
+                asset_tag: self.asset_tag,
+                chain_tag: self.chain_tag,
+            })
         }
 
-        fn change_public_columns(&self) -> Result<[AssignedValue<Scalar>; 9], String> {
+        fn change_public_inputs(
+            &self,
+        ) -> Result<ConfidentialUnshieldChangePublicInputsV1<AssignedValue<Scalar>>, String>
+        {
             let change_commitment_0 = self.change_commitment_0.ok_or_else(|| {
                 "change-unshield relation omitted its public change commitment".to_owned()
             })?;
-            Ok([
-                self.input_commitment_0,
-                self.input_commitment_1,
-                self.nullifier_0,
-                self.nullifier_1,
+            Ok(ConfidentialUnshieldChangePublicInputsV1 {
+                input_commitment_0: self.input_commitment_0,
+                input_commitment_1: self.input_commitment_1,
+                nullifier_0: self.nullifier_0,
+                nullifier_1: self.nullifier_1,
                 change_commitment_0,
-                self.root,
-                self.public_amount,
-                self.asset_tag,
-                self.chain_tag,
-            ])
+                root: self.root,
+                public_amount: self.public_amount,
+                asset_tag: self.asset_tag,
+                chain_tag: self.chain_tag,
+            })
         }
     }
 
@@ -2069,7 +2249,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         let input_amounts =
             input_amounts_u128.map(|amount| ctx.load_witness(scalar_from_u128(amount)));
         for amount in input_amounts {
-            range.range_check(ctx, amount, 128);
+            range.range_check(ctx, amount, ConfidentialUnsignedRangeV1::Amount.bits());
         }
         assert_nonzero(ctx, &range, input_amounts[0]);
         constrain_optional_nonzero(ctx, &range, input_amounts[1], present_input_1);
@@ -2198,7 +2378,14 @@ pub(in crate::zk) mod secure_relation_v3 {
             let output_amount_u128 = change_witness.map_or(0, |value| value.output_0_amount);
             let output_amount = ctx.load_witness(scalar_from_u128(output_amount_u128));
             change_amount = Some(output_amount);
-            range.range_check(ctx, output_amount, 128);
+            range.range_check(
+                ctx,
+                output_amount,
+                ConfidentialUnshieldChangePublicInputV1::PublicAmount
+                    .range()
+                    .expect("change-unshield public amount range is specified")
+                    .bits(),
+            );
             constrain_optional_nonzero(ctx, &range, output_amount, present_output_0);
             let output_rho_bytes = change_witness.map_or([0; 32], |value| value.output_0_rho);
             let output_rho = ctx.load_witness(if include_output_0 {
@@ -2231,12 +2418,26 @@ pub(in crate::zk) mod secure_relation_v3 {
                 gate.assert_is_const(ctx, &selected_equal, &Scalar::ZERO);
             }
             let public_amount = gate.sub(ctx, input_sum, output_amount);
-            range.range_check(ctx, public_amount, 128);
+            range.range_check(
+                ctx,
+                public_amount,
+                ConfidentialUnshieldChangePublicInputV1::PublicAmount
+                    .range()
+                    .expect("change-unshield public amount range is specified")
+                    .bits(),
+            );
             assert_nonzero(ctx, &range, public_amount);
             change_commitment_0 = Some(public_change_commitment);
             public_amount
         } else {
-            range.range_check(ctx, input_sum, 128);
+            range.range_check(
+                ctx,
+                input_sum,
+                ConfidentialUnshieldFullPublicInputV1::PublicAmount
+                    .range()
+                    .expect("full-unshield public amount range is specified")
+                    .bits(),
+            );
             assert_nonzero(ctx, &range, input_sum);
             input_sum
         };
@@ -2278,7 +2479,7 @@ pub(in crate::zk) mod secure_relation_v3 {
     ) -> Result<AssignedConfidentialUnshieldChangeStepV4, String> {
         let relation =
             assign_unshield_relation::<DEPTH>(ctx, range, UnshieldWitnessRef::Change(witness))?;
-        let public = relation.change_public_columns()?;
+        let public = relation.change_public_inputs()?.into_array();
         let change_amount = relation.change_amount.ok_or_else(|| {
             "change-unshield relation omitted its constrained change amount".to_owned()
         })?;
@@ -2306,9 +2507,9 @@ pub(in crate::zk) mod secure_relation_v3 {
         let range = builder.range_chip();
         let bindings = assign_unshield_relation::<DEPTH>(builder.main(0), &range, witness)?;
         let public = if matches!(witness, UnshieldWitnessRef::Change(_)) {
-            bindings.change_public_columns()?.to_vec()
+            bindings.change_public_inputs()?.into_array().to_vec()
         } else {
-            bindings.full_public_columns()?.to_vec()
+            bindings.full_public_inputs()?.into_array().to_vec()
         };
         builder.assigned_instances = public.into_iter().map(|value| vec![value]).collect();
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
@@ -3111,6 +3312,48 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
 
         #[test]
+        fn shared_amount_range_accepts_bit_127_and_rejects_bit_128() {
+            const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
+            let amount_bits = super::super::ConfidentialUnsignedRangeV1::Amount.bits();
+            assert_eq!(amount_bits, 128);
+            assert_eq!(
+                super::super::KagemushaTopUpPublicInputV1::AtomicAmount.range(),
+                Some(super::super::ConfidentialUnsignedRangeV1::Amount),
+            );
+            assert_eq!(
+                super::super::ConfidentialUnshieldFullPublicInputV1::PublicAmount.range(),
+                Some(super::super::ConfidentialUnsignedRangeV1::Amount),
+            );
+            assert_eq!(
+                super::super::ConfidentialUnshieldChangePublicInputV1::PublicAmount.range(),
+                Some(super::super::ConfidentialUnsignedRangeV1::Amount),
+            );
+
+            let verify = |value: Scalar| {
+                let mut builder = BaseCircuitBuilder::new(false)
+                    .use_k(K)
+                    .use_lookup_bits(K - 1);
+                let range = builder.range_chip();
+                let assigned = builder.main(0).load_witness(value);
+                range.range_check(builder.main(0), assigned, amount_bits);
+                builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+                MockProver::run(K as u32, &builder, Vec::new())
+                    .expect("shared confidential amount-range mock prover")
+                    .verify()
+            };
+
+            let high_valid = super::super::scalar_from_u128(1_u128 << 127);
+            assert!(
+                verify(high_valid).is_ok(),
+                "a valid u128 with bit 127 set must remain admissible",
+            );
+            assert!(
+                verify(high_valid + high_valid).is_err(),
+                "the field value 2^128 must fail the shared amount gadget",
+            );
+        }
+
+        #[test]
         fn secure_topup_rejects_malformed_or_contradictory_paths() {
             const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
             let mut witness = sample_topup_witness();
@@ -3666,13 +3909,21 @@ pub fn encode_confidential_amount_v2(amount: u128) -> [u8; 32] {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the canonical empty root of the fixed confidential tree.
 pub fn poseidon_empty_root_v2() -> [u8; 32] {
-    scalar_to_repr_bytes(confidential_empty_subtree_roots_v3()[CONFIDENTIAL_TREE_DEPTH_V2])
+    iroha_data_model::zk::CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute the fixed-tree root for canonical commitment leaves.
 pub fn compute_confidential_root_v2(commitments: &[[u8; 32]]) -> Result<[u8; 32], String> {
     compute_confidential_root_v3(commitments)
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+/// Compute the canonical root after every non-empty commitment prefix.
+pub fn compute_confidential_prefix_roots_v2(
+    commitments: &[[u8; 32]],
+) -> Result<Vec<[u8; 32]>, String> {
+    compute_confidential_prefix_roots_v3(commitments)
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3902,10 +4153,35 @@ fn confidential_subtree_root_v3(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute the fixed-tree root using V3 leaf and internal-node domains.
 pub fn compute_confidential_root_v3(commitments: &[[u8; 32]]) -> Result<[u8; 32], String> {
+    let roots = compute_confidential_prefix_roots_v3(commitments)?;
+    Ok(roots.last().copied().unwrap_or_else(poseidon_empty_root_v2))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn compute_confidential_prefix_roots_v3(commitments: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, String> {
     validate_confidential_tree_len_v3(commitments)?;
     let empty_roots = confidential_empty_subtree_roots_v3();
-    confidential_subtree_root_v3(commitments, 0, CONFIDENTIAL_TREE_DEPTH_V2, &empty_roots)
-        .map(scalar_to_repr_bytes)
+    let mut frontier = [None; CONFIDENTIAL_TREE_DEPTH_V2];
+    let mut roots = Vec::with_capacity(commitments.len());
+
+    for (leaf_index, commitment) in commitments.iter().copied().enumerate() {
+        let mut node = confidential_commitment_leaf_v3(commitment, leaf_index)?;
+        let mut index = leaf_index;
+        for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+            if index & 1 == 0 {
+                frontier[level] = Some(node);
+                node = merkle_parent_v3(node, empty_roots[level]);
+            } else {
+                let left = frontier[level].take().ok_or_else(|| {
+                    format!("missing confidential tree frontier at level {level}")
+                })?;
+                node = merkle_parent_v3(left, node);
+            }
+            index >>= 1;
+        }
+        roots.push(scalar_to_repr_bytes(node));
+    }
+    Ok(roots)
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -5190,31 +5466,19 @@ struct PreparedKagemushaTopUpShieldV3 {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl PreparedKagemushaTopUpShieldV3 {
     fn instance_columns(&self) -> Result<Vec<Vec<Scalar>>, String> {
-        [
-            self.public.output_commitment,
-            self.public.spend_nullifier,
-            self.public.initial_root,
-            self.public.finalized_root,
-            self.public.atomic_amount,
-            self.public.asset_scale,
-            self.public.leaf_index,
-            self.public.asset_tag,
-            self.public.chain_tag,
-            self.public.payer_tag,
-            self.public.operation_tag,
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, bytes)| {
-            scalar_from_repr(bytes)
-                .map(|value| vec![value])
-                .ok_or_else(|| {
-                    format!(
-                        "Kagemusha top-up public column {index} is not a canonical Pasta scalar"
-                    )
+        self.public
+            .try_map(|field, bytes| {
+                scalar_from_repr(bytes)
+                    .map(|value| vec![value])
+                    .ok_or_else(|| {
+                        format!(
+                            "Kagemusha top-up public input '{}' at column {} is not a canonical Pasta scalar",
+                            field.name(),
+                            field.index(),
+                        )
+                    })
                 })
-        })
-        .collect()
+            .map(|public| public.into_array().to_vec())
     }
 }
 
@@ -5972,19 +6236,31 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
         secure_relation_v3::ConfidentialUnshieldFullCircuitV3::<CONFIDENTIAL_TREE_DEPTH_V2> {
             witness: Some(witness),
         };
-    let instance_columns = vec![
-        vec![scalar_from_repr(input_0_commitment).expect("v2 commitment scalar")],
-        vec![scalar_from_repr(input_1_commitment).unwrap_or(Scalar::ZERO)],
-        vec![scalar_from_repr(nullifier_0).expect("nullifier scalar")],
-        vec![scalar_from_repr(nullifier_1).unwrap_or(Scalar::ZERO)],
-        vec![
-            scalar_from_repr(root_hint)
-                .ok_or_else(|| "root_hint must be a canonical Pasta scalar".to_owned())?,
-        ],
-        vec![scalar_from_u128(public_amount)],
-        vec![scalar_from_repr(asset_tag).expect("asset tag scalar")],
-        vec![scalar_from_repr(chain_tag).expect("chain tag scalar")],
-    ];
+    let public = ConfidentialUnshieldFullPublicInputsV1 {
+        input_commitment_0: input_0_commitment,
+        input_commitment_1: input_1_commitment,
+        nullifier_0,
+        nullifier_1,
+        root: root_hint,
+        public_amount: scalar_to_repr_bytes(scalar_from_u128(public_amount)),
+        asset_tag,
+        chain_tag,
+    };
+    let instance_columns = public
+        .try_map(|field: ConfidentialUnshieldFullPublicInputV1, bytes| {
+            scalar_from_repr(bytes)
+                .or_else(|| (bytes == [0; 32]).then_some(Scalar::ZERO))
+                .map(|value| vec![value])
+                .ok_or_else(|| {
+                    format!(
+                        "full-unshield public input '{}' at column {} is not a canonical Pasta scalar",
+                        field.name(),
+                        field.index(),
+                    )
+                })
+        })?
+        .into_array()
+        .to_vec();
     let instance_refs: Vec<&[Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
     let instance_wrapper = vec![instance_refs.as_slice()];
     let proof_raw = create_confidential_v2_proof(
@@ -6158,44 +6434,30 @@ pub fn build_confidential_unshield_proof_v2_with_paths(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 struct PreparedConfidentialUnshieldChangeV4 {
     witness: ConfidentialUnshieldWitnessV3,
-    input_commitments: [[u8; 32]; 2],
+    public: ConfidentialUnshieldChangePublicInputsV1,
     nullifiers: [[u8; 32]; 2],
     change_commitment: [u8; 32],
     root: [u8; 32],
-    public_amount: u128,
-    asset_tag: [u8; 32],
-    chain_tag: [u8; 32],
     input_count: usize,
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl PreparedConfidentialUnshieldChangeV4 {
     fn instance_columns(&self) -> Result<Vec<Vec<Scalar>>, String> {
-        let values = [
-            self.input_commitments[0],
-            self.input_commitments[1],
-            self.nullifiers[0],
-            self.nullifiers[1],
-            self.change_commitment,
-            self.root,
-            scalar_to_repr_bytes(scalar_from_u128(self.public_amount)),
-            self.asset_tag,
-            self.chain_tag,
-        ];
-        values
-            .into_iter()
-            .enumerate()
-            .map(|(index, bytes)| {
+        self.public
+            .try_map(|field, bytes| {
                 scalar_from_repr(bytes)
                     .or_else(|| (bytes == [0; 32]).then_some(Scalar::ZERO))
                     .map(|value| vec![value])
                     .ok_or_else(|| {
                         format!(
-                            "change-unshield public column {index} is not a canonical Pasta scalar"
+                            "change-unshield public input '{}' at column {} is not a canonical Pasta scalar",
+                            field.name(),
+                            field.index(),
                         )
                     })
             })
-            .collect()
+            .map(|public| public.into_array().to_vec())
     }
 }
 
@@ -6315,13 +6577,20 @@ fn prepare_confidential_unshield_change_v4_resolved_paths(
     secure_relation_v3::validate_unshield_v3_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&witness)?;
     Ok(PreparedConfidentialUnshieldChangeV4 {
         witness,
-        input_commitments: [input_0_commitment, input_1_commitment],
+        public: ConfidentialUnshieldChangePublicInputsV1 {
+            input_commitment_0: input_0_commitment,
+            input_commitment_1: input_1_commitment,
+            nullifier_0,
+            nullifier_1,
+            change_commitment_0: output_0_commitment,
+            root: root_hint,
+            public_amount: scalar_to_repr_bytes(scalar_from_u128(public_amount)),
+            asset_tag,
+            chain_tag,
+        },
         nullifiers: [nullifier_0, nullifier_1],
         change_commitment: output_0_commitment,
         root: root_hint,
-        public_amount,
-        asset_tag,
-        chain_tag,
         input_count: inputs.len(),
     })
 }
@@ -6764,6 +7033,44 @@ mod tests {
             layers.push(next);
         }
         layers
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn canonical_empty_root_constant_matches_poseidon_profile() {
+        let computed = super::scalar_to_repr_bytes(
+            super::confidential_empty_subtree_roots_v3()[super::CONFIDENTIAL_TREE_DEPTH_V2],
+        );
+        assert_eq!(
+            computed,
+            iroha_data_model::zk::CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT
+        );
+        assert_eq!(super::poseidon_empty_root_v2(), computed);
+        assert_eq!(
+            super::compute_confidential_root_v2(&[]).expect("empty profile root"),
+            computed
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn incremental_prefix_roots_match_recursive_profile() {
+        let commitments = (1_u64..=64).map(scalar_bytes).collect::<Vec<_>>();
+        let prefix_roots = super::compute_confidential_prefix_roots_v2(&commitments)
+            .expect("canonical prefix roots");
+        let empty_roots = super::confidential_empty_subtree_roots_v3();
+
+        for prefix_len in 1..=commitments.len() {
+            let recursive = super::confidential_subtree_root_v3(
+                &commitments[..prefix_len],
+                0,
+                super::CONFIDENTIAL_TREE_DEPTH_V2,
+                &empty_roots,
+            )
+            .map(super::scalar_to_repr_bytes)
+            .expect("recursive profile root");
+            assert_eq!(prefix_roots[prefix_len - 1], recursive);
+        }
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -7490,6 +7797,46 @@ mod tests {
                 &[[0; 32]],
             )
             .is_err()
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn canonical_kagemusha_vk_digests_match_reviewed_goldens() {
+        let topup = super::kagemusha_topup_shield_v2_vk_box().expect("canonical top-up vk");
+        let full = super::confidential_unshield_v2_vk_box().expect("canonical full-unshield vk");
+        let change =
+            super::confidential_unshield_v3_vk_box().expect("canonical change-unshield vk");
+        assert_eq!(
+            [
+                hex::encode(crate::zk::hash_vk(&topup)),
+                hex::encode(crate::zk::hash_vk(&full)),
+                hex::encode(crate::zk::hash_vk(&change)),
+            ],
+            [
+                hex::encode(super::KAGEMUSHA_TOPUP_SHIELD_V2_VK_DIGEST_V1),
+                hex::encode(super::CONFIDENTIAL_UNSHIELD_V2_VK_DIGEST_V1),
+                hex::encode(super::CONFIDENTIAL_UNSHIELD_V3_VK_DIGEST_V1),
+            ],
+            "canonical verifier-key layout changed; review the circuit/schema version before updating these goldens",
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn kagemusha_topup_canonical_vk_guard_rejects_one_byte_substitution() {
+        let canonical =
+            super::kagemusha_topup_shield_v2_vk_box().expect("canonical top-up verifier key");
+        super::ensure_kagemusha_topup_shield_v2_canonical_vk_box(&canonical)
+            .expect("reviewed top-up verifier key");
+        let mut mutated = canonical;
+        *mutated
+            .bytes
+            .last_mut()
+            .expect("non-empty canonical top-up verifier key") ^= 1;
+        assert!(
+            super::ensure_kagemusha_topup_shield_v2_canonical_vk_box(&mutated).is_err(),
+            "one-byte same-circuit verifier substitution must fail closed",
         );
     }
 

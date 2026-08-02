@@ -877,10 +877,11 @@ mod tests {
     }
 
     fn sample_input(authority: AccountId) -> NexusTransferInput {
-        let definition = AssetDefinitionId::from_uuid_bytes_unchecked([
+        let definition = AssetDefinitionId::from_uuid_bytes([
             0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x42, 0x22, 0x82, 0x22, 0x22, 0x22, 0x22, 0x22,
             0x22, 0x22,
-        ]);
+        ])
+        .expect("sample asset definition UUID is valid");
         NexusTransferInput {
             source_asset_id: AssetId::new(definition, authority.clone()),
             quantity: "1.25".parse().expect("quantity"),
