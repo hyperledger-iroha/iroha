@@ -52,19 +52,9 @@ pub(super) const SCRATCH_RUNNING_AFTER: usize = SCRATCH_RUNNING_BEFORE + 1;
 pub(super) const SCRATCH_RELATION_CARRY_BEFORE: usize = SCRATCH_RUNNING_AFTER + 1;
 pub(super) const SCRATCH_RELATION_CARRY_AFTER: usize = SCRATCH_RELATION_CARRY_BEFORE + 1;
 pub(super) const SCRATCH_RELATION_CARRY_BITS_OFFSET: usize = SCRATCH_RELATION_CARRY_AFTER + 1;
-pub(super) const SCRATCH_VM_OPCODE_SELECT_OFFSET: usize = SCRATCH_RELATION_CARRY_BITS_OFFSET + 2;
-pub(super) const SCRATCH_VM_DESTINATION_SELECT_OFFSET: usize = SCRATCH_VM_OPCODE_SELECT_OFFSET + 9;
-pub(super) const SCRATCH_VM_LEFT_SELECT_OFFSET: usize = SCRATCH_VM_DESTINATION_SELECT_OFFSET + 8;
-pub(super) const SCRATCH_VM_RIGHT_SELECT_OFFSET: usize = SCRATCH_VM_LEFT_SELECT_OFFSET + 8;
-pub(super) const SCRATCH_VM_IMMEDIATE_OFFSET: usize = SCRATCH_VM_RIGHT_SELECT_OFFSET + 8;
-pub(super) const SCRATCH_VM_HALTED_BEFORE: usize = SCRATCH_VM_IMMEDIATE_OFFSET + 4;
-pub(super) const SCRATCH_VM_HALTED_AFTER: usize = SCRATCH_VM_HALTED_BEFORE + 1;
-pub(super) const SCRATCH_VM_CARRY_BEFORE: usize = SCRATCH_VM_HALTED_AFTER + 1;
-pub(super) const SCRATCH_VM_CARRY_AFTER: usize = SCRATCH_VM_CARRY_BEFORE + 1;
-pub(super) const SCRATCH_VM_DIFFERENCE: usize = SCRATCH_VM_CARRY_AFTER + 1;
-pub(super) const SCRATCH_VM_RESULT: usize = SCRATCH_VM_DIFFERENCE + 1;
-pub(super) const SCRATCH_VM_RESULT_BITS_OFFSET: usize = SCRATCH_VM_RESULT + 1;
-pub(super) const SCRATCH_VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_RESULT_BITS_OFFSET + 8;
+// V0 assigns the right-hand distinctness bits to scratch columns 81 through
+// 88; the intervening scratch cells are canonical zero padding.
+pub(super) const SCRATCH_DISTINCT_RIGHT_BITS_OFFSET: usize = SCRATCH_OFFSET + 81;
 
 pub(super) const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
@@ -160,9 +150,6 @@ pub(super) enum PqMaspAirErrorV1 {
     Resource,
     #[error("PQ-MASP AIR SHA-256 schedule is invalid")]
     Sha256,
-    #[error("PQ-MASP AIR copy permutation is invalid")]
-    #[cfg_attr(not(test), allow(dead_code))]
-    Copy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -244,22 +231,6 @@ pub(super) enum PqMaspFixedRowV1 {
         side: SumSideV1,
         byte: u8,
     },
-    #[cfg_attr(not(test), allow(dead_code))]
-    VmHeader,
-    #[cfg_attr(not(test), allow(dead_code))]
-    VmProgram {
-        instruction: u8,
-    },
-    #[cfg_attr(not(test), allow(dead_code))]
-    VmPrevious {
-        instruction: u8,
-        byte: u8,
-    },
-    #[cfg_attr(not(test), allow(dead_code))]
-    VmNext {
-        instruction: u8,
-        byte: u8,
-    },
     Padding,
 }
 
@@ -322,8 +293,6 @@ struct OutputVariablesV1 {
 }
 
 struct TraceBuilderV1<'a> {
-    #[cfg_attr(not(test), allow(dead_code))]
-    statement: &'a PqMaspStarkStatementV1,
     witness: Option<&'a PqMaspWitnessV1>,
     assignment: Vec<u8>,
     rows: Vec<Vec<F>>,
@@ -354,7 +323,6 @@ impl<'a> TraceBuilderV1<'a> {
                 (Vec::new(), 0, 0)
             };
         Ok(Self {
-            statement,
             witness,
             assignment: Vec::new(),
             rows: Vec::new(),
@@ -779,7 +747,7 @@ impl<'a> TraceBuilderV1<'a> {
                 row[SCRATCH_NONZERO_BIT_SELECT_OFFSET + selected_bit] = F::ONE;
                 for bit in 0..8 {
                     row[SCRATCH_BYTE_BITS_OFFSET + bit] = F(u64::from((left_byte >> bit) & 1));
-                    row[SCRATCH_VM_DIFFERENCE_BITS_OFFSET + bit] =
+                    row[SCRATCH_DISTINCT_RIGHT_BITS_OFFSET + bit] =
                         F(u64::from((right_byte >> bit) & 1));
                 }
                 running = 1;

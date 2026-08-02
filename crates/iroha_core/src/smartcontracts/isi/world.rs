@@ -33046,34 +33046,6 @@ seiyaku GovernanceLifecycle {
             }
         }
 
-        #[cfg(feature = "zk-halo2-ipa")]
-        fn pasta_scalar_word(value: u64) -> [u8; 32] {
-            let mut out = [0u8; 32];
-            out[..8].copy_from_slice(&value.to_le_bytes());
-            out
-        }
-
-        #[cfg(feature = "zk-halo2-ipa")]
-        fn tamper_open_verify_envelope_inner_proof_byte(proof: &mut ProofAttachment) {
-            let mut envelope: OpenVerifyEnvelope =
-                norito::decode_from_bytes(&proof.proof.bytes).expect("decode OpenVerifyEnvelope");
-            assert!(
-                envelope.proof_bytes.len() > 12,
-                "fixture proof must carry a non-empty ZK1 PROF payload"
-            );
-            assert_eq!(&envelope.proof_bytes[..4], b"ZK1\0");
-            assert_eq!(&envelope.proof_bytes[4..8], b"PROF");
-            let prof_len = u32::from_le_bytes(
-                envelope.proof_bytes[8..12]
-                    .try_into()
-                    .expect("PROF length bytes"),
-            );
-            assert!(prof_len > 0, "fixture PROF payload must not be empty");
-            envelope.proof_bytes[12] ^= 0x01;
-            proof.proof.bytes =
-                norito::to_bytes(&envelope).expect("re-encode tampered OpenVerifyEnvelope");
-        }
-
         fn fail_closed_confidential_fixture(domain_name: &str) -> (State, AssetDefinitionId) {
             let domain_id = DomainId::try_new(domain_name, "universal").expect("domain id parses");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);

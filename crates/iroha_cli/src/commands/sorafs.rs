@@ -13853,8 +13853,8 @@ enforce_admission = true
 
 [sorafs.gateway.rate_limit]
 max_requests = 120
-window = "60s"
-ban = "30s"
+window = {{ secs = 60, nanos = 0 }}
+ban = {{ secs = 30, nanos = 0 }}
 
 [sorafs.gateway.acme]
 enabled = true
@@ -13862,9 +13862,9 @@ account_email = "ops@example.com"
 directory_url = "https://acme-v02.api.letsencrypt.org/directory"
 hostnames = [{hosts}]
 dns_provider_id = "cloudflare-prod"
-renewal_window = "30d"
-retry_backoff = "30m"
-retry_jitter = "5m"
+renewal_window = {{ secs = 2592000, nanos = 0 }}
+retry_backoff = {{ secs = 1800, nanos = 0 }}
+retry_jitter = {{ secs = 300, nanos = 0 }}
 
 [sorafs.gateway.acme.challenges]
 dns01 = true
@@ -14217,12 +14217,42 @@ mod gateway_tests {
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("template command runs");
         let rendered = ctx.outputs().join("\n");
-        assert_sorafs_config_snippet_is_schema_valid(&rendered);
+        let config = assert_sorafs_config_snippet_is_schema_valid(&rendered);
+        assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
+        assert_eq!(config.gateway.rate_limit.ban, Some(Duration::from_secs(30)));
+        assert_eq!(
+            config.gateway.acme.renewal_window,
+            Duration::from_secs(30 * 24 * 60 * 60)
+        );
+        assert_eq!(
+            config.gateway.acme.retry_backoff,
+            Duration::from_secs(30 * 60)
+        );
+        assert_eq!(
+            config.gateway.acme.retry_jitter,
+            Duration::from_secs(5 * 60)
+        );
         assert!(rendered.contains("[sorafs.gateway]"));
         assert!(!rendered.contains("[torii.sorafs_gateway]"));
         assert!(rendered.contains("gateway-a.example.com"));
         assert!(rendered.contains("gateway-b.example.com"));
         assert!(!rendered.contains("denylist"));
+    }
+
+    #[test]
+    fn direct_mode_documentation_fixture_satisfies_config_schema() {
+        let fixture = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/documentation/sorafs_gateway_direct_mode.toml"
+        ));
+
+        let config = assert_sorafs_config_snippet_is_schema_valid(fixture);
+        assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
+        assert_eq!(
+            config.gateway.rate_limit.ban,
+            Some(Duration::from_secs(10 * 60))
+        );
+        assert!(config.gateway.direct_mode.is_some());
     }
 
     #[test]
@@ -25566,7 +25596,7 @@ mod tests {
         plan_file
     }
 
-    pub(super) fn assert_sorafs_config_snippet_is_schema_valid(snippet: &str) {
+    pub(super) fn assert_sorafs_config_snippet_is_schema_valid(snippet: &str) -> UserSorafsConfig {
         let mut root: toml::Table =
             toml::from_str(snippet).expect("generated snippet must parse as TOML");
         let sorafs = root
@@ -25584,7 +25614,7 @@ mod tests {
         ConfigReader::new()
             .with_toml_source(TomlSource::inline(sorafs))
             .read_and_complete::<UserSorafsConfig>()
-            .expect("generated snippet must satisfy the iroha_config SoraFS schema");
+            .expect("generated snippet must satisfy the iroha_config SoraFS schema")
     }
 
     #[test]

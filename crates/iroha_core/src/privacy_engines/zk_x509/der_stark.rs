@@ -75,8 +75,6 @@ pub(crate) const ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1: usize =
 /// Fixed public parser/comparator registration envelope.
 pub(crate) const ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1: usize =
     ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + ZK_X509_DER_STARK_MAX_COMPARATOR_ROWS_V1;
-pub(crate) const ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1: usize =
-    ZK_X509_DER_STARK_TRACE_SIZE_V1 - ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1;
 
 const _: () =
     assert!(ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 < ZK_X509_DER_STARK_TRACE_SIZE_V1);
@@ -346,10 +344,6 @@ pub(crate) struct ZkX509DerStarkFixedScheduleV1 {
 }
 
 impl ZkX509DerStarkFixedScheduleV1 {
-    pub(crate) fn shape(&self) -> &ZkX509DerStarkShapeV1 {
-        &self.shape
-    }
-
     pub(crate) const fn active_rows(&self) -> usize {
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }

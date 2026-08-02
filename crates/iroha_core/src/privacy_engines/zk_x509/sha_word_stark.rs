@@ -37,9 +37,6 @@ use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 
-/// Stable descriptor for the STARK-facing SHA word trace.
-pub(crate) const ZK_X509_SHA_WORD_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"sha-word-stark-air-v1-incompatible:raw-single-call-base64-aux51-fixed55-constraints155-degree4:capacity-call-base76-aux54-fixed72-constraints335-degree4:verifier-fixed-maximum-block-and-byte-topology:private-active-block-prefix-and-unique-padding-transition-across-blocks:per-byte-message-cap-enforcement:fixed-width-role-exact-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-address=680*active-blocks+word:message-byte-marker-masks-and-private-count:four-lane-local-execution-sorted-word-memory-products:base-errors-folded-after-base-commitment-in-four-independent-lanes:word-byte-fixed-masks:sigma-four-verifier-selectors:choose-majority-four-chunks:canonical-add-arity2-or4";
-
 pub(crate) const SHA_WORD_BASE_WIDTH_V1: usize = 64;
 pub(crate) const SHA_WORD_COPY_LANES_V1: usize = WORD_MEMORY_PERMUTATION_LANES_V1;
 pub(crate) const SHA_WORD_LOCAL_PRODUCT_WIDTH_V1: usize = 6 * SHA_WORD_COPY_LANES_V1;
@@ -409,24 +406,6 @@ pub(crate) enum ShaWordFixedRowV1 {
     Padding,
 }
 
-impl ShaWordFixedRowV1 {
-    pub(crate) fn is_local(&self) -> bool {
-        matches!(
-            self,
-            Self::Word { .. }
-                | Self::Sigma { .. }
-                | Self::Choose { .. }
-                | Self::Majority { .. }
-                | Self::Add { .. }
-                | Self::Digest { .. }
-        )
-    }
-
-    pub(crate) fn is_memory(&self) -> bool {
-        matches!(self, Self::Memory { .. })
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ShaWordPhysicalContinuationV1 {
     pub(crate) segment_index: u8,
@@ -491,16 +470,6 @@ impl ZkX509ShaWordCapacityBaseSourceV1 {
     /// Exact private message length committed by the base rows.
     pub(crate) const fn message_len(&self) -> usize {
         self.message_len
-    }
-
-    /// Verifier-owned maximum message capacity.
-    pub(crate) const fn maximum_message_len(&self) -> usize {
-        self.maximum_message_len
-    }
-
-    /// Whether the manifest requires the private length to fill its capacity.
-    pub(crate) const fn exact_length(&self) -> bool {
-        self.exact_length
     }
 
     /// Maximum compression blocks reserved by the fixed schedule.
@@ -994,10 +963,6 @@ pub(crate) struct ZkX509ShaWordStarkFixedScheduleV1 {
 }
 
 impl ZkX509ShaWordStarkFixedScheduleV1 {
-    pub(crate) const fn statement(&self) -> ZkX509ShaWordStarkStatementV1 {
-        self.statement
-    }
-
     pub(crate) const fn logical_rows(&self) -> usize {
         self.logical_rows
     }

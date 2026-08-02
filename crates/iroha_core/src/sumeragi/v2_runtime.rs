@@ -4953,16 +4953,6 @@ impl BoundedIngress<AdapterCommand> {
         self.reserve_canonical_body_available_internal(tag, manifest, None, None)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn reserve_canonical_body_available_with_owner(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-        owner: &RuntimeLifecycleOwner,
-    ) -> Result<BodyAvailableReservation, EnqueueError> {
-        self.reserve_canonical_body_available_internal(tag, manifest, Some(owner), None)
-    }
-
     fn reserve_canonical_body_available_internal(
         &mut self,
         tag: EventTag,

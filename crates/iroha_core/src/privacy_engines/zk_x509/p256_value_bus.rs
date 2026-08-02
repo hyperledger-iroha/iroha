@@ -39,9 +39,6 @@ use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 
-/// Stable descriptor for the inactive first-release value bus.
-pub(crate) const ZK_X509_P256_VALUE_BUS_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-value-bus-v1:fixed-ssa-ids:16xu16-limbs:arithmetic-a-b-reads-c-write:spare-row-input-and-constant-writers:ordinary-equality-reads:boolean-scalar-to-base-bridges:verifier-sorted-writer-first:four-post-commitment-products:id-limb-read-write-modulus-value-kind-value:canonical-inactive-padding:64-factor-segments:exactly2-factors-per-packed-row:first-release";
-
 /// Number of independently sampled grand-product lanes.
 pub(crate) const P256_VALUE_BUS_LANES_V1: usize = 4;
 /// `beta`, id, limb, read/write, modulus, value kind, and value.
@@ -66,12 +63,6 @@ pub(crate) const P256_VALUE_BUS_STARK_FIXED_WIDTH_V1: usize =
 /// Exact residue inventory for one opened aggregate row.
 pub(crate) const P256_VALUE_BUS_STARK_CONSTRAINT_COUNT_V1: usize =
     P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 * 41 + 2 * P256_VALUE_BUS_LANES_V1;
-/// Maximum total degree of the numeric adapter.
-pub(crate) const P256_VALUE_BUS_STARK_CONSTRAINT_DEGREE_V1: u8 = 2;
-/// Stable descriptor for the source-attached numeric aggregate adapter.
-pub(crate) const ZK_X509_P256_VALUE_BUS_STARK_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-p256-value-bus-stark-v1:exactly2-factor-packing:949312-logical-factors:474656-packed-active-rows:numeric-base34:aux12:fixed22:constraints90-degree2:execution-and-verifier-sorted-endpoints:verifier-owned-ssa-topology:writer-first-read-adjacency:range16:canonical-zero-inactive:uniform-native-domain2pow19:on-demand-fixed-base-aux-rows:terminal-opening-equality:execution-writer-cross-product-appended-separately:no-enum-or-native-row-branch-in-extension-evaluator:first-release";
-
 /// Unambiguous transcript labels for all 28 challenge coordinates.
 pub(crate) const P256_VALUE_BUS_CHALLENGE_LABELS_V1: [[&[u8]; P256_VALUE_BUS_TUPLE_TERMS_V1];
     P256_VALUE_BUS_LANES_V1] = [
@@ -2011,7 +2002,6 @@ pub(crate) struct P256ValueBusStarkFixedProviderV1 {
     metadata: Vec<P256ValueBusStarkMetadataV1>,
     sorted_prefix: Vec<usize>,
     logical_factor_rows: usize,
-    packed_rows: usize,
     sorted_active_factor_rows: usize,
     trace_size: usize,
 }
@@ -2173,7 +2163,6 @@ impl P256ValueBusStarkFixedProviderV1 {
             metadata,
             sorted_prefix,
             logical_factor_rows,
-            packed_rows,
             sorted_active_factor_rows,
             trace_size,
         })
@@ -2385,24 +2374,9 @@ impl P256ValueBusStarkFixedProviderV1 {
         Ok(())
     }
 
-    /// Packed physical endpoint rows before uniform-domain padding.
-    pub(crate) const fn logical_rows_v1(&self) -> usize {
-        self.packed_rows
-    }
-
     /// Exact product-factor rows before two-factor packing.
     pub(crate) const fn logical_factor_rows_v1(&self) -> usize {
         self.logical_factor_rows
-    }
-
-    /// Active sorted accesses before its inactive suffix.
-    pub(crate) const fn sorted_active_rows_v1(&self) -> usize {
-        self.sorted_active_factor_rows
-    }
-
-    /// Native row count.
-    pub(crate) const fn trace_size_v1(&self) -> usize {
-        self.trace_size
     }
 }
 
@@ -2473,33 +2447,6 @@ impl<'a> P256ValueBusStarkBaseRowProviderV1<'a> {
             }
         }
         Ok(base)
-    }
-
-    /// One committed base cell.
-    pub(crate) fn base_cell_v1(
-        self,
-        index: usize,
-        column: usize,
-    ) -> Result<F, P256ValueBusErrorV1> {
-        if column >= P256_VALUE_BUS_STARK_BASE_WIDTH_V1 {
-            return Err(P256ValueBusErrorV1::Topology);
-        }
-        Ok(self.base_row_v1(index)?[column])
-    }
-
-    /// Replay one complete committed base column.
-    pub(crate) fn fill_base_column_v1(
-        self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256ValueBusErrorV1> {
-        if column >= P256_VALUE_BUS_STARK_BASE_WIDTH_V1 || output.len() != self.trace_size {
-            return Err(P256ValueBusErrorV1::Topology);
-        }
-        for (row, value) in output.iter_mut().enumerate() {
-            *value = self.base_cell_v1(row, column)?;
-        }
-        Ok(())
     }
 
     /// Challenge-independent endpoint.
@@ -2589,25 +2536,6 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
             next_row: 0,
             trace_size: self.trace_size,
         }
-    }
-
-    /// Replay one complete auxiliary column.
-    pub(crate) fn fill_aux_column_v1(
-        &self,
-        column: usize,
-        output: &mut [F],
-    ) -> Result<(), P256ValueBusErrorV1> {
-        if column >= P256_VALUE_BUS_STARK_AUX_WIDTH_V1 || output.len() != self.trace_size {
-            return Err(P256ValueBusErrorV1::Topology);
-        }
-        let mut replay = self.replay_v1();
-        for value in output {
-            let row = replay
-                .next_aux_row_v1()?
-                .ok_or(P256ValueBusErrorV1::Topology)?;
-            *value = row[column];
-        }
-        Ok(())
     }
 
     /// Endpoint terminal under the bound X5B1 challenges.
@@ -2961,17 +2889,6 @@ impl P256ValueBusBoundSourceV1 {
             .row_v1(row)
     }
 
-    /// Verifier-owned fixed sorted row retained across the phase transition.
-    pub(crate) fn sorted_fixed_row_v1(
-        &self,
-        row: usize,
-    ) -> Result<[F; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1], P256ValueBusErrorV1> {
-        self.sorted_fixed
-            .as_deref()
-            .ok_or(P256ValueBusErrorV1::Phase)?
-            .row_v1(row)
-    }
-
     /// Recursively overwrite the retained bound value material and
     /// challenge-derived terminals.
     ///
@@ -3172,18 +3089,6 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
         }
         Ok(())
     }
-
-    /// Final product terminal.
-    pub(crate) const fn terminal_v1(self) -> [F; P256_VALUE_BUS_LANES_V1] {
-        self.terminal
-    }
-}
-
-/// Project the committed limb cell used by the writer cross product.
-pub(crate) const fn p256_value_bus_opened_value_v1(
-    base: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
-) -> F {
-    base[STARK_BASE_VALUE]
 }
 
 /// Project both committed limb cells used by packed writer/copy products.

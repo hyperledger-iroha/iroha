@@ -56,10 +56,11 @@ the scoreboard output (`persist_path`) for audit trails.
 
 Gateway-side enforcement knobs are captured in
 `fixtures/documentation/sorafs_gateway_direct_mode.toml`. The template mirrors the output
-from `iroha app sorafs gateway direct-mode enable`, disabling envelope/admission
-checks, wiring rate-limit defaults, and populating the `direct_mode` table with
-plan-derived hostnames and manifest digests. Replace the placeholder values with
-your rollout plan before committing the snippet to configuration management.
+from `iroha app sorafs gateway direct-mode enable` by preserving envelope,
+admission, and capability checks and populating the `direct_mode` table with
+plan-derived hostnames and manifest digests. It also adds conservative rate-limit
+settings. Replace the placeholder values with your rollout plan before committing
+the snippet to configuration management.
 
 ## 3. Compliance Test Suite
 

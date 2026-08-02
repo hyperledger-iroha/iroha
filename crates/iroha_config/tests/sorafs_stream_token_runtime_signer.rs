@@ -162,12 +162,12 @@ signer_public_key_hex = "{valid_public_key}"
         (
             "development handle",
             enabled_overlay("pkcs11:test/stream-token/v1", &valid_public_key),
-            "must be a production runtime handle",
+            "must be a canonical credential-free production runtime handle",
         ),
         (
             "whitespace handle",
             enabled_overlay("pkcs11:prod/stream token/v1", &valid_public_key),
-            "must be a production runtime handle",
+            "must be a canonical credential-free production runtime handle",
         ),
     ] {
         let error = parse_overlay(&source).expect_err(label);

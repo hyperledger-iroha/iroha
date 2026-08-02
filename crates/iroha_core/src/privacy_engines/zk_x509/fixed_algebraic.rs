@@ -595,20 +595,6 @@ impl ZkX509FixedAlgebraicScheduleBuilderV1 {
         )?)
     }
 
-    /// Add a constant repeated contribution.
-    pub(crate) fn push_repeated_v1(
-        &mut self,
-        column: u16,
-        first: u64,
-        count: u64,
-        stride: u64,
-        value: F,
-    ) -> Result<(), ZkX509FixedAlgebraicErrorV1> {
-        self.push_atom_v1(ZkX509FixedAlgebraicAtomV1::repeated_v1(
-            column, first, count, stride, value,
-        )?)
-    }
-
     /// Add an affine repeated contribution.
     pub(crate) fn push_repeated_affine_v1(
         &mut self,
