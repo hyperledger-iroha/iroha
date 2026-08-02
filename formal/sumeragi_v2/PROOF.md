@@ -1,5 +1,246 @@
 # Sumeragi v2 safety and liveness argument
 
+## Revision-4 argument
+
+Revision 4 is a fresh-genesis protocol. For each frozen height context, let
+`V` be the unit-vote validator committee and require
+
+```text
+n = |V| = 3f + 1,    1 <= f <= 10,    q = 2f + 1.
+```
+
+The protocol therefore admits exactly 4, 7, ..., 31 validators. At most `f`
+committee members may be Byzantine. Stake affects election and eligibility,
+but it does not weight a Prepare, Commit, or timeout vote. Every certificate
+uses `q` distinct validator identities from the one frozen committee.
+
+A height-seeded permutation of `V` is rotated cyclically by view. In each view,
+Set A is the first `q` validators, including the leader at its head and the
+proxy tail at its end; Set B is the remaining `f` validators. The proxy tail is
+the sole fast-path vote collector. There is no backup collector. The first
+retransmission deadline activates same-view fallback: it keeps the exact
+proposal, view, lock, and quorum rule, but expands full-body recovery and voting
+eligibility from Set A to all of `V`. A certificate of `q` timeout votes changes
+the view and rotates every role. Installing that certified view change resets
+the fallback flag before the new view starts.
+
+Every honest Prepare voter must reconstruct the complete canonical body from
+the mandatory Reed-Solomon-16 layout, verify the manifest and body hashes,
+durably store the exact body, and deterministically validate it before
+persisting its Prepare intent. Commit voting additionally requires the matching
+PrepareQC and durable lock. Honest validators sign at most once per
+height-context, view, and phase, retain locks across fallback and view changes,
+and only accept a proposal justified by the highest certified lock. Signatures
+bind the height context, view, phase, proposal identity, body commitment, and
+execution commitment. These durability, authentication, deterministic
+execution, and safe-proposal checks are trusted production-refinement
+assumptions of the compact model.
+
+### Unit-quorum intersection
+
+For any two revision-4 quorums `Q1` and `Q2`,
+
+```text
+|Q1 intersect Q2| >= |Q1| + |Q2| - n
+                  = 2(2f + 1) - (3f + 1)
+                  = f + 1.
+```
+
+Because at most `f` validators are Byzantine, the intersection contains an
+honest validator. Each quorum also contains at least `f + 1` honest
+validators. No stake-power premise is needed or permitted.
+
+### Safety
+
+**Lemma 1 (same-view certificate uniqueness).** Two valid PrepareQCs, or two
+valid CommitQCs, for one height context, view, and phase cannot certify
+different bodies.
+
+The two signer sets intersect in an honest validator. That validator would have
+to violate its durable sign-once rule to sign both bodies.
+
+**Lemma 2 (full-body external validity).** A valid PrepareQC certifies that at
+least `f + 1` honest validators durably possess and have deterministically
+validated the exact body. A CommitQC inherits the same property.
+
+A QC has `q` distinct signers, at most `f` of whom are Byzantine. The
+full-body-before-Prepare gate applies independently to each honest signer;
+possession of a manifest or a partial shard set is insufficient. A Commit vote
+requires that same full-body authority plus the matching PrepareQC and lock.
+Thus a certified body remains recoverable from honest QC signers after a leader
+or proxy-tail failure.
+
+**Lemma 3 (fallback preservation).** Entering same-view fallback cannot create
+a conflicting certificate.
+
+Fallback changes only which committee members may reconstruct the body and
+vote. It does not change the proposal, view, phase, signer identity, sign-once
+slot, lock, or `q` threshold. Set B votes are therefore ordinary unit votes in
+the same certificate domain, not a second or weaker quorum system. A certified
+view change clears this view-scoped eligibility expansion, so stale fallback
+authority cannot leak into the rotated view.
+
+**Lemma 4 (certified view-change lock preservation).** A certified view change
+cannot replace a locked body with a conflicting body.
+
+A Commit quorum for body `x` contains at least `f + 1` honest locked
+validators. Fewer than `q` other validators remain, so a conflicting
+PrepareQC cannot be the first higher certificate unless one of those honest
+validators abandons its lock. The safe-proposal rule permits such a validator
+to move only through a strictly higher certified lock. Choosing the first
+conflicting higher PrepareQC yields the same contradiction recursively: its
+quorum intersects the protected quorum in an honest validator that cannot
+justify the change. Timeout votes bypass the proxy tail, and the certified
+view-change value carries the highest safe lock into the rotated view. The
+compact revision-4 model represents this by leaving `lockedBody` unchanged in
+`ChangeView` and requiring `Propose` to match a nonempty lock.
+
+**Theorem 1 (agreement).** Two valid CommitQCs in one height context cannot
+certify different bodies.
+
+Same-view conflict contradicts Lemma 1. For different views, order the
+certificates by view and select the earliest conflicting later certificate.
+Its PrepareQC contradicts Lemma 4. Same-view fallback is irrelevant to this
+ordering by Lemma 3.
+
+**Corollary 1 (chain-prefix safety).** If successor height contexts are created
+only from a durably applied revision-4 CommitQC and its exact canonical body,
+then finalized histories of honest validators are prefix comparable.
+
+Theorem 1 gives one certified body per height context. Hash-bound parent and
+height-context construction then gives the induction step. A validator may
+lag, but finalized-output repair for an older height cannot authorize a
+different successor.
+
+### Conditional liveness after GST
+
+The liveness claim is conditional, as required by FLP. Assume that after GST:
+
+1. at least `q = n - f` honest validators remain responsive;
+2. authenticated message delivery, timer service, full-body reconstruction,
+   durable writes, signatures, deterministic validation, and application
+   complete within finite bounds;
+3. retransmission and view-change deadlines eventually exceed those bounds;
+4. an honest leader can recover any certified locked body from honest signers;
+5. enough honest members of every unfinished predecessor lane committee remain
+   responsive to meet its frozen descriptor threshold until exact durable lane
+   completion, even if those members are absent from the successor global
+   roster; and
+6. a correct proxy tail that receives `q` phase votes durably forms and
+   disseminates the corresponding QC.
+
+**Lemma 5 (fallback progress with an honest tail).** In a view with an honest
+leader and honest proxy tail, the height either completes on the Set A fast
+path or completes after same-view fallback.
+
+Set A has exactly `q` members, so the fast path is intentionally optimistic:
+one withholding or unavailable Set A member may prevent its QC. At the first
+retransmission deadline, fallback makes every validator eligible for body
+recovery and voting without changing the proposal. There are exactly `q`
+honest validators in the worst case. After GST they all obtain and validate
+the full body, and their `q` Prepare votes, followed by their `q` Commit votes,
+reach the honest proxy tail.
+
+**Lemma 6 (eventual usable view).** Repeated certified view changes eventually
+select a view with both an honest leader and an honest proxy tail.
+
+Timeout votes do not depend on the proxy tail, so the `q` honest validators can
+certify departure from a stalled view. Across one full cyclic rotation, at
+most `f` views place a Byzantine validator in the leader position and at most
+`f` place one in the proxy-tail position. Their union excludes at most `2f`
+of the `3f + 1` views, leaving at least `f + 1` views with both roles honest.
+Certified view entry resets fallback, after which that view receives its own
+fast-path attempt and, if needed, same-view fallback.
+
+**Theorem 2 (conditional per-height termination).** Under the post-GST
+assumptions, every active height eventually obtains a CommitQC, and every
+responsive honest validator eventually recovers, validates, durably applies
+the exact body, and activates its successor height.
+
+Failed views either decide or collect `q` timeout votes and rotate. Lemma 6
+eventually supplies a usable view; Lemma 5 completes both voting phases there.
+The full-body gate provides the body needed for application. Successor
+activation depends on durable application, not on completion of retryable
+old-height network output, lane sidecars, or cleanup.
+Those retryable historical lane obligations retain their predecessor
+descriptor and committee. A removed configured validator is an observer for
+successor global consensus and has no successor vote, while remaining eligible
+for a lane vote only when that exact frozen descriptor explicitly names it.
+The same rule applies to unfinished old descriptors and independently pinned
+current-height Nexus lane descriptors; neither borrows successor-global
+authority. A proof-carrying historical response from such a signer is bounded
+at successor ingress and revalidated against the exact outstanding request and
+old certificate before persistence.
+
+This theorem does not cover a permanent partition, more than `f` Byzantine or
+unresponsive validators, nonterminating local work, exhausted finite counters,
+or a scheduler that never services an enabled action. Finalized-output repair
+remains required and retryable; it is removed only from the successor
+activation dependency.
+
+### Revision-4 model status
+
+[`SumeragiV2Revision4.tla`](SumeragiV2Revision4.tla) encodes the exact committee
+geometry, one finite cyclic A/B rotation, same-view fallback, fallback reset
+on `q`-certified `ChangeView`, full-body voting gates, durable sign-once state,
+decision agreement, and successor activation independent of finalized-output
+debt. Its routing state additionally records these production-facing
+obligations:
+
+1. a proposal manifest targets the whole frozen committee;
+2. the first body/chunk occurrence targets exactly Set A;
+3. same-view fallback expands body/chunk targets to the whole committee;
+4. Prepare and Commit votes target only the current proxy tail; and
+5. each timeout vote uses committee-wide fanout, so forming a timeout
+   certificate does not depend on the proxy-tail route.
+
+[`SumeragiV2Revision4.cfg`](SumeragiV2Revision4.cfg) instantiates `n = 4`,
+`f = 1`, `q = 3`, two candidate bodies, and one faulty validator for exhaustive
+invariant checking. The finite `Views = 0..(n - 1)` horizon is one complete
+role rotation; unlike the former unbounded natural-valued executable view, it
+has a finite state graph which TLC can exhaust.
+
+[`SumeragiV2Revision4Liveness.cfg`](SumeragiV2Revision4Liveness.cfg) checks the
+same finite geometry with `PostGSTSpec`. That specification makes the
+conditional partial-synchrony premises executable: while the current leader
+and proxy tail are both honest, the post-GST transition relation suppresses
+timeout-certified departure, representing deadlines longer than the finite
+service bound. Weak fairness is stated explicitly for honest-leader proposal,
+honest full-body service, fallback, honest Prepare and Commit service,
+honest-tail QC and decision formation, honest timeout service and certified
+view change, exact local decided-body recovery, application, and successor
+activation. `RepairFinalizedOutput` is deliberately absent from the fairness
+set and from the activation guard.
+
+The temporal configuration checks both:
+
+```text
+ConditionalPostGSTProgress
+FinalizedOutputDebtDoesNotBlockSuccessor
+```
+
+The first reaches decision, local application, and successor activation from
+the initial height within the fair post-GST model. The second is a leads-to
+property from applied state with outstanding finalized-output debt to an
+active successor. `NonblockingSuccessorActivation` remains the separate
+enabledness invariant.
+
+`CompleteFullBody` and `RecoverDecidedFullBody` atomically abstract RS16
+reconstruction, hash checking, durability, and validation. The compact model
+also does not generate the complete set of arbitrary Byzantine network actions
+or establish a source-level refinement. Consequently TLC success is bounded
+invariant and conditional temporal evidence, not by itself a TLAPS proof of
+the paper theorem, a proof of production refinement, or unconditional
+liveness.
+
+## Revision-3 archive (historical)
+
+Everything below this heading describes the retired weighted-vote
+revision-3 transition relation and its proof ledger. It is preserved as
+historical proof-engineering material. It is not revision-4 release evidence,
+and its count-and-power assumptions must not be imported into the current
+protocol.
+
 This note gives the deductive protocol argument corresponding to
 `SumeragiV2.tla` and `iroha_sumeragi_core::Reducer`. It deliberately separates
 the paper argument from its mechanization status: the lemmas below explain the
@@ -8,7 +249,7 @@ conditional target, while `SumeragiV2Proofs.tla`, `verus_proofs.rs`, and
 recorded as mechanically discharged until the relevant TLAPS or Verus command
 succeeds.
 
-## Definitions and assumptions
+### Definitions and assumptions
 
 For one frozen height context let `V` be the voting roster, `n = |V|`, `P` the
 total voting power, and `w(S)` the power of signer set `S`. A dual quorum `Q`
@@ -56,7 +297,7 @@ successor-activation fairness. Revision 3 has no legacy decoder premise: a
 Vote, QC, status record, or finality artifact without its canonical signed
 proposal origin is rejected.
 
-## Quorum lemmas
+### Quorum lemmas
 
 **Lemma 1 (count intersection).** Any two count quorums intersect in a correct
 validator.
@@ -81,7 +322,7 @@ Their signer sets are dual quorums and therefore intersect in a correct
 validator. That validator would have signed two subjects in the same durable
 sign-once slot, contradicting rule 1.
 
-## Validity, availability, and locks
+### Validity, availability, and locks
 
 **Lemma 4 (external validity and decided-body availability).** Every PrepareQC
 certifies a deterministically valid body that remains available from a correct
@@ -108,7 +349,7 @@ strictly higher PrepareQC. All such changes are complete WAL frames. Replay
 applies the same checks in sequence, while a height transition creates a new
 context rather than mutating the old height's lock.
 
-## Certified timeout protection
+### Certified timeout protection
 
 **Lemma 6 (a formed TC protects every still-formable old CommitQC and its safe
 re-proposal).** Consider a subject `x` whose same-round durable Commit-intent
@@ -146,7 +387,7 @@ loading and checking the canonical body subject, and refusing fresh candidate
 assembly while a lock exists. This is a safe-value/source-refinement fact; it
 does not by itself establish the eventual locked-body reproposal theorem.
 
-## Agreement and chain prefix
+### Agreement and chain prefix
 
 **Theorem 1 (agreement).** Two valid CommitQCs in one height context cannot
 certify different subjects.
@@ -202,7 +443,7 @@ TLAPS receipt. Consequently
 `IndexedChainSpecEstablishesExactPerSlotReceiptAgreement` remains
 `specified_unproved` and is not promoted.
 
-## Crash/restart and reconfiguration
+### Crash/restart and reconfiguration
 
 **Theorem 2 (crash/restart safety).** A crash at any effect boundary cannot
 cause a correct validator to equivocate, lower a lock, enter an uncertified
@@ -253,7 +494,7 @@ SANY-clean but has no fresh strict TLAPS evidence, so
 `specified_unproved`. It does not discharge or promote the terminal Rust trace
 refinement.
 
-## Conditional liveness after GST
+### Conditional liveness after GST
 
 Assume after GST that the responsive correct voters independently meet both
 strict count and power thresholds; per-source authenticated transport is
@@ -583,7 +824,7 @@ machine-checked liveness completion while the ledger reports
 `machine_checked_completion: false` and retains downstream asynchronous and
 multi-height liveness obligations as `specified_unproved`.
 
-## Exact reply-writer boundary
+### Exact reply-writer boundary
 
 `SumeragiV2ReplyWriterDeadline.tla` is an orthogonal executable abstraction of
 one exact-reply actor occurrence. It acquires one absolute adaptively scaled
@@ -629,7 +870,7 @@ semantic refinement theorem. The earlier 276/276 strict TLAPS receipt predates
 the final witness origin, monotonicity, receipt-attempt, and strong-fairness
 theorems; a fresh strict run against the current proof source remains pending.
 
-## Typed rollover handoff boundary
+### Typed rollover handoff boundary
 
 `SumeragiV2TypedRolloverHandoff.tla` isolates one changed- or same-roster
 handoff with two initial exact-output workers, a move-only service/transport
@@ -665,7 +906,7 @@ consumed by the top-level successor-activation production-refinement debt; they
 are not independent ledger rows. No filesystem refinement claim follows from
 the abstract model.
 
-## Mechanization ledger
+### Mechanization ledger
 
 `proof_coverage.json` is the checked-in status declaration, not independent
 proof authority. The checker binds it to exact theorem declarations and

@@ -3738,9 +3738,11 @@ enum FairV2IngressPushDisposition {
 /// progress slot, one distinct TimeoutVote slot, and one transport-completion
 /// slot. Every authenticated non-validator hop independently owns two slots:
 /// general work and transport completion. Only messages without an authenticated transport hop share the two-position
-/// anonymous lane. A roster-origin completion forwarded by a non-validator source
-/// stays in that exact authenticated source's lane and cannot spend another
-/// source's reservation.
+/// anonymous lane. A current-roster completion forwarded by a non-validator
+/// source, or a proof-carrying historical-recovery response from a predecessor
+/// signer, stays in that exact authenticated source's lane and cannot spend
+/// another source's reservation. The latter is authorized downstream against
+/// its outstanding request and frozen historical certificate.
 /// Exact wire retransmissions coalesce
 /// only while the same semantic origin still owns an identical queued envelope;
 /// after service, a later retransmission is admitted normally. Distinct
@@ -5055,15 +5057,6 @@ impl FairV2Ingress {
         Ok(())
     }
 
-    /// Return whether one semantic peer belongs to the installed frozen roster.
-    ///
-    /// This is intentionally independent of the authenticated transport hop:
-    /// a roster requester may use an authenticated non-validator relay without
-    /// granting that relay semantic allocation authority.
-    fn frozen_roster_contains(&self, peer: &PeerId) -> bool {
-        self.state.lock().roster.contains(peer)
-    }
-
     fn try_push(
         &self,
         inbound: InboundBlockMessage,
@@ -5292,14 +5285,27 @@ impl FairV2Ingress {
         let lane_timeout_vote_len = lane.timeout_vote_len;
         let lane_transport_completion_len = lane.transport_completion_len;
         let is_validator_source = matches!(source, FairV2IngressSource::Validator(_));
-        let is_validator_origin = inbound
+        let is_current_validator_origin = inbound
             .sender()
             .is_some_and(|peer| state.roster.contains(peer));
-        // Transport completions are protocol-valid only for a frozen-roster
-        // semantic origin. Their finite queue and byte owners belong to the
-        // authenticated hop's lane: a non-validator relay therefore spends
-        // its own reserve and cannot borrow a validator's or another source's.
-        if is_transport_completion && !is_validator_origin {
+        let is_historical_recovery_response =
+            message_kind == FairV2IngressMessageKind::LaneHistoricalRecoveryResponse;
+        // Ordinary transport completions are protocol-valid only for a
+        // current frozen-roster semantic origin. A historical lane-recovery
+        // response is the one narrow exception: its responder authority comes
+        // from the outstanding request's frozen CommitQC or READY certificate,
+        // which the lane adapter verifies before persistence. Keep that proof-
+        // carrying response in the bounded completion partition and require an
+        // authenticated semantic origin, so a validator removed from the
+        // successor roster can finish an old lane without granting arbitrary
+        // old peers current-height completion authority.
+        let authenticated_historical_recovery_response = is_historical_recovery_response
+            && inbound.sender().is_some()
+            && inbound.via().is_some();
+        if is_transport_completion
+            && !is_current_validator_origin
+            && !authenticated_historical_recovery_response
+        {
             return Err(FairV2IngressPushError::Rejected(inbound));
         }
         let (owned_class_bytes, source_class_byte_limit) = if is_validator_source && is_timeout_vote
@@ -6655,8 +6661,8 @@ impl SumeragiHandle {
         }
         if let LaneRelayMessage::CertifiedMergeSidecar {
             sender,
+            reply_route,
             message: sidecar,
-            ..
         } = &message
         {
             let allocating_requester = match sidecar {
@@ -6666,12 +6672,20 @@ impl SumeragiHandle {
                 | CertifiedMergeSidecarMessage::GenerationHint(_)
                 | CertifiedMergeSidecarMessage::Chunk(_) => None,
             };
+            // The handle can authenticate only the semantic transport
+            // identity and reply capability. A removed validator's exact
+            // Kura/finality authority is verified by the serialized lane
+            // adapter before it may allocate responder state; the sync
+            // channel below remains the bounded handoff corridor.
             if allocating_requester.is_some_and(|requester| {
-                requester != sender || !self.block.frozen_roster_contains(sender)
+                requester != sender
+                    || !reply_route
+                        .as_ref()
+                        .is_some_and(|route| route.is_active() && route.semantic_target() == sender)
             }) {
                 iroha_logger::debug!(
                     %sender,
-                    "rejecting non-roster certified merge-sidecar allocation before lane ingress"
+                    "rejecting unauthenticated certified merge-sidecar allocation before lane ingress"
                 );
                 return SumeragiIngressDisposition::Rejected(message);
             }
@@ -8672,17 +8686,10 @@ mod authoritative_runtime_gate_tests {
         assert!(required_control_frame >= exact_direct_frame);
         assert!(exact_direct_frame > exact_broadcast_frame);
 
-        let minimal_layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 1,
-        };
+        let minimal_layout = minimal_rs16_layout();
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 2_490);
+        assert_eq!(minimal_proposal_bytes, 2_523);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,
@@ -9013,10 +9020,10 @@ mod authoritative_runtime_gate_tests {
     #[test]
     fn fair_v2_ingress_completion_bound_overflow_fails_closed() {
         let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
+            encoding: wire::PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: u32::MAX,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: u64::MAX,
             max_chunk_count: u32::MAX,
         };

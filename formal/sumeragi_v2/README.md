@@ -1,18 +1,101 @@
 # Sumeragi v2 formal verification
 
-This directory is the first-release formal corridor for the production
-Sumeragi v2 consensus protocol. There is no legacy Sumeragi proof corridor.
-The model fixes protocol revision 3 and is parameterized over arbitrary finite
-frozen rosters; production separately enforces the release limit of 128
-validators. Mechanization status is recorded per obligation in the proof
-ledger. The first-release implementation likewise has one canonical decoder:
-an omitted `proposal_round` is invalid rather than interpreted as the vote or
-certificate round.
+This directory is the formal corridor for the production Sumeragi v2
+consensus protocol. The authoritative protocol is revision 4. It admits only
+unit-vote committees with exact `n = 3f + 1` geometry, `1 <= f <= 10`, and
+therefore exactly 4, 7, ..., 31 validators with quorum `q = 2f + 1`. Stake may
+affect election or eligibility; it never weights a consensus or timeout vote.
 
-## Modules
+Revision 4 deterministically rotates a height-seeded roster permutation. Set A
+contains the first `q` members, with the leader first and proxy tail last; Set B
+contains the remaining `f`. The leader sends the proposal manifest
+committee-wide and the first full-body dispersal to Set A. Set A votes directly
+to the sole proxy-tail collector. The first retransmission deadline activates
+same-view fallback, which preserves the proposal, view, lock, and `q` threshold
+while expanding body recovery and voting to the full committee. Timeout votes
+bypass the proxy tail. A certificate of `q` timeout votes rotates the leader,
+proxy tail, and both sets, and resets fallback before the new view starts.
+
+Every honest Prepare signer must first reconstruct the complete canonical body
+from the mandatory Reed-Solomon-16 layout, check its hashes, durably store it,
+and deterministically validate it. A durable CommitQC plus canonical
+application authorizes successor activation. Retryable finalized-height
+network output, lane sidecars, and cleanup are reconstructed and repaired
+independently; they cannot hold the successor height inactive.
+An unfinished historical lane remains governed by its immutable predecessor
+descriptor, not by the successor global roster. A configured validator removed
+from that roster has no successor global vote, but may continue signing any
+exact frozen lane descriptor which names it. This includes unfinished old
+descriptors and independently pinned current-height Nexus lane descriptors,
+whose committees need not be successor-roster subsets. This adds no safety
+requirement for global-roster overlap; conditional lane-output liveness
+requires each frozen lane committee's honest threshold to remain responsive
+until durable completion.
+
+`SumeragiV2Revision4.tla` is the compact revision-4 model.
+`SumeragiV2Revision4.cfg` instantiates the smallest production committee with
+one validator designated faulty and two candidate bodies for exhaustive safety
+checking. `SumeragiV2Revision4Liveness.cfg` checks the same finite full
+rotation under the model's explicit post-GST weak-fairness assumptions. The
+model records committee-wide manifest fanout, first-occurrence body/chunk
+targets equal to Set A, committee-wide fallback targets, Prepare and Commit
+routes to the current proxy tail, and committee-wide timeout routes which do
+not depend on that tail. It also checks full-body-before-Prepare and Commit,
+agreement, fallback reset, exact decided-body recovery before local apply, and
+successor activation while finalized-output debt may remain outstanding.
+
+The deductive safety and conditional post-GST liveness arguments are in
+[`PROOF.md`](PROOF.md). Three proof boundaries matter when interpreting a TLC
+run. `CompleteFullBody` and `RecoverDecidedFullBody` atomically abstract
+reconstruction, hash checking, durability, and deterministic validation.
+`PostGSTSpec` assumes weakly fair service of the honest leader, body, vote,
+honest-tail QC, timeout, application, and successor actions, and suppresses a
+timeout-certified departure while the leader and proxy tail are both honest;
+this represents deadlines which exceed the finite post-GST service bound.
+Finally, the compact transition system does not enumerate a complete
+Byzantine network adversary or prove its production refinement. The safety
+configuration therefore supplies bounded invariant evidence, and the liveness
+configuration supplies bounded temporal evidence under the named assumptions;
+neither is a TLAPS proof or an unconditional termination result.
+
+## Revision-4 files
+
+- `SumeragiV2Revision4.tla` is the authoritative compact revision-4 protocol
+  model, routing-invariant surface, and conditional post-GST temporal surface.
+- `SumeragiV2Revision4.cfg` is its exhaustive bounded
+  four-validator/two-body safety instantiation.
+- `SumeragiV2Revision4Liveness.cfg` uses the same geometry to check
+  `ConditionalPostGSTProgress` and
+  `FinalizedOutputDebtDoesNotBlockSuccessor` under `PostGSTSpec`.
+- `PROOF.md` gives the unit-quorum safety argument, conditional post-GST
+  liveness argument, and exact mechanization boundary.
+
+Run only the revision-4 TLC corridor with:
+
+```sh
+bash scripts/formal/run_sumeragi_v2_tlc.sh ci revision4_safety revision4_liveness
+```
+
+The repository proof-ledger checker requires both configurations and registers
+the model in the formal source manifest used by generated evidence:
+
+```sh
+python3 scripts/formal/check_sumeragi_v2_proof_ledger.py
+```
+
+## Revision-3 archive
+
+The modules and proof ledger described below record the superseded revision-3
+transition relation and remain useful as historical proof engineering. They
+are not evidence for revision 4 until their obligations are restated against
+`SumeragiV2Revision4.tla` and rerun from the final source. Revision 4 has one
+canonical decoder and is a fresh-genesis protocol; revision-3 wire, WAL, and
+height-context state are not migrated in place.
+
+### Modules
 
 - `SumeragiV2Quorums.tla` and `SumeragiV2QuorumProofs.tla` define and prove
-  strict count-and-power quorum intersection.
+  the historical revision-3 count-and-power quorum relation.
 - `SumeragiV2Availability.tla`, `SumeragiV2CrashRecovery.tla`, and
   `SumeragiV2Reconfiguration.tla` define durable-body, WAL, restart, and frozen
   height-context boundaries. `SumeragiV2VocabularyProofs.tla` checks their
@@ -471,7 +554,7 @@ certificate round.
   not independent ledger rows, TLAPS evidence, or cross-tool proof evidence,
   and they do not establish a Rust transition-refinement theorem.
 
-## Exact protocol abstractions
+### Exact protocol abstractions
 
 `ContextRecord` binds the chain and protocol identities, semantic parent
 finality, height, epoch, canonical roster and powers, lane/DA commitments, and
@@ -601,7 +684,7 @@ fingerprint. A retired fixed-timeout binary therefore cannot silently
 participate in the same height and supply premature timeout votes against the
 view-growing liveness argument.
 
-## Theorem scope and FLP boundary
+### Theorem scope and FLP boundary
 
 Safety is asynchronous: it permits arbitrary delay, loss, duplication,
 reordering, Byzantine messages within authenticated identities, and crashes at
@@ -1009,7 +1092,7 @@ mutation shows that the volatile-only witness fails on the crash transition
 while the exact authority-aware witness survives repaired replay; it is a
 counterexample regression, not deductive discharge.
 
-## Evidence and release gate
+### Evidence and release gate
 
 The operator-facing conditional guarantee, liveness snapshot, watchdog
 classifications, and executable PR/release commands are documented in
@@ -1632,7 +1715,7 @@ implementation results, not deductive evidence. The checked-in pinned Verus
 receipt predates the proposal-origin changes and was not rerun for this source;
 it must not be cited as discharge of the changed obligations.
 
-## Trusted computing boundary
+### Trusted computing boundary
 
 The proof ledger keeps the remaining premises explicit:
 

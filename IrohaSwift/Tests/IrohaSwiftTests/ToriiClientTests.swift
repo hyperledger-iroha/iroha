@@ -16168,7 +16168,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "execution_commitment": executionCommitment,
         ]
         let payload = try JSONSerialization.data(withJSONObject: [
-            "protocol_version": 3,
+            "protocol_version": 4,
             "node_fingerprint": nativeAmxTestHash(0xA1),
             "build_fingerprint": nativeAmxTestHash(0xA3),
             "config_fingerprint": nativeAmxTestHash(0xA5),
@@ -16768,7 +16768,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testSumeragiV2StatusRejectsLegacyMissingAndMalformedShapes() throws {
         func payload(_ mutate: (inout [String: Any]) -> Void) throws -> Data {
             var value: [String: Any] = [
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "node_fingerprint": nativeAmxTestHash(0xA1),
                 "build_fingerprint": nativeAmxTestHash(0xA3),
                 "config_fingerprint": nativeAmxTestHash(0xA5),

@@ -923,18 +923,30 @@ def test_load_roster_rejects_more_than_protocol_maximum(tmp_path: Path) -> None:
     try:
         MODULE.load_roster(roster_path)
     except ValueError as error:
-        assert "at most 128 validators" in str(error)
+        assert "at most 31 validators" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("load_roster accepted a roster above the protocol maximum")
 
 
-def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) -> None:
+def test_load_roster_rejects_non_three_f_plus_one_geometry(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path, validator_count=5)
+
+    try:
+        MODULE.load_roster(roster_path)
+    except ValueError as error:
+        assert "exact 3f + 1 validator committee" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("load_roster accepted non-3f+1 committee geometry")
+
+
+def test_render_bundle_scales_body_budget_for_seven_validators(tmp_path: Path) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     secrets_path = tmp_path / "validator_secrets.toml"
     base_config_path = tmp_path / "config.toml"
     output_dir = tmp_path / "out"
-    _write_roster(roster_path, validator_count=5, inline_private_keys=False)
-    _write_secrets(secrets_path, validator_count=5)
+    _write_roster(roster_path, validator_count=7, inline_private_keys=False)
+    _write_secrets(secrets_path, validator_count=7)
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
 
     MODULE.render_bundle(
@@ -945,12 +957,12 @@ def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) ->
     )
 
     rendered = MODULE._load_toml(
-        output_dir / "taira-validator-5" / "config.toml"
+        output_dir / "taira-validator-7" / "config.toml"
     )
     queues = rendered["sumeragi"]["queues"]
     assert queues["authenticated_non_validator_sources"] == 2
     assert queues["body_source_bytes"] == 45_088_768
-    assert queues["body_bytes"] == 8 * queues["body_source_bytes"]
+    assert queues["body_bytes"] == 10 * queues["body_source_bytes"]
 
 
 def test_render_bundle_rejects_non_positive_queue_template_values(

@@ -254,7 +254,7 @@
               "epoch_seed": "08499EEBF6BCDB2EBA26F335D47F5256F4E294E8BCF95D239870177FBEAE4FC2",
               "vrf_commit_window_blocks": 100,
               "vrf_reveal_window_blocks": 40,
-              "max_validators": 128,
+              "max_validators": 31,
               "min_self_bond": "1000",
               "min_nomination_bond": "1",
               "max_nominator_concentration_pct": 25,
@@ -613,5 +613,5 @@
       "topology": []
     }
   ],
-  "wire_protocol_version": 3
+  "wire_protocol_version": 4
 }

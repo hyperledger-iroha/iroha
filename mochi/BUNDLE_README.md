@@ -31,14 +31,17 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    first launch. The `[supervisor.restart]` table lets you disable automatic
    restarts (`mode = "never"`) or adjust the retry count/backoff for flaky
    development environments.
-   You can also switch topology profiles: presets use `profile = "single-peer"`
-   or `profile = "four-peer-bft"`, while custom profiles use a table such as
-   `profile = { peer_count = 3, consensus_mode = "permissioned" }`. For NPoS
+   You can also switch topology profiles: use the
+   `profile = "four-peer-bft"` preset, while custom profiles use a table such
+   as `profile = { peer_count = 7, consensus_mode = "permissioned" }`. Custom
+   peer counts must form an exact Sumeragi committee (`3f+1`), so this bundle
+   accepts 4 or 7 peers. The historical `single-peer` name is accepted only
+   for saved-config compatibility and now launches four validators. For NPoS
    genesis presets, set `consensus_mode = "npos"` and include
    `genesis_profile = "iroha3-dev"` in the same table (or set
    `supervisor.genesis_profile` when using presets).
    CLI runs accept the same presets or an inline profile table via
-   `--profile '{ peer_count = 3, consensus_mode = "permissioned" }'`.
+   `--profile '{ peer_count = 7, consensus_mode = "permissioned" }'`.
    For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
    sections in `config/local.toml` (or pass `--nexus-config`, `--enable-nexus`,
    on the CLI). MOCHI validates `nexus.enabled` against lane
@@ -72,22 +75,12 @@ Use these quick snippets inside `config/local.toml` to match common layouts:
 
 ```
 [supervisor]
-profile = "single-peer" # 1 node
+profile = "four-peer-bft" # 4 validators
 ```
 
 ```
 [supervisor]
-profile = { peer_count = 3, consensus_mode = "permissioned" } # 3 nodes
-```
-
-```
-[supervisor]
-profile = "four-peer-bft" # 4 nodes
-```
-
-```
-[supervisor]
-profile = { peer_count = 5, consensus_mode = "permissioned" } # 5 nodes
+profile = { peer_count = 7, consensus_mode = "permissioned" } # 7 validators
 ```
 
 For NPoS/Nexus runs, switch to `consensus_mode = "npos"` and include a genesis

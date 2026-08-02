@@ -24,7 +24,7 @@ use iroha_data_model::{
         ResolvedDomainV1,
     },
     asset::AssetDefinitionAlias,
-    block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
+    block::consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
     da::commitment::DaProofPolicyBundle,
     isi::{
         GrantBox, RegisterBox, RevokeBox, SetAssetDefinitionAlias,
@@ -440,6 +440,11 @@ fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
     if validator_count > MAX_VALIDATORS_PER_HEIGHT {
         return Err(eyre!(
             "localnet validator count {validator_count} exceeds the Sumeragi v2 protocol maximum of {MAX_VALIDATORS_PER_HEIGHT}"
+        ));
+    }
+    if !is_valid_committee_size(validator_count) {
+        return Err(eyre!(
+            "localnet validator count {validator_count} is not an exact Sumeragi v2 3f+1 committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
         ));
     }
     let source_count = validator_count
@@ -1110,6 +1115,11 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
     if validator_count > MAX_VALIDATORS_PER_HEIGHT {
         return Err(eyre!(
             "`--peers` ({validator_count}) exceeds the Sumeragi v2 protocol maximum validator roster of {MAX_VALIDATORS_PER_HEIGHT}"
+        ));
+    }
+    if !is_valid_committee_size(validator_count) {
+        return Err(eyre!(
+            "`--peers` ({validator_count}) must form an exact Sumeragi v2 3f+1 validator committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
         ));
     }
     if opts.sora_profile.is_some() && !opts.build_line.is_iroha3() {
@@ -7475,6 +7485,14 @@ mod tests {
     fn localnet_body_ingress_budget_enforces_protocol_roster_limit() {
         localnet_sumeragi_body_bytes(MAX_VALIDATORS_PER_HEIGHT)
             .expect("the protocol-maximum roster must remain representable");
+        let geometry_error = localnet_sumeragi_body_bytes(5)
+            .expect_err("a non-3f+1 roster must fail before capacity arithmetic");
+        assert!(
+            geometry_error
+                .to_string()
+                .contains("exact Sumeragi v2 3f+1"),
+            "unexpected error: {geometry_error}"
+        );
         let error = localnet_sumeragi_body_bytes(MAX_VALIDATORS_PER_HEIGHT + 1)
             .expect_err("an oversized roster must fail before capacity arithmetic");
         assert!(
@@ -9264,10 +9282,38 @@ mod tests {
 
         let error = validate_localnet_options(&opts)
             .expect_err("the CLI must reject a roster above the wire-protocol limit");
+        let expected = format!(
+            "`--peers` ({oversized}) exceeds the Sumeragi v2 protocol maximum validator roster of {MAX_VALIDATORS_PER_HEIGHT}"
+        );
         assert!(
-            error.to_string().contains(
-                "`--peers` (129) exceeds the Sumeragi v2 protocol maximum validator roster of 128"
-            ),
+            error.to_string().contains(&expected),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(5).expect("non-zero"),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28_080,
+            base_p2p_port: 28_337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+        };
+
+        let error = validate_localnet_options(&opts)
+            .expect_err("the CLI must reject a non-3f+1 validator roster");
+        assert!(
+            error.to_string().contains("exact Sumeragi v2 3f+1"),
             "unexpected error: {error}"
         );
     }

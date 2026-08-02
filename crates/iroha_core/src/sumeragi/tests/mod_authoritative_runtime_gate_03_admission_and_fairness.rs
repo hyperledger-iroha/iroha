@@ -2,14 +2,7 @@
     fn full_ingress_does_not_persist_a_carrierless_leader_wire_barrier() {
         let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
         let validator = PeerId::new(KeyPair::random().public_key().clone());
-        let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 1,
-        };
+        let layout = minimal_rs16_layout();
         let proposal_message = v2_maximum_structural_proposal_wire(layout, 1);
         let BlockMessage::V2(proposal_envelope) = &proposal_message else {
             unreachable!("proposal fixture is a v2 envelope");
@@ -17,7 +10,7 @@
         let wire::ConsensusMessageV2Payload::Proposal(proposal) = &proposal_envelope.payload else {
             unreachable!("proposal fixture carries Proposal");
         };
-        let _directory = bind_test_leader_wire_gate(&ingress, &validator, proposal.round, 1);
+        let _directory = bind_test_leader_wire_gate(&ingress, &validator, proposal.round, 2);
 
         let mut occurrence = 0_u64;
         loop {
@@ -82,16 +75,9 @@
             .configure_roster([validator.clone()])
             .expect("one-validator fair-ingress geometry");
         ingress.require_leader_wire_lifecycle_gate();
-        ingress.state.lock().leader_wire_max_chunk_count = 1;
+        ingress.state.lock().leader_wire_max_chunk_count = 2;
 
-        let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 1,
-        };
+        let layout = minimal_rs16_layout();
         let proposal_message = v2_maximum_structural_proposal_wire(layout, 1);
         let BlockMessage::V2(proposal_envelope) = &proposal_message else {
             unreachable!("proposal fixture is a v2 envelope");
@@ -107,7 +93,7 @@
         let owner = [0xA5; 32];
         let roster = [validator.clone()].into_iter().collect();
         let capacity =
-            super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(1, 1)
+            super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(1, 2)
                 .expect("finite leader-wire geometry");
         let recovery_authority =
             super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
@@ -124,7 +110,7 @@
             owner,
             roster,
             capacity,
-            1,
+            2,
             recovery_authority,
             &[],
             &[],
@@ -240,16 +226,9 @@
             }) => (vote.round, vote.proposal_round, vote.subject),
             _ => unreachable!("vote fixture carries a v2 Vote"),
         };
-        let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 1);
+        let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 2);
 
-        let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 1,
-        };
+        let layout = minimal_rs16_layout();
         let mut proposal_message = v2_maximum_structural_proposal_wire(layout, 1);
         let manifest_hash = match &mut proposal_message {
             BlockMessage::V2(wire::ConsensusMessageV2 {
@@ -569,7 +548,7 @@
     }
 
     #[test]
-    fn sidecar_allocations_require_roster_requester_before_lane_queue_admission() {
+    fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
         use std::num::NonZeroU64;
 
         use crate::merge_sidecar::{
@@ -613,33 +592,33 @@
             request.request_id = request.canonical_request_id();
             request
         };
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 4);
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 8);
 
         let outsider_request = request_for(&outsider);
         let outsider_route = routes.mint_via(outsider.clone(), hub.clone());
-        let rejected =
+        let admitted =
             handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
                 sender: outsider.clone(),
                 reply_route: Some(outsider_route),
                 message: CertifiedMergeSidecarMessage::Request(outsider_request.clone()),
             });
         assert!(matches!(
-            rejected,
-            super::SumeragiIngressDisposition::Rejected(
-                super::LaneRelayMessage::CertifiedMergeSidecar {
-                    sender,
-                    message: CertifiedMergeSidecarMessage::Request(request),
-                    ..
-                }
-            ) if sender == outsider && request == outsider_request
+            admitted,
+            super::SumeragiIngressDisposition::Accepted
         ));
-        assert!(
-            matches!(
-                relay_receiver.try_recv(),
-                Err(std::sync::mpsc::TryRecvError::Empty)
-            ),
-            "an outsider Request must allocate no lane-relay slot"
-        );
+        assert!(matches!(
+            relay_receiver
+                .try_recv()
+                .expect("serialized adapter receives the exact historical proof candidate"),
+            super::LaneRelayMessage::CertifiedMergeSidecar {
+                sender,
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Request(request),
+            } if sender == outsider
+                && request == outsider_request
+                && route.is_authenticated_via(&hub)
+                && route.semantic_target() == &outsider
+        ));
 
         let mut outsider_close = CertifiedMergeSidecarCloseV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
@@ -651,6 +630,7 @@
             responder: roster_requester.clone(),
         };
         outsider_close.close_id = outsider_close.canonical_close_id();
+        let expected_outsider_close = outsider_close.clone();
         let outsider_close_route = routes.mint_via(outsider.clone(), hub.clone());
         assert!(matches!(
             handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
@@ -658,15 +638,21 @@
                 reply_route: Some(outsider_close_route),
                 message: CertifiedMergeSidecarMessage::Close(outsider_close),
             },),
-            super::SumeragiIngressDisposition::Rejected(_)
+            super::SumeragiIngressDisposition::Accepted
         ));
-        assert!(
-            matches!(
-                relay_receiver.try_recv(),
-                Err(std::sync::mpsc::TryRecvError::Empty)
-            ),
-            "an outsider standalone Close must allocate no lane-relay slot"
-        );
+        assert!(matches!(
+            relay_receiver
+                .try_recv()
+                .expect("serialized adapter receives the historical close candidate"),
+            super::LaneRelayMessage::CertifiedMergeSidecar {
+                sender,
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Close(close),
+            } if sender == outsider
+                && close == expected_outsider_close
+                && route.is_authenticated_via(&hub)
+                && route.semantic_target() == &outsider
+        ));
 
         let mismatched_request = request_for(&outsider);
         let roster_route = routes.mint_via(roster_requester.clone(), hub.clone());
@@ -684,6 +670,24 @@
                 Err(std::sync::mpsc::TryRecvError::Empty)
             ),
             "a roster transport identity cannot allocate for another semantic requester"
+        );
+
+        let outsider_request = request_for(&outsider);
+        let wrong_target_route = routes.mint_via(roster_requester.clone(), hub.clone());
+        assert!(matches!(
+            handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
+                sender: outsider.clone(),
+                reply_route: Some(wrong_target_route),
+                message: CertifiedMergeSidecarMessage::Request(outsider_request),
+            },),
+            super::SumeragiIngressDisposition::Rejected(_)
+        ));
+        assert!(
+            matches!(
+                relay_receiver.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "a reply route for another semantic peer cannot reach the proof owner"
         );
 
         let roster_request = request_for(&roster_requester);

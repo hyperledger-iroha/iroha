@@ -533,7 +533,7 @@ def enum_tag(value, key, label):
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     status = json.load(handle)
 
-if not isinstance(status, dict) or status.get("protocol_version") != 3:
+if not isinstance(status, dict) or status.get("protocol_version") != 4:
     raise SystemExit(
         "expected the Sumeragi v2 reducer status; "
         "legacy RBC/recovery status is not accepted"

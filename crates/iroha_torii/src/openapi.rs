@@ -14116,7 +14116,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 "properties": {
                     "context_id": { "$ref": "#/components/schemas/SumeragiV2HeightContextId" },
                     "chain_id": { "type": "string", "minLength": 1 },
-                    "protocol_version": { "type": "integer", "format": "uint16", "enum": [3] },
+                    "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                     "height": { "type": "integer", "format": "uint64", "minimum": 1 },
                     "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
                     "epoch_end_height": { "type": "integer", "format": "uint64", "minimum": 1 },
@@ -15319,7 +15319,7 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
             "properties": {
                 "version": { "type": "integer", "enum": [1] },
                 "source_network": { "$ref": "#/components/schemas/SccpTairaNetworkV1" },
-                "protocol_version": { "type": "integer", "enum": [3] },
+                "protocol_version": { "type": "integer", "enum": [3, 4] },
                 "chain_id_hash": {
                     "const": "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7"
                 },
@@ -16832,7 +16832,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "required": ["encoding", "details"],
             "additionalProperties": false,
             "properties": {
-                "encoding": { "type": "string", "enum": ["plain", "reed_solomon16"] },
+                "encoding": { "type": "string", "enum": ["reed_solomon16"] },
                 "details": { "type": "null" }
             },
             "description": "Adjacent-tag Norito JSON representation of the unit-variant v2 payload encoding."
@@ -16872,8 +16872,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "properties": {
                 "validator": { "$ref": "#/components/schemas/SumeragiV2BlsValidatorId" },
                 "power": {
-                    "type": "integer", "format": "uint64", "minimum": 1,
-                    "maximum": 18446744073709551615_u64
+                    "type": "integer", "format": "uint64", "enum": [1]
                 }
             }
         }),
@@ -16890,11 +16889,11 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "maximum": max_sumeragi_validators
                 },
                 "total_power": {
-                    "type": "integer", "format": "uint64", "minimum": 1,
-                    "maximum": 18446744073709551615_u64
+                    "type": "integer", "format": "uint64", "minimum": 4,
+                    "maximum": max_sumeragi_validators
                 }
             },
-            "description": "Canonical strict-greater-than-two-thirds count and power quorum derived from the frozen roster."
+            "description": "Canonical 2f+1 equal-vote quorum derived from a bounded 3f+1 roster."
         }),
     );
     schemas.insert(
@@ -16909,15 +16908,16 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "properties": {
                 "encoding": { "$ref": "#/components/schemas/SumeragiV2PayloadEncoding" },
                 "chunk_size_bytes": {
-                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "type": "integer", "format": "uint32", "minimum": 2,
+                    "multipleOf": 2,
                     "maximum": 4294967295_u64
                 },
                 "data_shards": {
-                    "type": "integer", "format": "uint16", "minimum": 0,
+                    "type": "integer", "format": "uint16", "minimum": 1,
                     "maximum": 65535
                 },
                 "parity_shards": {
-                    "type": "integer", "format": "uint16", "minimum": 0,
+                    "type": "integer", "format": "uint16", "minimum": 1,
                     "maximum": 65535
                 },
                 "max_payload_size_bytes": {
@@ -17148,7 +17148,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "additionalProperties": false,
             "properties": {
                 "chain_id": { "type": "string", "minLength": 1 },
-                "protocol_version": { "type": "integer", "format": "uint16", "enum": [3] },
+                "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                 "height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
@@ -17169,7 +17169,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
                 "roster": {
-                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
+                    "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/SumeragiV2ValidatorPower" },
                     "description": "Canonical ordered voting roster; observers are excluded and validator identities must be unique."
@@ -17203,12 +17203,12 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 },
                 "mode": { "$ref": "#/components/schemas/SumeragiV2ConsensusMode" },
                 "roster": {
-                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
+                    "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/SumeragiV2ValidatorPower" }
                 },
                 "validator_set_pops": {
-                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
+                    "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
                     "description": "Parent-authenticated BLS proofs of possession aligned one-for-one with the next roster."
                 },
@@ -17229,7 +17229,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "additionalProperties": false,
             "properties": {
                 "format_version": { "type": "integer", "format": "uint16", "enum": [3] },
-                "protocol_version": { "type": "integer", "format": "uint16", "enum": [3] },
+                "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                 "height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
@@ -17241,7 +17241,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
                 "validator_set_pops": {
-                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
+                    "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
                     "description": "Durable BLS proofs of possession aligned one-for-one with height_context.roster."
                 }
@@ -22436,7 +22436,7 @@ fn openapi_schemas() -> Map {
                     "description": "Canonical uppercase 32-byte Norito JSON hex."
                 },
                 "validator_count": {
-                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "type": "integer", "format": "uint32", "minimum": 4,
                     "maximum": max_sumeragi_validators
                 },
                 "quorum": { "$ref": "#/components/schemas/SumeragiV2DualQuorum" }
@@ -22736,7 +22736,8 @@ fn openapi_schemas() -> Map {
                         "missing_proposal", "body_unavailable",
                         "prepare_quorum_missing", "commit_quorum_missing",
                         "timeout_certificate_missing", "scheduler_starvation",
-                        "application_pending", "local_control_pending"
+                        "application_pending", "successor_activation_pending",
+                        "local_control_pending"
                     ]
                 },
                 "details": { "type": "null" }
@@ -22859,7 +22860,7 @@ fn openapi_schemas() -> Map {
             ],
             "additionalProperties": false,
             "properties": {
-                "protocol_version": { "type": "integer", "minimum": 3, "maximum": 3 },
+                "protocol_version": { "type": "integer", "minimum": 4, "maximum": 4 },
                 "node_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "build_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "config_fingerprint": { "$ref": "#/components/schemas/Hash" },
@@ -33150,9 +33151,8 @@ mod tests {
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("enum"))
                 .and_then(Value::as_array)
-                .and_then(|values| values.first())
-                .and_then(Value::as_u64),
-            Some(3)
+                .map(|values| { values.iter().filter_map(Value::as_u64).collect::<Vec<_>>() }),
+            Some(vec![3, 4])
         );
         assert_eq!(
             finality_anchor_properties
@@ -39229,8 +39229,8 @@ mod tests {
         );
         for (schema_name, field, version) in [
             ("SumeragiV2FinalityArtifact", "format_version", 3_u64),
-            ("SumeragiV2FinalityArtifact", "protocol_version", 3_u64),
-            ("SumeragiV2HeightContext", "protocol_version", 3_u64),
+            ("SumeragiV2FinalityArtifact", "protocol_version", 4_u64),
+            ("SumeragiV2HeightContext", "protocol_version", 4_u64),
         ] {
             assert_eq!(
                 property(&schemas, schema_name, field)
@@ -39242,7 +39242,7 @@ mod tests {
         }
 
         let roster = property(&schemas, "SumeragiV2HeightContext", "roster");
-        assert_eq!(roster.get("minItems").and_then(Value::as_u64), Some(1));
+        assert_eq!(roster.get("minItems").and_then(Value::as_u64), Some(4));
         assert_eq!(
             roster.get("maxItems").and_then(Value::as_u64),
             Some(max_validators)
@@ -39261,9 +39261,9 @@ mod tests {
         );
         assert_eq!(
             property(&schemas, "SumeragiV2ValidatorPower", "power")
-                .get("minimum")
-                .and_then(Value::as_u64),
-            Some(1)
+                .get("enum")
+                .and_then(Value::as_array),
+            Some(&vec![Value::from(1_u64)])
         );
         assert_ref(
             &schemas,
@@ -39283,7 +39283,7 @@ mod tests {
             "SumeragiV2FinalizedNextEpochSnapshot",
         ] {
             let pops = property(&schemas, owner, "validator_set_pops");
-            assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(1));
+            assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(4));
             assert_eq!(
                 pops.get("maxItems").and_then(Value::as_u64),
                 Some(max_validators)
@@ -39321,6 +39321,12 @@ mod tests {
                 Some(true)
             );
         }
+        assert_eq!(
+            property(&schemas, "SumeragiV2FinalizedNextEpochSnapshot", "roster")
+                .get("minItems")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
         assert_eq!(
             property(&schemas, "SumeragiV2FinalizedNextEpochSnapshot", "roster")
                 .get("maxItems")

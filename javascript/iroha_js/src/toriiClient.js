@@ -16209,8 +16209,8 @@ function parseSumeragiStatusPayload(payload) {
     "sumeragi.protocol_version",
     { max: 0xffff },
   );
-  if (protocolVersion !== 3) {
-    throw new RangeError("sumeragi.protocol_version must equal 3");
+  if (protocolVersion !== 4) {
+    throw new RangeError("sumeragi.protocol_version must equal 4");
   }
   const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
   const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
@@ -17191,9 +17191,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
     if (
       minSigners !== active.heightContext.quorum.min_signers ||
       totalPower !== active.heightContext.quorum.total_power ||
-      signedPower < signerCount ||
-      signedPower > totalPower ||
-      (active.heightContext.mode.mode === "permissioned" && signedPower !== signerCount)
+      signedPower !== signerCount
     ) {
       throw new RangeError(`${itemContext} disagrees with the frozen dual quorum`);
     }
@@ -17238,7 +17236,11 @@ function parseSumeragiLivenessStatus(value, context, active) {
     });
   };
   const voteQuorums = (field, phase) => Object.freeze(
-    assertSumeragiArrayBound(record[field], 128, `${context}.${field}`).map(
+    assertSumeragiArrayBound(
+      record[field],
+      phase === "commit" ? 32 : 31,
+      `${context}.${field}`,
+    ).map(
       (item, index) => checkedPartialQuorum(
         item,
         `${context}.${field}[${index}]`,
@@ -17249,7 +17251,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
   const timeoutQuorums = Object.freeze(
     assertSumeragiArrayBound(
       record.timeout_quorums,
-      128,
+      31,
       `${context}.timeout_quorums`,
     ).map((item, index) => checkedPartialQuorum(
       item,
@@ -17492,6 +17494,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
           "timeout_certificate_missing",
           "scheduler_starvation",
           "application_pending",
+          "successor_activation_pending",
           "local_control_pending",
         ],
         `${context}.blocker`,
@@ -17937,14 +17940,14 @@ function parseSumeragiHeightContext(value, context) {
   const validatorCount = parseSumeragiUnsigned(
     record.validator_count,
     `${context}.validator_count`,
-    { positive: true, max: 128 },
+    { positive: true, max: 31 },
   );
   const quorumRecord = ensureRecord(record.quorum, `${context}.quorum`);
   const quorum = Object.freeze({
     min_signers: parseSumeragiUnsigned(
       quorumRecord.min_signers,
       `${context}.quorum.min_signers`,
-      { positive: true, max: 128 },
+      { positive: true, max: 31 },
     ),
     total_power: parseSumeragiUnsigned(
       quorumRecord.total_power,
@@ -17953,7 +17956,12 @@ function parseSumeragiHeightContext(value, context) {
     ),
   });
   const expectedMinSigners = Math.floor((validatorCount * 2) / 3) + 1;
-  if (quorum.min_signers !== expectedMinSigners || quorum.total_power < validatorCount) {
+  if (
+    validatorCount < 4 ||
+    (validatorCount - 1) % 3 !== 0 ||
+    quorum.min_signers !== expectedMinSigners ||
+    quorum.total_power !== validatorCount
+  ) {
     throw new RangeError(`${context}.quorum is not canonical for validator_count`);
   }
   const mode = parseSumeragiTaggedUnit(
@@ -17962,9 +17970,6 @@ function parseSumeragiHeightContext(value, context) {
     ["permissioned", "npos"],
     `${context}.mode`,
   );
-  if (mode.mode === "permissioned" && quorum.total_power !== validatorCount) {
-    throw new RangeError(`${context}.quorum.total_power must equal validator_count in permissioned mode`);
-  }
   const epochSeed = parseSumeragiByte32(record.epoch_seed, `${context}.epoch_seed`);
   return Object.freeze({
     epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
@@ -17984,7 +17989,7 @@ function parseSumeragiCommitQcStatus(value, context) {
   const validatorCount = parseSumeragiUnsigned(
     record.validator_count,
     `${context}.validator_count`,
-    { positive: true, max: 128 },
+    { positive: true, max: 31 },
   );
   const signerCount = parseSumeragiUnsigned(
     record.signer_count,
@@ -17994,7 +17999,7 @@ function parseSumeragiCommitQcStatus(value, context) {
   const minSigners = parseSumeragiUnsigned(
     record.min_signers,
     `${context}.min_signers`,
-    { positive: true, max: 128 },
+    { positive: true, max: 31 },
   );
   const signedPower = parseSumeragiUnsigned(
     record.signed_power,
@@ -18006,10 +18011,12 @@ function parseSumeragiCommitQcStatus(value, context) {
     { positive: true },
   );
   if (
+    validatorCount < 4 ||
+    (validatorCount - 1) % 3 !== 0 ||
     signerCount > validatorCount ||
     minSigners !== Math.floor((validatorCount * 2) / 3) + 1 ||
-    signedPower > totalPower ||
-    totalPower < validatorCount ||
+    signedPower !== signerCount ||
+    totalPower !== validatorCount ||
     signerCount < minSigners ||
     BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n
   ) {

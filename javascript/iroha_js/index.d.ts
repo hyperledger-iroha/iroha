@@ -828,7 +828,7 @@ export interface SccpSemanticProofProfileV1 {
 export interface SccpSoraFinalityAnchorV1 {
   readonly version: 1;
   readonly source_network: SccpNetworkV1;
-  readonly protocol_version: 3;
+  readonly protocol_version: 3 | 4;
   readonly chain_id_hash: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
@@ -5868,6 +5868,7 @@ export type ToriiSumeragiV2LivenessBlocker = Readonly<{
     | "timeout_certificate_missing"
     | "scheduler_starvation"
     | "application_pending"
+    | "successor_activation_pending"
     | "local_control_pending";
   details: null;
 }>;
@@ -6023,7 +6024,7 @@ export interface ToriiSumeragiSafetyHaltStatus {
 }
 
 export interface ToriiSumeragiStatus {
-  protocol_version: 3;
+  protocol_version: 4;
   node_fingerprint: string;
   build_fingerprint: string;
   config_fingerprint: string;

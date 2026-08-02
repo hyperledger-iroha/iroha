@@ -875,7 +875,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
   };
   const commitContextId = [fakeSumeragiHash(0x41)];
   return {
-    protocol_version: 3,
+    protocol_version: 4,
     node_fingerprint: fakeSumeragiHash(0x11),
     build_fingerprint: fakeSumeragiHash(0x12),
     config_fingerprint: fakeSumeragiHash(0x13),
@@ -12309,7 +12309,7 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
-  assert.equal(status.protocol_version, 3);
+  assert.equal(status.protocol_version, 4);
   assert.equal(status.restart_required, false);
   assert.equal(status.height, 10);
   assert.equal(status.height_context.mode.mode, "permissioned");
@@ -12575,6 +12575,18 @@ test("getSumeragiStatusTyped accepts the local-control liveness blocker", async 
   assert.equal(status.liveness.blocker.blocker, "local_control_pending");
 });
 
+test("getSumeragiStatusTyped accepts the successor-activation liveness blocker", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.blocker = {
+    blocker: "successor_activation_pending",
+    details: null,
+  };
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.liveness.blocker.blocker, "successor_activation_pending");
+});
+
 test("getSumeragiStatusTyped accepts the unsafe-proposal ignore reason", async () => {
   const payload = createSumeragiV2StatusPayload();
   payload.liveness.ignore_counts = [
@@ -12635,7 +12647,7 @@ test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen con
   const wrongVersion = createSumeragiV2StatusPayload({ protocol_version: 1 });
   await assert.rejects(
     () => sumeragiClientForPayload(wrongVersion).getSumeragiStatusTyped(),
-    /protocol_version must equal 3/,
+    /protocol_version must equal 4/,
   );
 
   const missingRestartRequired = createSumeragiV2StatusPayload();
@@ -12831,6 +12843,23 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
   await assert.rejects(
     () => sumeragiClientForPayload(underpowered).getSumeragiStatusTyped(),
     /does not satisfy its frozen dual quorum/,
+  );
+
+  const weightedNpos = createSumeragiV2StatusPayload();
+  weightedNpos.height_context.mode = { mode: "npos", details: null };
+  weightedNpos.height_context.quorum.total_power = 5;
+  await assert.rejects(
+    () => sumeragiClientForPayload(weightedNpos).getSumeragiStatusTyped(),
+    /quorum is not canonical/,
+  );
+
+  const invalidGeometry = createSumeragiV2StatusPayload();
+  invalidGeometry.height_context.validator_count = 5;
+  invalidGeometry.height_context.quorum.min_signers = 4;
+  invalidGeometry.height_context.quorum.total_power = 5;
+  await assert.rejects(
+    () => sumeragiClientForPayload(invalidGeometry).getSumeragiStatusTyped(),
+    /quorum is not canonical/,
   );
 
   const missingQc = createSumeragiV2StatusPayload({ last_commit_qc: null });

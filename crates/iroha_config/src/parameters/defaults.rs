@@ -3872,7 +3872,7 @@ pub mod sumeragi {
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 3;
+    pub const PROTOCOL_VERSION: u32 = 4;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// The view-zero round deadline is ten signed block-cadence intervals.
@@ -4110,8 +4110,8 @@ pub mod sumeragi {
         pub const VRF_COMMIT_WINDOW_BLOCKS: u64 = 100;
         /// VRF reveal window size after the commitment window.
         pub const VRF_REVEAL_WINDOW_BLOCKS: u64 = 40;
-        /// Maximum validators elected for an epoch (`0` means no configured cap).
-        pub const MAX_VALIDATORS: u32 = 128;
+        /// Exact bounded `3f + 1` ceiling for an epoch committee.
+        pub const MAX_VALIDATORS: u32 = 31;
         /// Minimum validator self-bond.
         pub const MIN_SELF_BOND: u64 = 1_000;
         /// Minimum nomination bond.

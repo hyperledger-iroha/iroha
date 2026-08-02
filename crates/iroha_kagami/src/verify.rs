@@ -10,6 +10,7 @@ use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
+    block::consensus_v2::is_valid_committee_size,
     isi::{Register, asset_alias::SetAssetDefinitionAlias},
     parameter::{
         custom::CustomParameterId,
@@ -129,11 +130,25 @@ fn verify_manifest(
 
     let peers_with_pops = collect_topology(manifest)?;
     let unique_peers: HashSet<_> = peers_with_pops.iter().collect();
+    if unique_peers.len() != peers_with_pops.len() {
+        return Err(eyre!(
+            "profile {:?} topology contains duplicate voting peer identities",
+            profile
+        ));
+    }
     if unique_peers.len() < defaults.min_peers {
         return Err(eyre!(
             "profile {:?} requires at least {} topology entries with PoP (saw {})",
             profile,
             defaults.min_peers,
+            unique_peers.len()
+        ));
+    }
+    if !is_valid_committee_size(unique_peers.len()) {
+        return Err(eyre!(
+            "profile {:?} topology must contain an exact revision-4 `3f + 1` committee \
+             between 4 and 31 validators (saw {})",
+            profile,
             unique_peers.len()
         ));
     }
@@ -464,35 +479,58 @@ mod tests {
     #[test]
     fn verify_accepts_dev_profile_manifest() {
         let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
-        let peer = generate_peer_pop();
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let manifest = build_manifest_with_profile(
             GenesisProfile::Iroha3Dev,
             SumeragiConsensusMode::Npos,
             seed,
-            std::slice::from_ref(&peer),
+            &peers,
         );
 
         let report =
             verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None).expect("verify manifest");
-        assert_eq!(report.peer_count, 1);
+        assert_eq!(report.peer_count, 4);
         assert_eq!(report.vrf_seed_hex, hex::encode_upper(seed));
     }
 
     #[test]
     fn verify_allows_permissioned_dev_profile() {
         let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
-        let peer = generate_peer_pop();
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let manifest = build_manifest_with_profile(
             GenesisProfile::Iroha3Dev,
             SumeragiConsensusMode::Permissioned,
             seed,
-            std::slice::from_ref(&peer),
+            &peers,
         );
 
         let report =
             verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None).expect("verify manifest");
-        assert_eq!(report.peer_count, 1);
+        assert_eq!(report.peer_count, 4);
         assert_eq!(report.vrf_seed_hex, "n/a");
+    }
+
+    #[test]
+    fn verify_rejects_non_committee_profile_topologies() {
+        let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
+        let peers = (0..32).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+
+        for count in [1_usize, 2, 3, 5, 32] {
+            let manifest = build_manifest_with_profile(
+                GenesisProfile::Iroha3Dev,
+                SumeragiConsensusMode::Npos,
+                seed,
+                &peers[..count],
+            );
+
+            let error = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None)
+                .expect_err("non-committee topology must fail profile verification");
+            assert!(
+                error.to_string().contains("requires at least")
+                    || error.to_string().contains("exact revision-4 `3f + 1`"),
+                "unexpected error for {count} peers: {error}"
+            );
+        }
     }
 
     #[test]
@@ -732,12 +770,12 @@ mod tests {
     #[test]
     fn verify_command_outputs_report_for_dev_profile() {
         let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
-        let peer = generate_peer_pop();
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let manifest = build_manifest_with_profile(
             GenesisProfile::Iroha3Dev,
             SumeragiConsensusMode::Npos,
             seed,
-            std::slice::from_ref(&peer),
+            &peers,
         );
 
         let mut file = NamedTempFile::new().expect("create temp file");

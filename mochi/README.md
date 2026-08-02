@@ -17,14 +17,16 @@ The `mochi-integration` crate provides lightweight Torii mocks and supervisor sm
 For the desktop shell itself, the quickest happy path is:
 
 ```sh
-cargo run -p mochi-ui --features gui --bin mochi -- --profile single-peer --build-binaries
+cargo run -p mochi-ui --features gui --bin mochi -- --profile four-peer-bft --build-binaries
 ```
 
-Use `--profile four-peer-bft` when you want a closer validator/quorum rehearsal.
-Unprofiled `single-peer` genesis keeps a 100 ms signed block cadence, while
-multi-peer profiles use the one-second localnet cadence so crash-safe consensus
-persistence can keep up when all validators share one development machine.
-Explicit Kagami genesis profiles retain their profile-defined cadence.
+The default four-validator topology is the smallest exact Sumeragi committee.
+Custom profiles may use four or seven validators and use the one-second
+localnet cadence so crash-safe consensus persistence can keep up when all
+validators share one development machine. Explicit Kagami genesis profiles
+retain their profile-defined cadence. The historical `single-peer` profile
+name remains readable for saved-config compatibility but launches four
+validators.
 
 The desktop app now treats the selected workspace as the home for bootstrap files and uses
 `<workspace>/.mochi/sandbox/<profile>` as the default runtime state root. The dashboard and the
@@ -57,9 +59,8 @@ scripts/mochi_local_sandbox.sh mcp-add-command
 ```
 
 By default the helper uses the current directory as `MOCHI_WORKSPACE_ROOT` and starts the
-`single-peer` preset. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal, or
-set `MOCHI_WORKSPACE_ROOT=/path/to/app` when the current shell is not already in the target app
-workspace.
+`four-peer-bft` preset. Set `MOCHI_WORKSPACE_ROOT=/path/to/app` when the current shell is not
+already in the target app workspace.
 Set `MOCHI_PYTHON=/absolute/path/to/python3` when you need to select a specific validated
 interpreter; the helper uses that one interpreter for every Python step.
 

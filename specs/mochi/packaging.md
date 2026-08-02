@@ -89,8 +89,9 @@ environment variables:
 
 - `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
   configs, storage, and logs.
-- `--profile` – switch between topology presets (`single-peer`,
-  `four-peer-bft`).
+- `--profile` – select the `four-peer-bft` topology preset or a custom exact
+  3f+1 committee. The historical `single-peer` name also launches four
+  validators.
 - `--torii-start`, `--p2p-start` – change the base ports used when allocating
   services.
 - `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.

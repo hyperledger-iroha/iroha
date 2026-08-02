@@ -25,7 +25,7 @@ validator fleet.
 - Public Sumeragi-v2 chain ID: `fc56984b-2be7-431d-840e-21514d1883f0`
 - Archived pre-v2 chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
-- Consensus protocol: Sumeragi v2 state machine, wire revision 3 only (`wire_protocol_version = 3`)
+- Consensus protocol: Sumeragi v2 state machine, wire revision 4 only (`wire_protocol_version = 4`)
 - Timing profile: authoritative 4,000 ms block cadence and one absolute 40,000 ms view-zero round deadline
 - Candidate bounds: 96 transactions, 21 MiB canonical body, and a four-times bounded queue scan
 - Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
@@ -1025,7 +1025,7 @@ frontier and no CommitQC exists yet,
 submits the first post-genesis write, and then re-checks `/status` plus
 `/v1/sumeragi/status` strictly after that write lands.
 
-The rollout script requires `/v1/sumeragi/status` to advertise wire revision 3, a
+The rollout script requires `/v1/sumeragi/status` to advertise wire revision 4, a
 frozen `height_context` with at least 4 validators and a consistent dual
 quorum, an exact durable `last_commit_qc` after genesis, bounded `operator`
 queues, and all canonical lane-evidence arrays. It rejects mismatched CommitQC

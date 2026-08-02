@@ -9580,7 +9580,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -16190,7 +16190,8 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              3,
+              4
             ],
             "type": "integer"
           },
@@ -19660,8 +19661,8 @@
             "$ref": "#/components/schemas/SumeragiV2StatusPhase"
           },
           "protocol_version": {
-            "maximum": 3,
-            "minimum": 3,
+            "maximum": 4,
+            "minimum": 4,
             "type": "integer"
           },
           "restart_required": {
@@ -20174,7 +20175,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -20340,7 +20341,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -20488,6 +20489,7 @@
               "timeout_certificate_missing",
               "scheduler_starvation",
               "application_pending",
+              "successor_activation_pending",
               "local_control_pending"
             ],
             "type": "string"

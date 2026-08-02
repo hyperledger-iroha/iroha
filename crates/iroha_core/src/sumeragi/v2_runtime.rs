@@ -13173,11 +13173,11 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"runtime ingress nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: 1024 * 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 512 * 1024,
                 max_chunk_count: 1024,
             },
             leader_seed: [0x5A; 32],
@@ -19383,23 +19383,23 @@ mod tests {
             payload_hash: Hash::new(b"queued-body-payload"),
         };
         let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 2,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 1,
-            max_chunk_count: 1,
+            max_chunk_count: 2,
         };
         let canonical = wire::PayloadManifest {
             round,
             subject,
             payload_size_bytes: 1,
             layout,
-            chunk_hashes: vec![Hash::new(b"canonical chunk")],
+            chunk_hashes: vec![Hash::new(b"canonical chunk"); 2],
             chunk_root: Hash::new(b"canonical root"),
         };
         let conflicting = wire::PayloadManifest {
-            chunk_hashes: vec![Hash::new(b"conflicting chunk")],
+            chunk_hashes: vec![Hash::new(b"conflicting chunk"); 2],
             chunk_root: Hash::new(b"conflicting root"),
             ..canonical.clone()
         };
@@ -19483,18 +19483,18 @@ mod tests {
             subject,
             payload_size_bytes: 1,
             layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
-                chunk_size_bytes: 1,
-                data_shards: 0,
-                parity_shards: 0,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 2,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 1,
-                max_chunk_count: 1,
+                max_chunk_count: 2,
             },
-            chunk_hashes: vec![Hash::new(b"reserved canonical chunk")],
+            chunk_hashes: vec![Hash::new(b"reserved canonical chunk"); 2],
             chunk_root: Hash::new(b"reserved canonical root"),
         };
         let conflicting = wire::PayloadManifest {
-            chunk_hashes: vec![Hash::new(b"reserved conflicting chunk")],
+            chunk_hashes: vec![Hash::new(b"reserved conflicting chunk"); 2],
             chunk_root: Hash::new(b"reserved conflicting root"),
             ..canonical.clone()
         };
@@ -19821,19 +19821,19 @@ mod tests {
             payload_hash: Hash::new(b"retired-body-payload"),
         };
         let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 2,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 1,
-            max_chunk_count: 1,
+            max_chunk_count: 2,
         };
         let original = wire::PayloadManifest {
             round,
             subject,
             payload_size_bytes: 1,
             layout,
-            chunk_hashes: vec![Hash::new(b"retired chunk")],
+            chunk_hashes: vec![Hash::new(b"retired chunk"); 2],
             chunk_root: Hash::new(b"retired root"),
         };
         let replacement = wire::PayloadManifest {
@@ -19841,7 +19841,7 @@ mod tests {
                 view: round.view + 1,
                 ..round
             },
-            chunk_hashes: vec![Hash::new(b"replacement chunk")],
+            chunk_hashes: vec![Hash::new(b"replacement chunk"); 2],
             chunk_root: Hash::new(b"replacement root"),
             ..original.clone()
         };
@@ -21223,14 +21223,14 @@ mod tests {
             subject,
             payload_size_bytes: 1,
             layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
-                chunk_size_bytes: 1,
-                data_shards: 0,
-                parity_shards: 0,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 2,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 1,
-                max_chunk_count: 1,
+                max_chunk_count: 2,
             },
-            chunk_hashes: vec![Hash::new(b"coalesced capacity chunk")],
+            chunk_hashes: vec![Hash::new(b"coalesced capacity chunk"); 2],
             chunk_root: Hash::new(b"coalesced capacity root"),
         });
         assert!(matches!(
@@ -25647,14 +25647,14 @@ mod tests {
             subject,
             payload_size_bytes: 1,
             layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
-                chunk_size_bytes: 1,
-                data_shards: 0,
-                parity_shards: 0,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 2,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 1,
-                max_chunk_count: 1,
+                max_chunk_count: 2,
             },
-            chunk_hashes: vec![Hash::new([0_u8])],
+            chunk_hashes: vec![Hash::new([0_u8]); 2],
             chunk_root: Hash::new(b"runtime transport root"),
         });
         assert!(runtime.can_admit_network_payload(&transport));

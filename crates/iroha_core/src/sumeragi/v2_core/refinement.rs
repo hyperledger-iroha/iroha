@@ -1991,7 +1991,10 @@ macro_rules! event_can_start_wal_record_body {
             }
             4u8 | 5u8 => $record_kind == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT),
             6u8 => $record_kind == refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT),
-            10u8 => {
+            // Validation normally starts a vote intent directly. A
+            // retransmission tick may start the same intent after activating
+            // Set B fallback when the exact body arrived before the tick.
+            7u8 | 10u8 => {
                 $record_kind == refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
                     || $record_kind == refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
             }
@@ -5332,6 +5335,8 @@ impl BoundaryCapabilityKey {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct VolatileSummary {
     pub(crate) candidate_present: bool,
+    /// Whether the current view has crossed the Set B fallback boundary.
+    pub(crate) fallback_active: bool,
     pub(crate) body_work: u64,
     pub(crate) pending_prepare: u64,
     pub(crate) known_prepare: u64,
@@ -5904,6 +5909,7 @@ macro_rules! volatile_summary_well_formed_body {
 macro_rules! volatile_summaries_equal_body {
     ($before:expr, $after:expr) => {{
         $before.candidate_present == $after.candidate_present
+            && $before.fallback_active == $after.fallback_active
             && $before.body_work == $after.body_work
             && $before.pending_prepare == $after.pending_prepare
             && $before.known_prepare == $after.known_prepare
@@ -6522,6 +6528,7 @@ macro_rules! transition_facts_from_projection_body {
 macro_rules! volatile_replay_unchanged_body {
     ($before:expr, $after:expr) => {{
         $before.candidate_present == $after.candidate_present
+            && $before.fallback_active == $after.fallback_active
             && $before.pending_prepare == $after.pending_prepare
             && $before.known_prepare == $after.known_prepare
             && $before.vote_pools == $after.vote_pools
@@ -6802,6 +6809,10 @@ macro_rules! transition_branch_constraints_body {
                         (!$facts.install_view_unchanged || !$facts.generation_unchanged)
                             && $enter_count == 1u64
                             && $apply_count == 0u64
+                            // Every installed TC begins a new proposal
+                            // generation. This includes a same-view lock
+                            // upgrade, so Set B must earn fallback again.
+                            && !$facts.volatile_after.fallback_active
                             && !$facts.volatile_after.candidate_present
                             // A TC-selected lock carries its full PrepareQC.
                             // Installation therefore starts at most one

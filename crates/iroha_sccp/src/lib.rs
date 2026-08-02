@@ -5444,7 +5444,7 @@ pub fn verified_sccp_message_taira_finality_proof(
 /// Decode and cryptographically verify a proof-controlled Taira v2 artifact.
 ///
 /// This establishes internal cryptographic consistency for the complete frozen
-/// v2 context, dual count-and-power quorum, `PoPs`, and exact commit-vote
+/// v2 context, exact equal-vote quorum, `PoPs`, and exact commit-vote
 /// transcript. The context and roster are still carried by the proof, so
 /// callers MUST NOT treat this function as a trust anchor. Production
 /// destination proofs additionally bind an audited semantic circuit to a

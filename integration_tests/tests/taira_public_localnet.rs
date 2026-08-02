@@ -364,6 +364,7 @@ fn blocker_label(blocker: SumeragiV2LivenessBlocker) -> &'static str {
         SumeragiV2LivenessBlocker::TimeoutCertificateMissing => "timeout_certificate_missing",
         SumeragiV2LivenessBlocker::SchedulerStarvation => "scheduler_starvation",
         SumeragiV2LivenessBlocker::ApplicationPending => "application_pending",
+        SumeragiV2LivenessBlocker::SuccessorActivationPending => "successor_activation_pending",
         SumeragiV2LivenessBlocker::LocalControlPending => "local_control_pending",
     }
 }
@@ -3893,6 +3894,10 @@ fn simulation_summary_json_records_release_profile_and_status_evidence() {
     assert_eq!(
         blocker_label(SumeragiV2LivenessBlocker::ApplicationPending),
         "application_pending"
+    );
+    assert_eq!(
+        blocker_label(SumeragiV2LivenessBlocker::SuccessorActivationPending),
+        "successor_activation_pending"
     );
     assert_eq!(
         blocker_label(SumeragiV2LivenessBlocker::LocalControlPending),

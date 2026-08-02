@@ -3555,7 +3555,7 @@ mod test {
                 max_retained_bytes: nonzero!(123_456_789_u64),
             },
             consensus: Consensus {
-                protocol_version: 3,
+                protocol_version: 4,
                 role: "validator".to_string(),
             },
             confidential_gas: ConfidentialGas {
@@ -3677,7 +3677,7 @@ mod test {
                 "max_retained_bytes": 123456789
               },
               "consensus": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "role": "validator"
               },
               "confidential_gas": {

@@ -1,3 +1,72 @@
+# Sumeragi consensus
+
+## Authoritative Sumeragi v2 revision 4
+
+Revision 4 is the first-release production consensus contract. Wire and pure
+core protocol versions are exactly `4`; nodes do not negotiate or reinterpret
+older consensus messages.
+
+### Committee and roles
+
+- Every height uses an equal-vote committee with exact `n = 3f + 1` geometry,
+  where `1 <= f <= 10`. Valid committee sizes are 4, 7, 10, …, 31 and quorum is
+  exactly `q = 2f + 1`. NPoS stake affects candidate election, not consensus
+  vote weight.
+- The finalized height seed and height determine a stable roster permutation.
+  Views rotate that permutation cyclically without changing validator indices.
+- Set A is the first `q` members: the leader is first and the proxy tail is
+  last. Set B is the remaining `f` members.
+
+### Proposal, availability, and voting
+
+1. The leader broadcasts the signed proposal manifest to the full committee
+   and initially sends its canonical body chunks to Set A.
+2. Reed-Solomon-16 is mandatory. A validator may Prepare-vote only after it has
+   reconstructed the complete canonical body, verified its manifest and hashes,
+   stored it durably, and completed deterministic validation.
+3. Set A sends Prepare and Commit votes directly to the proxy tail. The proxy
+   tail aggregates `q` equal votes and broadcasts the corresponding QC.
+4. When the fast path does not complete, recovery expands body/chunk delivery
+   and voting to the full committee. The quorum remains `q`; Set B never
+   weakens the certificate.
+5. Timeout votes are committee-wide and do not depend on the proxy tail. A
+   TimeoutCertificate rotates the leader, proxy tail, Set A, and Set B. A
+   locked body is re-proposed unchanged; Proposal, Vote, and QC evidence always
+   has same-round semantics.
+
+### Finality and progress
+
+- A CommitQC is unique under the standard authenticated `3f + 1`, at-most-`f`
+  Byzantine assumption and durable honest sign-once/lock rules.
+- A node applies only the exact certified, locally available body. Durable
+  application and its typed finality artifact authorize successor construction.
+- NPoS epochs advance after exactly 3,600 finalized non-empty blocks. Empty
+  blocks are rejected before voting/finality, so the height boundary is also
+  the non-empty-block boundary; the old committee authenticates the full
+  next-epoch transition evidence.
+- Retryable finalized-height output, merge/lane sidecars, historical service,
+  and cleanup run under detached supervised repair. They remain observable
+  debt but cannot revoke finality or block successor activation.
+- Liveness is conditional on partial synchrony after GST, at least `2f + 1`
+  responsive committee members, terminating deterministic validation and
+  durable storage, and an eventually honest leader/proxy-tail view. It is not
+  claimed during an unbounded partition or permanent storage failure.
+
+### Fresh-genesis migration
+
+Revision 4 is a fresh-genesis cutover. There is no rolling or in-place
+compatibility path from revision 3: old consensus wire values, frozen height
+contexts, safety WAL state, and partially completed rounds must be rejected.
+Operators must generate and sign a revision-4 genesis and start new revision-4
+storage. State transfer, if separately authorized, terminates at an audited
+snapshot boundary and does not import revision-3 consensus state.
+
+## Historical Sumeragi V1 material (non-authoritative)
+
+Everything below this heading describes the retired V1 implementation and
+operator surfaces. It is retained only as historical context and must not be
+used to implement, configure, validate, or operate revision 4.
+
 ## Sumeragi Consensus V1
 
 Sumeragi V1 is Iroha's first-release deterministic BFT consensus protocol.

@@ -3642,8 +3642,10 @@ node --test javascript/iroha_js/test/integrationTorii.test.js
 
 ### Dockerised harness (`npm run test:integration`)
 
-Use the bundled integration harness to spin up the single-node Docker Compose
-topology, wait for `/status`, and run the mutation-enabled smoke suite:
+Use the bundled integration harness to spin up the four-validator Docker
+Compose topology, wait for `/status`, and run the mutation-enabled smoke suite.
+The `docker-compose.single.yml` filename is retained for compatibility; it no
+longer denotes a one-validator network.
 
 ```bash
 target/debug/kagami keys --out-dir target/js-integration-genesis
@@ -3659,8 +3661,9 @@ before starting it. Never commit the private file.
 `scripts/run_integration.mjs` performs the following steps:
 
 1. Runs `npm ci` (skip via `JS_TORII_SKIP_INSTALL=1`) and rebuilds the native binding.
-2. Starts `docker compose -f defaults/docker-compose.single.yml up -d irohad0`
-   unless `--no-start` (or `JS_TORII_START=0`) is supplied.
+2. Starts all four validators in
+   `defaults/docker-compose.single.yml` unless `--no-start` (or
+   `JS_TORII_START=0`) is supplied.
 3. Waits up to 90 s for `http://127.0.0.1:8080/status` (override via
    `--torii-url`/`--wait-seconds`/`IROHA_TORII_INTEGRATION_URL`).
 4. Sets the mutation env vars (chain id, account id, private key) and runs
@@ -3670,7 +3673,8 @@ before starting it. Never commit the private file.
 Flags/environment variables:
 
 - `--compose-file` (or `JS_TORII_COMPOSE_FILE`) to point at a custom compose manifest.
-- `--service` / `COMPOSE_SERVICE` to target a different service name.
+- `--service` / `COMPOSE_SERVICE` to start only one explicitly selected
+  service instead of the full validator stack.
 - `--compose-bin` / `JS_TORII_COMPOSE_BIN` to use a non-default compose command.
 - `IROHA_GENESIS_PUBLIC_KEY_FILE` and `IROHA_GENESIS_PRIVATE_KEY_FILE` supply
   the runtime-only genesis custody required by the default Compose manifest.

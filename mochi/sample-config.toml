@@ -13,11 +13,11 @@ data_root = "./data"
 build_binaries = false
 
 # Choose a topology profile. Use a preset string or a custom table:
-# profile = "single-peer"
 # profile = "four-peer-bft"
-# profile = { peer_count = 3, consensus_mode = "permissioned" }
-# profile = { peer_count = 3, consensus_mode = "npos", genesis_profile = "iroha3-dev" }
-profile = "single-peer"
+# profile = { peer_count = 7, consensus_mode = "permissioned" }
+# profile = { peer_count = 7, consensus_mode = "npos", genesis_profile = "iroha3-dev" }
+# Custom peer counts must be exact 3f+1 Sumeragi committees (4 or 7 here).
+profile = "four-peer-bft"
 # Override the generated chain identifier. Leave blank to use `mochi-local`.
 # If `genesis_profile` is set, the chain id must match the profile default.
 chain_id = ""

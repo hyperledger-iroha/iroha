@@ -15,6 +15,16 @@ RUN_INTEGRATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RUN_INTEGRATION)
 
 
+def test_default_start_does_not_narrow_the_validator_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The compatibility-named compose fixture must start all four validators."""
+
+    monkeypatch.delenv("COMPOSE_SERVICE", raising=False)
+    args = RUN_INTEGRATION._parse_args([])
+    assert args.service is None
+
+
 def test_default_compose_custody_preflight_fails_closed_and_accepts_exact_records(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -9834,6 +9834,181 @@ def _top_level_operator_body(
     return stripped[body_start:body_end], stripped.count("\n", 0, body_start) + 1
 
 
+def _revision4_model_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the executable revision-4 routing and conditional-progress surface."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [f"{module_path}: revision-4 model must be a regular file"]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "Views": ("0..(N - 1)",),
+        "ConstantOK": (
+            "N = 3 * F + 1",
+            "Cardinality(Faulty) <= F",
+            "\\E candidateView \\in Views : UsableView(candidateView)",
+        ),
+        "Init": ("ConstantOK",),
+        "Propose": (
+            "manifestTargets' = Validators",
+            "bodyTargets' = SetA(view)",
+        ),
+        "EnterFallback": (
+            "fallback' = TRUE",
+            "bodyTargets' = Validators",
+        ),
+        "ChangeView": (
+            "view < N - 1",
+            "fallback' = FALSE",
+            "prepareVoteRoutes' = {}",
+            "commitVoteRoutes' = {}",
+            "timeoutVoteRoutes' = {}",
+        ),
+        "ManifestCommitteeFanout": (
+            "manifestTargets = Validators",
+        ),
+        "FastPathAndFallbackBodyFanout": (
+            "IF fallback THEN Validators ELSE SetA(view)",
+        ),
+        "PrepareVotesRouteToProxyTail": (
+            "Validators \\X {ProxyTail(view)}",
+            "VoteSigners(prepareVotes)",
+        ),
+        "CommitVotesRouteToProxyTail": (
+            "Validators \\X {ProxyTail(view)}",
+            "VoteSigners(commitVotes)",
+        ),
+        "TimeoutVotesBypassProxyTail": (
+            "RouteSources(timeoutVoteRoutes) = timeoutVotes",
+            "= Validators",
+        ),
+        "PostGSTSendTimeout": (
+            "~UsableView(view)",
+            "SendTimeout(validator)",
+        ),
+        "ConditionalPostGSTProgress": (
+            "decisions /= {}",
+            "applied",
+            "successorActive",
+        ),
+        "FinalizedOutputDebtDoesNotBlockSuccessor": (
+            "applied",
+            "finalizedOutputDebt",
+            "~> successorActive",
+        ),
+    }
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 operator {operator}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 operator {operator} is "
+                f"missing {missing}"
+            )
+
+    fairness = _top_level_operator_body(source, "PostGSTFairness")
+    if fairness is None:
+        errors.append(f"{module_path}: missing revision-4 PostGSTFairness")
+    else:
+        body, line = fairness
+        normalized = " ".join(body.split())
+        required_fair_actions = (
+            "HonestLeaderProposes",
+            "HonestBodyService",
+            "EnterFallback",
+            "HonestPrepareService",
+            "HonestTailPrepareQCService",
+            "HonestCommitService",
+            "HonestTailDecisionService",
+            "HonestTimeoutService",
+            "ChangeView",
+            "LocalDecisionBodyRecovery",
+            "LocalDecisionApplication",
+            "ActivateSuccessor",
+        )
+        missing = [
+            action
+            for action in required_fair_actions
+            if f"WF_vars({action})" not in normalized
+        ]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: PostGSTFairness is missing weakly fair "
+                f"services {missing}"
+            )
+        if "WF_vars(RepairFinalizedOutput)" in normalized:
+            errors.append(
+                f"{module_path}:{line}: finalized-output repair may not be a "
+                "revision-4 successor-progress fairness prerequisite"
+            )
+
+    config_contracts = {
+        "SumeragiV2Revision4.cfg": (
+            "SPECIFICATION Spec",
+            "INVARIANT ManifestCommitteeFanout",
+            "INVARIANT FastPathAndFallbackBodyFanout",
+            "INVARIANT PrepareVotesRouteToProxyTail",
+            "INVARIANT CommitVotesRouteToProxyTail",
+            "INVARIANT TimeoutVotesBypassProxyTail",
+            "INVARIANT NonblockingSuccessorActivation",
+        ),
+        "SumeragiV2Revision4Liveness.cfg": (
+            "SPECIFICATION PostGSTSpec",
+            "PROPERTY ConditionalPostGSTProgress",
+            "PROPERTY FinalizedOutputDebtDoesNotBlockSuccessor",
+        ),
+    }
+    for filename, required in config_contracts.items():
+        path = formal_dir / filename
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: revision-4 TLC config must be a regular file")
+            continue
+        config_source = path.read_text(encoding="utf-8")
+        missing = [token for token in required if token not in config_source]
+        if missing:
+            errors.append(
+                f"{path}: revision-4 TLC configuration is missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(f"{runner_path}: revision-4 TLC runner must be a regular file")
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_safety",
+            "revision4_liveness",
+            'revision4_safety) cfg="SumeragiV2Revision4.cfg"',
+            'revision4_liveness) cfg="SumeragiV2Revision4Liveness.cfg"',
+            "revision4_safety|revision4_liveness)",
+            "SumeragiV2Revision4.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 TLC runner is missing {missing}"
+            )
+    return errors
+
+
 def _top_level_declaration_span(
     source: str,
     symbol: str,
@@ -40253,7 +40428,7 @@ outbound_frame_queue_max_high_bytes: config
     wire_path = paths["wire"]
     for expected, description in (
         (
-            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;",
+            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;",
             "first-release maximum validator geometry",
         ),
         (
@@ -90519,6 +90694,7 @@ def validate_ledger(
     errors.extend(_resume_vote_witness_errors(formal_dir))
     errors.extend(_retired_liveness_errors(formal_dir))
     errors.extend(_bounded_view_dependency_errors(formal_dir))
+    errors.extend(_revision4_model_contract_errors(formal_dir, ROOT_DIR))
     errors.extend(_reachable_oracle_guard_errors(formal_dir))
     errors.extend(_generalized_context_init_errors(formal_dir))
     errors.extend(_safety_property_source_fidelity_errors(formal_dir))
@@ -90739,7 +90915,12 @@ def validate_ledger(
                 f"{cfg}: TLC configuration must start with {expected_header!r}"
             )
         if (
-            cfg_name != "effective_lock_acquisition.cfg"
+            cfg_name
+            not in {
+                "effective_lock_acquisition.cfg",
+                "SumeragiV2Revision4.cfg",
+                "SumeragiV2Revision4Liveness.cfg",
+            }
             and '  ValidSubjects = {"A"}\n' not in source
         ):
             errors.append(

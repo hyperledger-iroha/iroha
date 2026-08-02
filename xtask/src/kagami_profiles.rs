@@ -10,7 +10,7 @@ use std::{
 use blake2::{Blake2b512, digest::Digest};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
-    block::decode_framed_signed_block,
+    block::{consensus_v2::is_valid_committee_size, decode_framed_signed_block},
     isi::SetParameter,
     parameter::{
         Parameter,
@@ -55,16 +55,18 @@ struct PeerMaterial {
     address: String,
     public_key: String,
     private_key: String,
+    streaming_public_key: String,
+    streaming_private_key: String,
     pop: Vec<u8>,
     pop_hex: String,
 }
 
+struct StagedGenesis {
+    manifest: RawGenesisTransaction,
+    signed_wire: Vec<u8>,
+}
+
 type AnyResult<T> = Result<T, Box<dyn Error>>;
-// Ed25519 identity used for streaming control-plane in sample configs.
-const STREAM_ID_PUBLIC: &str =
-    "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
-const STREAM_ID_PRIVATE: &str =
-    "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
 const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
 
@@ -163,14 +165,24 @@ fn write_profile_bundle(
     let config_text = render_config(spec, &peers, genesis_key.public_key());
     let config_path = bundle_root.join("config.toml");
     fs::write(&config_path, &config_text)?;
-    let patched_genesis = bind_staged_context(
+    for peer_index in 1..peers.len() {
+        fs::write(
+            bundle_root.join(peer_config_file_name(peer_index)),
+            render_peer_config(spec, &peers, peer_index, genesis_key.public_key()),
+        )?;
+    }
+    let staged_genesis = bind_staged_context(
         spec,
         kagami_bin,
         &genesis_path,
         &config_path,
-        patched_genesis,
+        &genesis_key,
     )?;
-    write_json(&genesis_path, &patched_genesis)?;
+    write_json(&genesis_path, &staged_genesis.manifest)?;
+    fs::write(
+        bundle_root.join("genesis.signed.nrt"),
+        staged_genesis.signed_wire,
+    )?;
 
     let vrf_seed_hex = if spec.requires_seed {
         Some(spec.vrf_seed_hex())
@@ -285,17 +297,23 @@ fn bind_staged_context(
     kagami_bin: &Path,
     genesis_path: &Path,
     config_path: &Path,
-    manifest: RawGenesisTransaction,
-) -> AnyResult<RawGenesisTransaction> {
+    genesis_key: &KeyPair,
+) -> AnyResult<StagedGenesis> {
+    let private_key_hex = hex::encode(genesis_key.private_key().to_bytes().1);
+    let expected_public_key = genesis_key.public_key().to_string();
     let output = Command::new(kagami_bin)
         .args([
             "genesis",
             "sign",
             genesis_path.to_str().expect("genesis path utf-8"),
-            "--seed",
-            "kagami-profile-staged-context",
+            "--private-key",
+            &private_key_hex,
+            "--expected-public-key",
+            &expected_public_key,
             "--config",
             config_path.to_str().expect("config path utf-8"),
+            "--bound-manifest-out",
+            genesis_path.to_str().expect("genesis path utf-8"),
         ])
         .output()
         .map_err(|err| format!("failed to stage {} genesis: {err}", spec.slug))?;
@@ -312,7 +330,8 @@ fn bind_staged_context(
         .into());
     }
 
-    let block = decode_framed_signed_block(&output.stdout)
+    let signed_wire = output.stdout;
+    let block = decode_framed_signed_block(&signed_wire)
         .map_err(|err| format!("failed to decode staged {} genesis: {err}", spec.slug))?;
     let mut metadata = None;
     for transaction in block.external_transactions() {
@@ -346,25 +365,31 @@ fn bind_staged_context(
         )
         .into());
     }
-    if metadata.wire_protocol_version != 3 {
+    if metadata.wire_protocol_version
+        != u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)
+    {
         return Err(format!(
-            "staged {} genesis advertised {}, expected protocol v3",
-            spec.slug, metadata.wire_protocol_version
+            "staged {} genesis advertised {}, expected protocol v{}",
+            spec.slug,
+            metadata.wire_protocol_version,
+            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION
         )
         .into());
     }
 
-    let rebound = manifest
-        .with_sumeragi_v2_context_parameters(metadata.sumeragi_v2)
-        .with_consensus_meta();
-    if rebound.consensus_fingerprint() != Some(metadata.consensus_fingerprint) {
+    let bound_manifest = RawGenesisTransaction::from_path(genesis_path)
+        .map_err(|err| format!("failed to load bound {} genesis: {err}", spec.slug))?;
+    if bound_manifest.consensus_fingerprint() != Some(metadata.consensus_fingerprint) {
         return Err(format!(
-            "staged {} consensus fingerprint did not cover the rebound Nexus/AMX context",
+            "staged {} consensus fingerprint did not cover the bound Nexus/AMX context",
             spec.slug
         )
         .into());
     }
-    Ok(rebound)
+    Ok(StagedGenesis {
+        manifest: bound_manifest,
+        signed_wire,
+    })
 }
 
 fn run_verify(
@@ -406,7 +431,18 @@ fn render_config(
     peers: &[PeerMaterial],
     genesis_public_key: &iroha_crypto::PublicKey,
 ) -> String {
-    let node = peers.first().expect("at least one peer per profile");
+    render_peer_config(spec, peers, 0, genesis_public_key)
+}
+
+fn render_peer_config(
+    spec: &ProfileSpec,
+    peers: &[PeerMaterial],
+    peer_index: usize,
+    genesis_public_key: &iroha_crypto::PublicKey,
+) -> String {
+    let node = peers
+        .get(peer_index)
+        .expect("peer config index must address signed topology");
     let trusted_peers = peers
         .iter()
         .map(|peer| format!("  \"{}@{}\"", peer.public_key, peer.address))
@@ -514,9 +550,19 @@ allow_tool_prefixes = ["iroha."]
         .expect("generated peer material must contain a valid IPv4 port");
     let network_address =
         SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], p2p_port))).to_literal();
+    let public_ip = node
+        .address
+        .rsplit_once(':')
+        .and_then(|(ip, _)| ip.parse::<std::net::Ipv4Addr>().ok())
+        .expect("generated peer material must contain a valid IPv4 address")
+        .octets();
     let network_public_address =
-        SocketAddr::Ipv4(SocketAddrV4::from(([127, 0, 0, 1], p2p_port))).to_literal();
-    let torii_address = SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], 8080))).to_literal();
+        SocketAddr::Ipv4(SocketAddrV4::from((public_ip, p2p_port))).to_literal();
+    let torii_port = 8080_u16
+        .checked_add(u16::try_from(peer_index).expect("profile peer index must fit u16"))
+        .expect("profile Torii port must fit u16");
+    let torii_address =
+        SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], torii_port))).to_literal();
     format!(
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
@@ -531,7 +577,7 @@ trusted_peers_pop = [
 ]
 
 [sumeragi]
-protocol_version = 3
+protocol_version = 4
 role = "validator"
 
 [sumeragi.block]
@@ -564,6 +610,8 @@ lane_count = 3
 
 [genesis]
 public_key = "{genesis_pk}"
+file = "/config/genesis.signed.nrt"
+manifest_json = "/config/genesis.json"
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
@@ -581,38 +629,79 @@ public_key = "{genesis_pk}"
         sorafs_site_bindings = sorafs_site_bindings,
         taira_nexus_overrides = taira_nexus_overrides,
         taira_mcp_overrides = taira_mcp_overrides,
-        taira_offline_overrides = taira_offline_overrides,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
-        stream_pub = STREAM_ID_PUBLIC,
-        stream_priv = STREAM_ID_PRIVATE,
+        stream_pub = node.streaming_public_key,
+        stream_priv = node.streaming_private_key,
     )
 }
 
 fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
-    let node = peers.first().expect("at least one peer per profile");
-    let site_bindings_volume = if spec.slug == "iroha3-taira" {
-        "\n      - ./sorafs_sites.json:/config/sorafs_sites.json:ro"
-    } else {
-        ""
-    };
+    let services = peers
+        .iter()
+        .enumerate()
+        .map(|(peer_index, peer)| {
+            let service = format!("iroha-{}-{peer_index}", spec.slug);
+            let config_file = peer_config_file_name(peer_index);
+            let command = r#"["irohad", "--sora", "--config", "/config/config.toml"]"#;
+            let site_bindings_volume = if spec.slug == "iroha3-taira" {
+                "\n      - ./sorafs_sites.json:/config/sorafs_sites.json:ro"
+            } else {
+                ""
+            };
+            let p2p_port = peer
+                .address
+                .rsplit_once(':')
+                .map(|(_, port)| port)
+                .expect("generated peer address must contain a port");
+            let peer_ip = peer
+                .address
+                .rsplit_once(':')
+                .map(|(ip, _)| ip)
+                .expect("generated peer address must contain an IP");
+            let torii_port = 8080_u16
+                .checked_add(
+                    u16::try_from(peer_index).expect("profile peer index must fit into u16"),
+                )
+                .expect("profile Torii port must fit into u16");
+            format!(
+                r#"  {service}:
+    image: hyperledger/iroha:latest
+    command: {command}
+    volumes:
+      - ./{config_file}:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{site_bindings_volume}
+    ports:
+      - "{torii_port}:{torii_port}"
+      - "{p2p_port}:{p2p_port}"
+    networks:
+      profile:
+        ipv4_address: {peer_ip}
+"#,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
     format!(
         r#"version: "3.9"
 services:
-  iroha-{slug}:
-    image: hyperledger/iroha:latest
-    command: ["irohad", "--sora", "--config", "/config/config.toml", "--genesis", "/config/genesis.json"]
-    volumes:
-      - ./config.toml:/config/config.toml:ro
-      - ./genesis.json:/config/genesis.json:ro{site_bindings_volume}
-    ports:
-      - "8080:8080"
-      - "{p2p}:{p2p}"
+{services}
+networks:
+  profile:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
 "#,
-        slug = spec.slug,
-        p2p = node.address.split(':').next_back().unwrap_or("1337"),
-        site_bindings_volume = site_bindings_volume,
     )
+}
+
+fn peer_config_file_name(peer_index: usize) -> String {
+    if peer_index == 0 {
+        "config.toml".to_owned()
+    } else {
+        format!("config-peer-{peer_index}.toml")
+    }
 }
 
 fn render_readme(
@@ -662,9 +751,10 @@ fn render_readme(
 
 Files:
 - genesis.json — generated with `kagami genesis generate --profile {profile}`, patched with deterministic topology+PoPs, and rebound to the exact staged Nexus/AMX context through `kagami genesis sign`
+- genesis.signed.nrt — canonical signed genesis wire artifact consumed by every validator
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json`
-- config.toml — minimal Nexus config matching the topology (ports 8080/1337)
-{site_bindings_file}- docker-compose.yml — single-node snippet mounting the config/genesis
+- config.toml and config-peer-*.toml — one unique validator config per signed topology member
+{site_bindings_file}- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 
 Regenerate:
 - cargo xtask kagami-profiles --profile {profile}
@@ -681,20 +771,42 @@ Regenerate:
 }
 
 fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
+    if !is_valid_committee_size(spec.min_peers) {
+        return Err(format!(
+            "profile {} peer count {} is not an exact revision-4 `3f + 1` committee",
+            spec.slug, spec.min_peers
+        )
+        .into());
+    }
     (0..spec.min_peers)
         .map(|idx| {
             let seed = format!("{}-peer-{idx}", spec.slug);
             let kp = deterministic_keypair(&seed, Algorithm::BlsNormal)?;
+            let streaming_kp = deterministic_keypair(
+                &format!("{}-streaming-{idx}", spec.slug),
+                Algorithm::Ed25519,
+            )?;
             let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).map_err(|err| {
                 format!("failed to generate deterministic BLS PoP for `{seed}`: {err}")
             })?;
-            let port = 1337 + u16::try_from(idx).unwrap_or(0);
-            let address = format!("127.0.0.1:{port}");
+            let peer_offset =
+                u16::try_from(idx).map_err(|_| "profile peer index does not fit into u16")?;
+            let port = 1337_u16
+                .checked_add(peer_offset)
+                .ok_or("profile P2P port does not fit into u16")?;
+            let host_octet = 10_usize
+                .checked_add(idx)
+                .filter(|octet| *octet <= usize::from(u8::MAX))
+                .ok_or("profile peer index does not fit into the compose subnet")?;
+            let address = format!("172.28.0.{host_octet}:{port}");
             Ok(PeerMaterial {
                 peer_id: PeerId::from(kp.public_key().clone()),
                 address,
                 public_key: kp.public_key().to_string(),
                 private_key: ExposedPrivateKey(kp.private_key().clone()).to_string(),
+                streaming_public_key: streaming_kp.public_key().to_string(),
+                streaming_private_key: ExposedPrivateKey(streaming_kp.private_key().clone())
+                    .to_string(),
                 pop: pop.clone(),
                 pop_hex: hex::encode(&pop),
             })
@@ -783,7 +895,7 @@ const PROFILES: &[ProfileSpec] = &[
         profile_flag: "iroha3-dev",
         chain_id: "iroha3-dev.local",
         chain_discriminant: None,
-        min_peers: 1,
+        min_peers: 4,
         requires_seed: false,
     },
     ProfileSpec {
@@ -847,6 +959,21 @@ mod tests {
     }
 
     #[test]
+    fn profile_peer_builder_rejects_non_committee_sizes() {
+        for count in [1_usize, 2, 3, 5, 32] {
+            let spec = ProfileSpec {
+                min_peers: count,
+                ..PROFILES[0]
+            };
+            let error = build_peers(&spec).expect_err("non-committee profile must fail");
+            assert!(
+                error.to_string().contains("exact revision-4 `3f + 1`"),
+                "unexpected error for {count} peers: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn topology_is_injected_into_genesis() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let patched = inject_topology(stub_genesis(), &peers).expect("inject topology");
@@ -892,8 +1019,8 @@ mod tests {
         assert!(rendered.contains("viral_incentive_pool_account"));
         assert!(rendered.contains(peers[0].public_key.as_str()));
         assert!(rendered.contains(&genesis_key.public_key().to_string()));
-        assert!(rendered.contains(STREAM_ID_PUBLIC));
-        assert!(rendered.contains(STREAM_ID_PRIVATE));
+        assert!(rendered.contains(&peers[0].streaming_public_key));
+        assert!(rendered.contains(&peers[0].streaming_private_key));
         assert!(
             !rendered.contains("round_timeout_ms"),
             "round timing is derived from the signed genesis cadence"
@@ -960,7 +1087,7 @@ mod tests {
         let expected_listen =
             SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], 1337))).to_literal();
         let expected_public =
-            SocketAddr::Ipv4(SocketAddrV4::from(([127, 0, 0, 1], 1337))).to_literal();
+            SocketAddr::Ipv4(SocketAddrV4::from(([172, 28, 0, 10], 1337))).to_literal();
         let expected_torii =
             SocketAddr::Ipv4(SocketAddrV4::from(([0, 0, 0, 0], 8080))).to_literal();
         for profile in PROFILES {
@@ -1063,6 +1190,63 @@ mod tests {
             .expect("derive deterministic genesis key");
         let readme = render_readme(&PROFILES[1], &peers, genesis_key.public_key(), Some("ABCD"));
         assert!(readme.contains("sorafs_sites.json"));
+    }
+
+    #[test]
+    fn compose_launches_every_signed_topology_member_with_unique_config() {
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
+        let rendered = render_docker_compose(&PROFILES[0], &peers);
+
+        assert_eq!(
+            rendered
+                .matches("    image: hyperledger/iroha:latest")
+                .count(),
+            peers.len()
+        );
+        assert_eq!(
+            rendered.matches("ipv4_address: 172.28.0.").count(),
+            peers.len()
+        );
+        assert!(rendered.contains("./config.toml:/config/config.toml:ro"));
+        assert_eq!(
+            rendered
+                .matches("./genesis.signed.nrt:/config/genesis.signed.nrt:ro")
+                .count(),
+            peers.len()
+        );
+        assert!(!rendered.contains("--genesis"));
+        for peer_index in 1..peers.len() {
+            assert!(rendered.contains(&format!(
+                "./config-peer-{peer_index}.toml:/config/config.toml:ro"
+            )));
+        }
+    }
+
+    #[test]
+    fn peer_configs_use_distinct_consensus_streaming_and_port_material() {
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
+        let genesis_key = deterministic_keypair("distinct-peer-configs", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
+
+        for (peer_index, peer) in peers.iter().enumerate() {
+            let rendered =
+                render_peer_config(&PROFILES[0], &peers, peer_index, genesis_key.public_key());
+            let torii_port = 8080 + peer_index;
+            assert!(rendered.contains(&format!("private_key = \"{}\"", peer.private_key)));
+            assert!(rendered.contains(&peer.streaming_public_key));
+            assert!(rendered.contains(&peer.streaming_private_key));
+            assert!(rendered.contains(&format!("0.0.0.0:{torii_port}")));
+            assert!(rendered.contains("file = \"/config/genesis.signed.nrt\""));
+            assert!(rendered.contains("manifest_json = \"/config/genesis.json\""));
+            for (other_index, other) in peers.iter().enumerate() {
+                if peer_index != other_index {
+                    assert!(
+                        !rendered.contains(&format!("private_key = \"{}\"", other.private_key))
+                    );
+                    assert!(!rendered.contains(&other.streaming_private_key));
+                }
+            }
+        }
     }
 
     #[test]

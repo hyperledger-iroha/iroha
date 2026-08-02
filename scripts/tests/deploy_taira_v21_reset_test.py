@@ -726,7 +726,7 @@ def _health_getter(
         if "/v1/sumeragi/status" in url:
             subject = {"block_hash": f"hash:{block_hash.upper()}#A1b2"}
             return {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "restart_required": False,
                 "height": 8,
                 "last_committed_height": 7,

@@ -1302,6 +1302,7 @@ test("registry rejects stale emitter hashes after either typed proof policy chan
 test("registry rejects legacy and ambiguous Sumeragi v2 finality anchors", () => {
   const mutations = [
     ["wrong protocol", (anchor) => { anchor.protocol_version = 1; }, /protocol_version/u],
+    ["future protocol", (anchor) => { anchor.protocol_version = 5; }, /protocol_version/u],
     ["protocol type confusion", (anchor) => { anchor.protocol_version = true; }, /integer/u],
     ["zero context", (anchor) => { anchor.checkpoint_context_id = UPPER(0, 32); }, /nonzero/u],
     ["aliased artifact", (anchor) => {
@@ -1848,7 +1849,21 @@ test("recent discovery admits only the exact Solana projection shape", () => {
 
 test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema", () => {
   assert.equal(normalizeSccpMessageBundle(messageBundle()).version, 1);
-  assert.equal(normalizeSccpProofRequest(proofRequest()).public_inputs.target_domain, 2);
+  const historicalRequest = normalizeSccpProofRequest(proofRequest());
+  assert.equal(historicalRequest.public_inputs.target_domain, 2);
+  const currentRequest = proofRequest();
+  currentRequest.sora_finality_anchor.protocol_version = 4;
+  currentRequest.sora_finality_anchor_hash = `0x${policyHashes({
+    version: 1,
+    semantic_profile: currentRequest.semantic_proof_profile,
+    sora_finality_anchor: currentRequest.sora_finality_anchor,
+  }).anchor}`;
+  const currentParsed = normalizeSccpProofRequest(currentRequest);
+  assert.equal(currentParsed.sora_finality_anchor.protocol_version, 4);
+  assert.notEqual(
+    currentParsed.sora_finality_anchor_hash,
+    historicalRequest.sora_finality_anchor_hash,
+  );
   const retiredPayload = messageBundle();
   retiredPayload.payload = { Burn: {} };
   assert.throws(() => normalizeSccpMessageBundle(retiredPayload), /retired/u);

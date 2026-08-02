@@ -1,9 +1,33 @@
 # Roadmap
 
-Last updated: 2026-08-01
+Last updated: 2026-08-02
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Sumeragi v2 revision-4 release gates
+
+Revision-4 implementation facts are recorded in `status.md`. Older Sumeragi
+V1/revision-3 checkpoint lists elsewhere in this file are historical and do
+not add release gates. The outstanding revision-4 work is limited to:
+
+- Run the final source through guarded formatting, focused and workspace
+  compilation/tests, strict Clippy, Norito roundtrips/codec checks, and the
+  revision-4 formal syntax, invariant, and mutation corridor. Focused consensus
+  validation must include pre-Decision cache rejection, disjoint-roster
+  historical lane signing/recovery, exact-predecessor sidecar reservation under
+  outsider pressure, DA resource-cap boundaries, volatile shard reacquisition
+  followed by one durable canonical-body boundary, restart hydration, fresh
+  generated four-peer genesis startup, and nonblocking cleanup saturation.
+- Run unskipped chaos on representative networks of at least four validators,
+  covering faulty/withholding leaders and proxy tails, Set A and Set B loss,
+  asymmetric partitions, RS16 reconstruction, restart, and catch-up.
+- Pass a source-sealed 24-hour liveness gate under continuous load and scheduled
+  faults, with zero conflicting finality and zero no-progress interval that
+  remains after the network and storage assumptions recover.
+- Preserve the performance SLO: one-second block cadence, 10,000 TPS target,
+  permissioned p95/p99 finality at or below 1.5/2 seconds, and NPoS p95/p99 at
+  or below 2/3 seconds.
 
 ## First-release security remediation validation
 
@@ -221,7 +245,13 @@ The remaining work is evidence-driven and must stay in order:
   semantically validated restart may durably force-fence active predecessor
   responder state without synthesizing close prefixes. Same-roster rehydration
   preserves generation and state, and a new requester against a full
-  same-roster table rejects without mutation. The focused
+  same-roster table rejects without mutation. The responder geometry now
+  reserves the current roster plus one complete historical committee, caps
+  identities outside the live roster to that separate corridor, and retains a
+  body-eviction-safe compact carrier witness in Kura. Legacy version-2 retained
+  records remain readable and are atomically promoted from an exact local body
+  before eviction; validation must cover both that migration and the combined
+  archive/reference byte ceiling. The focused
   route and pipeline generation/epoch TLC traces are
   wired and fresh at 7/7/depth 7 and 11/10/depth 10 respectively; the
   fail-atomic capacity-overflow route/pipeline traces are fresh at 5/5/depth 5
@@ -1428,9 +1458,9 @@ testnet remains an implemented SCCP V1 runtime and SDK profile outside this
 production evidence corridor. TON, generic proof backends, arbitrary assets,
 Nexus settlement, and compatibility manifests are not part of SCCP V1.
 
-The live node admits only Sumeragi-v2 wire revision 3 and dispatches the worker
+The live node admits only Sumeragi-v2 wire revision 4 and dispatches the worker
 to the serialized v2 height runner; the legacy actor is never selected under a
-revision-3 handshake. The runner replays its context and safety WAL before opening
+revision-4 handshake. The runner replays its context and safety WAL before opening
 ingress, owns every body/fetch/validation/apply effect, and rolls over only from
 a Kura-authenticated finality receipt. Post-finality WAL/body/chunk cleanup is
 reported as an ordered typed partial-success outcome only for explicitly
@@ -25601,7 +25631,7 @@ validation path.
 **Status:** active first-release verification and release validation.
 
 The release target is the single serialized Sumeragi v2 reducer and wire
-revision 3. Permissioned and NPoS contexts use the same Prepare/Commit state
+revision 4. Permissioned and NPoS contexts use the same Prepare/Commit state
 machine, dual count-and-power quorums, durable grouped timeout certificates,
 mandatory DA, exact receipt-backed height transitions, and one frozen
 height-context identity. Mixed-version operation, rolling protocol upgrades,

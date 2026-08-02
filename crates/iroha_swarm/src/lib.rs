@@ -13,6 +13,11 @@ const BASE_PORT_API: u16 = 8080;
 /// Swarm error.
 #[derive(displaydoc::Display, Debug)]
 pub enum Error {
+    /// Peer count ({actual}) must form an exact Sumeragi v2 `3f + 1` committee (4..=31).
+    InvalidPeerCount {
+        /// Number of peers requested for the swarm manifest.
+        actual: u16,
+    },
     /// Target file path points to a directory.
     TargetFileIsADirectory,
     /// Target directory not found.
@@ -166,6 +171,12 @@ impl<'a> Swarm<'a> {
         next_consensus_mode: Option<String>,
         mode_activation_height: Option<u64>,
     ) -> Result<Self, Error> {
+        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(usize::from(count.get()))
+        {
+            return Err(Error::InvalidPeerCount {
+                actual: count.get(),
+            });
+        }
         if target_path.is_dir() {
             return Err(Error::TargetFileIsADirectory);
         }
@@ -390,9 +401,9 @@ mod tests {
     }
 
     #[test]
-    fn single_build_banner() {
+    fn minimum_committee_build_banner() {
         let output = build_as_string(
-            nonzero_ext::nonzero!(1u16),
+            nonzero_ext::nonzero!(4u16),
             false,
             Some("."),
             false,
@@ -402,13 +413,13 @@ mod tests {
         assert!(output.starts_with("# Single-line banner\n\n"));
         assert!(output.contains("build: .."));
         assert!(output.contains("pull_policy: never"));
-        assert_runtime_genesis_secret_contract(&output, 1);
+        assert_runtime_genesis_secret_contract(&output, 4);
     }
 
     #[test]
-    fn single_build_banner_nocache() {
+    fn minimum_committee_build_banner_nocache() {
         let output = build_as_string(
-            nonzero_ext::nonzero!(1u16),
+            nonzero_ext::nonzero!(4u16),
             false,
             Some("."),
             true,
@@ -417,31 +428,31 @@ mod tests {
 
         assert!(output.starts_with("# Multi-line banner 1\n# Multi-line banner 2\n\n"));
         assert!(output.contains("pull_policy: build"));
-        assert_runtime_genesis_secret_contract(&output, 1);
+        assert_runtime_genesis_secret_contract(&output, 4);
     }
 
     #[test]
     fn multiple_build_banner_nocache() {
         let output = build_as_string(
-            nonzero_ext::nonzero!(4u16),
+            nonzero_ext::nonzero!(7u16),
             false,
             Some("."),
             true,
             Some(&["Single-line banner"]),
         );
 
-        assert_eq!(output.matches("pull_policy: build").count(), 4);
+        assert_eq!(output.matches("pull_policy: build").count(), 7);
         assert!(output.contains("- irohad0"));
-        assert_runtime_genesis_secret_contract(&output, 4);
+        assert_runtime_genesis_secret_contract(&output, 7);
     }
 
     #[test]
-    fn single_pull_healthcheck() {
-        let output = build_as_string(nonzero_ext::nonzero!(1u16), true, None, false, None);
+    fn minimum_committee_pull_healthcheck() {
+        let output = build_as_string(nonzero_ext::nonzero!(4u16), true, None, false, None);
 
         assert!(output.contains("pull_policy: missing"));
         assert!(output.contains("start_period: 4s"));
-        assert_runtime_genesis_secret_contract(&output, 1);
+        assert_runtime_genesis_secret_contract(&output, 4);
     }
 
     #[test]
@@ -460,7 +471,7 @@ mod tests {
         let target_path = temp.path().join("docker-compose.yml");
 
         let output = build_with_paths(
-            nonzero_ext::nonzero!(1u16),
+            nonzero_ext::nonzero!(4u16),
             false,
             None,
             false,
@@ -508,7 +519,7 @@ mod tests {
         let target_path = temp.path().join("deployment/docker-compose.yml");
 
         let output = build_with_paths(
-            nonzero_ext::nonzero!(1u16),
+            nonzero_ext::nonzero!(4u16),
             false,
             None,
             false,
@@ -550,10 +561,20 @@ mod tests {
                 p2p_port: 2001,
                 api_port: 9001,
             },
+            PeerOverride {
+                name: "gamma".into(),
+                p2p_port: 2002,
+                api_port: 9002,
+            },
+            PeerOverride {
+                name: "delta".into(),
+                p2p_port: 2003,
+                api_port: 9003,
+            },
         ];
 
         let output = build_with_paths(
-            nonzero_ext::nonzero!(2u16),
+            nonzero_ext::nonzero!(4u16),
             false,
             None,
             false,
@@ -588,7 +609,7 @@ mod tests {
         let config_dir = temp.path().join("configs");
 
         let result = Swarm::new(
-            nonzero_ext::nonzero!(1u16),
+            nonzero_ext::nonzero!(4u16),
             Some(&[]),
             false,
             &config_dir,
@@ -618,7 +639,7 @@ mod tests {
         }];
 
         let result = Swarm::new(
-            nonzero_ext::nonzero!(2u16),
+            nonzero_ext::nonzero!(4u16),
             Some(&[]),
             false,
             &config_dir,
@@ -635,9 +656,38 @@ mod tests {
         assert!(matches!(
             result,
             Err(crate::Error::InvalidPeerOverrideCount {
-                expected: 2,
+                expected: 4,
                 actual: 1
             })
         ));
+    }
+
+    #[test]
+    fn rejects_non_committee_peer_counts() {
+        let temp = TempDir::new("invalid_peer_count");
+        let config_dir = temp.path().join("configs");
+        let target_path = temp.path().join("compose.yml");
+
+        for count in [1_u16, 2, 3, 5, 32] {
+            let result = Swarm::new(
+                std::num::NonZeroU16::new(count).expect("fixture count is non-zero"),
+                Some(&[]),
+                false,
+                &config_dir,
+                IMAGE,
+                None,
+                false,
+                &target_path,
+                None,
+                None,
+                None,
+                None,
+            );
+
+            assert!(
+                matches!(result, Err(crate::Error::InvalidPeerCount { actual }) if actual == count),
+                "peer count {count} must be rejected"
+            );
+        }
     }
 }

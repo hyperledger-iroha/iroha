@@ -1071,9 +1071,23 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.anchorHash.equals(
         "0x" + finalityAnchorHash().toLowerCase());
 
+    final Map<String, Object> current = proofRequest();
+    final Map<String, Object> currentAnchor = object(current.get("sora_finality_anchor"));
+    currentAnchor.put("protocol_version", 4);
+    current.put(
+        "sora_finality_anchor_hash", "0x" + finalityAnchorHash(currentAnchor).toLowerCase());
+    final SccpModels.Groth16ProofRequestV1 currentRequest =
+        SccpJsonParser.parseProofRequest(jsonBytes(current));
+    assert currentRequest.soraFinalityAnchor.protocolVersion == 4;
+    assert !currentRequest.soraFinalityAnchor.anchorHash.equals(
+        request.soraFinalityAnchor.anchorHash);
+
     final Map<String, Object> wrongProtocol = proofRequest();
     object(wrongProtocol.get("sora_finality_anchor")).put("protocol_version", 1);
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocol)));
+    final Map<String, Object> futureProtocol = proofRequest();
+    object(futureProtocol.get("sora_finality_anchor")).put("protocol_version", 5);
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(futureProtocol)));
     final Map<String, Object> wrongProtocolType = proofRequest();
     object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "3");
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocolType)));

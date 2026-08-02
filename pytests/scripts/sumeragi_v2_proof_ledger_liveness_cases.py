@@ -1159,6 +1159,14 @@ def test_tlc_configs_keep_an_externally_invalid_subject(tmp_path: Path) -> None:
     formal_dir = tmp_path / "formal"
     shutil.copytree(module.FORMAL_DIR, formal_dir)
     for cfg_name in module.REQUIRED_TLC_CONFIGS:
+        if cfg_name in {
+            "SumeragiV2Revision4.cfg",
+            "SumeragiV2Revision4Liveness.cfg",
+        }:
+            assert "Bodies = {b1, b2}\n" in (
+                formal_dir / cfg_name
+            ).read_text(encoding="utf-8")
+            continue
         if cfg_name == "effective_lock_acquisition.cfg":
             assert (
                 "AcquisitionSubjects = "

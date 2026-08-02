@@ -22,9 +22,10 @@ scope, ownership, cadence, evidence, and rollback expectations.
   projections stored in `javascript/iroha_js/test/fixtures/torii_responses.json`
   so the SDK mirrors the same DTO shapes as the Python/Swift suites.【javascript/iroha_js/test/toriiClient.test.js:33】
 - **Integration stack.** `scripts/run_integration.mjs` starts the canonical
-  `defaults/docker-compose.single.yml` stack and exercises the latest fixtures
-  via `/v1/pipeline`/Connect/ISO helpers, ensuring regression coverage every
-  time the fixture bundle rotates.【javascript/iroha_js/scripts/run_integration.mjs:1】
+  four-validator `defaults/docker-compose.single.yml` stack and exercises the
+  latest fixtures via `/v1/pipeline`/Connect/ISO helpers, ensuring regression
+  coverage every time the fixture bundle
+  rotates.【javascript/iroha_js/scripts/run_integration.mjs:1】
 
 ## Cadence
 

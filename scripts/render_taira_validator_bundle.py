@@ -17,7 +17,7 @@ DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
 DEFAULT_INSTALL_ROOT = Path("/etc/iroha/taira-validator")
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
-MAX_VALIDATORS = 128
+MAX_VALIDATORS = 31
 TAIRA_CHAIN_DISCRIMINANT = 369
 MIB = 1024 * 1024
 # First-release privacy admission permits one 9 MiB action per 10 MiB
@@ -1135,6 +1135,11 @@ def load_roster(
         raise ValueError(
             f"roster must define at most {MAX_VALIDATORS} validators for the "
             "Sumeragi v2 protocol"
+        )
+    if (len(validators_raw) - 1) % 3 != 0:
+        raise ValueError(
+            "roster must define an exact 3f + 1 validator committee "
+            "(4, 7, 10, ..., 31)"
         )
     if secrets is None and secrets_path is not None:
         secrets = load_secret_material(secrets_path)

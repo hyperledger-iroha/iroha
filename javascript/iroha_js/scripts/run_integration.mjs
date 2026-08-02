@@ -17,7 +17,7 @@ const JS_DIR = path.resolve(SCRIPT_DIR, "..");
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "../../..");
 const DEFAULT_COMPOSE_FILE = path.join(REPO_ROOT, "defaults", "docker-compose.single.yml");
 const DEFAULT_TORII_URL = process.env.IROHA_TORII_INTEGRATION_URL ?? "http://127.0.0.1:8080";
-const DEFAULT_SERVICE = process.env.COMPOSE_SERVICE ?? "irohad0";
+const DEFAULT_SERVICE = process.env.COMPOSE_SERVICE;
 const DEFAULT_WAIT_SECONDS = Number.parseInt(process.env.JS_TORII_WAIT_SECONDS ?? process.env.WAIT_SECONDS ?? "", 10) || 90;
 const DEFAULT_ACCOUNT_ID =
   process.env.IROHA_TORII_INTEGRATION_ACCOUNT_ID ??
@@ -95,7 +95,7 @@ async function main() {
     await runProcess("npm", ["run", "build:native"], { cwd: JS_DIR });
 
     if (shouldStart && composeCommand) {
-      await runCompose(composeCommand, ["-f", composeFile, "up", "-d", composeService]);
+      await runCompose(composeCommand, composeUpArgs(composeFile, composeService));
       composeRunning = true;
     }
 
@@ -152,6 +152,14 @@ async function main() {
       }
     }
   }
+}
+
+export function composeUpArgs(composeFile, composeService) {
+  const args = ["-f", composeFile, "up", "-d"];
+  if (composeService) {
+    args.push(composeService);
+  }
+  return args;
 }
 
 export async function validateDefaultComposeGenesisCustody(env = process.env) {

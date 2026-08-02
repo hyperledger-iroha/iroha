@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-DEFAULT_PROFILE="single-peer"
+DEFAULT_PROFILE="four-peer-bft"
 PYTHON_BIN="${MOCHI_PYTHON:-python3}"
 
 usage() {
@@ -20,7 +20,7 @@ Commands:
 
 Environment:
   MOCHI_WORKSPACE_ROOT         Workspace root for .env.local and .mochi/generated/* (default: current directory)
-  MOCHI_PROFILE                Preset profile slug (single-peer|four-peer-bft)
+  MOCHI_PROFILE                Preset profile slug (four-peer-bft; legacy single-peer also launches 4)
   MOCHI_PROFILE_SLUG           Explicit sandbox slug override when MOCHI_PROFILE is custom
   MOCHI_CARGO_TARGET_DIR       Cargo target dir for `cargo run`/auto-builds (default: <workspace>/.mochi/build-target)
   MOCHI_START_TIMEOUT_SECONDS  Seconds to wait for session.json readiness (default: 1200)
@@ -52,7 +52,7 @@ resolve_profile_slug() {
       printf '%s\n' "$profile"
       ;;
     *)
-      printf 'Unsupported MOCHI_PROFILE `%s`. Use single-peer, four-peer-bft, or set MOCHI_PROFILE_SLUG explicitly.\n' "$profile" >&2
+      printf 'Unsupported MOCHI_PROFILE `%s`. Use four-peer-bft (or legacy single-peer), or set MOCHI_PROFILE_SLUG explicitly.\n' "$profile" >&2
       return 1
       ;;
   esac

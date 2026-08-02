@@ -1583,7 +1583,7 @@ class _MockState:
             "payload_hash": _canonical_hash(0x33),
         }
         self.sumeragi_status = {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "node_fingerprint": _canonical_hash(0x11),
             "build_fingerprint": _canonical_hash(0x12),
             "config_fingerprint": _canonical_hash(0x13),

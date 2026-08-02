@@ -922,6 +922,11 @@ public sealed class SccpExactTests
             Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
         Assert.Equal("0xc4b540323ca41631f036ca1fe2c99723632d176f801ff6a6f912c597636b4f49", parsed.StatementHash);
         Assert.Equal("0x51a5a484ea19820bd95e6e9f7c9eb83e3369d2dbc2e83b0399462cde84db1c2a", parsed.RequestHash);
+        var current = SccpGroth16ProofRequestV1.Parse(Json(ProofRequestObject(4)));
+        Assert.Equal((ushort)4, current.SoraFinalityAnchor.ProtocolVersion);
+        Assert.False(current.SoraFinalityAnchor.AnchorHash.AsSpan()
+            .SequenceEqual(parsed.SoraFinalityAnchor.AnchorHash));
+        Assert.Throws<ArgumentException>(() => ProofRequestObject(5));
         var mutations = new Action<Dictionary<string, object?>>[]
         {
             value => value["allow_unready"] = true,
@@ -939,6 +944,7 @@ public sealed class SccpExactTests
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)value["semantic_proof_profile"]!)["commitments"]!)["circuit_commitment"] = Upper(0xc2, 32),
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_height"] = 0,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 1,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 5,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "3",
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = true,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["validator_set_epoch"] = 2,
@@ -1821,10 +1827,10 @@ public sealed class SccpExactTests
         ["native_message_submit_path"] = "/v1/bridge/messages",
     };
 
-    private static Dictionary<string, object?> ProofRequestObject()
+    private static Dictionary<string, object?> ProofRequestObject(ushort protocolVersion = 3)
     {
         var key = VerifyingKey();
-        var policy = OutboundPolicy();
+        var policy = OutboundPolicy(protocolVersion);
         var semantic = (Dictionary<string, object?>)policy["semantic_profile"]!;
         var anchor = (Dictionary<string, object?>)policy["sora_finality_anchor"]!;
         var bundleBytes = CanonicalBundleBytes();
@@ -2402,9 +2408,9 @@ public sealed class SccpExactTests
         return result;
     }
 
-    private static Dictionary<string, object?> OutboundPolicy()
+    private static Dictionary<string, object?> OutboundPolicy(ushort protocolVersion = 3)
     {
-        var anchor = FinalityAnchor();
+        var anchor = FinalityAnchor(protocolVersion);
         return new Dictionary<string, object?>
         {
             ["version"] = 1,
@@ -2423,14 +2429,14 @@ public sealed class SccpExactTests
         };
     }
 
-    private static Dictionary<string, object?> FinalityAnchor()
+    private static Dictionary<string, object?> FinalityAnchor(ushort protocolVersion = 3)
     {
         var chainHash = SccpV1.Keccak256(Convert.FromHexString("FC56984B2BE7431D840E21514D1883F0"));
         return new Dictionary<string, object?>
         {
             ["version"] = 1,
             ["source_network"] = Network("sora-taira"),
-            ["protocol_version"] = 3,
+            ["protocol_version"] = protocolVersion,
             ["chain_id_hash"] = Convert.ToHexString(chainHash),
             ["checkpoint_height"] = 7,
             ["checkpoint_block_hash"] = Upper(0xa1, 32),

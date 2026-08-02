@@ -1,6 +1,7 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
 REQUIRED_MODEL_MODULES = (
+    "SumeragiV2Revision4",
     "SumeragiV2",
     "SumeragiV2Quorums",
     "SumeragiV2QuorumProofs",
@@ -70,6 +71,8 @@ REQUIRED_MODEL_MODULES = (
 )
 
 REQUIRED_TLC_CONFIGS = (
+    "SumeragiV2Revision4.cfg",
+    "SumeragiV2Revision4Liveness.cfg",
     "quorum_count.cfg",
     "quorum_stake.cfg",
     "safety_count.cfg",
@@ -81,6 +84,8 @@ REQUIRED_TLC_CONFIGS = (
 )
 
 REQUIRED_TLC_CONFIG_HEADERS = {
+    "SumeragiV2Revision4.cfg": "SPECIFICATION Spec",
+    "SumeragiV2Revision4Liveness.cfg": "SPECIFICATION PostGSTSpec",
     "quorum_count.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "quorum_stake.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "safety_count.cfg": "INIT Init\nNEXT Next",

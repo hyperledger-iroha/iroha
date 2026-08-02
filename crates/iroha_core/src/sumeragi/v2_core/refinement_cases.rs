@@ -4047,6 +4047,7 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
     same_round_install.acknowledge_persist_exact = true;
     same_round_install.acknowledgement_continuation = CONTINUATION_INSTALL_TIMEOUT;
     same_round_install.install_view_unchanged = true;
+    same_round_install.volatile_before.fallback_active = true;
     same_round_install.volatile_before.timeout_vote_pools = 1;
     same_round_install.volatile_before.timeout_vote_entries = 2;
     same_round_install.volatile_after.timeout_vote_pools = 1;
@@ -4057,7 +4058,15 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
     ));
     assert!(
         accepts_facts(same_round_install),
-        "a lock-only TC install preserves the exact current timeout pool"
+        "a lock-only TC install resets fallback and preserves the exact current timeout pool"
+    );
+    let mut same_round_install_keeps_fallback = same_round_install;
+    same_round_install_keeps_fallback
+        .volatile_after
+        .fallback_active = true;
+    assert!(
+        !accepts_facts(same_round_install_keeps_fallback),
+        "a same-view TC generation upgrade cannot retain Set B fallback"
     );
     let mut full_same_round_control = same_round_install;
     full_same_round_control.volatile_after.outbound_control = 4;

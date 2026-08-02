@@ -13,7 +13,7 @@ The API mirrors the app-facing endpoints exposed by Torii:
   asynchronous top-up and redemption operations using direct structured JSON.
 * `/v1/telemetry/peers-info` for peer telemetry snapshots (connectivity,
   config, and connected peers).
-* `/v1/sumeragi/status` for fail-closed authoritative Sumeragi wire-revision-3 consensus
+* `/v1/sumeragi/status` for fail-closed authoritative Sumeragi wire-revision-4 consensus
   and canonical lane evidence.
 
 Example
@@ -3100,7 +3100,7 @@ _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
 _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
 _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
 _OFFLINE_TOP_UP_FINALITY_PROOF_VERSION = 1
-_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 3
+_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 4
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
@@ -4413,7 +4413,7 @@ class OfflineTopUpFinalityHeightContext:
 
     context_id: OfflineTopUpFinalityHeightContextId
     chain_id: str
-    protocol_version: Literal[3]
+    protocol_version: Literal[4]
     height: int
     epoch: int
     epoch_end_height: int
@@ -5339,7 +5339,7 @@ def _offline_top_up_finality_height_context(
     return OfflineTopUpFinalityHeightContext(
         context_id=context_id,
         chain_id=chain_id,
-        protocol_version=3,
+        protocol_version=4,
         height=height,
         epoch=epoch,
         epoch_end_height=epoch_end_height,
@@ -7624,7 +7624,8 @@ class PipelinePreflight:
 class _SumeragiV2StatusParser:
     """Fail-closed parser for the flattened authoritative v2 JSON projection."""
 
-    MAX_VALIDATORS = 128
+    MAX_CONSENSUS_VALIDATORS = 31
+    MAX_LANE_VALIDATORS = 128
     MAX_LANE_SETTLEMENT_COMMITMENTS = 128
     MAX_LANE_RELAY_ENVELOPES = 64
     MAX_LANE_PAYLOAD_OWNERSHIPS = 128
@@ -7669,8 +7670,8 @@ class _SumeragiV2StatusParser:
             "sumeragi.protocol_version",
             maximum=0xFFFF,
         )
-        if protocol_version != 3:
-            raise RuntimeError("sumeragi.protocol_version must equal 3")
+        if protocol_version != 4:
+            raise RuntimeError("sumeragi.protocol_version must equal 4")
 
         height = cls._unsigned(record.get("height"), "sumeragi.height")
         view = cls._unsigned(record.get("view"), "sumeragi.view")
@@ -7901,9 +7902,7 @@ class _SumeragiV2StatusParser:
             if (
                 min_signers != height_context.min_signers
                 or total_power != height_context.total_power
-                or signed_power < signer_count
-                or signed_power > total_power
-                or (height_context.mode == "permissioned" and signed_power != signer_count)
+                or signed_power != signer_count
             ):
                 raise RuntimeError(f"{quorum_context} disagrees with the frozen dual quorum")
             round_ = checked_round(quorum.get("round"), f"{quorum_context}.round")
@@ -7933,7 +7932,13 @@ class _SumeragiV2StatusParser:
 
         def vote_quorums(field: str, *, phase: str) -> List[SumeragiV2VoteQuorumStatus]:
             raw_values = cls._array(
-                record.get(field), f"{context}.{field}", maximum=cls.MAX_VALIDATORS
+                record.get(field),
+                f"{context}.{field}",
+                maximum=(
+                    cls.MAX_CONSENSUS_VALIDATORS + 1
+                    if phase == "commit"
+                    else cls.MAX_CONSENSUS_VALIDATORS
+                ),
             )
             return [
                 vote_quorum(item, f"{context}.{field}[{index}]", phase=phase)
@@ -7943,7 +7948,7 @@ class _SumeragiV2StatusParser:
         raw_timeouts = cls._array(
             record.get("timeout_quorums"),
             f"{context}.timeout_quorums",
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         timeout_quorums: List[SumeragiV2TimeoutQuorumStatus] = []
         for index, raw in enumerate(raw_timeouts):
@@ -7980,9 +7985,7 @@ class _SumeragiV2StatusParser:
             if (
                 min_signers != height_context.min_signers
                 or total_power != height_context.total_power
-                or signed_power < signer_count
-                or signed_power > total_power
-                or (height_context.mode == "permissioned" and signed_power != signer_count)
+                or signed_power != signer_count
                 or (
                     formed
                     and (
@@ -8245,6 +8248,7 @@ class _SumeragiV2StatusParser:
                     "timeout_certificate_missing",
                     "scheduler_starvation",
                     "application_pending",
+                    "successor_activation_pending",
                     "local_control_pending",
                 },
                 context=f"{context}.blocker",
@@ -8726,14 +8730,14 @@ class _SumeragiV2StatusParser:
             record.get("validator_count"),
             f"{context}.validator_count",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         quorum = cls._mapping(record.get("quorum"), f"{context}.quorum")
         min_signers = cls._unsigned(
             quorum.get("min_signers"),
             f"{context}.quorum.min_signers",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         total_power = cls._unsigned(
             quorum.get("total_power"),
@@ -8741,7 +8745,12 @@ class _SumeragiV2StatusParser:
             positive=True,
         )
         expected_min = validator_count * 2 // 3 + 1
-        if min_signers != expected_min or total_power < validator_count:
+        if (
+            validator_count < 4
+            or (validator_count - 1) % 3 != 0
+            or min_signers != expected_min
+            or total_power != validator_count
+        ):
             raise RuntimeError(
                 f"{context}.quorum is not canonical for validator_count"
             )
@@ -8751,10 +8760,6 @@ class _SumeragiV2StatusParser:
             allowed={"permissioned", "npos"},
             context=f"{context}.mode",
         )
-        if mode == "permissioned" and total_power != validator_count:
-            raise RuntimeError(
-                f"{context}.quorum.total_power must equal validator_count in permissioned mode"
-            )
         return SumeragiV2HeightContextStatus(
             epoch=cls._unsigned(record.get("epoch"), f"{context}.epoch"),
             epoch_end_height=cls._unsigned(
@@ -8774,24 +8779,26 @@ class _SumeragiV2StatusParser:
             record.get("validator_count"),
             f"{context}.validator_count",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         signer_count = cls._unsigned(record.get("signer_count"), f"{context}.signer_count")
         min_signers = cls._unsigned(
             record.get("min_signers"),
             f"{context}.min_signers",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_CONSENSUS_VALIDATORS,
         )
         signed_power = cls._unsigned(record.get("signed_power"), f"{context}.signed_power")
         total_power = cls._unsigned(
             record.get("total_power"), f"{context}.total_power", positive=True
         )
         if (
-            signer_count > validator_count
+            validator_count < 4
+            or (validator_count - 1) % 3 != 0
+            or signer_count > validator_count
             or min_signers != validator_count * 2 // 3 + 1
-            or signed_power > total_power
-            or total_power < validator_count
+            or signed_power != signer_count
+            or total_power != validator_count
             or signer_count < min_signers
             or signed_power * 3 <= total_power * 2
         ):
@@ -9227,13 +9234,13 @@ class _SumeragiV2StatusParser:
             record.get("participant_validator_count"),
             f"{context}.participant_validator_count",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_LANE_VALIDATORS,
         )
         min_quorum = cls._unsigned(
             record.get("participant_min_quorum"),
             f"{context}.participant_min_quorum",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_LANE_VALIDATORS,
         )
         expected_quorum = validator_count - (validator_count - 1) // 3
         authority_height = cls._unsigned(
@@ -9388,7 +9395,7 @@ class _SumeragiV2StatusParser:
                         record.get("validator_set"),
                         f"{context}.validator_set",
                         minimum=1,
-                        maximum=cls.MAX_VALIDATORS,
+                        maximum=cls.MAX_LANE_VALIDATORS,
                     ),
                     f"{context}.validator_set",
                 )
@@ -9551,7 +9558,7 @@ class _SumeragiV2StatusParser:
                         descriptor.get("validator_set"),
                         f"{descriptor_context}.validator_set",
                         minimum=1,
-                        maximum=cls.MAX_VALIDATORS,
+                        maximum=cls.MAX_LANE_VALIDATORS,
                     ),
                     f"{descriptor_context}.validator_set",
                 )
@@ -9562,13 +9569,13 @@ class _SumeragiV2StatusParser:
             descriptor.get("validator_count"),
             f"{descriptor_context}.validator_count",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_LANE_VALIDATORS,
         )
         min_quorum = cls._exact_unsigned(
             descriptor.get("min_quorum"),
             f"{descriptor_context}.min_quorum",
             positive=True,
-            maximum=cls.MAX_VALIDATORS,
+            maximum=cls.MAX_LANE_VALIDATORS,
         )
         expected_quorum = len(validators) - (len(validators) - 1) // 3
         validator_hash_version = cls._exact_unsigned(
@@ -10060,14 +10067,14 @@ class _SumeragiV2StatusParser:
             ]
             if (
                 not validators
-                or len(validators) > cls.MAX_VALIDATORS
+                or len(validators) > cls.MAX_LANE_VALIDATORS
                 or len(set(validators)) != len(validators)
             ):
                 raise RuntimeError(
                     f"{item_context}.lane_block_descriptor_validator_set must be non-empty and unique"
                 )
-            validator_count = cls._unsigned(record.get("lane_block_descriptor_validator_count"), f"{item_context}.lane_block_descriptor_validator_count", positive=True, maximum=cls.MAX_VALIDATORS)
-            min_quorum = cls._unsigned(record.get("lane_block_descriptor_min_quorum"), f"{item_context}.lane_block_descriptor_min_quorum", positive=True, maximum=cls.MAX_VALIDATORS)
+            validator_count = cls._unsigned(record.get("lane_block_descriptor_validator_count"), f"{item_context}.lane_block_descriptor_validator_count", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("lane_block_descriptor_min_quorum"), f"{item_context}.lane_block_descriptor_min_quorum", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
             if validator_count != len(validators) or min_quorum > validator_count:
                 raise RuntimeError(f"{item_context} descriptor quorum does not match its validator set")
             previous_height = cls._unsigned(record.get("previous_lane_block_height"), f"{item_context}.previous_lane_block_height")
@@ -10114,8 +10121,8 @@ class _SumeragiV2StatusParser:
         ):
             item_context = f"{context}[{index}]"
             record = cls._mapping(block_value, item_context)
-            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", positive=True, maximum=cls.MAX_VALIDATORS)
-            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", positive=True, maximum=cls.MAX_VALIDATORS)
+            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", positive=True, maximum=cls.MAX_LANE_VALIDATORS)
             prepare_count = cls._unsigned(record.get("prepare_qc_signer_count"), f"{item_context}.prepare_qc_signer_count", maximum=cls.MAX_U32)
             commit_count = cls._unsigned(record.get("commit_qc_signer_count"), f"{item_context}.commit_qc_signer_count", maximum=cls.MAX_U32)
             if min_quorum > validator_count or not (min_quorum <= prepare_count <= validator_count) or not (min_quorum <= commit_count <= validator_count):
@@ -10176,8 +10183,8 @@ class _SumeragiV2StatusParser:
         ):
             item_context = f"{context}[{index}]"
             record = cls._mapping(session_value, item_context)
-            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", maximum=cls.MAX_VALIDATORS)
-            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", maximum=cls.MAX_VALIDATORS)
+            validator_count = cls._unsigned(record.get("validator_count"), f"{item_context}.validator_count", maximum=cls.MAX_LANE_VALIDATORS)
+            min_quorum = cls._unsigned(record.get("min_quorum"), f"{item_context}.min_quorum", maximum=cls.MAX_LANE_VALIDATORS)
             prepare_count = cls._unsigned(record.get("prepare_vote_count"), f"{item_context}.prepare_vote_count", maximum=cls.MAX_U32)
             commit_count = cls._unsigned(record.get("commit_vote_count"), f"{item_context}.commit_vote_count", maximum=cls.MAX_U32)
             if validator_count == 0:

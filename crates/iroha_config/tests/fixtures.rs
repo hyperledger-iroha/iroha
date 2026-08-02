@@ -1898,7 +1898,7 @@ fn minimal_config_snapshot() {
                 queues: SumeragiQueues {
                     commands: 1024,
                     authenticated_non_validator_sources: 2,
-                    bodies: 518,
+                    bodies: 130,
                     body_bytes: 242221056,
                     body_source_bytes: 34603008,
                     chunks: 2048,
@@ -5238,7 +5238,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
     use iroha_config_base::read::ConfigReader;
 
-    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 3);
+    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 4);
     assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
     assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
     assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);
@@ -5252,7 +5252,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
         2
     );
-    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 518);
+    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 130);
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
         4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
@@ -5290,7 +5290,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
             .get(),
         2
     );
-    assert_eq!(cfg.sumeragi.queues.bodies.get(), 518);
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 130);
     assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 231 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),

@@ -1135,14 +1135,14 @@ genesis_profile = "invalid"
         let (_dir, path) = temp_file(
             r#"
 [supervisor]
-profile = { peer_count = 5, consensus_mode = "permissioned" }
+profile = { peer_count = 7, consensus_mode = "permissioned" }
 "#,
         );
         let config =
             parse_bundle_config(&path, &fs::read_to_string(&path).unwrap()).expect("config parsed");
         let profile = config.profile.expect("profile expected");
         assert_eq!(profile.preset, None);
-        assert_eq!(profile.topology.peer_count, 5);
+        assert_eq!(profile.topology.peer_count, 7);
         assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
         assert!(config.genesis_profile.is_none());
     }
@@ -1152,7 +1152,7 @@ profile = { peer_count = 5, consensus_mode = "permissioned" }
         let (_dir, path) = temp_file(
             r#"
 [supervisor]
-profile = { peer_count = 3, consensus_mode = "permissioned", genesis_profile = "iroha3-dev" }
+profile = { peer_count = 4, consensus_mode = "permissioned", genesis_profile = "iroha3-dev" }
 "#,
         );
         let err = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
@@ -1168,14 +1168,14 @@ profile = { peer_count = 3, consensus_mode = "permissioned", genesis_profile = "
         let (_dir, path) = temp_file(
             r#"
 [supervisor]
-profile = { peer_count = 3, consensus_mode = "npos", genesis_profile = "iroha3-dev" }
+profile = { peer_count = 7, consensus_mode = "npos", genesis_profile = "iroha3-dev" }
 "#,
         );
         let config =
             parse_bundle_config(&path, &fs::read_to_string(&path).unwrap()).expect("config parsed");
         let profile = config.profile.expect("profile expected");
         assert_eq!(profile.preset, None);
-        assert_eq!(profile.topology.peer_count, 3);
+        assert_eq!(profile.topology.peer_count, 7);
         assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Npos);
         assert_eq!(config.genesis_profile, Some(GenesisProfile::Iroha3Dev));
     }
@@ -1325,7 +1325,9 @@ data_root = "./env-data"
         let mut config = BundleConfig::default();
         config.set_workspace_root(Some(temp.path().join("workspace")));
         config.set_data_root(Some(temp.path().join("data")));
-        config.set_profile(Some(NetworkProfile::from_preset(ProfilePreset::SinglePeer)));
+        config.set_profile(Some(NetworkProfile::from_preset(
+            ProfilePreset::FourPeerBft,
+        )));
         config.set_chain_id(Some("local-test".to_owned()));
         config.set_build_binaries(Some(true));
         config.set_readiness_smoke(Some(false));
@@ -1403,7 +1405,7 @@ data_root = "./env-data"
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join("config/local.toml");
         let mut config = BundleConfig::default();
-        let profile = NetworkProfile::custom(3, SumeragiConsensusMode::Npos).expect("profile");
+        let profile = NetworkProfile::custom(7, SumeragiConsensusMode::Npos).expect("profile");
         config.set_profile(Some(profile));
         config.set_genesis_profile(Some(GenesisProfile::Iroha3Dev));
         config.write_to_path(&path).expect("write bundle config");

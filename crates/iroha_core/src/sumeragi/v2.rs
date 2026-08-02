@@ -3683,21 +3683,7 @@ fn commit_qc_status(
     certificate.validate(context)?;
     let signer_count = u32::try_from(certificate.signers.len())
         .map_err(|_| wire::ValidationError::TooManySigners)?;
-    let signed_power = certificate.signers.iter().try_fold(
-        0_u64,
-        |total, signer| -> Result<u64, AdapterError> {
-            let index = usize::try_from(*signer)
-                .map_err(|_| AdapterError::ValidatorIndexOutOfRange(*signer))?;
-            let power = context
-                .roster
-                .get(index)
-                .ok_or(AdapterError::ValidatorIndexOutOfRange(*signer))?
-                .power;
-            total
-                .checked_add(power)
-                .ok_or_else(|| wire::ValidationError::VotingPowerOverflow.into())
-        },
-    )?;
+    let signed_power = u64::from(signer_count);
     let validator_count =
         u32::try_from(context.roster.len()).map_err(|_| wire::ValidationError::RosterTooLarge)?;
     Ok(wire::SumeragiV2CommitQcStatus {
@@ -11232,11 +11218,11 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: 1024 * 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 512 * 1024,
                 max_chunk_count: 1024,
             },
             leader_seed: [0xA5; 32],
@@ -11439,11 +11425,11 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: 1024 * 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 512 * 1024,
                 max_chunk_count: 1024,
             },
             leader_seed: [0x5A; 32],
@@ -11949,14 +11935,9 @@ mod tests {
     }
 
     #[test]
-    fn commit_qc_status_reports_exact_frozen_signer_power() {
+    fn commit_qc_status_reports_equal_vote_projection_in_npos_mode() {
         let mut context = context();
         context.mode = wire::ConsensusMode::Npos;
-        for (index, validator) in context.roster.iter_mut().enumerate() {
-            validator.power = u64::try_from(index + 1).expect("fixture power fits u64");
-        }
-        context.quorum =
-            wire::DualQuorum::from_roster(&context.roster).expect("weighted fixture quorum");
         let certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
                 context_id: context.id(),
@@ -11981,8 +11962,8 @@ mod tests {
         assert_eq!(summary.validator_count, 4);
         assert_eq!(summary.signer_count, 3);
         assert_eq!(summary.min_signers, 3);
-        assert_eq!(summary.signed_power, 8);
-        assert_eq!(summary.total_power, 10);
+        assert_eq!(summary.signed_power, 3);
+        assert_eq!(summary.total_power, 4);
     }
 
     #[test]

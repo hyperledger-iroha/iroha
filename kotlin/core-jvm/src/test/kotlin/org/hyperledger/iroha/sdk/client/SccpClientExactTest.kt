@@ -1197,8 +1197,20 @@ class SccpClientExactTest {
         )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
 
+        val current = proofRequest()
+        @Suppress("UNCHECKED_CAST")
+        val currentAnchor = current["sora_finality_anchor"] as MutableMap<String, Any?>
+        currentAnchor["protocol_version"] = 4
+        current["sora_finality_anchor_hash"] = "0x${finalityAnchorHash(4).lowercase()}"
+        val currentRequest = SccpJsonParser.parseProofRequest(jsonBytes(current))
+        assertEquals(4, currentRequest.soraFinalityAnchor.protocolVersion)
+        assertTrue(
+            currentRequest.soraFinalityAnchor.anchorHash != request.soraFinalityAnchor.anchorHash,
+        )
+
         val invalidFinalityAnchors: List<(MutableMap<String, Any?>) -> Unit> = listOf(
             { it["protocol_version"] = 1 },
+            { it["protocol_version"] = 5 },
             { it["protocol_version"] = "3" },
             { it["protocol_version"] = 3.0 },
             { it["protocol_version"] = true },
@@ -2057,11 +2069,11 @@ class SccpClientExactTest {
             publicSignalSchemaHash().hexToBytes(),
     ).toUpperHex()
 
-    private fun finalityAnchorHash(): String {
+    private fun finalityAnchorHash(protocolVersion: Int = 3): String {
         val canonical = ByteArrayOutputStream().also { output ->
             output.write(1)
             output.write(1)
-            writeU16(output, 3)
+            writeU16(output, protocolVersion)
             output.write(tairaChainIdHash().hexToBytes())
             writeU64(output, 7)
             output.write(upper(0xa1, 32).hexToBytes())

@@ -1813,13 +1813,14 @@ python/iroha_python/scripts/run_integration.sh
 ```
 
 Harness options are available as CLI flags (see `--help`). Common environment
-variables:
+variables follow. The compatibility-named `docker-compose.single.yml` fixture
+starts a four-validator committee by default.
 
 | Variable | Purpose |
 |----------|---------|
 | `START_TORII` | Set to `0` to reuse an existing node instead of starting docker compose. |
 | `COMPOSE_FILE` | Override the compose file (defaults to `defaults/docker-compose.single.yml`). |
-| `COMPOSE_SERVICE` | Service name to start (defaults to `irohad0`). |
+| `COMPOSE_SERVICE` | Optional service name to start instead of the default full four-validator stack. |
 | `IROHA_TORII_URL` | Torii URL used by the tests (defaults to `http://127.0.0.1:8080`). |
 | `IROHA_GENESIS_PUBLIC_KEY_FILE` | Runtime genesis verifier-key file required by the default Compose stack. |
 | `IROHA_GENESIS_PRIVATE_KEY_FILE` | Owner-held runtime genesis signing-key file required by the default Compose stack. |

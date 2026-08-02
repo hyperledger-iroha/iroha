@@ -51,7 +51,7 @@ fn fixture() -> Fixture {
     keys.sort_by(|left, right| {
         PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
     });
-    let powers = [40, 30, 20, 10];
+    let powers = [1, 1, 1, 1];
     let roster = keys
         .iter()
         .zip(powers)
@@ -95,12 +95,12 @@ fn fixture() -> Fixture {
         nexus_amx_context_hash: Hash::new(b"bridge core v2 context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
+            encoding: PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 1024,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 4096,
-            max_chunk_count: 4,
+            max_chunk_count: 8,
         },
         leader_seed: [0x42; 32],
     };

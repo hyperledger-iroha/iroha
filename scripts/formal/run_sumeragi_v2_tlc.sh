@@ -104,6 +104,8 @@ allowed_configs=(
   safety_stake
   chain_epoch
   liveness
+  revision4_safety
+  revision4_liveness
   effective_lock_acquisition
   resume_locked_commit_witness
   multilane_autoscale_lifecycle_fixed
@@ -136,7 +138,11 @@ ln -s "${TLAPM_STDLIB}/Functions.tla" "${tlapm_compat_dir}/Functions.tla"
 ln -s "${TLAPM_STDLIB}/Folds.tla" "${tlapm_compat_dir}/Folds.tla"
 seed=424242
 for config in "${configs[@]}"; do
-  cfg="${config}.cfg"
+  case "$config" in
+    revision4_safety) cfg="SumeragiV2Revision4.cfg" ;;
+    revision4_liveness) cfg="SumeragiV2Revision4Liveness.cfg" ;;
+    *) cfg="${config}.cfg" ;;
+  esac
   metadir="${run_dir}/${config}"
   tlc_log="${run_dir}/${config}.log"
   mkdir -p "$metadir"
@@ -174,6 +180,9 @@ for config in "${configs[@]}"; do
       liveness)
         "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \
           -simulate "num=${TRACE_COUNT}" SumeragiV2AsyncNetwork.tla
+        ;;
+      revision4_safety|revision4_liveness)
+        "${common[@]}" SumeragiV2Revision4.tla
         ;;
       effective_lock_acquisition)
         "${common[@]}" SumeragiV2EffectiveLockAcquisition.tla

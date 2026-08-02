@@ -1383,7 +1383,7 @@ pub(crate) trait V2EffectServices {
         decision_round: wire::ConsensusRound,
         decision_subject: wire::BlockSubject,
     ) -> Result<(), Self::Error>;
-    /// Broadcast one canonical v2 consensus envelope to every voting validator.
+    /// Route one canonical v2 consensus envelope through the frozen committee.
     fn broadcast_consensus(&mut self, message: wire::ConsensusMessageV2)
     -> Result<(), Self::Error>;
     /// Sign a certified-body request with the requester's transport identity.
@@ -1427,7 +1427,7 @@ pub(crate) trait V2EffectServices {
         task: &BodyFetchTask,
     ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error>;
     /// Hand one structurally, cryptographically, and outer-peer authenticated
-    /// chunk to the persistent chunk/reconstruction adapter.
+    /// chunk to the bounded in-memory reconstruction adapter.
     fn accept_authenticated_chunk(
         &mut self,
         task: &BodyFetchTask,
@@ -1522,7 +1522,7 @@ pub(crate) enum CertifiedBodyFetchCompletionDisposition {
     Retryable,
 }
 
-/// Result of handing an authenticated chunk to the persistent reconstruction
+/// Result of handing an authenticated chunk to the bounded reconstruction
 /// service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthenticatedChunkDisposition {
@@ -1606,11 +1606,6 @@ impl PostFinalityCleanupOutcome {
             target,
             reason: reason.into(),
         });
-    }
-
-    /// Append a later cleanup stage while preserving execution order.
-    pub(crate) fn append(&mut self, mut later: Self) {
-        self.warnings.append(&mut later.warnings);
     }
 
     /// Borrow all retained cleanup diagnostics in execution order.
@@ -11636,12 +11631,12 @@ mod tests {
                 nexus_amx_context_hash: Hash::new(b"nexus amx context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::Plain,
+                    encoding: wire::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1_048_576,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 1_048_576,
-                    max_chunk_count: 1,
+                    max_chunk_count: 2,
                 },
                 leader_seed: [0x33; 32],
             };
@@ -11779,17 +11774,17 @@ mod tests {
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 snapshot_bootstrap: None,
-                quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
+                quorum: wire::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"production transport nexus/amx context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::Plain,
+                    encoding: wire::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1_048_576,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 1_048_576,
-                    max_chunk_count: 1,
+                    max_chunk_count: 2,
                 },
                 leader_seed: [0x62; 32],
             };
@@ -23090,12 +23085,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"serialized rebind nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1_048_576,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 1_048_576,
-                max_chunk_count: 1,
+                max_chunk_count: 2,
             },
             leader_seed: [0x44; 32],
         };

@@ -20,7 +20,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 /** Canonical compact-length bare-Norito models for the Sumeragi v2 wire protocol. */
 public final class SumeragiV2Wire {
   /** Live Sumeragi protocol revision. */
-  public static final int PROTOCOL_VERSION = 3;
+  public static final int PROTOCOL_VERSION = 4;
   /** Maximum number of real Kagemusha top-up leaves committed by one block. */
   public static final long MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK = 16;
   private static final byte[] KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =

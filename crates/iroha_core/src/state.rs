@@ -12726,11 +12726,77 @@ where
 /// Stake-snapshot trait: provides an epoch-specific validator roster snapshot.
 ///
 /// Implementations should return the ordered validator `PeerIds` that form the roster
-/// for the given `epoch`. The exact policy is a WSV concern (e.g., stake-weighted
-/// selection and sorting). Callers must translate `PeerIds` into `ValidatorIndex` space.
+/// for the given `epoch`. Stake controls eligibility; deterministic finalized
+/// randomness selects committee seats and every selected peer receives one
+/// consensus vote. Callers translate `PeerIds` into `ValidatorIndex` space.
 pub trait StakeSnapshot {
     /// Return ordered validator `PeerIds` for the given `epoch`, or `None` if unavailable.
     fn epoch_validator_peer_ids(&self, epoch: u64) -> Option<Vec<PeerId>>;
+}
+
+fn bounded_global_committee_size(
+    world: &impl WorldReadOnly,
+    available_candidates: usize,
+) -> Option<usize> {
+    let configured = world
+        .sumeragi_npos_parameters()
+        .and_then(|params| usize::try_from(params.max_validators()).ok())
+        .unwrap_or(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT);
+    let capped = available_candidates
+        .min(configured)
+        .min(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT);
+    if capped < iroha_data_model::block::consensus_v2::MIN_VALIDATORS_PER_HEIGHT {
+        return None;
+    }
+    let committee_size = capped - (capped - 1) % 3;
+    iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
+        .then_some(committee_size)
+}
+
+fn npos_epoch_selection_seed(world: &impl WorldReadOnly, epoch: u64) -> [u8; 32] {
+    world.vrf_epochs().get(&epoch).map_or_else(
+        || {
+            world
+                .sumeragi_npos_parameters()
+                .map_or([0; 32], |params| params.epoch_seed)
+        },
+        |record| record.seed,
+    )
+}
+
+fn npos_peer_prf_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
+    let epoch_bytes = epoch.to_le_bytes();
+    let peer_bytes = peer.encode();
+    Hash::new_from_chunks(&[
+        b"sumeragi-v2:npos-committee-seat:v1\0",
+        seed.as_slice(),
+        epoch_bytes.as_slice(),
+        peer_bytes.as_slice(),
+    ])
+}
+
+fn select_prf_committee(
+    world: &impl WorldReadOnly,
+    epoch: u64,
+    mut candidates: Vec<PeerId>,
+) -> Option<Vec<PeerId>> {
+    candidates.sort();
+    candidates.dedup();
+    let committee_size = bounded_global_committee_size(world, candidates.len())?;
+    let seed = npos_epoch_selection_seed(world, epoch);
+    let mut scored = candidates
+        .into_iter()
+        .map(|peer| (npos_peer_prf_score(seed, epoch, &peer), peer))
+        .collect::<Vec<_>>();
+    scored.sort_by(|(left_score, left_peer), (right_score, right_peer)| {
+        left_score
+            .cmp(right_score)
+            .then_with(|| left_peer.cmp(right_peer))
+    });
+    scored.truncate(committee_size);
+    let mut committee = scored.into_iter().map(|(_, peer)| peer).collect::<Vec<_>>();
+    committee.sort();
+    Some(committee)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -12881,11 +12947,11 @@ where
                 Some(peer_id)
             })
             .collect();
-        if !ids.is_empty() {
-            return Some(ids);
+        if let Some(committee) = select_prf_committee(world, epoch, ids) {
+            return Some(committee);
         }
     }
-    let mut candidates: Vec<(PeerId, Quantity, AccountId)> = world
+    let mut candidates: Vec<PeerId> = world
         .public_lane_validators()
         .iter()
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
@@ -12919,31 +12985,15 @@ where
             if enforce_topology_membership && !topology_peers.contains(&pid) {
                 return None;
             }
-            Some((pid, record.total_stake.clone(), record.validator.clone()))
+            Some(pid)
         })
         .collect();
 
-    candidates.retain(|(pid, _, _)| peer_has_live_consensus_key(world, pid, block_height));
+    candidates.retain(|peer| peer_has_live_consensus_key(world, peer, block_height));
+    candidates.sort();
+    candidates.dedup();
 
-    // One peer may be registered on several active lanes. Canonicalize those
-    // rows before ranking so the peer occupies one roster slot and receives
-    // its maximum eligible stake. Equal-stake rows use the smallest account
-    // identity as a deterministic secondary ranking key.
-    let mut candidates_by_peer: BTreeMap<PeerId, (Quantity, AccountId)> = BTreeMap::new();
-    for (peer, stake, account) in candidates {
-        let should_replace =
-            candidates_by_peer
-                .get(&peer)
-                .is_none_or(|(current_stake, current_account)| {
-                    stake > *current_stake
-                        || (stake == *current_stake && account < *current_account)
-                });
-        if should_replace {
-            candidates_by_peer.insert(peer, (stake, account));
-        }
-    }
-
-    if candidates_by_peer.is_empty() {
+    if candidates.is_empty() {
         let peers: Vec<PeerId> = world
             .peers()
             .iter()
@@ -12951,29 +13001,10 @@ where
             .filter(|peer| !enforce_topology_membership || topology_peers.contains(peer))
             .cloned()
             .collect();
-        return if peers.is_empty() { None } else { Some(peers) };
+        return select_prf_committee(world, epoch, peers);
     }
 
-    let mut candidates: Vec<(PeerId, Quantity, AccountId)> = candidates_by_peer
-        .into_iter()
-        .map(|(peer, (stake, account))| (peer, stake, account))
-        .collect();
-    candidates.sort_by(|lhs, rhs| {
-        rhs.1
-            .cmp(&lhs.1)
-            .then_with(|| lhs.2.cmp(&rhs.2))
-            .then_with(|| lhs.0.cmp(&rhs.0))
-    });
-
-    let max = usize::try_from(nexus.staking.max_validators.get())
-        .unwrap_or(usize::MAX)
-        .min(candidates.len());
-    let peers: Vec<PeerId> = candidates
-        .into_iter()
-        .take(max)
-        .map(|(peer, _, _)| peer)
-        .collect();
-    if peers.is_empty() { None } else { Some(peers) }
+    select_prf_committee(world, epoch, candidates)
 }
 
 impl StakeSnapshot for StateView<'_> {
@@ -13038,6 +13069,35 @@ mod stake_snapshot_tests {
             by_pk.push(record.id.clone());
             world_block.consensus_keys_by_pk.insert(pk, by_pk);
         }
+    }
+
+    fn seed_active_public_lane_validator(
+        world_block: &mut WorldBlock<'_>,
+        keypair: &KeyPair,
+        lane_id: LaneId,
+        stake: u32,
+    ) -> PeerId {
+        let peer = PeerId::from(keypair.public_key().clone());
+        let validator = DMAccountId::of(keypair.public_key().clone());
+        let _ = world_block.peers.get_mut().push(peer.clone());
+        seed_consensus_key(world_block, &peer, ConsensusKeyStatus::Active, 0);
+        world_block.public_lane_validators.insert(
+            (lane_id, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id,
+                validator: validator.clone(),
+                peer_id: peer.clone(),
+                stake_account: validator,
+                total_stake: iroha_primitives::numeric::Quantity::from(stake),
+                self_stake: iroha_primitives::numeric::Quantity::from(stake),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        peer
     }
 
     #[test]
@@ -13773,37 +13833,23 @@ mod stake_snapshot_tests {
             nexus.lane_config = DerivedLaneConfig::from_catalog(&stale_geometry_catalog);
         }
 
-        let live_kp = crate::state::checked_keypair();
+        let live_keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let stale_kp = crate::state::checked_keypair();
-        let live_peer = PeerId::from(live_kp.public_key().clone());
         let stale_peer = PeerId::from(stale_kp.public_key().clone());
-        let live_validator = DMAccountId::of(live_kp.public_key().clone());
         let stale_validator = DMAccountId::of(stale_kp.public_key().clone());
 
         let mut wb = state.world.block();
-        {
-            let peers = wb.peers.get_mut();
-            let _ = peers.push(live_peer.clone());
-            let _ = peers.push(stale_peer.clone());
+        let mut live_peers = Vec::with_capacity(live_keypairs.len());
+        for keypair in &live_keypairs {
+            live_peers.push(seed_active_public_lane_validator(
+                &mut wb,
+                keypair,
+                LaneId::SINGLE,
+                10,
+            ));
         }
-        seed_consensus_key(&mut wb, &live_peer, ConsensusKeyStatus::Active, 0);
+        let _ = wb.peers.get_mut().push(stale_peer.clone());
         seed_consensus_key(&mut wb, &stale_peer, ConsensusKeyStatus::Active, 0);
-        wb.public_lane_validators.insert(
-            (LaneId::SINGLE, live_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: live_validator.clone(),
-                peer_id: live_peer.clone(),
-                stake_account: live_validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
         wb.public_lane_validators.insert(
             (stale_lane, stale_validator.clone()),
             PublicLaneValidatorRecord {
@@ -13825,9 +13871,9 @@ mod stake_snapshot_tests {
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        live_peers.sort();
         assert_eq!(
-            roster,
-            vec![live_peer],
+            roster, live_peers,
             "stale derived geometry must not let a removed catalog lane influence NPoS roster selection"
         );
         assert!(
@@ -13991,14 +14037,27 @@ mod stake_snapshot_tests {
     }
 
     #[test]
+    fn npos_committee_prf_score_binds_seed_epoch_and_peer() {
+        let first = PeerId::from(crate::state::checked_keypair().public_key().clone());
+        let second = PeerId::from(crate::state::checked_keypair().public_key().clone());
+        let seed = [0x5A; 32];
+        let score = npos_peer_prf_score(seed, 7, &first);
+
+        assert_eq!(score, npos_peer_prf_score(seed, 7, &first));
+        assert_ne!(score, npos_peer_prf_score([0xA5; 32], 7, &first));
+        assert_ne!(score, npos_peer_prf_score(seed, 8, &first));
+        assert_ne!(score, npos_peer_prf_score(seed, 7, &second));
+    }
+
+    #[test]
     fn council_members_map_to_peer_ids_in_epoch_roster() {
         // Build a minimal state with blank Kura/query
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
 
-        // Generate three peer keypairs and set them as world peers
-        let kp: Vec<KeyPair> = (0..3).map(|_| crate::state::checked_keypair()).collect();
+        // Generate one exact 3f+1 committee and set it as the world peers.
+        let kp: Vec<KeyPair> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
         let peers_vec: UniqueVec<PeerId> = {
             let mut uv = UniqueVec::new();
@@ -14012,15 +14071,18 @@ mod stake_snapshot_tests {
         for peer in peers {
             seed_consensus_key(&mut wb, &peer, ConsensusKeyStatus::Active, 0);
         }
-        // Build a council state with member accounts whose signatories match peers [1,0]
+        // Build a council state whose account signatories map to the same peers
+        // in a deliberately different order.
         let members = vec![
             DMAccountId::of(kp[1].public_key().clone()),
             DMAccountId::of(kp[0].public_key().clone()),
+            DMAccountId::of(kp[3].public_key().clone()),
+            DMAccountId::of(kp[2].public_key().clone()),
         ];
         let council = CouncilState {
             epoch: 0,
             members,
-            candidate_count: 3,
+            candidate_count: 4,
             ..CouncilState::default()
         };
         wb.council.insert(0, council);
@@ -14032,9 +14094,12 @@ mod stake_snapshot_tests {
         let fast = state
             .epoch_validator_peer_ids_fast(0)
             .expect("fast epoch roster should exist");
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0], PeerId::from(kp[1].public_key().clone()));
-        assert_eq!(out[1], PeerId::from(kp[0].public_key().clone()));
+        let mut expected: Vec<_> = kp
+            .iter()
+            .map(|keypair| PeerId::from(keypair.public_key().clone()))
+            .collect();
+        expected.sort();
+        assert_eq!(out, expected);
         assert_eq!(fast, out);
     }
 
@@ -14067,9 +14132,10 @@ mod stake_snapshot_tests {
         );
         world.commit();
 
-        let roster = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0)
-            .expect("single-key council member remains eligible");
-        assert_eq!(roster, vec![peer]);
+        assert!(
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0).is_none(),
+            "ignoring the multisig member leaves an underfilled committee"
+        );
     }
 
     #[test]
@@ -14083,29 +14149,33 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 1_u64.into();
         }
 
-        let old_account_key = crate::state::checked_keypair();
-        let new_account_key = crate::state::checked_keypair();
-        let old_peer_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let new_peer_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let old_account = DMAccountId::of(old_account_key.public_key().clone());
-        let new_account = DMAccountId::of(new_account_key.public_key().clone());
-        let old_peer = PeerId::from(old_peer_key.public_key().clone());
-        let new_peer = PeerId::from(new_peer_key.public_key().clone());
-        assert_ne!(old_peer.public_key(), old_account.expect_single_signatory());
-        assert_ne!(new_peer.public_key(), new_account.expect_single_signatory());
+        let account_keys: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
+        let peer_keys: Vec<_> = (0..4)
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let accounts: Vec<_> = account_keys
+            .iter()
+            .map(|keypair| DMAccountId::of(keypair.public_key().clone()))
+            .collect();
+        let peers: Vec<_> = peer_keys
+            .iter()
+            .map(|keypair| PeerId::from(keypair.public_key().clone()))
+            .collect();
+        for (account, peer) in accounts.iter().zip(&peers) {
+            assert_ne!(peer.public_key(), account.expect_single_signatory());
+        }
 
         let mut wb = state.world.block();
         {
-            let peers = wb.peers.get_mut();
-            let _ = peers.push(old_peer.clone());
-            let _ = peers.push(new_peer.clone());
+            let world_peers = wb.peers.get_mut();
+            for peer in &peers {
+                let _ = world_peers.push(peer.clone());
+            }
         }
-        seed_consensus_key(&mut wb, &old_peer, ConsensusKeyStatus::Active, 0);
-        seed_consensus_key(&mut wb, &new_peer, ConsensusKeyStatus::Active, 0);
-        for (account, peer) in [
-            (old_account.clone(), old_peer.clone()),
-            (new_account.clone(), new_peer.clone()),
-        ] {
+        for peer in &peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
+        for (account, peer) in accounts.iter().cloned().zip(peers.iter().cloned()) {
             wb.public_lane_validators.insert(
                 (LaneId::SINGLE, account.clone()),
                 PublicLaneValidatorRecord {
@@ -14127,8 +14197,8 @@ mod stake_snapshot_tests {
             0,
             CouncilState {
                 epoch: 0,
-                members: vec![old_account, new_account],
-                candidate_count: 2,
+                members: accounts,
+                candidate_count: 4,
                 ..CouncilState::default()
             },
         );
@@ -14136,16 +14206,17 @@ mod stake_snapshot_tests {
 
         {
             let mut topo_block = state.commit_topology.block();
-            topo_block.mutate_vec(|peers| *peers = vec![old_peer.clone()]);
+            topo_block.mutate_vec(|topology| *topology = vec![peers[0].clone()]);
             topo_block.commit();
         }
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        let mut expected = peers;
+        expected.sort();
         assert_eq!(
-            roster,
-            vec![old_peer, new_peer],
+            roster, expected,
             "the newly widened explicit peer binding must not be dropped from the council roster"
         );
     }
@@ -14162,6 +14233,8 @@ mod stake_snapshot_tests {
 
         let active_kp = crate::state::checked_keypair();
         let jailed_kp = crate::state::checked_keypair();
+        let extra_active_keypairs: Vec<_> =
+            (0..3).map(|_| crate::state::checked_keypair()).collect();
         let active_validator = DMAccountId::of(active_kp.public_key().clone());
         let jailed_validator = DMAccountId::of(jailed_kp.public_key().clone());
 
@@ -14207,12 +14280,16 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_active_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).unwrap();
-        assert_eq!(roster.len(), 1);
-        assert_eq!(roster[0], PeerId::from(active_kp.public_key().clone()));
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&PeerId::from(active_kp.public_key().clone())));
+        assert!(!roster.contains(&PeerId::from(jailed_kp.public_key().clone())));
     }
 
     #[test]
@@ -14227,6 +14304,8 @@ mod stake_snapshot_tests {
 
         let active_kp = crate::state::checked_keypair();
         let stale_kp = crate::state::checked_keypair();
+        let extra_active_keypairs: Vec<_> =
+            (0..3).map(|_| crate::state::checked_keypair()).collect();
         let active_validator = DMAccountId::of(active_kp.public_key().clone());
         let stale_validator = DMAccountId::of(stale_kp.public_key().clone());
         let active_peer = PeerId::from(active_kp.public_key().clone());
@@ -14273,12 +14352,16 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_active_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster, vec![active_peer]);
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&active_peer));
         assert!(
             !roster.contains(&stale_peer),
             "active validator records for lanes absent from active Nexus config must be ignored"
@@ -14297,6 +14380,8 @@ mod stake_snapshot_tests {
 
         let present_kp = crate::state::checked_keypair();
         let missing_kp = crate::state::checked_keypair();
+        let extra_present_keypairs: Vec<_> =
+            (0..3).map(|_| crate::state::checked_keypair()).collect();
         let present_validator = DMAccountId::of(present_kp.public_key().clone());
         let missing_validator = DMAccountId::of(missing_kp.public_key().clone());
 
@@ -14341,13 +14426,17 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_present_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster.len(), 1);
-        assert_eq!(roster[0], PeerId::from(present_kp.public_key().clone()));
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&PeerId::from(present_kp.public_key().clone())));
+        assert!(!roster.contains(&PeerId::from(missing_kp.public_key().clone())));
     }
 
     #[test]
@@ -14360,7 +14449,7 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 100_u64.into();
         }
 
-        let keypairs: Vec<KeyPair> = (0..3).map(|_| crate::state::checked_keypair()).collect();
+        let keypairs: Vec<KeyPair> = (0..4).map(|_| crate::state::checked_keypair()).collect();
 
         let mut wb = state.world.block();
         {
@@ -14441,7 +14530,7 @@ mod stake_snapshot_tests {
         }
 
         let public_keypairs: Vec<KeyPair> =
-            (0..2).map(|_| crate::state::checked_keypair()).collect();
+            (0..4).map(|_| crate::state::checked_keypair()).collect();
         let restricted_keypairs: Vec<KeyPair> =
             (0..2).map(|_| crate::state::checked_keypair()).collect();
 
@@ -14524,7 +14613,7 @@ mod stake_snapshot_tests {
     }
 
     #[test]
-    fn multi_lane_duplicate_peer_uses_maximum_stake_once() {
+    fn multi_lane_duplicate_peer_occupies_one_equal_vote_committee_seat() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
@@ -14549,11 +14638,12 @@ mod stake_snapshot_tests {
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
             nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.max_validators = NonZeroU32::new(3).expect("nonzero validator limit");
+            nexus.staking.max_validators = NonZeroU32::new(4).expect("nonzero validator limit");
         }
 
         let peer_a_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer_b_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let extra_peer_keys: Vec<_> = (0..2).map(|_| crate::state::checked_keypair()).collect();
         let peer_a = PeerId::from(peer_a_key.public_key().clone());
         let peer_b = PeerId::from(peer_b_key.public_key().clone());
         let account_a_high = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
@@ -14616,16 +14706,23 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        let extra_peers: Vec<_> = extra_peer_keys
+            .iter()
+            .map(|keypair| seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 3))
+            .collect();
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        assert_eq!(roster.len(), 4);
         assert_eq!(
-            roster,
-            vec![peer_a.clone(), peer_b.clone()],
-            "peer A must rank by its maximum stake and occupy exactly one roster slot"
+            roster.iter().filter(|peer| *peer == &peer_a).count(),
+            1,
+            "peer A must occupy exactly one roster slot despite being registered on two lanes"
         );
+        assert!(roster.contains(&peer_b));
+        assert!(extra_peers.iter().all(|peer| roster.contains(peer)));
 
         let active_lane_ids = BTreeSet::from([LaneId::SINGLE, secondary_lane]);
         let powers = crate::sumeragi::stake_snapshot::strict_v2_voting_roster(
@@ -14634,20 +14731,10 @@ mod stake_snapshot_tests {
             Some(&active_lane_ids),
         )
         .expect("strict voting powers");
-        assert_eq!(powers.len(), 2);
-        assert_eq!(
-            powers
-                .iter()
-                .find(|entry| entry.validator == peer_a)
-                .map(|entry| entry.power),
-            Some(10)
-        );
-        assert_eq!(
-            powers
-                .iter()
-                .find(|entry| entry.validator == peer_b)
-                .map(|entry| entry.power),
-            Some(5)
+        assert_eq!(powers.len(), 4);
+        assert!(
+            powers.iter().all(|entry| entry.power == 1),
+            "stake elects committee members but every selected validator has one consensus vote"
         );
     }
 
@@ -14663,6 +14750,7 @@ mod stake_snapshot_tests {
 
         let live_kp = crate::state::checked_keypair();
         let expired_kp = crate::state::checked_keypair();
+        let extra_live_keypairs: Vec<_> = (0..3).map(|_| crate::state::checked_keypair()).collect();
         let live_validator = DMAccountId::of(live_kp.public_key().clone());
         let expired_validator = DMAccountId::of(expired_kp.public_key().clone());
 
@@ -14725,13 +14813,17 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_live_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster.len(), 1);
-        assert_eq!(roster[0], live_peer);
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&live_peer));
+        assert!(!roster.contains(&expired_peer));
     }
 
     #[test]
@@ -14812,6 +14904,8 @@ mod stake_snapshot_tests {
 
         let stake_kp = crate::state::checked_keypair();
         let admin_kp = crate::state::checked_keypair();
+        let extra_stake_keypairs: Vec<_> =
+            (0..3).map(|_| crate::state::checked_keypair()).collect();
         let stake_validator = DMAccountId::of(stake_kp.public_key().clone());
         let admin_validator = DMAccountId::of(admin_kp.public_key().clone());
 
@@ -14858,12 +14952,17 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_stake_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster, vec![stake_peer]);
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&stake_peer));
+        assert!(!roster.contains(&admin_peer));
     }
 
     #[test]
@@ -14890,17 +14989,28 @@ mod stake_snapshot_tests {
 
         let kp_a = crate::state::checked_keypair();
         let kp_b = crate::state::checked_keypair();
+        let extra_keypairs: Vec<_> = (0..2).map(|_| crate::state::checked_keypair()).collect();
         let peer_a = PeerId::from(kp_a.public_key().clone());
         let peer_b = PeerId::from(kp_b.public_key().clone());
+        let extra_peers: Vec<_> = extra_keypairs
+            .iter()
+            .map(|keypair| PeerId::from(keypair.public_key().clone()))
+            .collect();
 
         let mut wb = state.world.block();
         {
             let peers = wb.peers.get_mut();
             let _ = peers.push(peer_a.clone());
             let _ = peers.push(peer_b.clone());
+            for peer in &extra_peers {
+                let _ = peers.push(peer.clone());
+            }
         }
         seed_consensus_key(&mut wb, &peer_a, ConsensusKeyStatus::Active, 0);
         seed_consensus_key(&mut wb, &peer_b, ConsensusKeyStatus::Active, 0);
+        for peer in &extra_peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
         // Stray validator entry should not affect admin-managed rosters.
         let validator_id = DMAccountId::of(kp_a.public_key().clone());
         wb.public_lane_validators.insert(
@@ -14924,7 +15034,10 @@ mod stake_snapshot_tests {
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster, vec![peer_a, peer_b]);
+        let mut expected = vec![peer_a, peer_b];
+        expected.extend(extra_peers);
+        expected.sort();
+        assert_eq!(roster, expected);
     }
 
     #[test]
@@ -14934,7 +15047,7 @@ mod stake_snapshot_tests {
         let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
 
         let mut wb = state.world.block();
-        let keypairs: Vec<_> = (0..3).map(|_| crate::state::checked_keypair()).collect();
+        let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut peers_vec = UniqueVec::new();
         for kp in &keypairs {
             let _ = peers_vec.push(PeerId::from(kp.public_key().clone()));
@@ -14949,8 +15062,10 @@ mod stake_snapshot_tests {
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        let mut expected = peers;
+        expected.sort();
         assert_eq!(
-            roster, peers,
+            roster, expected,
             "genesis peers should populate the roster when no public-lane stake exists"
         );
     }
@@ -16060,7 +16175,7 @@ mod custom_parameter_tests {
     #[test]
     fn npos_parameters_reject_retired_fields_and_zero_seed() {
         let mut params = Parameters::default();
-        let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
+        let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":31,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
         let custom = iroha_data_model::parameter::CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload

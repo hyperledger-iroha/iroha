@@ -818,12 +818,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x42; 32],
         }
@@ -1206,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn npos_voting_power_does_not_remap_evidence_signer_indices() {
+    fn npos_mode_does_not_remap_equal_vote_evidence_signer_indices() {
         let state = fresh_state();
         let frozen_roster = roster();
         let mut context = height_one_context(
@@ -1215,11 +1215,7 @@ mod tests {
             test_block_hash(0x90),
         );
         context.mode = V2ConsensusMode::Npos;
-        for (entry, power) in context.roster.iter_mut().zip([1, 100, 3, 7]) {
-            entry.power = power;
-        }
-        context.quorum = DualQuorum::from_roster(&context.roster).expect("weighted quorum");
-        context.validate().expect("valid weighted NPoS context");
+        context.validate().expect("valid equal-vote NPoS context");
 
         let evidence = double_prepare_evidence(1, 1, 47, 0);
         assert_eq!(offender_indices(&evidence, 1, &context), vec![1]);

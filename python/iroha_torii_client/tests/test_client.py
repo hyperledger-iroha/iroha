@@ -251,7 +251,7 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "executed_block_wire_hash": _canonical_hash(0x37),
     }
     return {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
@@ -3676,7 +3676,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["protocol_version"] == 3
+        assert payload["protocol_version"] == 4
         assert payload["restart_required"] is False
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
@@ -3699,7 +3699,7 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
     try:
         base_url = server.base_url.rstrip("/")
         fixtures = {
-            "status": {"protocol_version": 3, "height": 42},
+            "status": {"protocol_version": 4, "height": 42},
             "leader": {"leader_index": 2},
             "telemetry": {"availability": {"total_votes_ingested": 7}},
         }
@@ -3734,7 +3734,7 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
 
     assert type(status) is SumeragiV2Status
     assert SumeragiV2Status is not SumeragiDiagnosticsStatus
-    assert status.protocol_version == 3
+    assert status.protocol_version == 4
     assert status.restart_required is False
     assert status.height == 10
     assert status.phase == "prepare"
@@ -3971,6 +3971,18 @@ def test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker() ->
     status = _get_sumeragi_status(payload)
 
     assert status.liveness.blocker == "local_control_pending"
+
+
+def test_get_sumeragi_status_accepts_successor_activation_pending_liveness_blocker() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["blocker"] = {
+        "blocker": "successor_activation_pending",
+        "details": None,
+    }
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.liveness.blocker == "successor_activation_pending"
 
 
 def test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason() -> None:
@@ -4830,7 +4842,7 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
 
     wrong_version = _sumeragi_v2_status_payload()
     wrong_version["protocol_version"] = 1
-    with pytest.raises(RuntimeError, match="protocol_version must equal 3"):
+    with pytest.raises(RuntimeError, match="protocol_version must equal 4"):
         _get_sumeragi_status(wrong_version)
 
     missing_restart_required = _sumeragi_v2_status_payload()
@@ -4900,6 +4912,19 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     underpowered["last_commit_qc"]["signed_power"] = 2
     with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
         _get_sumeragi_status(underpowered)
+
+    weighted_npos = _sumeragi_v2_status_payload()
+    weighted_npos["height_context"]["mode"] = {"mode": "npos", "details": None}
+    weighted_npos["height_context"]["quorum"]["total_power"] = 5
+    with pytest.raises(RuntimeError, match="quorum is not canonical"):
+        _get_sumeragi_status(weighted_npos)
+
+    invalid_geometry = _sumeragi_v2_status_payload()
+    invalid_geometry["height_context"]["validator_count"] = 5
+    invalid_geometry["height_context"]["quorum"]["min_signers"] = 4
+    invalid_geometry["height_context"]["quorum"]["total_power"] = 5
+    with pytest.raises(RuntimeError, match="quorum is not canonical"):
+        _get_sumeragi_status(invalid_geometry)
 
 
 def test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_details() -> None:

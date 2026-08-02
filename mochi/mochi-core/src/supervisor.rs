@@ -3768,9 +3768,8 @@ impl GenesisMaterial {
             vrf_seed_hex,
         )?;
         // Public Kagami profiles own their signed cadence and are checked by
-        // `kagami verify`. The unprofiled Mochi sandbox instead binds cadence
-        // to its local topology: 100 ms for one peer and the documented
-        // one-second localnet cadence for multiple peers.
+        // `kagami verify`. Unprofiled Mochi sandboxes bind the documented
+        // one-second localnet cadence into their exact validator committee.
         let manifest = if genesis_profile.is_some() {
             manifest
         } else {
@@ -3798,7 +3797,9 @@ impl GenesisMaterial {
             consensus_fingerprint: None,
         };
         let primary = peers.first().ok_or_else(|| {
-            SupervisorError::Config("Mochi genesis requires at least one peer".to_owned())
+            SupervisorError::Config(
+                "Mochi genesis requires an exact 3f+1 validator committee".to_owned(),
+            )
         })?;
         // Kagami must stage genesis against the exact peer configuration that
         // irohad will consume. The paths and public key are already stable, so
@@ -4702,7 +4703,7 @@ exit 0
             let script_path = root.join("kagami_stub.sh");
             let chain_discriminant = iroha_data_model::account::address::chain_discriminant();
             let manifest = format!(
-                "{{\"chain\":\"00000000-0000-0000-0000-000000000000\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"Permissioned\",\"wire_protocol_version\":3,\"sumeragi_v2\":{{\"da_layout\":{{\"encoding\":{{\"encoding\":\"reed_solomon16\",\"details\":null}},\"chunk_size_bytes\":262144,\"data_shards\":4,\"parity_shards\":2,\"max_payload_size_bytes\":16777216,\"max_chunk_count\":1024}},\"nexus_amx_context_hash\":\"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3\",\"execution_policy_hash\":\"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3\"}},\"transactions\":[{{\"instructions\":[]}}]}}"
+                "{{\"chain\":\"00000000-0000-0000-0000-000000000000\",\"chain_discriminant\":{chain_discriminant},\"ivm_dir\":\".\",\"consensus_mode\":\"Permissioned\",\"wire_protocol_version\":4,\"sumeragi_v2\":{{\"da_layout\":{{\"encoding\":{{\"encoding\":\"reed_solomon16\",\"details\":null}},\"chunk_size_bytes\":262144,\"data_shards\":4,\"parity_shards\":2,\"max_payload_size_bytes\":16777216,\"max_chunk_count\":1024}},\"nexus_amx_context_hash\":\"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3\",\"execution_policy_hash\":\"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3\"}},\"transactions\":[{{\"instructions\":[]}}]}}"
             );
             let script = format!(
                 r#"#!/bin/sh
@@ -4835,7 +4836,7 @@ case "$1" in
     case "$2" in
       generate)
         cat <<'JSON'
-{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{chain_discriminant},"ivm_dir":".","consensus_mode":"Permissioned","wire_protocol_version":3,"sumeragi_v2":{{"da_layout":{{"encoding":{{"encoding":"reed_solomon16","details":null}},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024}},"nexus_amx_context_hash":"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3","execution_policy_hash":"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"}},"transactions":[{{"instructions":[]}}]}}
+{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{chain_discriminant},"ivm_dir":".","consensus_mode":"Permissioned","wire_protocol_version":4,"sumeragi_v2":{{"da_layout":{{"encoding":{{"encoding":"reed_solomon16","details":null}},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024}},"nexus_amx_context_hash":"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3","execution_policy_hash":"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"}},"transactions":[{{"instructions":[]}}]}}
 JSON
         exit 0
         ;;
@@ -5169,7 +5170,7 @@ esac
         let _env = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let _stub = KagamiStub::install(temp.path());
-        let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+        let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
             .data_root(temp.path())
             .chain_id("test-chain")
             .torii_base_port(9000)
@@ -5178,7 +5179,7 @@ esac
             .expect("build supervisor");
 
         assert_eq!(supervisor.chain_id(), "test-chain");
-        assert_eq!(supervisor.peers().len(), 1);
+        assert_eq!(supervisor.peers().len(), 4);
 
         let peer = &supervisor.peers()[0];
         let config_path = peer.config_path().to_path_buf();
@@ -5601,23 +5602,16 @@ esac
         }
         assert_eq!(revocation_paths.len(), 4);
 
-        let single = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+        let legacy = SupervisorBuilder::new(ProfilePreset::SinglePeer)
             .data_root(temp.path().join("single-peer"))
             .torii_base_port(30000)
             .p2p_base_port(31000)
             .build()
-            .expect("build single-peer supervisor");
-        let single_config: toml::Table = toml::from_str(
-            &fs::read_to_string(single.peers()[0].config_path()).expect("peer config readable"),
-        )
-        .expect("valid peer config");
-        assert!(
-            single_config
-                .get("network")
-                .and_then(toml::Value::as_table)
-                .and_then(|network| network.get("soranet_handshake"))
-                .is_none(),
-            "single-peer Mochi must keep Iroha's canonical production PoW defaults"
+            .expect("build historical profile alias");
+        assert_eq!(
+            legacy.peers().len(),
+            4,
+            "the historical profile name must still launch a safe committee"
         );
     }
 
@@ -5666,11 +5660,11 @@ esac
 
     #[test]
     fn profile_preset_preserves_consensus_mode() {
-        let profile = NetworkProfile::custom(3, SumeragiConsensusMode::Npos).expect("profile");
+        let profile = NetworkProfile::custom(7, SumeragiConsensusMode::Npos).expect("profile");
         let builder =
             SupervisorBuilder::with_profile(profile).profile_preset(ProfilePreset::SinglePeer);
         assert_eq!(builder.profile().preset, Some(ProfilePreset::SinglePeer));
-        assert_eq!(builder.profile().topology.peer_count, 1);
+        assert_eq!(builder.profile().topology.peer_count, 4);
         assert_eq!(
             builder.profile().consensus_mode,
             SumeragiConsensusMode::Npos
@@ -5681,12 +5675,12 @@ esac
     fn build_rejects_genesis_profile_without_npos() {
         let temp = tempfile::tempdir().expect("tempdir");
         let profile =
-            NetworkProfile::custom(1, SumeragiConsensusMode::Permissioned).expect("profile");
+            NetworkProfile::custom(4, SumeragiConsensusMode::Permissioned).expect("profile");
         let builder = SupervisorBuilder::with_profile(profile)
             .data_root(temp.path())
             .genesis_profile(GenesisProfile::Iroha3Dev)
             .set_profile(
-                NetworkProfile::custom(1, SumeragiConsensusMode::Permissioned).expect("profile"),
+                NetworkProfile::custom(4, SumeragiConsensusMode::Permissioned).expect("profile"),
             );
 
         let err = builder
@@ -5797,7 +5791,7 @@ esac
         let _stub = KagamiStub::install(temp.path());
 
         for (preset, expected_cadence_ms) in [
-            (ProfilePreset::SinglePeer, 100),
+            (ProfilePreset::SinglePeer, 1_000),
             (ProfilePreset::FourPeerBft, 1_000),
         ] {
             let supervisor = SupervisorBuilder::new(preset)

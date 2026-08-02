@@ -1168,7 +1168,7 @@ fn encoded_chunk_count(
     }
     let data_chunks = payload_len.div_ceil(chunk_size);
     match layout.encoding {
-        wire::PayloadEncoding::Plain => Ok(data_chunks),
+        wire::PayloadEncoding::Plain => Err(CandidateError::InvalidDataAvailabilityLayout),
         wire::PayloadEncoding::ReedSolomon16 => {
             let data_shards = usize::from(layout.data_shards);
             let parity_shards = usize::from(layout.parity_shards);
@@ -1558,7 +1558,14 @@ mod tests {
         let key = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::BlsNormal)
             .expect("deterministic validator key");
         let peer = PeerId::new(key.public_key().clone());
-        let topology = Topology::new(vec![peer.clone()]);
+        let mut voters = vec![peer];
+        voters.extend((0xA8_u8..=0xAA).map(|seed| {
+            let voter = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic validator key");
+            PeerId::new(voter.public_key().clone())
+        }));
+        voters.sort();
+        let topology = Topology::new(voters.clone());
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_with_chain_for_testing(
             World::new(),
@@ -1587,10 +1594,13 @@ mod tests {
             snapshot_block_creation_time_ms: 2,
             snapshot_state_hash: Hash::new(b"candidate snapshot state"),
         };
-        let roster = vec![wire::ValidatorPower {
-            validator: peer,
-            power: 1,
-        }];
+        let roster = voters
+            .into_iter()
+            .map(|validator| wire::ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect::<Vec<_>>();
         let context = wire::HeightContext {
             chain_id: state.chain_id_ref().clone(),
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1606,12 +1616,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"candidate snapshot Nexus/AMX"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x43; 32],
         };
@@ -1932,7 +1942,7 @@ mod tests {
     }
 
     #[test]
-    fn chunk_count_matches_plain_and_rs16_stripes() {
+    fn chunk_count_rejects_plain_and_matches_rs16_stripes() {
         let plain = wire::DataAvailabilityLayout {
             encoding: wire::PayloadEncoding::Plain,
             chunk_size_bytes: 8,
@@ -1941,7 +1951,10 @@ mod tests {
             max_payload_size_bytes: 1024,
             max_chunk_count: 1024,
         };
-        assert_eq!(encoded_chunk_count(plain, 17).expect("plain count"), 3);
+        assert!(matches!(
+            encoded_chunk_count(plain, 17),
+            Err(CandidateError::InvalidDataAvailabilityLayout)
+        ));
 
         let rs = wire::DataAvailabilityLayout {
             encoding: wire::PayloadEncoding::ReedSolomon16,

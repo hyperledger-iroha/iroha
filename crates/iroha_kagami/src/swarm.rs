@@ -6,7 +6,10 @@ use std::{
 
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_data_model::{
+    block::consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
+    parameter::system::SumeragiConsensusMode,
+};
 use iroha_genesis::RawGenesisTransaction;
 use iroha_swarm::PeerOverride;
 
@@ -24,6 +27,8 @@ use crate::{
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
     /// Number of peer services in the configuration.
+    ///
+    /// Must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
     #[arg(long, short, value_name = "COUNT")]
     peers: std::num::NonZeroU16,
     /// UTF-8 seed for deterministic key-generation.
@@ -125,6 +130,13 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         // let args: Args = <Args as clap::Parser>::parse();
         let args = self;
+
+        ensure!(
+            is_valid_committee_size(usize::from(args.peers.get())),
+            "`--peers` ({}) must form an exact Sumeragi v2 `3f + 1` validator committee \
+             in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}",
+            args.peers
+        );
 
         if !args.print && !args.user_allows_overwrite()? {
             return Ok(());
@@ -320,7 +332,7 @@ mod tests {
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_minimal_genesis(&config_dir.join("genesis.json"));
         let args = Args {
-            peers: NonZeroU16::new(1).expect("non-zero"),
+            peers: NonZeroU16::new(4).expect("non-zero"),
             seed: None,
             healthcheck: false,
             config_dir,
@@ -354,7 +366,7 @@ mod tests {
         write_minimal_genesis(&config_dir.join("genesis.json"));
         let compose_path = temp_dir.path().join("docker-compose.yml");
         let args = Args {
-            peers: NonZeroU16::new(1).expect("non-zero"),
+            peers: NonZeroU16::new(4).expect("non-zero"),
             seed: None,
             healthcheck: false,
             config_dir,
@@ -441,7 +453,7 @@ api_port = 9000
         fs::create_dir_all(&config_dir).expect("create config dir");
         write_npos_genesis(&config_dir.join("genesis.json"));
         let args = Args {
-            peers: NonZeroU16::new(2).expect("non-zero"),
+            peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("swarm-npos-overrides".to_owned()),
             healthcheck: false,
             config_dir: config_dir.clone(),
@@ -483,7 +495,7 @@ api_port = 9000
         write_npos_genesis_without_parameters(&config_dir.join("genesis.json"));
 
         let args = Args {
-            peers: NonZeroU16::new(1).expect("non-zero"),
+            peers: NonZeroU16::new(4).expect("non-zero"),
             seed: None,
             healthcheck: false,
             config_dir: config_dir.clone(),
@@ -515,7 +527,7 @@ api_port = 9000
         write_npos_genesis(&config_dir.join("genesis.json"));
 
         let args = Args {
-            peers: NonZeroU16::new(3).expect("non-zero"),
+            peers: NonZeroU16::new(7).expect("non-zero"),
             seed: Some("npos-ok".to_owned()),
             healthcheck: false,
             config_dir: config_dir.clone(),
@@ -532,6 +544,40 @@ api_port = 9000
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
             .expect("npos genesis with parameters should pass");
+    }
+
+    #[test]
+    fn run_rejects_non_committee_peer_counts() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config_dir = temp_dir.path().join("cfg");
+        fs::create_dir_all(&config_dir).expect("create config dir");
+        write_minimal_genesis(&config_dir.join("genesis.json"));
+
+        for count in [1_u16, 2, 3, 5, 32] {
+            let args = Args {
+                peers: NonZeroU16::new(count).expect("fixture count is non-zero"),
+                seed: None,
+                healthcheck: false,
+                config_dir: config_dir.clone(),
+                peer_config: None,
+                image: "hyperledger/iroha:dev".to_owned(),
+                build: None,
+                no_cache: false,
+                out_file: temp_dir.path().join(format!("docker-compose-{count}.yml")),
+                print: true,
+                force: false,
+                no_banner: true,
+            };
+
+            let mut writer = BufWriter::new(Vec::new());
+            let error = args
+                .run(&mut writer)
+                .expect_err("non-committee peer count must fail");
+            assert!(
+                error.to_string().contains("exact Sumeragi v2 `3f + 1`"),
+                "unexpected error for {count} peers: {error}"
+            );
+        }
     }
 
     fn write_minimal_genesis(path: &Path) {
