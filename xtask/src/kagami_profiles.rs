@@ -810,7 +810,6 @@ trusted_peers_pop = [
 ]
 
 [sumeragi]
-protocol_version = 4
 role = "validator"
 
 [sumeragi.block]
@@ -822,9 +821,6 @@ proposal_queue_scan_multiplier = 4
 authenticated_non_validator_sources = {authenticated_non_validator_sources}
 body_bytes = {body_bytes}
 body_source_bytes = {body_source_bytes}
-
-[sumeragi.da]
-enabled = true
 
 [network]
 address = "{network_address}"
@@ -1001,6 +997,9 @@ fn render_readme(
     } else {
         "VRF seed: derived from chain id".to_string()
     };
+    let verify_vrf_seed_arg = vrf_seed_hex
+        .map(|seed| format!(" --vrf-seed-hex {seed}"))
+        .unwrap_or_default();
     let chain_discriminant_line = spec.chain_discriminant.map_or_else(String::new, |value| {
         format!("- chain discriminant: {value}\n")
     });
@@ -1034,7 +1033,7 @@ Files:
 - genesis.signed.nrt — canonical signed genesis wire artifact consumed by every validator
 - genesis.public_key — canonical one-line verifier key for the signed genesis artifact
 - genesis.expected_hash — canonical one-line independently provisioned signed-header hash
-- verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json`
+- verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json{verify_vrf_seed_arg}`
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 {site_bindings_file}- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
@@ -1050,6 +1049,7 @@ Regenerate:
         genesis_pk = genesis_public_key,
         peer_rows = peer_rows,
         profile = spec.profile_flag,
+        verify_vrf_seed_arg = verify_vrf_seed_arg,
         nexus_regeneration_arg = nexus_regeneration_arg,
         site_bindings_file = site_bindings_file,
     )
@@ -1231,7 +1231,9 @@ fn profile_slug_list() -> String {
 
 #[cfg(test)]
 mod tests {
+    use iroha_config::{base::toml::TomlSource, parameters::actual};
     use iroha_crypto::Signature;
+    use iroha_data_model::account::address::ChainDiscriminantGuard;
     use tempfile::tempdir;
 
     use super::*;
@@ -1339,6 +1341,44 @@ mod tests {
             !rendered.contains("[sumeragi.npos]"),
             "NPoS policy belongs in the signed genesis parameter snapshot"
         );
+        assert!(
+            !rendered.contains("protocol_version"),
+            "wire protocol version is derived from the signed consensus metadata"
+        );
+        assert!(
+            !rendered.contains("[sumeragi.da]"),
+            "mandatory DA policy is derived from the signed consensus metadata"
+        );
+    }
+
+    #[test]
+    fn rendered_profile_configs_pass_actual_config_admission() {
+        let expected_hash = Hash::new(b"xtask profile config admission").to_string();
+
+        for profile in PROFILES {
+            let peers = build_peers(profile).expect("build deterministic peers");
+            let genesis_key = deterministic_keypair(
+                &format!("config-{}-admission-genesis", profile.slug),
+                Algorithm::Ed25519,
+            )
+            .expect("derive deterministic genesis key");
+            let rendered = render_config(profile, &peers, genesis_key.public_key(), &expected_hash);
+            let table = rendered
+                .parse::<toml::Table>()
+                .expect("rendered profile config is valid TOML");
+            let bundle = tempdir().expect("profile config admission directory");
+            let path = bundle.path().join("peer0.toml");
+            let _chain_discriminant = profile
+                .chain_discriminant
+                .map(ChainDiscriminantGuard::enter);
+
+            actual::Root::from_toml_source(TomlSource::new(path, table)).unwrap_or_else(|error| {
+                panic!(
+                    "rendered profile {} must pass exact runtime config admission: {error:?}",
+                    profile.slug
+                )
+            });
+        }
     }
 
     #[test]
@@ -1400,6 +1440,10 @@ mod tests {
             None,
         );
         assert!(readme.contains("- chain discriminant: 369"));
+        assert!(readme.contains(
+            "kagami verify --profile iroha3-taira --genesis genesis.json \
+             --vrf-seed-hex ABCD"
+        ));
         assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-taira\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }

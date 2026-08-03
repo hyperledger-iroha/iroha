@@ -31891,28 +31891,24 @@ impl State {
     /// Load the immutable Sumeragi v2 context which authenticated a historical
     /// consensus height.
     ///
-    /// The lookup is read-only and returns `None` when the deterministic
-    /// context history is absent. Consensus evidence admission treats absence
-    /// as a fail-closed validation error.
+    /// The lookup is read-only and returns `None` when cryptographically
+    /// verified finality history is absent. Consensus evidence admission
+    /// treats absence as a fail-closed validation error. The structural
+    /// context recovery store is intentionally not an authorization fallback:
+    /// its checksum cannot prove roster PoPs or committed-chain continuity.
     ///
     /// # Errors
     ///
-    /// Returns an error when the canonical finality artifact or context store
-    /// cannot be inspected, or when its immutable frame fails validation.
+    /// Returns an error when the canonical finality artifact cannot be
+    /// inspected or its immutable frame fails validation.
     pub(crate) fn sumeragi_v2_height_context(
         &self,
         height: u64,
     ) -> Result<Option<iroha_data_model::block::consensus_v2::HeightContext>> {
-        if let Some(artifact) = self.kura.v2_finality_artifact(height)? {
-            return Ok(Some(artifact.height_context));
-        }
-        let Some(store) = crate::sumeragi::v2_context_store::V2ContextStore::open_existing(
-            self.kura.sumeragi_v2_storage_root(),
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(store.load(height)?.map(|record| record.context().clone()))
+        Ok(self
+            .kura
+            .v2_finality_artifact(height)?
+            .map(|artifact| artifact.height_context))
     }
 
     /// Resolve a committed block height by block hash using Kura's index.

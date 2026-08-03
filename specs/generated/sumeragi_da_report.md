@@ -1,4 +1,9 @@
-# Sumeragi Data-Availability Report
+# Historical Sumeragi Data-Availability Report
+
+> This 4/6-peer fixture predates revision 4's exact `3f + 1` committee rule.
+> It is retained only as historical telemetry and is not current release
+> evidence. Current functional coverage uses 4- and 7-validator committees;
+> current performance evidence must come from a fresh 4/7/10 soak-matrix run.
 
 Processed 3 summary file(s) from `artifacts/sumeragi-da/20251005T190335Z`.
 

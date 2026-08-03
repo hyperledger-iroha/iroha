@@ -18,7 +18,8 @@ use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId, Level, asset::AssetDefinition, isi::Register, parameter::BlockParameter, prelude::*,
+    ChainId, Level, asset::AssetDefinition, block::consensus_v2::is_valid_committee_size,
+    isi::Register, parameter::BlockParameter, prelude::*,
 };
 use iroha_primitives::addr::socket_addr;
 use iroha_test_network::{
@@ -967,7 +968,7 @@ async fn block_after_genesis_is_synced() -> Result<()> {
             let guard = sandbox::serial_guard();
             let network = NetworkBuilder::new()
                 .with_base_seed(SEED)
-                .with_peers(5)
+                .with_peers(7)
                 // Align test timing with the new consensus pipeline (3s block, 6s commit).
                 .with_block_cadence(Duration::from_secs(9))
                 .build();
@@ -1037,6 +1038,12 @@ struct UnstableNetwork {
 
 impl UnstableNetwork {
     async fn run(self) -> Result<()> {
+        if !is_valid_committee_size(self.n_peers) {
+            return Err(eyre!(
+                "expected an exact revision-4 3f + 1 committee in 4..=31, got {} peers",
+                self.n_peers
+            ));
+        }
         if self.n_peers <= self.n_faulty_peers {
             return Err(eyre!(
                 "expected more peers than faulty peers (peers={}, faulty={})",
@@ -1872,7 +1879,7 @@ mod tests {
 
     #[test]
     fn faulty_peer_selection_preserves_the_active_leader() {
-        let peer_ids: Vec<_> = (0..9)
+        let peer_ids: Vec<_> = (0..10)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
         let chain_id: ChainId = "unstable-network-selection".parse().expect("chain id");
@@ -1909,7 +1916,7 @@ mod tests {
 
     #[test]
     fn preferred_faulty_peers_are_selected_first() {
-        let peer_ids: Vec<_> = (0..5)
+        let peer_ids: Vec<_> = (0..4)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
         let chain_id: ChainId = "unstable-network-preferred-faults"
@@ -1939,7 +1946,7 @@ mod tests {
 
     #[test]
     fn preferred_active_leader_does_not_override_safe_selection() {
-        let peer_ids: Vec<_> = (0..8)
+        let peer_ids: Vec<_> = (0..7)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
         let chain_id: ChainId = "unstable-network-unsafe-preferred"
@@ -1968,7 +1975,7 @@ mod tests {
 
     #[test]
     fn fault_budget_matches_commit_quorum_tail() {
-        let peer_count = 9;
+        let peer_count = 10;
         let commit_quorum = commit_quorum_from_len(peer_count);
         let fault_budget = UnstableNetwork::fault_budget_for_peer_count(peer_count);
         assert_eq!(fault_budget, peer_count - commit_quorum);
@@ -1976,7 +1983,7 @@ mod tests {
 
     #[test]
     fn fault_round_seed_sticks_at_budget() {
-        let budget = UnstableNetwork::fault_budget_for_peer_count(12);
+        let budget = UnstableNetwork::fault_budget_for_peer_count(13);
         assert!(budget > 0);
         let sticky = UnstableNetwork::fault_round_seed(4, budget, budget);
         assert_eq!(sticky, 0);
@@ -2095,9 +2102,9 @@ mod tests {
 }
 
 #[tokio::test]
-async fn unstable_network_5_peers_1_fault() -> Result<()> {
+async fn unstable_network_4_peers_1_fault() -> Result<()> {
     UnstableNetwork {
-        n_peers: 5,
+        n_peers: 4,
         n_faulty_peers: 1,
         n_rounds: 5,
         force_soft_fork: false,
@@ -2119,9 +2126,9 @@ async fn soft_fork() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_8_peers_1_fault() -> Result<()> {
+async fn unstable_network_7_peers_1_fault() -> Result<()> {
     UnstableNetwork {
-        n_peers: 8,
+        n_peers: 7,
         n_faulty_peers: 1,
         n_rounds: 3,
         force_soft_fork: false,
@@ -2131,9 +2138,9 @@ async fn unstable_network_8_peers_1_fault() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_9_peers_2_faults() -> Result<()> {
+async fn unstable_network_7_peers_2_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 9,
+        n_peers: 7,
         n_faulty_peers: 2,
         n_rounds: 3,
         force_soft_fork: false,
@@ -2143,9 +2150,9 @@ async fn unstable_network_9_peers_2_faults() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_9_peers_3_faults() -> Result<()> {
+async fn unstable_network_10_peers_3_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 9,
+        n_peers: 10,
         n_faulty_peers: 3,
         // Keep this high-fault scenario to two rounds to reduce host-load flakiness in the
         // grouped `network_functional` harness while still exercising repeated partition recovery.
@@ -2157,13 +2164,31 @@ async fn unstable_network_9_peers_3_faults() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_12_peers_4_faults() -> Result<()> {
+async fn unstable_network_13_peers_4_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 12,
+        n_peers: 13,
         n_faulty_peers: 4,
         n_rounds: 1,
         force_soft_fork: false,
     }
     .run()
     .await
+}
+
+#[tokio::test]
+async fn unstable_network_rejects_non_revision4_committee_geometry() {
+    let error = UnstableNetwork {
+        n_peers: 5,
+        n_faulty_peers: 1,
+        n_rounds: 1,
+        force_soft_fork: false,
+    }
+    .run()
+    .await
+    .expect_err("invalid revision-4 committee geometry must fail before startup");
+
+    assert!(
+        error.to_string().contains("exact revision-4 3f + 1"),
+        "unexpected geometry error: {error}"
+    );
 }

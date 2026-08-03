@@ -64,6 +64,14 @@ const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
 /// retained-batch contract without inflating either queue.
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
 
+/// Maximum validation-marker identities which can be authoritative at restart.
+///
+/// The replayed adapter contributes at most one durable lock and one durable
+/// decision in addition to its already-bounded startup effect batch. Historical
+/// view-local markers outside this frontier remain body-availability evidence,
+/// but cannot force synchronous execution or restore vote authority.
+const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 2;
+
 /// Largest record-specific `Persist -> Persisted` flattened batch.
 ///
 /// The witness is locally formed `InstallTimeout`: one local TimeoutVote
@@ -246,6 +254,59 @@ impl LocalProposalDirective {
     /// Subject already decided at this height, if application is pending.
     pub(crate) const fn decided_subject(self) -> Option<wire::BlockSubject> {
         self.decided_subject
+    }
+}
+
+/// Opaque authenticated frontier for restoring validation-marker authority.
+///
+/// Construction is restricted to a fully replayed adapter, so a checksummed
+/// body-store marker cannot select itself for recovery. The bounded key set is
+/// derived only from the durable lock/decision and the adapter's first replay
+/// batch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecoveredValidationAuthority {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    keys: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
+}
+
+impl RecoveredValidationAuthority {
+    /// Whether this capability belongs to the exact immutable height context.
+    pub(crate) fn authorizes_context(&self, context: &wire::HeightContext) -> bool {
+        self.context_id == context.id() && self.height == context.height
+    }
+
+    /// Whether one exact proposal origin belongs to the authenticated frontier.
+    pub(crate) fn authorizes(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        self.keys.contains(&(round, subject))
+    }
+
+    /// Number of exact identities in the bounded replay frontier.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Construct a bounded exact frontier for body-store seam tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        context: &wire::HeightContext,
+        keys: impl IntoIterator<Item = (wire::ConsensusRound, wire::BlockSubject)>,
+    ) -> Self {
+        let keys = keys.into_iter().collect::<BTreeSet<_>>();
+        assert!(keys.len() <= MAX_RECOVERED_VALIDATION_AUTHORITIES);
+        assert!(keys.iter().all(|(round, _)| {
+            round.context_id == context.id() && round.height == context.height
+        }));
+        Self {
+            context_id: context.id(),
+            height: context.height,
+            keys,
+        }
     }
 }
 
@@ -3517,6 +3578,10 @@ pub(crate) enum AdapterError {
     /// No fsynced deterministic execution result exists for a signable vote or QC.
     #[error("missing validated Sumeragi v2 execution commitment")]
     MissingExecutionCommitment,
+    /// WAL replay named more validation-marker identities than the reviewed
+    /// startup frontier can contain.
+    #[error("Sumeragi v2 recovered validation authority exceeded its bounded replay frontier")]
+    RecoveredValidationCapacityExceeded,
     /// One immutable subject was bound to different execution results.
     #[error("conflicting Sumeragi v2 execution commitments for one immutable subject")]
     ConflictingExecutionCommitment,
@@ -4207,6 +4272,86 @@ impl SumeragiV2Adapter {
             locked_round,
             locked_subject,
             decided_subject,
+        })
+    }
+
+    /// Mint the bounded validation-marker frontier authorized by WAL replay.
+    ///
+    /// Marker files from superseded views remain checksummed local data, not
+    /// restart authority. Only the active durable lock/decision and exact body
+    /// identities referenced by the first replay batch can be rebound before
+    /// live ingress opens.
+    pub(crate) fn recovered_validation_authority(
+        &self,
+        startup_effects: &[AdapterEffect],
+    ) -> Result<RecoveredValidationAuthority, AdapterError> {
+        self.ensure_ingress()?;
+        if startup_effects.len() > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP {
+            return Err(AdapterError::RecoveredValidationCapacityExceeded);
+        }
+        let context_id = self.wire_context.id();
+        let height = self.wire_context.height;
+        let mut keys = BTreeSet::new();
+        let mut retain = |round: wire::ConsensusRound,
+                          subject: wire::BlockSubject|
+         -> Result<(), AdapterError> {
+            if round.context_id != context_id || round.height != height {
+                return Err(AdapterError::DurableBodyMismatch);
+            }
+            keys.insert((round, subject));
+            Ok(())
+        };
+
+        if let Some(certificate) = self.reducer.durable_state().locked() {
+            retain(
+                self.registry.round_to_wire(certificate.proposal_round()),
+                self.registry.subject(certificate.subject())?,
+            )?;
+        }
+        if let Some((_, proposal_round, subject, _)) = self.replayed_decision_key()? {
+            retain(proposal_round, subject)?;
+        }
+        for effect in startup_effects {
+            match effect {
+                AdapterEffect::Sign { request, .. } => {
+                    if let Some((round, subject)) = request.body_round().zip(request.subject()) {
+                        retain(round, subject)?;
+                    }
+                }
+                AdapterEffect::FetchBody { round, subject, .. }
+                | AdapterEffect::StoreBody { round, subject, .. }
+                | AdapterEffect::ValidateBody { round, subject, .. } => {
+                    retain(*round, *subject)?;
+                }
+                AdapterEffect::Apply {
+                    subject,
+                    certificate,
+                    ..
+                } => {
+                    retain(certificate.proposal_round, *subject)?;
+                }
+                AdapterEffect::EnterView {
+                    protected_body: Some((round, subject)),
+                    ..
+                } => {
+                    retain(*round, *subject)?;
+                }
+                AdapterEffect::Broadcast(_)
+                | AdapterEffect::EnterView {
+                    protected_body: None,
+                    ..
+                }
+                | AdapterEffect::ReportEquivocation { .. }
+                | AdapterEffect::ReportInvalidCertifiedBody { .. } => {}
+            }
+        }
+        if keys.len() > MAX_RECOVERED_VALIDATION_AUTHORITIES {
+            return Err(AdapterError::RecoveredValidationCapacityExceeded);
+        }
+        Ok(RecoveredValidationAuthority {
+            context_id,
+            height,
+            keys,
         })
     }
 
@@ -16147,6 +16292,18 @@ mod tests {
             }
             effects => panic!("unexpected recovered Prepare frontier: {effects:?}"),
         };
+        let validation_authority = recovered
+            .recovered_validation_authority(&startup)
+            .expect("WAL replay mints the exact bounded validation frontier");
+        assert_eq!(validation_authority.len(), 1);
+        assert!(validation_authority.authorizes(
+            wire::ConsensusRound {
+                context_id: context().id(),
+                height: context().height,
+                view: 0,
+            },
+            prepared_subject,
+        ));
         let signed = recovered
             .signature_completed(sign_tag, vote_signature.clone())
             .expect("new generation accepts the replay-issued Prepare callback");
@@ -16165,6 +16322,99 @@ mod tests {
                 .disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
         );
+    }
+
+    #[test]
+    fn recovered_validation_authority_uses_locked_proposal_round() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+
+        let proposal_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: 0,
+        };
+        let certificate_round = wire::ConsensusRound {
+            view: 2,
+            ..proposal_round
+        };
+        let timeout = |view, marker| wire::TimeoutCertificate {
+            round: wire::ConsensusRound {
+                view,
+                ..proposal_round
+            },
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![marker; 96],
+            }],
+        };
+        let timeout_zero = adapter
+            .registry
+            .tc_to_core(&timeout(0, 0xA8), &adapter.wire_context)
+            .expect("register the view-zero timeout certificate");
+        let timeout_one = adapter
+            .registry
+            .tc_to_core(&timeout(1, 0xA9), &adapter.wire_context)
+            .expect("register the view-one timeout certificate");
+        let locked_subject = subject(0xAA);
+        let wire_prepare = wire::QuorumCertificate {
+            round: certificate_round,
+            proposal_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: locked_subject,
+            execution_commitment: execution_commitment(0xAA),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xAA; 96],
+        };
+        let core_context = adapter.reducer.context().clone();
+        let prepare = adapter
+            .registry
+            .qc_to_core(&wire_prepare, &adapter.wire_context)
+            .expect("register the carried durable PrepareQC");
+        let local_validator = adapter
+            .registry
+            .validator_id(0)
+            .expect("local fixture validator");
+        let lock_entry = reducer::WalEntry::new(
+            reducer::PersistenceId::new(3),
+            reducer::WalRecord::LockAndCommit {
+                vote: reducer::Vote::new_with_proposal_round(
+                    core_context.id(),
+                    prepare.round(),
+                    prepare.proposal_round(),
+                    reducer::Phase::Commit,
+                    prepare.subject(),
+                    local_validator,
+                ),
+                prepare,
+            },
+        );
+        adapter.reducer = reducer::Reducer::recover(
+            core_context,
+            Some(local_validator),
+            reducer::Generation::new(2),
+            [
+                reducer::WalEntry::new(
+                    reducer::PersistenceId::new(1),
+                    reducer::WalRecord::InstallTimeout(timeout_zero),
+                ),
+                reducer::WalEntry::new(
+                    reducer::PersistenceId::new(2),
+                    reducer::WalRecord::InstallTimeout(timeout_one),
+                ),
+                lock_entry,
+            ],
+        )
+        .expect("recover the carried durable lock");
+
+        let authority = adapter
+            .recovered_validation_authority(&[])
+            .expect("mint the recovered lock frontier");
+        assert_eq!(authority.len(), 1);
+        assert!(authority.authorizes(proposal_round, locked_subject));
+        assert!(!authority.authorizes(certificate_round, locked_subject));
     }
 
     #[test]

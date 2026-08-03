@@ -1,10 +1,20 @@
-from pathlib import Path
+import importlib.util
 import re
 import subprocess
+import sys
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "run_izanami_communication_vulnerability_matrix.sh"
+LIVENESS_SCRIPT = ROOT / "scripts" / "run_izanami_liveness_matrix.py"
+LIVENESS_SPEC = importlib.util.spec_from_file_location(
+    "run_izanami_liveness_matrix", LIVENESS_SCRIPT
+)
+assert LIVENESS_SPEC is not None and LIVENESS_SPEC.loader is not None
+LIVENESS = importlib.util.module_from_spec(LIVENESS_SPEC)
+sys.modules[LIVENESS_SPEC.name] = LIVENESS
+LIVENESS_SPEC.loader.exec_module(LIVENESS)
 
 
 def _classifier_degraded_pattern() -> str:
@@ -12,6 +22,30 @@ def _classifier_degraded_pattern() -> str:
     match = re.search(r"^acceptance_failure_regex='([^']+)'", source, re.MULTILINE)
     assert match is not None
     return match.group(1)
+
+
+def test_liveness_rows_reject_retired_v1_consensus_dimensions() -> None:
+    rows = LIVENESS.parse_rows("baseline:1024:1:300")
+    assert rows == [LIVENESS.MatrixRow("baseline", 1024, 1, 300)]
+
+    try:
+        LIVENESS.parse_rows("legacy:1024:1:300:2:2")
+    except ValueError as error:
+        assert "revision-4" in str(error)
+    else:
+        raise AssertionError("retired collector dimensions must fail closed")
+
+    source = LIVENESS_SCRIPT.read_text(encoding="utf-8")
+    assert "--sumeragi-collectors-k" not in source
+    assert "--sumeragi-inline-block-created-backup-rbc" not in source
+
+
+def test_liveness_matrix_accepts_only_revision4_committee_geometry() -> None:
+    assert [
+        peers
+        for peers in range(1, 33)
+        if LIVENESS.is_revision4_committee_size(peers)
+    ] == [4, 7, 10, 13, 16, 19, 22, 25, 28, 31]
 
 
 def test_matrix_classifier_ignores_retryable_endpoint_refusals() -> None:
@@ -89,6 +123,7 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert "consensus_pressure" in evidence.read_text().splitlines()[0]
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
     assert (out_dir / "root-cause.md").exists()
+    assert "--peers 19" in (out_dir / "permissioned-targeted-load.log").read_text()
 
     report.unlink()
     (out_dir / "summary.md").unlink()
@@ -115,6 +150,33 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert "throughput_evidence" in evidence.read_text().splitlines()[0]
     assert "stress_labels" in evidence.read_text().splitlines()[0]
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
+
+
+def test_stopping_matrix_stays_within_revision4_fault_budget(tmp_path: Path) -> None:
+    for mode, peers, faulty in (("quick", 4, 1), ("paper", 19, 6)):
+        out_dir = tmp_path / mode
+        subprocess.run(
+            [
+                "bash",
+                str(SCRIPT),
+                "--out",
+                str(out_dir),
+                "--mode",
+                mode,
+                "--only",
+                "stopping",
+                "--sumeragi-mode",
+                "permissioned",
+                "--izanami-cmd",
+                "true",
+            ],
+            check=True,
+            cwd=ROOT,
+        )
+
+        command_log = (out_dir / "permissioned-stopping.log").read_text()
+        assert f"--peers {peers}" in command_log
+        assert f"--faulty {faulty}" in command_log
 
 
 def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Path) -> None:

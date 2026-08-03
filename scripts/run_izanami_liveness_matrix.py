@@ -30,9 +30,6 @@ class MatrixRow:
     block_cap: int
     scan_multiplier: int
     pipeline_ms: int
-    collectors_k: int | None = None
-    redundant_send_r: int | None = None
-    inline_backup_rbc: bool | None = None
     latency_threshold_s: int = 3
 
 
@@ -46,43 +43,25 @@ DEFAULT_ROWS = [
 ]
 
 
+def is_revision4_committee_size(peers: int) -> bool:
+    """Return whether ``peers`` is an admitted bounded ``3f + 1`` roster."""
+
+    return 4 <= peers <= 31 and (peers - 1) % 3 == 0
+
+
 def parse_rows(value: str | None) -> list[MatrixRow]:
     if not value:
         return DEFAULT_ROWS
     rows: list[MatrixRow] = []
     for raw in value.split(","):
         parts = raw.split(":")
-        if len(parts) not in (4, 6, 7):
+        if len(parts) != 4:
             raise ValueError(
-                "matrix rows must be name:cap:scan:pipeline_ms or "
-                "name:cap:scan:pipeline_ms:collectors_k:redundant_send_r or "
-                "name:cap:scan:pipeline_ms:collectors_k:redundant_send_r:inline_backup_rbc"
+                "revision-4 matrix rows must be name:cap:scan:pipeline_ms"
             )
-        name, cap, scan, pipeline = parts[:4]
-        collectors_k = int(parts[4]) if len(parts) >= 6 else None
-        redundant_send_r = int(parts[5]) if len(parts) >= 6 else None
-        inline_backup_rbc = parse_bool(parts[6]) if len(parts) == 7 else None
-        rows.append(
-            MatrixRow(
-                name,
-                int(cap),
-                int(scan),
-                int(pipeline),
-                collectors_k,
-                redundant_send_r,
-                inline_backup_rbc,
-            )
-        )
+        name, cap, scan, pipeline = parts
+        rows.append(MatrixRow(name, int(cap), int(scan), int(pipeline)))
     return rows
-
-
-def parse_bool(value: str) -> bool:
-    normalized = value.lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"invalid boolean value: {value}")
 
 
 def percentile(sorted_values: list[float], quantile: float) -> float:
@@ -220,9 +199,6 @@ def collect_result(
         "block_cap": row.block_cap,
         "scan_multiplier": row.scan_multiplier,
         "pipeline_ms": row.pipeline_ms,
-        "collectors_k": "" if row.collectors_k is None else row.collectors_k,
-        "redundant_send_r": "" if row.redundant_send_r is None else row.redundant_send_r,
-        "inline_backup_rbc": "" if row.inline_backup_rbc is None else row.inline_backup_rbc,
         "latency_threshold_s": row.latency_threshold_s,
         "progress_interval_s": args.progress_interval_s,
         "peer_gap_p95_threshold_s": args.peer_gap_p95_threshold_s,
@@ -316,22 +292,6 @@ def run_row(args: argparse.Namespace, row: MatrixRow, output_root: Path) -> dict
         "--diagnostic-dir",
         str(run_dir),
     ]
-    if row.collectors_k is not None:
-        command.extend(["--sumeragi-collectors-k", str(row.collectors_k)])
-    if row.redundant_send_r is not None:
-        command.extend(
-            [
-                "--sumeragi-collectors-redundant-send-r",
-                str(row.redundant_send_r),
-            ]
-        )
-    if row.inline_backup_rbc is not None:
-        command.extend(
-            [
-                "--sumeragi-inline-block-created-backup-rbc",
-                str(row.inline_backup_rbc).lower(),
-            ]
-        )
     with runner_log.open("w") as log:
         proc = subprocess.run(
             command,
@@ -356,23 +316,18 @@ def write_outputs(rows: list[dict[str, object]], output_root: Path) -> None:
     with md_path.open("w") as handle:
         handle.write("# Izanami Liveness Matrix\n\n")
         handle.write(
-            "| row | pass | exit | cap | scan | pipeline | k | r | backup RBC | accepted | strict height | "
+            "| row | pass | exit | cap | scan | pipeline | accepted | strict height | "
             "approved | committed TPS | runner p95 | peer gap p95 | peer max | over 3s | DA ms | "
             "precommit ms | DA max | precommit max | pipeline max | conflict bps | detached merged | fallback | RBC payload | RBC READY | "
             "queue depth | view changes |\n"
         )
-        handle.write(
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | "
-            "---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n"
-        )
+        handle.write("| " + " | ".join(["---"] * 26) + " |\n")
         for row in rows:
             runner_p95 = row["runner_strict_interval_p95_ms"]
             runner_p95_text = "" if runner_p95 == "" else f"{runner_p95}ms"
             handle.write(
                 f"| {row['name']} | {row['row_pass']} | {row['exit_code']} | {row['block_cap']} | "
                 f"{row['scan_multiplier']} | {row['pipeline_ms']} | "
-                f"{row['collectors_k']} | {row['redundant_send_r']} | "
-                f"{row['inline_backup_rbc']} | "
                 f"{row['ingress_accepted']} | {row['final_strict_min_height']} | "
                 f"{row['final_strict_min_txs_approved']} | {row['committed_tps']} | "
                 f"{runner_p95_text} | {float(row['gap_p95_s']):.3f}s | "
@@ -396,11 +351,7 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument(
         "--rows",
-        help=(
-            "Comma-separated rows: name:cap:scan:pipeline_ms or "
-            "name:cap:scan:pipeline_ms:collectors_k:redundant_send_r or "
-            "name:cap:scan:pipeline_ms:collectors_k:redundant_send_r:inline_backup_rbc"
-        ),
+        help="Comma-separated revision-4 rows: name:cap:scan:pipeline_ms",
     )
     parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--tps", type=int, default=20_000)
@@ -426,6 +377,8 @@ def main() -> int:
         help="Rebuild summary files from an existing output root without rerunning rows.",
     )
     args = parser.parse_args()
+    if not is_revision4_committee_size(args.peers):
+        parser.error("--peers must be an exact revision-4 3f+1 committee in 4..=31")
     args.repo = args.repo.resolve()
     args.izanami = (args.repo / args.izanami).resolve()
     args.irohad = (args.repo / args.irohad).resolve()

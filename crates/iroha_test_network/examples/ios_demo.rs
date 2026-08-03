@@ -246,7 +246,7 @@ fn main() -> Result<()> {
     let telemetry_profile = args.telemetry_profile.clone();
 
     let (network, rt) = NetworkBuilder::new()
-        .with_peers(1)
+        .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(move |layer| {
             layer

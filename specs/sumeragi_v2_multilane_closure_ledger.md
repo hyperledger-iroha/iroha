@@ -866,7 +866,7 @@ archive; the model must expose ABA acceptance, loss, or sibling corruption.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, and `G-FINAL`.
 
-### ML-LIFE-05 — bounded stage diagnostics and the twelve-peer stall
+### ML-LIFE-05 — bounded stage diagnostics and the 13-peer global stall
 
 **Implementation:** Implemented.
 **Closure:** Implemented.
@@ -880,7 +880,7 @@ Kura/WSV receipt, queue-finalization, and conflict stages. State derives the
 ordered bounded vector from replicated State plus Kura evidence and Torii
 publishes it only on diagnostics. Live production candidate synthesis and
 canonical carrier application now connect the former recovery-to-application
-gap. The twelve-peer rerun required to prove that correction empirically
+gap. The 13-peer global rerun (twelve lane validators) required to prove that correction empirically
 remains `G-12P`.
 
 **Closure condition.** Add bounded, deterministic, operator-safe counters or
@@ -1196,11 +1196,14 @@ The mandatory four-peer lifecycle and rotating-validator Native tests are now
 non-ignored and source-bound into the release runner, but no fresh completion
 artifact is recorded here.
 
-### G-12P — twelve-peer multilane corridor
+### G-12P — twelve lane validators on a 13-peer global committee
 
 **Evidence:** Open.
 
-Run at least three independent four-validator dataspaces with grouped DvP and
+The stable gate identifier counts the twelve lane-validator assignments. Each
+run must use an exact 13-member revision-4 global committee, with the final
+global voter excluded from all three lane committees. Run at least three
+independent four-validator dataspaces with grouped DvP and
 autonomous work, rotating outage/restart, scale-out, drain, scale-in, and
 same-ID recreation. Require 10/10 fresh deterministic seeds and a two-hour
 fault soak, full peer convergence, durable participant receipts, and zero lost,
@@ -1254,7 +1257,7 @@ SDK parity suites, formal runners, `cargo build --workspace`, full
 `scripts/check_no_legacy_codec.sh`. The release record must contain commands,
 exit status, source revision, target directory, toolchain, and artifact hashes.
 `scripts/run_sumeragi_v2_release_gates.sh` must require the completed multilane
-focused, SDK, formal, four-peer, twelve-peer, and scaling gates and must fail on
+focused, SDK, formal, four-peer, 13-peer global, and scaling gates and must fail on
 a skipped required test.
 Only then may architecture/operator documentation, `status.md`, or
 `roadmap.md` describe a row or gate as closed.

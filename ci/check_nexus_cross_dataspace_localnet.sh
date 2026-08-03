@@ -16,7 +16,8 @@ export IROHA_TEST_NETWORK_START_ATTEMPTS=1
 export IROHA_TEST_SKIP_BUILD=0
 export IROHA_TEST_ALLOW_REENTRANT_BUILD=1
 
-# Run ten fresh, deterministic 12-peer networks. The launcher validates every
+# Run ten fresh, deterministic 13-peer global networks with twelve lane
+# validators. The launcher validates every
 # seed transcript as exactly one scheduled/passing test and publishes a
 # 10/10, zero-retry completion record.
 cross_dataspace_args=(--capture --no-skip-build)

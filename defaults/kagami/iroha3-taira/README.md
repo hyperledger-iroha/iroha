@@ -2,40 +2,29 @@
 
 - chain id: iroha3-taira
 - chain discriminant: 369
-- collectors: k=3 r=2
-- VRF seed (hex): 8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B
-- genesis public key: ed0120CFBB23652880ABCAEEE2FA6F512A1657E5D7EDBC7B45589721FD86C2FEC9F559
+
+- VRF seed (hex): 9DA3880072B44387B94BC02414E4E84AAE99F70966F8C247C092647109AFCBF3
+- deterministic genesis creation-time base (ms): 1700000000000
+- genesis public key: ed012077D8B70FE83D6E0A0FF1C100FDCD01C6A937DA0B7B1004E7C9545BB64D6639A8
 - peers:
-- peer 1: public_key=ea0130A71AAB00BE72C1BDF6B6A7F5D107E9D224DE900C3DDF6C84C1F17B0BB31E59A1403C9028320058E08D6659E0E7F92F0F address=127.0.0.1:1337 pop_hex=b08719da2ee0976152c12bd33e4f3e40670287ce1a6b764fe58bf1f21ce379e38f72e379bf0623101bbe63a2687ecf06047fd807f14fd2cde9c565c2bd25b29a96986944ca71b962d7d0e1a96ea0d692ec592a2971112ba8f582f06c0a546f43
-- peer 2: public_key=ea0130A7E9D016D723F72942FCF4B988FB599EA0E092F73C8B68E69F4E8B3FE542A3F7E48AD6CD15F3EB484E45F79399071F77 address=127.0.0.1:1338 pop_hex=a14eb180f0d78c55d2c034e91ccf691378e9c3ceed8e0b81d3e4b7c215c0dbb633bb9f1c5063911c31af4610016c164015f0f93db3c7df6a2ad0c39338fe7695b976a59fd13797615f229fbd77276a8bb2842e4e44fadcafdb7b37f4a143b913
-- peer 3: public_key=ea0130B0AC152F7A4288F1ABE531D50CCC01EF5958EFA12F9F39168E2D0D6FCFF3800F3DCF30203A9F30D3A9F262556CE414B4 address=127.0.0.1:1339 pop_hex=a0ff6f7dfc6e4109bb1a341ea118b0eb7012bcb1be809444c0c131664a00beb0e0318b5dbf75f1ab878d9c696625646805fece416ed8865549176b25871ac3bb17e80f49d4231c8f13f057075192d8edc9a7d4f4f1280406281b880a729b01e5
-- peer 4: public_key=ea0130B42F548672230B0A7F38AC30686F9F5B24799507B7A4A904F7E08C98C3385A4095906FC6D1BF8D67CC181084D68DAE73 address=127.0.0.1:1340 pop_hex=a9ed4797dfda4ce53a4e7ad945196969b300fd984d553a5da7c230a7796bdef99c86e90cc11db3703f49948f11238d360130b7b9642dafb3cf9c644a3828ed74a5b0eb1e229879d87651e5e04852b18a1de0b8119058291aca5a48534523fc21
-- peer 5: public_key=ea01308524AA484E6E6F06DD88E20D74A2493C3586B036F5394EB0B53C7C172653BFBE6EF08BF6468D5F1335547B6878138C20 address=127.0.0.1:1341 pop_hex=a0fba64c24895c6d5634abdf56d13c8f720bcb5b98f3245db3c1a6306226a8b7815df2e3c2545de9b77b48713a48f7fd18fcd2373b30d74b1dc89833b27f305101671319213f9177fe3e2d64906951737e2869560ace7f0deeb707b7154daee0
-- peer 6: public_key=ea0130A844144B7FC75B277AD83C3608B17613EE8336A1EE5F39406627B7C183416CE19F064FCDC26F85F7F21380077CB5BDDD address=127.0.0.1:1342 pop_hex=870ef4af8ac87b313e1322029f62039d95897c400f719ca8db58aa5b63e85179cead1d7ddb0b0533a972c6fc0307798505aafff4dd50262c41107b5b5c183eaf1dc6ae50e9236acc9ab2d1062d145bbf222eb3c9e53fae3bd20272d8b31b0414
-- peer 7: public_key=ea01308E10E640916ADFAC87A8B22FE4EF7383AAC610D09DC07322029A0913CA919176887FF1B418DEF885113E3CCC4C9CAC53 address=127.0.0.1:1343 pop_hex=935f3cb1167a391410d16ba2a7558a0400b76b8433c6fc9cafa23f8c584c5167354ea180672cab3be55db8c86ec81e7d133a03bada91ccfa69c0cca4675398dea7299abc51f086b1760d37281d61fc01de20279cd0bd597a970e0549b035c00e
+- peer 1: public_key=ea0130A281E64EED12B1A0CD3114DB7F3F33F4C923532CB0550ABB6A64911CA72EEAA1866CF77C84AD3B2C6406B0595E21FE3D address=172.28.0.10:1337 pop_hex=aad83622df5db2568f7a01eed56592d97d9fb8077c4e31def87d6654b4906a815324493cfea2af389b5ea4c62335c7f8009e3a38f3dd6f6a08fa6492d4e77433913722f67f6210a667eb6e1ffce83522bc308e8a9ade1ee0ddad94a4d2672bd4
+- peer 2: public_key=ea013080D71C0DD03907BC174C7F4D90C23993A5BA9108A7F109A1D7966117997D4B1F3C51008F538BABB2A01D3CB5A7C15778 address=172.28.0.11:1338 pop_hex=b01b6f05f1274ef632f0a4f46bcbfdd09b69fb37dc27aa58ec4e147ba1b7cc8816c56bb098623053d0a12b3db444cea0118795f31f27d434af4200168a362da8e9d2dc508ab99e6fa0d0003d469b1bfc4fad0c0b5373b34a6f3e76267cc35399
+- peer 3: public_key=ea013086B04CCED63EC8EA1D269C5B65944D294577D3089046D47D1F4676489365B1ABC21B486EA4259762656F2D6D756119BE address=172.28.0.12:1339 pop_hex=851800cb4af73e582091996fe0659b5200066d1bc18538ddf6fff52adc136ca76e9e406f889836e7bb33f4bcb393ebc2190d631bd9f56694c6248a4f22986995894e03519353126f950ed48a0c70cab0138793b27e5c91c2029fcce4ddc1fa80
+- peer 4: public_key=ea0130A61F886C2EBA8DA5BC16D014029F58D0F9E2201B14C4C41668BBB8F0F68B9F4CFE8140C82555F47BA840CAA1F204791E address=172.28.0.13:1340 pop_hex=b1e3b9bb4a8a76a1de973f1eb8cae7a14664310551f82cc5b3d82ec416883938532c2e3328f0b98729546522f7beb8350774041f30da46c1cabd0e2908c4d808ada51ae6937f3572a8d297335f5f6f32eb681c3b48538d3bca8c1d1f6217c37d
+- peer 5: public_key=ea013093594AD979F8D743275F33F9A59C3F9086BE5C72968C6C9D74FF4D43C6F4499B72212E93A3E57D7BF6DF7292ED2414DB address=172.28.0.14:1341 pop_hex=a9a0e83792f7ed94a2165deb706ccf550b656927bc52c42b1f30aa05ac81a669109eaa3a4c365c75302fc3b22305f0fa1436df8d5bac209a76f9af9d9c4c018ce33ebf73e7321377a326c10a0ba9194697659afae2cba40502139dd1181a32c8
+- peer 6: public_key=ea01308C0DA48B70E186205D0DFF8D00B170DE09B9B082725C7CBB16CC77C13808EB81BF027EDE1EF017E4E7D599DAAAD19034 address=172.28.0.15:1342 pop_hex=a67a14fb715c271a25dc2b6c3ed4d4ba92d7fe03bf60eea1882e5147a5fa46fd4d526628f34e2bd906e5d37eb399c51f0e88989ef60b076f5486d695e372a35ac3388542e2e16a01a3e72b27a5e332438dfda669fade3997b88f38d33680396b
+- peer 7: public_key=ea013086C1B85CD4512F7714C17C191F8448B6D2827AE199F09B98C7FCAA3151EA279B08BCE28A10E45279E3CD5A9DA7B3343E address=172.28.0.16:1343 pop_hex=8d500cbc7e50d5cb5f63196d75dd31ed54b8fb281916b2655689978f0085ff69e3f064e902ab4a8f9855d2daad6b596602de1f19d6fcb5b5f1eb46c368e09c43cbe68a52a8e5389b24032d0080f4070805f81a7719cd72c4d54394d546862a39
 
 Files:
-- genesis.json — generated with `kagami genesis generate --profile iroha3-taira` and patched with deterministic topology+PoPs
-- verify.txt — stdout from `kagami verify --profile iroha3-taira --genesis genesis.json`
-- config.toml — minimal Nexus config matching the topology (ports 8080/1337) and enabling native Torii MCP with the curated public `iroha.*` writer profile
-  plus explicit `nexus.fees.fee_asset_id = "xor#universal"` and `nexus.staking.stake_asset_id = "xor#universal"` overrides. The alias is bound in genesis to the live Taira XOR asset definition `6TEAJqbb8oEPmLncoNiMRbLEK6tw`. Named SoraFS hosts are configured through `[sorafs.gateway.site_bindings]`; Torii validates and caches that file at startup. This checked-in generic sample intentionally omits faucet and account-onboarding signers; use `kagami localnet` for a complete runtime-only onboarding bundle.
-- sorafs_sites.json — empty version-1 named-host binding document used by the sample config
-- docker-compose.yml — single-node snippet mounting the config, genesis, and site-binding document
-
-Operational note:
-- If this Torii node is exposed through nginx or another reverse proxy, keep
-  `/v1/connect/ws` on `proxy_http_version 1.1` and forward websocket
-  `Upgrade` plus `Connection: upgrade` headers end-to-end.
-- Keep `/v1/connect/ws` as its own exact-match websocket location ahead of any
-  generic `location /` or `location ^~ /v1/` proxy blocks so future deploys do
-  not accidentally downgrade Connect back to a plain HTTP hop.
-- For the public Taira deployment, prefer the checked-in validator/edge bundle
-  under `configs/soranexus/taira/`, including `taira-irohad.service`,
-  `taira-explorer.nginx.conf`, `validator_roster.example.toml`,
-  `validator_secrets.example.toml`, `scripts/render_taira_validator_bundle.py`,
-  `build_taira_rollout_bundle.sh`, `check_mcp_rollout.sh`, and
-  `verify_soraswap_rollout.sh`, so the public `/v1/mcp` route and the
-  downstream SoraSwap nested-call gate are both proven before cutover.
+- genesis.json — generated with `kagami genesis generate --profile iroha3-taira`, patched with deterministic topology+PoPs, and rebound to the exact staged Nexus/AMX context through `kagami genesis sign`
+- genesis.signed.nrt — canonical signed genesis wire artifact consumed by every validator
+- genesis.public_key — canonical one-line verifier key for the signed genesis artifact
+- genesis.expected_hash — canonical one-line independently provisioned signed-header hash
+- verify.txt — stdout from `kagami verify --profile iroha3-taira --genesis genesis.json --vrf-seed-hex 9DA3880072B44387B94BC02414E4E84AAE99F70966F8C247C092647109AFCBF3`
+- config.toml and config-peer-*.toml — compatibility names for the generated validator configs
+- peer0.toml through peerN.toml — canonical prepared-bundle validator configs
+- sorafs_sites.json — empty version-1 named-host binding document loaded, validated, and cached at Torii startup
+- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

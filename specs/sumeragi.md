@@ -595,12 +595,12 @@ Determinism
 
 ### Large payload simulations
 
-- Integration helpers `sumeragi_rbc_da_large_payload_four_peers` and `_six_peers`
-  (see `specs/sumeragi_da.md`) exercise the harness default
-  `LARGE_PAYLOAD_BYTES = 1024` smoke payload with `sumeragi.da.enabled = true`
-  and confirm that the protocol READY quorum is recorded, payload delivery
-  counters advance, and commit progresses without deadlocking. Larger payloads
-  remain soak/performance work rather than the default smoke shape.
+- Integration helpers
+  `large_da_payload_commits_with_consistent_v2_subject_four_peers` and
+  `_seven_peers` (see `specs/sumeragi_da.md`) exercise the first two admissible
+  revision-4 committee sizes with a 1 MiB canonical body. They require valid
+  revision-4 status at quorum peers and one identical committed subject. DA/RBC
+  is mandatory and has no runtime enable/disable switch.
 - DA availability timeout: while availability evidence is still missing
   (RBC `READY` quorum not met), the adapter logs and rebroadcasts
   availability evidence after the timeout. The reschedule counters
@@ -609,21 +609,10 @@ Determinism
   instead of deadline reschedules. Nodes missing payload
   fetch it from certificate signers first, then fall back to the full commit topology after
   the configured retry budget.
-- The helpers capture per-peer Prometheus counters and aggregate
-  `/v1/sumeragi/telemetry` snapshots; automation can watch their
-  `sumeragi_da_summary::*` output. Per-session RBC records remain internal.
-- Performance budgets are enforced by the helpers: RBC delivery uses a 30 s
-  base budget plus 60 s for each peer beyond four and a 40 s RS16 premium,
-  commit latency may exceed delivery by at most 40 s, throughput must stay above
-  `min(payload / delivery_budget, 0.1 MiB/s)`, background-post queue depth must
-  stay ≤ 32, and P2P queue drops must stay at 0. Violations fail the tests and
-  should alert operators in production runs.
-- Use `cargo run -p build-support --features dev-tools --bin sumeragi_da_report` against the latest
-  `.summary.json` artifacts to capture measured numbers. The generated Markdown
-  now includes `BG queue max` and `P2P drops max` columns mirroring the budgets.
-- The generated summary under ``specs/generated/sumeragi_da_report.md`` is
-  updated by `scripts/run_sumeragi_da.py --report-dest …` and is included here
-  to surface the most recent measurements.
+- Fault and performance telemetry is captured by
+  `scripts/run_sumeragi_stress.py` and the exact 4/7/10-peer soak matrix. The
+  pre-revision-4 generated RBC report is historical and is not evidence for
+  the current mandatory full-body contract.
 - Baseline (1 s block, k=3) metrics rely on a discrete harness run; see
   `specs/generated/sumeragi_baseline_report.md` for the latest report.
   The current measurements were captured on an Apple M2 Ultra (24 cores, 192 GB
@@ -653,7 +642,7 @@ Determinism
   Milestone A6 checklist covering baseline captures, soak-matrix runs, telemetry
   validation, and evidence packaging.
 
-For the multi-peer soak matrix (4/6/8 peers) and the corresponding operator
+For the multi-peer soak matrix (4/7/10 peers) and the corresponding operator
 sign-off bundle, run:
 
 ```bash
