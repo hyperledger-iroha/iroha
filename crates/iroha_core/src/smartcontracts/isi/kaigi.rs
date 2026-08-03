@@ -190,8 +190,7 @@ impl ExecuteKaigiAuthorized for JoinKaigi {
         let mut nullifier = nullifier;
         let mut roster_root = roster_root;
 
-        let allow_unassociated =
-            same_account_subject(authorization.signed_account(), &participant);
+        let allow_unassociated = same_account_subject(authorization.signed_account(), &participant);
         apply_with_record_authorized(
             state_transaction,
             &call_id,

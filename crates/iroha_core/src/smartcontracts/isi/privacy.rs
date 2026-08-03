@@ -4744,8 +4744,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.bootstrap_digest() != snapshot.bootstrap_digest()
                     || effect.asset_definition_id() != snapshot.state().asset_definition_id()
                     || effect.asset_definition_id() != &statement.asset_definition_id
-                    || effect.public_balance_scope()
-                        != snapshot.state().public_balance_scope()
+                    || effect.public_balance_scope() != snapshot.state().public_balance_scope()
                     || effect.public_balance_scope() != statement.public_balance_scope
                     || effect.reserve_account() != snapshot.state().reserve_account()
                     || effect.anchor() != statement.anchor
@@ -4880,8 +4879,7 @@ impl Execute for SubmitPrivacyProofV1 {
                                 authority,
                                 effect.reserve_account(),
                                 amount,
-                            )
-                            ?;
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
                             super::asset::isi::execute_verified_privacy_public_balance_transfer(
@@ -4976,8 +4974,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.next_root() == effect.current_root()
                     || effect.value_balance() != value_balance
                     || effect.public_balance_scope() != public_balance_scope
-                    || effect.public_balance_scope()
-                        != snapshot.bootstrap().public_balance_scope()
+                    || effect.public_balance_scope() != snapshot.bootstrap().public_balance_scope()
                 {
                     return Err(Error::InvariantViolation(
                         "native proof-managed effect is inconsistent with trusted state or its statement"
@@ -5324,8 +5321,7 @@ impl Execute for SubmitPrivacyProofV1 {
                                 authority,
                                 reserve_account,
                                 amount,
-                            )
-                            ?;
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
                             super::asset::isi::execute_verified_privacy_public_balance_transfer(

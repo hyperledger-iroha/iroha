@@ -12,9 +12,76 @@ def test_revision4_model_contract_is_registered() -> None:
     module = load_checker()
 
     assert "SumeragiV2Revision4" in module.REQUIRED_MODEL_MODULES
+    assert (
+        "SumeragiV2Revision4AdversarialSafety"
+        in module.REQUIRED_MODEL_MODULES
+    )
     assert "SumeragiV2Revision4.cfg" in module.REQUIRED_TLC_CONFIGS
+    assert (
+        "SumeragiV2Revision4AdversarialSafety.cfg"
+        in module.REQUIRED_TLC_CONFIGS
+    )
     assert "SumeragiV2Revision4Liveness.cfg" in module.REQUIRED_TLC_CONFIGS
     assert not module._revision4_model_contract_errors(module.FORMAL_DIR)
+    assert not module._revision4_adversarial_safety_contract_errors(
+        module.FORMAL_DIR
+    )
+
+
+def copy_revision4_adversarial_contract(tmp_path: Path, module) -> Path:
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for filename in (
+        "SumeragiV2Revision4AdversarialSafety.tla",
+        "SumeragiV2Revision4AdversarialSafety.cfg",
+    ):
+        shutil.copy2(module.FORMAL_DIR / filename, formal_dir / filename)
+    return formal_dir
+
+
+def test_revision4_adversarial_model_rejects_first_qc_global_stop(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_revision4_adversarial_contract(tmp_path, module)
+    model = formal_dir / "SumeragiV2Revision4AdversarialSafety.tla"
+    source = model.read_text(encoding="utf-8")
+    source = source.replace(
+        "    /\\ body \\notin commitQCs\n",
+        "    /\\ body \\notin commitQCs\n"
+        "    /\\ commitQCs = {}\n",
+        1,
+    )
+    model.write_text(source, encoding="utf-8")
+
+    errors = module._revision4_adversarial_safety_contract_errors(formal_dir)
+    assert any(
+        "FormCommitQC must remain enabled after the first QC or decision"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_revision4_adversarial_model_rejects_byzantine_sign_once_guard(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_revision4_adversarial_contract(tmp_path, module)
+    model = formal_dir / "SumeragiV2Revision4AdversarialSafety.tla"
+    source = model.read_text(encoding="utf-8")
+    source = source.replace(
+        "    /\\ <<validator, body>> \\notin commitVotes\n",
+        "    /\\ <<validator, body>> \\notin commitVotes\n"
+        "    /\\ VoteBodies(validator) = {}\n",
+        1,
+    )
+    model.write_text(source, encoding="utf-8")
+
+    errors = module._revision4_adversarial_safety_contract_errors(formal_dir)
+    assert any(
+        "must permit the faulty validator to vote for both bodies" in error
+        for error in errors
+    ), errors
 
 
 def test_revision4_model_contract_rejects_output_repair_as_progress_fairness(

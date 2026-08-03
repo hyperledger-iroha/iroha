@@ -14755,14 +14755,12 @@ pub mod isi {
             }
             st.tree_profile = derived_tree_profile;
 
-            let mut vk_fingerprints: Vec<String> = [
-                self.vk_unshield().clone(),
-                self.vk_shield().clone(),
-            ]
-            .into_iter()
-            .flatten()
-            .map(|vk| format!("{}::{}", vk.backend, vk.name))
-            .collect();
+            let mut vk_fingerprints: Vec<String> =
+                [self.vk_unshield().clone(), self.vk_shield().clone()]
+                    .into_iter()
+                    .flatten()
+                    .map(|vk| format!("{}::{}", vk.backend, vk.name))
+                    .collect();
             vk_fingerprints.sort();
             let vk_set_hash = if vk_fingerprints.is_empty() {
                 None

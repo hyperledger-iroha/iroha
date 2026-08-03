@@ -43,6 +43,12 @@ routes to the current proxy tail, and committee-wide timeout routes which do
 not depend on that tail. It also checks full-body-before-Prepare and Commit,
 agreement, fallback reset, exact decided-body recovery before local apply, and
 successor activation while finalized-output debt may remain outstanding.
+`SumeragiV2Revision4AdversarialSafety.tla` is the separate non-vacuity kernel
+for agreement: in one bounded round, its single Byzantine validator may vote
+for both candidate bodies, honest validators may split but durably sign at
+most once, and vote, QC, and decision actions remain open after the first QC.
+Its exhaustive configuration checks that neither two conflicting CommitQCs
+nor two conflicting decisions can become reachable.
 
 The deductive safety and conditional post-GST liveness arguments are in
 [`PROOF.md`](PROOF.md). Three proof boundaries matter when interpreting a TLC
@@ -52,11 +58,13 @@ reconstruction, hash checking, durability, and deterministic validation.
 honest-tail QC, timeout, application, and successor actions, and suppresses a
 timeout-certified departure while the leader and proxy tail are both honest;
 this represents deadlines which exceed the finite post-GST service bound.
-Finally, the compact transition system does not enumerate a complete
-Byzantine network adversary or prove its production refinement. The safety
-configuration therefore supplies bounded invariant evidence, and the liveness
-configuration supplies bounded temporal evidence under the named assumptions;
-neither is a TLAPS proof or an unconditional termination result.
+Finally, neither compact transition system enumerates a complete Byzantine
+network adversary or proves its production refinement. The adversarial safety
+kernel exhausts the critical four-validator/two-body vote-equivocation state
+space, while the main safety configuration supplies bounded routing and
+availability evidence and the liveness configuration supplies bounded
+temporal evidence under the named assumptions. None is a TLAPS proof or an
+unconditional termination result.
 
 ## Revision-4 files
 
@@ -64,6 +72,11 @@ neither is a TLAPS proof or an unconditional termination result.
   model, routing-invariant surface, and conditional post-GST temporal surface.
 - `SumeragiV2Revision4.cfg` is its exhaustive bounded
   four-validator/two-body safety instantiation.
+- `SumeragiV2Revision4AdversarialSafety.tla` removes the single-proposal and
+  stop-after-QC shortcuts while allowing the one faulty validator to vote for
+  both bodies.
+- `SumeragiV2Revision4AdversarialSafety.cfg` exhaustively checks conflicting
+  CommitQC and decision unreachability for that adversarial kernel.
 - `SumeragiV2Revision4Liveness.cfg` uses the same geometry to check
   `ConditionalPostGSTProgress` and
   `FinalizedOutputDebtDoesNotBlockSuccessor` under `PostGSTSpec`.
@@ -73,11 +86,12 @@ neither is a TLAPS proof or an unconditional termination result.
 Run only the revision-4 TLC corridor with:
 
 ```sh
-bash scripts/formal/run_sumeragi_v2_tlc.sh ci revision4_safety revision4_liveness
+bash scripts/formal/run_sumeragi_v2_tlc.sh ci revision4_safety revision4_adversarial_safety revision4_liveness
 ```
 
-The repository proof-ledger checker requires both configurations and registers
-the model in the formal source manifest used by generated evidence:
+The repository proof-ledger checker requires all three revision-4
+configurations and registers both models in the formal source manifest used by
+generated evidence:
 
 ```sh
 python3 scripts/formal/check_sumeragi_v2_proof_ledger.py

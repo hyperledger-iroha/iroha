@@ -1092,9 +1092,7 @@ mod tests {
                 active.clone(),
                 source.clone(),
                 destination.clone(),
-                AssetBalanceScope::Dataspace(
-                    iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-                ),
+                AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL,),
                 1,
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::UniversalDataspaceScope)

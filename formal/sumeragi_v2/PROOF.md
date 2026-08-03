@@ -200,6 +200,18 @@ invariant checking. The finite `Views = 0..(n - 1)` horizon is one complete
 role rotation; unlike the former unbounded natural-valued executable view, it
 has a finite state graph which TLC can exhaust.
 
+[`SumeragiV2Revision4AdversarialSafety.tla`](SumeragiV2Revision4AdversarialSafety.tla)
+separately removes the main compact model's single-proposal and retained-lock
+shortcuts from the agreement search. Its bounded round contains four
+validators, quorum three, two independent candidate bodies, and one Byzantine
+validator which may vote for both. Each honest validator may receive both full
+bodies but its durable Commit intent permits at most one vote. Vote, QC, and
+decision actions remain enabled after the first QC, so TLC continues searching
+for a second, conflicting QC and decision instead of obtaining agreement by
+terminating progress. The exhaustive
+[`SumeragiV2Revision4AdversarialSafety.cfg`](SumeragiV2Revision4AdversarialSafety.cfg)
+checks both conflicting-CommitQC unreachability and decision agreement.
+
 [`SumeragiV2Revision4Liveness.cfg`](SumeragiV2Revision4Liveness.cfg) checks the
 same finite geometry with `PostGSTSpec`. That specification makes the
 conditional partial-synchrony premises executable: while the current leader

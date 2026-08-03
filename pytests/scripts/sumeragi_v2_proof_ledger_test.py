@@ -11889,9 +11889,9 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
     (
         (
             "pop_next_with_ownership",
-            "self.class_readiness_at_lifecycle(oldest_lifecycle_ordinal)",
             "self.class_readiness()",
-            "runtime class arbitration is restricted to the oldest live lifecycle",
+            "(false, false, false)",
+            "runtime class arbitration sees every globally ready bounded service class",
         ),
         (
             "accept_driver_dispatch",
@@ -11900,16 +11900,16 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
             "Busy deferral transfers rather than replaces the predecessor owner",
         ),
         (
-            "minimum_active_lifecycle_ordinal",
-            "for owner in self.deferred_lifecycle_ownership.values()",
-            "for owner in [].iter()",
+            "minimum_active_lifecycle_ordinal_excluding",
+            "for (ordinal, owner) in &self.deferred_lifecycle_ownership",
+            "for (ordinal, owner) in [].iter()",
             "global runtime predecessor cut includes Busy-deferred ownership",
         ),
         (
             "scheduler_arbitration_inputs",
-            "fifo_minimum.is_some() && fifo_minimum == global_minimum",
-            "fifo_minimum.is_some()",
-            "runtime FIFO is ready only at the global live-lifecycle minimum",
+            "let fifo_ready = fifo_minimum.is_some();",
+            "let fifo_ready = false;",
+            "passive lifecycle capabilities cannot suppress runnable FIFO classes",
         ),
     ),
 )
@@ -36455,11 +36455,15 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     runtime.write_text(
         mutate_runtime_item(
             "step",
-            "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
+            "        if !timeout_preempts\n"
+            "            && let Some(step) = self.dispatch_one_adapter_deferred(now, None)?\n"
+            "        {\n",
             "        if false {\n"
             "            return Ok(RuntimeStep::Idle);\n"
             "        }\n"
-            "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
+            "        if !timeout_preempts\n"
+            "            && let Some(step) = self.dispatch_one_adapter_deferred(now, None)?\n"
+            "        {\n",
         ),
         encoding="utf-8",
     )

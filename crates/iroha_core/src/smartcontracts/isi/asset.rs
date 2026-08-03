@@ -1301,9 +1301,7 @@ pub mod isi {
     fn coherent_execution_dataspace(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Option<DataSpaceId>, Error> {
-        if state_transaction.current_dataspace_id
-            != state_transaction.world.current_dataspace_id
-        {
+        if state_transaction.current_dataspace_id != state_transaction.world.current_dataspace_id {
             return Err(InstructionExecutionError::InvariantViolation(
                 "transaction and world execution dataspaces are inconsistent".into(),
             ));
@@ -1335,14 +1333,10 @@ pub mod isi {
                     operation,
                 )?;
             }
-            (
-                AssetBalancePolicy::DataspaceRestricted,
-                AssetBalanceScope::Dataspace(dataspace),
-            ) => {
+            (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Dataspace(dataspace)) => {
                 if dataspace == DataSpaceId::UNIVERSAL {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "the universal coordinator is not a restricted public balance scope"
-                            .into(),
+                        "the universal coordinator is not a restricted public balance scope".into(),
                     ));
                 }
                 if let Some(route) = execution_dataspace

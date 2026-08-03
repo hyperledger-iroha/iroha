@@ -7548,19 +7548,18 @@ impl NetworkBuilder {
         let zk_config = resolved_genesis_config
             .as_ref()
             .map(|config| config.zk.clone());
-        let (mut parameter_state, preview_staged_policy_hashes) = match custom_genesis_block
-            .as_ref()
-        {
-            Some(custom) => (
-                consensus_parameters_from_genesis_with_overrides(
-                    custom,
-                    &genesis_isi,
-                    &genesis_post_topology_isi,
+        let (mut parameter_state, preview_staged_policy_hashes) =
+            match custom_genesis_block.as_ref() {
+                Some(custom) => (
+                    consensus_parameters_from_genesis_with_overrides(
+                        custom,
+                        &genesis_isi,
+                        &genesis_post_topology_isi,
+                    ),
+                    None,
                 ),
-                None,
-            ),
-            None => {
-                let (preview_genesis, staged_hash) =
+                None => {
+                    let (preview_genesis, staged_hash) =
                     config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
                         genesis_isi.clone(),
                         genesis_post_topology_isi.clone(),
@@ -7581,13 +7580,13 @@ impl NetworkBuilder {
                         }),
                         confidential_policy_hash,
                     );
-                assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
-                (
-                    consensus_parameters_from_genesis(&preview_genesis),
-                    Some(staged_hash),
-                )
-            }
-        };
+                    assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
+                    (
+                        consensus_parameters_from_genesis(&preview_genesis),
+                        Some(staged_hash),
+                    )
+                }
+            };
         parameter_state.sumeragi.block_cadence_ms = std::num::NonZeroU64::new(
             u64::try_from(block_cadence.as_millis())
                 .expect("signed block cadence fits into u64 milliseconds"),

@@ -1271,15 +1271,11 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         required_expression="""
                             let queue_before = self.ownership_snapshot();
                             let cursor_before = self.next_class.service_code();
-                            let Some(oldest_lifecycle_ordinal) =
-                                self.oldest_lifecycle_ordinal()?
-                            else {
+                            if self.oldest_lifecycle_ordinal()?.is_none() {
                                 return Ok(None);
-                            };
+                            }
                             let (completion_ready, progress_ready, normal_ready) =
-                                self.class_readiness_at_lifecycle(
-                                    oldest_lifecycle_ordinal
-                                );
+                                self.class_readiness();
                             let selection = select_bounded_service_class(
                                 cursor_before,
                                 completion_ready,
