@@ -5179,9 +5179,17 @@ impl V2LaneWorkAdapter {
         retained_qcs: &[LaneBlockQcV1],
     ) -> Result<Option<BTreeMap<PublicKey, Vec<u8>>>, V2LaneWorkError> {
         let descriptor = &proposal.descriptor;
-        if descriptor.proposal_height != self.context.height {
+        // Exact unfinished output can remain successor-owned for more than one
+        // global height. Historical output crosses rollover only through the
+        // exact retained message hashes, so it neither needs nor may inherit a
+        // later height's PoP authority. Proof-variant retirement below is
+        // deliberately available only to the current height.
+        if descriptor.proposal_height < self.context.height {
+            return Ok(None);
+        }
+        if descriptor.proposal_height > self.context.height {
             return Err(V2LaneWorkError::Persistence(
-                "retained unfinished lane proposal belongs to another height".to_owned(),
+                "retained unfinished lane proposal belongs to a future height".to_owned(),
             ));
         }
         for qc in retained_qcs {
@@ -21299,6 +21307,62 @@ pub(super) mod tests {
             )
             .is_err(),
             "the complete frozen PoP source must not weaken aggregate validation"
+        );
+    }
+
+    #[test]
+    fn unfinished_historical_lane_session_crosses_a_second_rollover_without_later_pops() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 2);
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+        let incarnation = adapter
+            .state
+            .lane_incarnation_at_height(lane_id, 1)
+            .expect("lane incarnation is active at the retained proposal height");
+        let proposal =
+            proposal_for_route(&adapter, &keys, lane_id, dataspace_id, incarnation, 1, 1);
+        assert_eq!(
+            adapter.lane_sessions.insert_proposal(proposal.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+
+        let leader = usize::try_from(adapter.context.leader(0)).expect("leader index");
+        let current_block = test_block(2, None, None, &keys[leader]);
+        let current_finality = finality_artifact_for_block(&adapter, &keys, &current_block);
+        let sources = adapter
+            .retained_lane_rollover_sources(&current_finality)
+            .expect("an exact older unfinished session crosses another rollover");
+        let source = sources
+            .get(&proposal.proposal_hash)
+            .expect("the retained proposal keeps an exact successor owner");
+        match source {
+            DurableLaneSessionSource::Retained {
+                proposal: retained,
+                message_hashes,
+                validator_pops,
+                ..
+            } => {
+                assert_eq!(retained, &proposal);
+                assert!(
+                    message_hashes.contains(&HashOf::new(&BlockMessage::LaneBlockProposal(
+                        proposal.clone()
+                    )))
+                );
+                assert!(
+                    validator_pops.is_none(),
+                    "historical exact output must not inherit a later height's PoP authority"
+                );
+            }
+            other => panic!("unexpected historical rollover source: {other:?}"),
+        }
+
+        let future = proposal_for_route(&adapter, &keys, lane_id, dataspace_id, incarnation, 3, 1);
+        let error = adapter
+            .retained_lane_validator_pops(&current_finality, &future, &[])
+            .expect_err("future-height retained work remains fail-closed");
+        assert!(
+            error.to_string().contains("future height"),
+            "unexpected future-height rejection: {error}"
         );
     }
 
