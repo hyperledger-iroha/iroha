@@ -259,11 +259,12 @@ The final Sumeragi handoff repeats that source isolation instead of collapsing a
 traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane, authenticated
 non-validator sources receive on-demand lanes capped by
 `sumeragi.queues.authenticated_non_validator_sources = H`, and anonymous traffic retains its own
-persistent lane. Each validator owns an ordinary first-message slot, a non-timeout Progress slot,
-a distinct signer-bounded TimeoutVote slot, and a TransportCompletion slot. Each materialized
-authenticated non-validator lane owns a generic slot and a TransportCompletion slot; the anonymous
-lane owns the same pair for a non-empty roster. Configuration must therefore provide at least
-`4 * roster_len + 2 * H + 2` slots, or `2 * H + 1` for the no-roster diagnostic geometry, and body
+persistent lane. Each validator owns an ordinary first-message slot, an ordinary Progress slot,
+a certified-fence-escape slot, a distinct signer-bounded TimeoutVote slot, and a
+TransportCompletion slot. Each materialized authenticated non-validator lane owns a generic slot,
+a certified-fence-escape slot, and a TransportCompletion slot; the anonymous
+lane owns only the generic and TransportCompletion pair for a non-empty roster. Configuration must therefore provide at least
+`5 * roster_len + 3 * H + 2` slots, or `3 * H + 1` for the no-roster diagnostic geometry, and body
 bytes must isolate `(roster_len + H + 1) * body_source_bytes`. A semantic duplicate carrying an
 alternate authenticated reply route attaches to its existing request before the new-lane `H` gate
 is evaluated. Exact-output route capacity remains the independent effective
@@ -286,8 +287,10 @@ still require a current-roster semantic origin.
 Removal from that fair ingress is conditional on the exact next queue. A reducer-directed head
 remains in its source lane unless the single runtime FIFO has room in that payload's Normal or
 Progress prefix. TimeoutVote, Commit votes, QCs, TCs, payload chunks, certified-body requests and
-responses, and Commit-certificate requests and responses all receive outer Progress ownership;
-TimeoutVote keeps its distinct signer-bounded reservation. A commit-certificate response is also
+responses, and Commit-certificate requests and responses all receive outer Progress ownership.
+TC, direct CommitQC, and a Commit-certificate response carrying CommitQC additionally use the
+isolated certified-fence-escape count and byte owner; TimeoutVote keeps its distinct signer-bounded
+reservation. A commit-certificate response is also
 charged to runtime Progress because successful authentication unwraps it into a CommitQC. A
 current-height certified-body request remains queued until the ordered I/O FIFO has room in its
 authenticated service prefix. One dequeue attempt examines at most one head from every ready

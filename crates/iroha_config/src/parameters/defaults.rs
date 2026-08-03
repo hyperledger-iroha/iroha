@@ -3900,16 +3900,16 @@ pub mod sumeragi {
     pub const QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY: NonZeroUsize = nonzero!(2_usize);
     /// Certified-body and block-sync outer-ingress message capacity.
     ///
-    /// Every admitted validator owns four protected positions (general source,
-    /// non-timeout progress, timeout vote, and transport completion), while
-    /// each configured authenticated non-validator source owns two positions, and
+    /// Every admitted validator owns five protected positions (general source,
+    /// ordinary progress, certified fence escape, timeout vote, and transport completion), while
+    /// each configured authenticated non-validator source owns three positions, and
     /// anonymous traffic owns two further positions.
     /// Deriving the default from the protocol roster ceiling keeps the queue
     /// count allocation representable for every legal height context; byte
     /// quotas remain explicitly roster-scaled by deployment generators.
     pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(
-        4 * MAX_VALIDATORS_PER_HEIGHT
-            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+        5 * MAX_VALIDATORS_PER_HEIGHT
+            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
             + 2
     );
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
@@ -3918,8 +3918,8 @@ pub mod sumeragi {
     /// independently authenticated non-validator lanes, and the anonymous lane.
     pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(231_usize * 1024 * 1024);
     /// Per-ingress-source canonical outer-ingress wire-byte partition. The
-    /// default contains disjoint maximum ordinary-envelope, payload-completion,
-    /// and timeout-vote partitions. The ordinary and completion partitions also
+    /// default contains disjoint maximum ordinary-envelope, certified-fence-escape,
+    /// payload-completion, and timeout-vote partitions. The ordinary and completion partitions also
     /// cover the one-MiB atomic lane-certificate and four-MiB executable-source
     /// protocol floors when deployments choose a smaller global block body.
     pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(33_usize * 1024 * 1024);
@@ -3937,6 +3937,11 @@ pub mod sumeragi {
         8 + RECOMMENDED_DA_MAX_CHUNK_COUNT * 33;
     /// Per-validator source bytes isolated from ordinary traffic for a timeout vote.
     pub const TIMEOUT_VOTE_RESERVE_BYTES: usize = 64 * 1024;
+    /// Per-validator source bytes isolated for a TC, CommitQC, or CommitQC response.
+    ///
+    /// The maximum 31-validator certificate forms fit this bound. Height
+    /// activation derives and checks their exact canonical wire requirement.
+    pub const CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES: usize = 64 * 1024;
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
     /// Reconstructed bodies waiting for reducer delivery.

@@ -226,13 +226,13 @@ AsyncReplyRequestKinds ==
 AsyncReplySourceOrder == [index \in 1..N |-> index - 1]
 AsyncReplySourceCapacity == Cardinality(AsyncArchiveServerIds)
 
-\* The same 4N+2 ingress geometry which protects every authenticated source's
+\* The same 5N+2 ingress geometry which protects every authenticated source's
 \* exact-output occurrence must contain at least one route owner per source.
 \* CurrentVoters may be a strict subset of those N peers; zero-power archives
 \* do not add another lane or an unbounded source class.  This is a
 \* configuration equation, not an eviction fallback.
 AsyncReplyExactOutputCorridorCapacity ==
-  (AsyncIngressCapacity - 2) \div 4
+  (AsyncIngressCapacity - 2) \div 5
 
 \* The Rust/Norito maximal structural fixture covers 128 signer indices, a
 \* maximum-size PrepareQC aggregate signature, and a maximum-size timeout-vote
@@ -519,10 +519,10 @@ AsyncConfiguration ==
   /\ AsyncQueueCapacity \in Nat \ {0}
   /\ AsyncProgressReserve \in Nat \ {0}
   /\ AsyncCompletionReserve \in Nat \ {0}
-  /\ AsyncProgressReserve + AsyncCompletionReserve < AsyncQueueCapacity
+  /\ AsyncProgressReserve + AsyncCompletionReserve + 1 < AsyncQueueCapacity
   /\ AsyncCompletionReserve >= 1
   /\ AsyncIngressCapacity \in Nat \ {0}
-  /\ AsyncIngressCapacity >= 4 * N + 2
+  /\ AsyncIngressCapacity >= 5 * N + 2
   /\ AsyncReplySourceCapacity = N
   /\ AsyncReplyExactOutputCorridorCapacity >=
        AsyncReplySourceCapacity
@@ -3759,8 +3759,8 @@ AsyncGenesisResponsiveVoters ==
   AsyncVotersAt(ContextRecord(0, <<>>))
 
 AsyncNormalLimit ==
-  AsyncQueueCapacity - AsyncProgressReserve - AsyncCompletionReserve
-AsyncProgressLimit == AsyncQueueCapacity - AsyncCompletionReserve
+  AsyncQueueCapacity - AsyncProgressReserve - AsyncCompletionReserve - 1
+AsyncProgressLimit == AsyncQueueCapacity - AsyncCompletionReserve - 1
 AsyncOrdinaryCompletionLimit == AsyncQueueCapacity - 1
 
 AsyncQueueDepth(node) == Len(asyncCommandQueues[node])
@@ -4706,6 +4706,12 @@ CanEnqueueClass(node, commandClass) ==
          AsyncQueueDepth(node) < AsyncOrdinaryCompletionLimit
 
 CanEnqueueCertifiedResponse(node) ==
+  AsyncQueueDepth(node) < AsyncQueueCapacity
+
+\* The final physical FIFO slot is not part of any ordinary class limit.
+\* Only one deeply authenticated certificate root may consume it; popping
+\* that root immediately restores the ordinary bounded prefix.
+CanEnqueueCertifiedFenceEscape(node) ==
   AsyncQueueDepth(node) < AsyncQueueCapacity
 
 SequenceSet(sequence) == {sequence[index]: index \in 1..Len(sequence)}
@@ -6575,10 +6581,24 @@ AsyncCandidateProducerContinuationEnqueueConsumesSelectedReplayReservation(
      /\ asyncRunnerPhase[node] = "Local"
      /\ asyncRunnerBudget[node] > 0
 
+AsyncCandidateIsDirectCertifiedFenceEscape(candidate) ==
+  /\ candidate.class = "Progress"
+  /\ candidate.evidence \in AsyncNetworkItems
+  /\ AsyncCertifiedFenceEscapeItem(candidate.evidence)
+  /\ candidate.causalOrigin.phase \in {"DeliverTC", "DeliverQC"}
+
+AsyncCandidateHasCertifiedFenceRoot(candidate) ==
+  /\ candidate.class \in {"Progress", "Completion"}
+  /\ candidate.causalOrigin.phase \in {"DeliverTC", "DeliverQC"}
+  /\ candidate.causalOrigin.payload.item.kind
+       \in {"TimeoutCertificate", "CommitQC"}
+
 EnqueueCandidate(candidate) ==
   LET node == candidate.node
   IN /\ ~AsyncCandidateServiceCoalesced(candidate)
-     /\ \/ AsyncCandidateProducerContinuationOrdinaryEnqueuePreservesReplayPrefix(
+     /\ \/ /\ AsyncCandidateIsDirectCertifiedFenceEscape(candidate)
+              /\ CanEnqueueCertifiedFenceEscape(node)
+        \/ AsyncCandidateProducerContinuationOrdinaryEnqueuePreservesReplayPrefix(
               candidate)
         \/ AsyncCandidateProducerContinuationEnqueueConsumesSelectedReplayReservation(
              candidate)
@@ -7159,7 +7179,7 @@ RetireCompletedBodyCertifiedResponseAuthority(command) ==
 
 CommitCertificateResponseItem(request, qc) ==
   AsyncNetworkItem(
-    "CommitCertificateResponse", AsyncUntrustedSource,
+    "CommitCertificateResponse", request.envelope.recipient,
     AsyncCommitCertificateResponseEnvelope(request, qc))
 
 (***************************************************************************
@@ -7412,10 +7432,35 @@ IngressHasCoalescingOwnerVia(item, authenticatedSource) ==
 IngressHasCoalescingOwner(item) ==
   IngressHasCoalescingOwnerVia(item, item.source)
 
+(*
+Only authenticated TC, direct CommitQC, and CommitCertificateResponse carrying
+CommitQC may spend the signer-fence escape reservation.  PrepareQC and raw
+TimeoutVote deliberately remain ordinary Progress.  This is a transport and
+capacity classifier only; reducer admission still verifies the complete
+certificate before it can change protocol state.
+*)
+AsyncCertifiedFenceEscapeKinds ==
+  {"TimeoutCertificate", "CommitQC", "CommitCertificateResponse"}
+
+AsyncCertifiedFenceEscapeItem(item) ==
+  /\ item.kind \in AsyncCertifiedFenceEscapeKinds
+  /\ IngressItemHasAuthenticatedHistory(item)
+  /\ IngressResourceSource(item) \in ValidatorIds
+
+AsyncCertifiedFenceEscapeContext(item) ==
+  CASE item.kind = "TimeoutCertificate" -> item.envelope.tc.context
+    [] item.kind = "CommitQC" -> item.envelope.qc.context
+    [] item.kind = "CommitCertificateResponse" -> item.envelope.qc.context
+
 IngressLaneHasNonTimeoutProgressIn(lanes, recipient, source) ==
   \E queued \in SequenceSet(lanes[recipient][source]):
     /\ IngressAdmissionClass(queued) = "Progress"
     /\ queued.kind # "TimeoutVote"
+    /\ ~AsyncCertifiedFenceEscapeItem(queued)
+
+IngressLaneHasCertifiedFenceEscapeIn(lanes, recipient, source) ==
+  \E queued \in SequenceSet(lanes[recipient][source]):
+    AsyncCertifiedFenceEscapeItem(queued)
 
 IngressLaneHasTimeoutVoteIn(lanes, recipient, source) ==
   \E queued \in SequenceSet(lanes[recipient][source]):
@@ -7432,6 +7477,15 @@ AsyncTimeoutVoteByteGateAllows(item) ==
      /\ ~IngressLaneHasTimeoutVoteIn(asyncIngressLanes,
                                       item.envelope.recipient,
                                       IngressResourceSource(item))
+
+AsyncCertifiedFenceEscapeOwnerGateAllowsVia(item, authenticatedSource) ==
+  \/ ~AsyncCertifiedFenceEscapeItem(item)
+  \/ ~IngressLaneHasCertifiedFenceEscapeIn(
+       asyncIngressLanes, item.envelope.recipient,
+       IngressResourceSourceVia(item, authenticatedSource))
+
+AsyncCertifiedFenceEscapeOwnerGateAllows(item) ==
+  AsyncCertifiedFenceEscapeOwnerGateAllowsVia(item, item.source)
 
 AsyncTransportCompletionOwnerGateAllows(item) ==
   \/ ~IngressUsesPhysicalCompletionOwner(item)
@@ -7452,14 +7506,15 @@ AsyncUntrustedGenericCompletionGateAllows(item) ==
 
 (*
 An empty source needs a first-message slot.  A validator separately reserves a
-missing non-timeout Progress item, a missing TimeoutVote, and one missing
-TransportCompletion item shared by Chunk and CertifiedResponse.  The
-continuation term covers the depth-one through depth-three combinations whose
-removal would recreate one of those reservations.  The aggregate untrusted
+missing ordinary Progress item, a missing certified-fence escape, a missing
+TimeoutVote, and one missing TransportCompletion item shared by Chunk and
+CertifiedResponse.  The continuation term covers the depth-one through
+depth-four combinations whose removal would recreate one of those
+reservations.  The aggregate untrusted
 source reserves `max(2 - depth, missing_transport_completion)`: at depth zero
 the empty-source and missing-completion terms are its two owners, while at
 depth one a present completion receives the separate generic continuation.
-Together these potentials match the production `4N+2` count gate for N >= 1.
+Together these potentials match the production `5N+2` count gate for N >= 1.
 *)
 IngressProtectedSourcesFor(lanes, recipient) ==
   {source \in AsyncIngressSources:
@@ -7472,41 +7527,36 @@ IngressTimeoutVoteProtectedSourcesFor(lanes, recipient) ==
   {source \in ValidatorIds:
      ~IngressLaneHasTimeoutVoteIn(lanes, recipient, source)}
 
+IngressCertifiedFenceEscapeProtectedSourcesFor(lanes, recipient) ==
+  {source \in ValidatorIds:
+     ~IngressLaneHasCertifiedFenceEscapeIn(lanes, recipient, source)}
+
 IngressTransportCompletionProtectedSourcesFor(lanes, recipient) ==
   {source \in AsyncIngressSources:
      ~IngressLaneHasTransportCompletionIn(lanes, recipient, source)}
 
+IngressProtectedClassNames ==
+  {"OrdinaryProgress", "CertifiedFenceEscape",
+   "TimeoutVote", "TransportCompletion"}
+
+IngressProtectedClassesPresentIn(lanes, recipient, source) ==
+  {class \in IngressProtectedClassNames:
+     CASE class = "OrdinaryProgress" ->
+            IngressLaneHasNonTimeoutProgressIn(lanes, recipient, source)
+       [] class = "CertifiedFenceEscape" ->
+            IngressLaneHasCertifiedFenceEscapeIn(lanes, recipient, source)
+       [] class = "TimeoutVote" ->
+            IngressLaneHasTimeoutVoteIn(lanes, recipient, source)
+       [] class = "TransportCompletion" ->
+            IngressLaneHasTransportCompletionIn(lanes, recipient, source)}
+
 IngressContinuationProtectedSourcesFor(lanes, recipient) ==
   {source \in AsyncIngressSources:
      \/ /\ source \in ValidatorIds
-           /\ \/ Len(lanes[recipient][source]) = 0
-              \/ /\ Len(lanes[recipient][source]) = 1
-                    /\ (IngressLaneHasNonTimeoutProgressIn(
-                           lanes, recipient, source)
-                         \/ IngressLaneHasTimeoutVoteIn(
-                              lanes, recipient, source)
-                         \/ IngressLaneHasTransportCompletionIn(
-                              lanes, recipient, source))
-              \/ /\ Len(lanes[recipient][source]) = 2
-                    /\ \/ /\ IngressLaneHasNonTimeoutProgressIn(
-                                  lanes, recipient, source)
-                               /\ IngressLaneHasTimeoutVoteIn(
-                                    lanes, recipient, source)
-                       \/ /\ IngressLaneHasNonTimeoutProgressIn(
-                                  lanes, recipient, source)
-                               /\ IngressLaneHasTransportCompletionIn(
-                                    lanes, recipient, source)
-                       \/ /\ IngressLaneHasTimeoutVoteIn(
-                                  lanes, recipient, source)
-                               /\ IngressLaneHasTransportCompletionIn(
-                                    lanes, recipient, source)
-              \/ /\ Len(lanes[recipient][source]) = 3
-                    /\ IngressLaneHasNonTimeoutProgressIn(
-                         lanes, recipient, source)
-                    /\ IngressLaneHasTimeoutVoteIn(
-                         lanes, recipient, source)
-                    /\ IngressLaneHasTransportCompletionIn(
-                         lanes, recipient, source)
+           /\ Len(lanes[recipient][source]) =
+                Cardinality(
+                  IngressProtectedClassesPresentIn(
+                    lanes, recipient, source))
      \/ /\ source \notin ValidatorIds
            /\ Len(lanes[recipient][source]) = 1
            /\ IngressLaneHasTransportCompletionIn(
@@ -7514,6 +7564,8 @@ IngressContinuationProtectedSourcesFor(lanes, recipient) ==
 
 IngressProtectedSlotCountFor(lanes, recipient) ==
   Cardinality(IngressProtectedSourcesFor(lanes, recipient))
+    + Cardinality(
+        IngressCertifiedFenceEscapeProtectedSourcesFor(lanes, recipient))
     + Cardinality(
         IngressTimeoutVoteProtectedSourcesFor(lanes, recipient))
     + Cardinality(
@@ -9441,7 +9493,8 @@ CommandDispatchable(command) ==
   /\ CommandExecutionReady(command)
   /\ (NodeIdle(command.node)
         \/ command.class = "Completion"
-        \/ LocalAssemblyBusyDispatchAllowed(command))
+        \/ LocalAssemblyBusyDispatchAllowed(command)
+        \/ AsyncCandidateHasCertifiedFenceRoot(command))
 
 ProtectedProgressCommand(command) ==
   CASE command.kind = "DeliverVote" ->
@@ -10230,6 +10283,7 @@ AsyncLeaderWireLocalAcceptanceCapacityProven(item) ==
      /\ IngressDepth(recipient)
           < IngressUsableCapacityAfterAdmission(item)
      /\ AsyncTimeoutVoteByteGateAllows(item)
+     /\ AsyncCertifiedFenceEscapeOwnerGateAllows(item)
      /\ AsyncTransportCompletionOwnerGateAllows(item)
      /\ CertifiedResponseFreshClaimGateAllows(item)
      /\ AsyncUntrustedGenericCompletionGateAllows(item)
@@ -10571,6 +10625,8 @@ CanAdmitIngressItemVia(item, authenticatedSource) ==
        < IngressUsableCapacityAfterAdmissionVia(
            item, authenticatedSource)
   /\ AsyncTimeoutVoteByteGateAllows(item)
+  /\ AsyncCertifiedFenceEscapeOwnerGateAllowsVia(
+       item, authenticatedSource)
   /\ AsyncTransportCompletionOwnerGateAllows(item)
   /\ CertifiedResponseFreshClaimGateAllows(item)
   /\ AsyncUntrustedGenericCompletionGateAllows(item)
@@ -11694,14 +11750,19 @@ IngressItemCanDrain(node, item) ==
                     THEN \/ ~CommitCertificateResponseAuthorized(item)
                          \/ CandidateAdmissionCoalesced(
                               CommitCertificateResponseCandidate(item))
-                         \/ /\ ~NonCompletionCausalAdmissionDebt(node)
-                               /\ CanEnqueueClass(node, "Progress")
+                         \/ /\ CanEnqueueCertifiedFenceEscape(node)
                                /\ ~CandidateAdmissionCoalesced(
                                     CommitCertificateResponseCandidate(item))
-               ELSE \/ AsyncControlServiceOccurrenceRetired(item)
-                    \/ CandidateAdmissionCoalesced(candidate)
-                    \/ /\ ~NonCompletionCausalAdmissionDebt(node)
-                          /\ CanEnqueueClass(node, candidate.class)
+               ELSE IF AsyncCertifiedFenceEscapeItem(item)
+                    THEN \/ AsyncControlServiceOccurrenceRetired(item)
+                         \/ CandidateAdmissionCoalesced(candidate)
+                         \/ /\ candidate.class = "Progress"
+                               /\ CanEnqueueCertifiedFenceEscape(node)
+                               /\ ~CandidateAdmissionCoalesced(candidate)
+                    ELSE \/ AsyncControlServiceOccurrenceRetired(item)
+                         \/ CandidateAdmissionCoalesced(candidate)
+                         \/ /\ ~NonCompletionCausalAdmissionDebt(node)
+                               /\ CanEnqueueClass(node, candidate.class)
 
 AsyncServeIngressReservationIdentities(node) ==
   UNION {
@@ -12307,6 +12368,26 @@ AsyncCandidateProducerContinuationRunnerPrefixStepOutcome(node) ==
     /\ AsyncCandidateProducerContinuationRunnerPrefixAtBudget(node, budget)
     /\ AsyncCandidateProducerContinuationRunnerPrefixGoal(node, budget)'
 
+(*
+A certified signer-fence escape may expose its downstream verifier while a
+durable ingress owner remains parked.  It never replaces that owner.  Across
+a leader-wire control barrier, the certificate must name the same height
+context and may only close the owner's view or a later view.  Serve barriers
+need no round relation: the reducer independently authenticates the TC or
+CommitQC and the retained Serve carrier stays owned for its later normal
+retirement.
+*)
+AsyncCertifiedFenceEscapeAdvancesLeaderWire(item, owner) ==
+  /\ AsyncCertifiedFenceEscapeItem(item)
+  /\ owner.phase \in AsyncControlKinds
+  /\ AsyncCertifiedFenceEscapeContext(item) = owner.context
+  /\ DeliveryHeight(item) = owner.height
+  /\ DeliveryView(item) >= owner.view
+
+AsyncLeaderWireIngressPrefixCleared(owner) ==
+  \A predecessorSource \in AsyncIngressSources:
+    owner.ingressPredecessors[predecessorSource] = 0
+
 AsyncServeIngressIndexMayPrecedeAdmittedTarget(node, source, index) ==
   IF ~AsyncServeIngressOwnsSharedPhysicalTurn(node)
   THEN TRUE
@@ -12319,6 +12400,7 @@ AsyncServeIngressIndexMayPrecedeAdmittedTarget(node, source, index) ==
           \/ /\ item.kind \in AsyncReplyRequestKinds
              /\ AsyncServeLogicalRequestIdentity(node, item)
                   = ownerIdentity
+          \/ AsyncCertifiedFenceEscapeItem(item)
 
 AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget(
     node, source, index) ==
@@ -12328,7 +12410,46 @@ AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget(
              AsyncLeaderWireEarliestPhysicalIngressRecord(node)
            item == asyncIngressLanes[node][source][index]
        IN \/ index <= owner.ingressPredecessors[source]
-          \/ AsyncLeaderWireAdmissionMatchesRecord(item, owner)
+          \/ /\ AsyncLeaderWireAdmissionMatchesRecord(item, owner)
+             /\ AsyncLeaderWireIngressPrefixCleared(owner)
+          \/ AsyncCertifiedFenceEscapeAdvancesLeaderWire(item, owner)
+
+THEOREM AsyncLeaderWireCarrierCannotBypassFrozenPrefix ==
+  \A node \in ValidatorIds, source \in AsyncIngressSources,
+     index \in 1..Len(IngressLane(node, source)):
+    LET owner == AsyncLeaderWireEarliestPhysicalIngressRecord(node)
+        item == IngressLane(node, source)[index]
+    IN /\ AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node)
+       /\ AsyncLeaderWireAdmissionMatchesRecord(item, owner)
+       /\ ~AsyncLeaderWireIngressPrefixCleared(owner)
+       /\ index > owner.ingressPredecessors[source]
+       /\ ~AsyncCertifiedFenceEscapeAdvancesLeaderWire(item, owner)
+       => ~AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget(
+              node, source, index)
+BY Isa DEF AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget,
+           AsyncLeaderWireIngressPrefixCleared, IngressLane
+
+THEOREM AsyncCertifiedFenceEscapeCrossesSelectedServeBarrier ==
+  \A node \in ValidatorIds, source \in AsyncIngressSources,
+     index \in 1..Len(IngressLane(node, source)):
+    LET item == IngressLane(node, source)[index]
+    IN /\ AsyncServeIngressOwnsSharedPhysicalTurn(node)
+       /\ AsyncCertifiedFenceEscapeItem(item)
+       => AsyncServeIngressIndexMayPrecedeAdmittedTarget(
+            node, source, index)
+BY Isa DEF AsyncServeIngressIndexMayPrecedeAdmittedTarget, IngressLane
+
+THEOREM AsyncCertifiedFenceEscapeCrossesMatchingLeaderWireBarrier ==
+  \A node \in ValidatorIds, source \in AsyncIngressSources,
+     index \in 1..Len(IngressLane(node, source)):
+    LET owner == AsyncLeaderWireEarliestPhysicalIngressRecord(node)
+        item == IngressLane(node, source)[index]
+    IN /\ AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node)
+       /\ AsyncCertifiedFenceEscapeAdvancesLeaderWire(item, owner)
+       => AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget(
+            node, source, index)
+BY Isa DEF AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget,
+           IngressLane
 
 \* An ordinary aggregate carrier has no separately mutable queue position:
 \* its immutable physical evidence names the exact lane occurrence.  When it
@@ -13809,6 +13930,116 @@ DeferredWorkOwnsRuntimeTurn(node) ==
        node, NextDeferredCommand(node))
 
 (***************************************************************************
+Typed certified-fence pacemaker selection.
+
+The exact authenticated TC/CommitQC root wins before every ordinary runtime
+owner, regardless of its post-barrier lifecycle ordinal.  Its Progress-root
+Completion/Progress descendants then retain the same narrow corridor.  The
+ordinary class cursor and FIFO debt are frozen throughout; an invalid or
+obsolete certified occurrence is consumed without creating a replacement.
+***************************************************************************)
+CertifiedPacemakerRootIndices(node) ==
+  {index \in 1..Len(asyncCommandQueues[node]):
+     AsyncCandidateIsDirectCertifiedFenceEscape(
+       asyncCommandQueues[node][index])}
+
+CertifiedPacemakerRootLifecycleOrdinals(node) ==
+  {AsyncCandidateLifecycleOrdinal(asyncCommandQueues[node][index]):
+     index \in CertifiedPacemakerRootIndices(node)}
+
+OldestCertifiedPacemakerRootLifecycleOrdinal(node) ==
+  CHOOSE ordinal \in CertifiedPacemakerRootLifecycleOrdinals(node):
+    \A other \in CertifiedPacemakerRootLifecycleOrdinals(node):
+      ordinal <= other
+
+OldestCertifiedPacemakerRootIndices(node) ==
+  {index \in CertifiedPacemakerRootIndices(node):
+     AsyncCandidateLifecycleOrdinal(asyncCommandQueues[node][index])
+       = OldestCertifiedPacemakerRootLifecycleOrdinal(node)}
+
+CertifiedPacemakerRootIndex(node) ==
+  CHOOSE index \in OldestCertifiedPacemakerRootIndices(node):
+    \A other \in OldestCertifiedPacemakerRootIndices(node): index <= other
+
+CertifiedPacemakerRootCommand(node) ==
+  asyncCommandQueues[node][CertifiedPacemakerRootIndex(node)]
+
+CertifiedPacemakerCausalIndices(node) ==
+  {index \in 1..Len(asyncCausalQueues[node]):
+     AsyncCandidateHasCertifiedFenceRoot(asyncCausalQueues[node][index])}
+
+CertifiedPacemakerCausalLifecycleOrdinals(node) ==
+  {AsyncCandidateLifecycleOrdinal(asyncCausalQueues[node][index]):
+     index \in CertifiedPacemakerCausalIndices(node)}
+
+OldestCertifiedPacemakerCausalLifecycleOrdinal(node) ==
+  CHOOSE ordinal \in CertifiedPacemakerCausalLifecycleOrdinals(node):
+    \A other \in CertifiedPacemakerCausalLifecycleOrdinals(node):
+      ordinal <= other
+
+OldestCertifiedPacemakerCausalIndices(node) ==
+  {index \in CertifiedPacemakerCausalIndices(node):
+     AsyncCandidateLifecycleOrdinal(asyncCausalQueues[node][index])
+       = OldestCertifiedPacemakerCausalLifecycleOrdinal(node)}
+
+CertifiedPacemakerCausalIndex(node) ==
+  CHOOSE index \in OldestCertifiedPacemakerCausalIndices(node):
+    \A other \in OldestCertifiedPacemakerCausalIndices(node): index <= other
+
+CertifiedPacemakerCausalCommand(node) ==
+  asyncCausalQueues[node][CertifiedPacemakerCausalIndex(node)]
+
+CertifiedPacemakerRootStep(node) ==
+  LET index == CertifiedPacemakerRootIndex(node)
+      command == asyncCommandQueues[node][index]
+      succeeds == CommandDispatchable(command)
+  IN /\ CertifiedPacemakerRootIndices(node) # {}
+     /\ asyncCommandQueues' =
+          [asyncCommandQueues EXCEPT
+             ![node] = SequenceWithoutIndex(@, index)]
+     /\ UNCHANGED <<asyncNextCommandClass, asyncFifoOwed,
+                     asyncTimeoutEmitted, AsyncDeferredVars>>
+     /\ IF succeeds
+        THEN /\ AsyncCommitImportExecutionProvenance(command)
+             /\ ExecuteCommand(command)
+             /\ AppendCausalSuccessors(command)
+        ELSE /\ DiscardCommand(command)
+             /\ LeaveCausalQueues
+
+CertifiedPacemakerCausalStep(node) ==
+  LET index == CertifiedPacemakerCausalIndex(node)
+      command == asyncCausalQueues[node][index]
+      succeeds == CommandDispatchable(command)
+      remaining == SequenceWithoutIndex(asyncCausalQueues[node], index)
+      retained ==
+        IF command.kind = "PersistInstallTC"
+        THEN AsyncTimeoutLifecycleSequenceAfterInstall(
+               remaining, node, command.view)
+        ELSE remaining
+  IN /\ CertifiedPacemakerCausalIndices(node) # {}
+     /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
+                     asyncFifoOwed, AsyncDeferredVars>>
+     /\ asyncCausalQueues' =
+          [asyncCausalQueues EXCEPT
+             ![node] = retained
+                        \o (IF succeeds
+                            THEN FreshCommandSuccessors(command)
+                            ELSE <<>>)]
+     /\ asyncTimeoutEmitted' =
+          IF succeeds /\ command.kind = "PersistInstallTC"
+          THEN [asyncTimeoutEmitted EXCEPT ![node] = FALSE]
+          ELSE asyncTimeoutEmitted
+     /\ IF succeeds
+        THEN /\ AsyncCommitImportExecutionProvenance(command)
+             /\ ExecuteCommand(command)
+        ELSE DiscardCommand(command)
+
+CertifiedPacemakerWorkAvailable(node) ==
+  \/ TimeoutDue(node)
+  \/ CertifiedPacemakerRootIndices(node) # {}
+  \/ CertifiedPacemakerCausalIndices(node) # {}
+
+(***************************************************************************
 The historical `FifoRuntimeStep` name denotes the timer-versus-command debt
 tracked by `asyncFifoOwed`; command selection itself is lifecycle-first with a
 cyclic equal-ordinal class tie break, as defined by `NextNodeCommandIndex`.
@@ -14186,6 +14417,24 @@ SerializedRuntimeStep(node) ==
   /\ asyncRunnerBudget' =
        [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
 
+\* An exact retained ingress owner stays frozen while one absolute timeout,
+\* authenticated certificate root, or trusted descendant advances.  This is
+\* not an ordinary Runtime/Local turn and therefore neither phase nor class
+\* debt moves.
+SerializedCertifiedPacemakerStep(node) ==
+  /\ AsyncIngressSchedulerBarrierActive(node)
+  /\ asyncRunnerPhase[node] \in {"Runtime", "Local"}
+  /\ CertifiedPacemakerWorkAvailable(node)
+  /\ AsyncIoTimeoutLifecycleRetirementTransition(node)
+  /\ UNCHANGED AsyncLocalAdmissionVars
+  /\ IF TimeoutDue(node)
+     THEN DirectTimeoutStep(node)
+     ELSE IF CertifiedPacemakerRootIndices(node) # {}
+          THEN CertifiedPacemakerRootStep(node)
+          ELSE CertifiedPacemakerCausalStep(node)
+  /\ asyncRunnerPhase' = asyncRunnerPhase
+  /\ asyncRunnerBudget' = asyncRunnerBudget
+
 (***************************************************************************
 A Serve ticket does not erase a Runtime lifecycle which was admitted first.
 Exactly one ordinary Runtime macro-step may run while that strictly older
@@ -14209,6 +14458,7 @@ SerializedRuntimePrecedesServeIngressStep(node) ==
 AsyncServeIngressTargetOnlyTurn(node) ==
   /\ AsyncIngressSchedulerBarrierActive(node)
   /\ asyncRunnerPhase[node] \in {"Runtime", "Local"}
+  /\ ~CertifiedPacemakerWorkAvailable(node)
   /\ ~( /\ asyncRunnerPhase[node] = "Runtime"
          /\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node))
   /\ ~( /\ asyncRunnerPhase[node] = "Local"
@@ -14740,13 +14990,15 @@ RunNodeWork(node) ==
                   \/ SerializedRuntimeStep(node)
           ELSE IF /\ AsyncIngressSchedulerBarrierActive(node)
                   /\ asyncRunnerPhase[node] \in {"Runtime", "Local"}
-               THEN IF /\ asyncRunnerPhase[node] = "Runtime"
+               THEN IF CertifiedPacemakerWorkAvailable(node)
+                    THEN SerializedCertifiedPacemakerStep(node)
+                    ELSE IF /\ asyncRunnerPhase[node] = "Runtime"
                          /\ AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)
-                    THEN SerializedRuntimePrecedesServeIngressStep(node)
-                    ELSE IF /\ asyncRunnerPhase[node] = "Local"
-                               /\ AsyncOlderLocalLifecyclePrecedesServeIngress(node)
-                         THEN SerializedLocalPrecedesServeIngressStep(node)
-                         ELSE AsyncServeIngressTargetOnlyTurn(node)
+                         THEN SerializedRuntimePrecedesServeIngressStep(node)
+                         ELSE IF /\ asyncRunnerPhase[node] = "Local"
+                                    /\ AsyncOlderLocalLifecyclePrecedesServeIngress(node)
+                              THEN SerializedLocalPrecedesServeIngressStep(node)
+                              ELSE AsyncServeIngressTargetOnlyTurn(node)
                ELSE \/ LocalAdmissionStep(node)
                     \/ IngressDrainStep(node)
                     \/ SerializedRuntimeStep(node)

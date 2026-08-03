@@ -1603,9 +1603,9 @@ atomic-lane, semantic-origin, P2P source-fairness, daemon-relay, and active-
 watchdog regressions. The 232-name baseline already included two exact locked-Commit
 progress-witness regressions
 and six outer TransportCompletion-corridor regressions. The current
-geometry inventories four owners per validator, two owners for every one of
+geometry inventories five owners per validator, three owners for every one of
 the `H` simultaneously materialized authenticated non-validator lanes, and two
-anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
+anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
@@ -1621,7 +1621,7 @@ includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
-`4N+2H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
+`5N+3H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, retained effect-capacity ownership,
 post-decision timeout/TC quiescence, and watchdog classification. It also pins
 the adapter's maximum flattened persistence macro-step at five effects within

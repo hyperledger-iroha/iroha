@@ -1,7 +1,7 @@
     #[test]
     fn roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner() {
         const FORGED_OCCURRENCES: usize = 32;
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(20);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(25);
         let validators = validator_peers(4);
         let authenticated_non_validator_via = validator_peers(5)
             .pop()
@@ -135,7 +135,7 @@
 
     #[test]
     fn fair_v2_ingress_retains_ready_head_until_downstream_admission() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
         let validators = validator_peers(2);
         let attacker = validators[0].clone();
         let honest = validators[1].clone();
@@ -197,7 +197,7 @@
 
     #[test]
     fn fair_v2_ingress_rotates_blocked_head_to_admissible_source() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
         let validators = validator_peers(2);
         let blocked = validators[0].clone();
         let admissible = validators[1].clone();
@@ -225,7 +225,7 @@
 
     #[test]
     fn fair_v2_ingress_bypasses_a_blocked_entry_within_the_same_source() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
         let validator = validator_peers(1).pop().expect("validator fixture");
         ingress.close();
         ingress
@@ -257,4 +257,3 @@
         assert_eq!(vote_height(&second_retained), Some(2));
         assert_eq!(ingress.len(), 0);
     }
-

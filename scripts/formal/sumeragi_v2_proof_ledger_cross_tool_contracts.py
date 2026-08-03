@@ -976,7 +976,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="reconcile_protected_lock",
                         item_token_sha256=(
-                            "2343ffb75b98a09664fb117de2d7b021f21c2225213304df8fd03b27813f0a23"
+                            "da83291d975ff1f309746a87c94f2371ecae41df7733677b568f32a7008f89c2"
                         ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
@@ -1237,7 +1237,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step",
                         item_token_sha256=(
-                            "b0e2eb20330d892f7c0dec448e673bdf528db4e3bab6b191de5d9164fc72a74a"
+                            "5054f687f343932ca8be815fc7690d0a0bb2e6490af8ad97ec5f7dacb0c36ac1"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
@@ -1248,7 +1248,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step_recovery",
                         item_token_sha256=(
-                            "7b81ecba71a58b71e2aae931f8c47f20a99c8b823e60e314d9a7467ca05c3e1a"
+                            "6237cbe71023254491c5cfa8024f57bb71183da8dc8ed557a9b06776de33ceed"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
@@ -3144,7 +3144,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="run_inner",
                         item_token_sha256=(
-                            "665cb4f59dc4037e17216d4f250cb08ec33f8dacd3c34405c544bd1582c8ebab"
+                            "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e"
                         ),
                         projection="terminal_application,",
                         required_expression="""

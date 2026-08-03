@@ -101,7 +101,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "05f8139fb6d9566a2749cc01e8e906c180ebca304448d635f2d276a5935f3757"
     ),
     "authenticated_command_reaches_fenced_reducer": (
-        "9a4aa6932087f18a3b4897e3946bb40a9e600c99fd4841ebce7a801247ee9835"
+        "75b1f243e311b75994e8caf13f64192a4672359b9a7daff0c7d48f674e7f66b9"
     ),
     "ready_to_finish": (
         "039df6143d8b4505489db3c75ab2d3d24c01a30a4da0f0d277d865f44cfa0ffa"
@@ -121,7 +121,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "615fbf207bf034f1660f2f42e0434e10fd070f57407a3e90e6bbc9055de5e0b9"
     ),
     "fence_blocked_lifecycle_owners": (
-        "a6ab663afdf61312dd4da128d54967c262f749f966a953dc63abc77d3751c83d"
+        "da537a5b598d706a2d6a4386942bff6d8360d226be5649dbce34dd8f136fc5bd"
     ),
     "freeze_due_clock_owners": (
         "72400e4f0322887b55caf39ccb20693960aaf607db8c5a36ec393014adef01cd"
@@ -136,10 +136,10 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "f6db1825402a97f52f35c0ef7cabda380be9055ca7507dfae0476d339057304c"
     ),
     "enqueue_after_clock_reservation": (
-        "913aa38626b74b70200f4c8212c061b5eb85e72d112ffbba805ba743b90873d6"
+        "d71a57ec0eb41724bb65040a35e9d0ac308a2ef387868c207070add6e02be541"
     ),
     "scheduler_arbitration_inputs": (
-        "0f041e2f24fb6ad723c393a6bec10da8215ffed5a6a655f2751e88b436137239"
+        "202321cef369cb9c0f64e6ea8cdff757cd769133edebe21619561426103f9929"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -151,22 +151,22 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "1d27b616e3804e98006a4353d9c7d1e03005ce9299c2e0b0ccbb7782209210df"
     ),
     "minimum_active_lifecycle_ordinal_for_deferred_excluding": (
-        "2707d2e2a3172161c3e68d8bb9779b686c53bb6414001c3827b5141e13c9483d"
+        "9189ca5abc49100c87ab18d5cbbcd33a31e85f60a306d02cff487c61be750b6b"
     ),
     "eligible_deferred_admission_ordinals": (
         "80c315add06cdc5b0a18d672ff0f3f6c114bb8f81ecd9f8303ff0b78bce6cfe6"
     ),
     "runtime_step": (
-        "b0e2eb20330d892f7c0dec448e673bdf528db4e3bab6b191de5d9164fc72a74a"
+        "5054f687f343932ca8be815fc7690d0a0bb2e6490af8ad97ec5f7dacb0c36ac1"
     ),
     "runtime_step_recovery": (
-        "7b81ecba71a58b71e2aae931f8c47f20a99c8b823e60e314d9a7467ca05c3e1a"
+        "6237cbe71023254491c5cfa8024f57bb71183da8dc8ed557a9b06776de33ceed"
     ),
     "dispatch_one_adapter_deferred": (
-        "51c2fad21770428bf8c40aaacea930b6e524540ade28c50099b9d8c7bf33cf70"
+        "d87f6e86b65a0b37be7198f880ad2103a4e99c7eb72d2ad32b376865c40d45da"
     ),
     "dispatch_one_fence_dependency": (
-        "7b3230ab5ceaf5e69725fa6769db4477b0b6d5e63480a033facc53f4c79ec5fd"
+        "c25a89ae60772980c7e4ea2eed0543b8e2d06c24e5f5753f6ca0e52b77ec4bcf"
     ),
     "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo": (
         "fd73f3acdd805bc9f4f34b6f660e49ef8a3b1b3327589e40d745770abd5ace12"
@@ -175,7 +175,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "93f8290d3a87f463bc2b99d13a9585edc988794ce18f5d2a2e3d80282a79e2ca"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
-        "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
+        "0fc1c6de5c9da37a971aa56a6da9120bd590996060ee2a3e8b83f5bb087f9fb0"
     ),
 }
 
@@ -241,7 +241,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "488ba0d5d7896c09a4966d90d16c831090f516c42ab213c70c62aead6b49f0b5"
     ),
     "runtime_deferred_lifecycle_validate_exact": (
-        "df41281db59b26ee4efd086c324d33d9655378f4a2c571335588396db1a71c38"
+        "63e7de646d2eb0dcbc7c9e8aaa87562e44ee3bb007b3185e51237b0b554e4cb3"
     ),
     "runtime_deferred_lifecycle_validate_against_ingress": (
         "5584747a03531f1709f299d16b7cd1884becd7cbd5a37c7619777277112b4e30"
@@ -250,7 +250,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "0ae0c8bde63fd29b4732f301498515f9444a9991f8008aaf3fc23a9a27583918"
     ),
     "runtime_deferred_lifecycle_rebase_deferred_ingress": (
-        "b18470839079c4922c39341a62f804bee2119123e05758c55100b62e183eb363"
+        "981bd3b563516a04eb013b82fbacc7017b4d3a8df16756bcf5c5d7cd72808de4"
     ),
     "reconcile_deferred_ingress_ownership": (
         "37ebb9c8e38cf6d1eda06a31a83570c40f45771f0847adea36d3305d7a6d38bc"
@@ -274,10 +274,10 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "6fccf9497abffa385d06a6e4f4fd9a0f641745ca51b17f8b6e7dcede26c449eb"
     ),
     "accept_driver_dispatch": (
-        "464c41421edc5a6e7b4dfe4b5a8e192cd27e32c29ef7031a90c49318c87266fb"
+        "650c7e0b0c9e1af79cb835080e7ff5f9cdf63a0e80e476586c211e6566e6d9f9"
     ),
     "enqueue_network_with_ingress_ownership": (
-        "4d24ee550fa9377701d25f13cf660429b5caed20e51955fdb2a91a5604a20a33"
+        "552da003386e22bf9d0a44fbba0384b46ef0ad3f47123dd0b563b16dc9435ed9"
     ),
     "can_admit_pre_runtime_leader_wire": (
         "3e049b47299eba83b510bb0bcbba25a48cd5614a77dbbd8189ebbb83b42ac6f7"
@@ -569,6 +569,8 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_wire_index_keeps_authenticated_origins_distinct",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pressure",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_escape_survives_exact_same_source_saturation",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_serializes_distinct_timeout_certificates_per_source",
     "sumeragi::serviced_candidate_store::tests::leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots",
     "sumeragi::v2_effects::tests::effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains",
     "sumeragi::v2_effects::tests::retained_live_retry_consumes_decision_retirement_terminal_same_cycle",
@@ -976,6 +978,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
+    "sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
     "sumeragi::v2_worker::tests::exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
     "sumeragi::v2_worker::tests::repeated_exact_serve_claims_close_all_older_sources_before_later_io",
     "sumeragi::v2_worker::tests::exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission",
@@ -1026,14 +1029,32 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
 # semantic ordering fragments below so failures identify the violated seam.
 _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     "consume_effects": (
-        "e52cf5a95fff03c6bf9982ac6f8933cfd940d0e8c4d2673a22a73a17ed5f74fa"
+        "e25571feeb68bdfdd4af602b39a40e63c87f11e39619b90281212c48513c71f5"
+    ),
+    "retain_effect_batch": (
+        "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
+    ),
+    "retain_effect_batch_at_frontier": (
+        "b7fbdd5ae5da857c63f2a5adbea69698c4b1f76bca99649d1ff7cf7674eb7535"
+    ),
+    "prepare_parked_effects_for_frontier": (
+        "2311f641861b3fafe8f90c34a7824596287bf1d6d8e791e30ba7b59438c178db"
+    ),
+    "commit_reconciliation_frontier": (
+        "1deed24b38bdba50796b402def3fc3ef9e9eaad44c93449e8e96f1bdb38c430c"
     ),
     "drain_retained_effect_batch": (
-        "d973c4b573c75870a27334050546a1d9f7996ca8f5da6b0c4fb96d23c985e39b"
+        "b796ca52147def7d7642b5f8c352f55e6ab2214b3c8d5c1a631ac5aa9c64bba5"
     ),
-    "step": "7f88caed1111bc8a98699d31100deaa1fa9d3ae01b9891b4396acd546f17d3d7",
+    "consume_pacemaker_effects": (
+        "f9675525191cc1f949cdd7fef4d86facf0a974f8c96c627eba96123246e738db"
+    ),
+    "step_pacemaker_once": (
+        "09140d1b32a493a591303e376d5ed642ea1479cb2fddae358d8d4d9b5b2a7df5"
+    ),
+    "step": "c56df5c78384e0685390837f6442bf17f81f37134a840445cb2522326a226bcb",
     "step_pending_tip_recovery": (
-        "e5a7cf7d1db1e5558d888b22275a578baa273dbcbc6e282047e6c8d399127172"
+        "2fea51da5e34af31e90c8a42ed6915cb8d6e64dc18a7df89ef0a0545b81b6f94"
     ),
 }
 
@@ -1361,7 +1382,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9",
+    "run_inner": "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1466,7 +1487,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256 = {
     "advance_executor_once_before_exact_serve": (
-        "0d3580e1ced5446597465ca2dd3a177a16dc168b66b8b8c9e2350b68fb03b86b"
+        "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26"
     ),
 }
 
@@ -1484,13 +1505,16 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
     ),
     "minimum_active_lifecycle_ordinal_excluding": (
-        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
+        "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
+    ),
+    "minimum_runnable_lifecycle_ordinal": (
+        "3c782c6e97e8a3639ea8d9c1eece964b64f9863f2cface7013c95d6e8ed17c61"
     ),
     "active_lifecycle_uses_ordinal": (
-        "3383cbf7969a7f8d792f56ed9c148c4ca523f6366bfac8c60b53a68af427a4fc"
+        "ae450e3b7d749e88ebb10ea93d575ffd88257f1c691bc58d9478adde058cd869"
     ),
     "older_lifecycle_predates_exact_serve": (
-        "2b832129d3f5e91ea0e333400277c9715785f896b460b0de55e398d2cdc69b30"
+        "ae0059eeb7251a27345ea821209d9d018623f3011643970833a6c6fbd0dad30a"
     ),
 }
 
@@ -1555,13 +1579,13 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9",
-    "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
+    "run_inner": "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e",
+    "advance_executor": "ce2f1975fd47aac0b33326547595f05779ab0a920e5996499bf450330c457f93",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
     ),
     "outer_ingress_turns": (
-        "1c08dc7293a6aacd522d211e8acd862cf8be0fb4926bb943b6464f4bd002e223"
+        "a5408a498d6ee0837e31c5fc1b152c043b3d2930eda580d750eaec4f2704ef18"
     ),
     "apply_bounded_sidecar_admissions": (
         "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad"
@@ -1880,10 +1904,10 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9"
+        "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e"
     ),
     "drain_v2_ingress": (
-        "5afe9ea25184f2f95aa5e150bc672c4d2aa70880a4a5021bf7f32f72d37bbfa1"
+        "272a78c4508606ba867590b62f91abe66df76dd08cdaf69874d54adc43727e96"
     ),
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"
@@ -2472,7 +2496,7 @@ _PRODUCTION_SM_DISTID_GEOMETRY_ITEM_SHA256 = {
     ),
 }
 
-# Exact pure geometry and admission items connecting the abstract 4N+2H+2
+# Exact pure geometry and admission items connecting the concrete 5N+3H+2
 # owner model to the authoritative production queue.  Whole-item token seals are
 # intentional here: every numeric term contributes to a progress reservation,
 # and comments or test-only lookalikes cannot satisfy this contract.

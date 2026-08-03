@@ -661,6 +661,9 @@ ADEQUATE_LEADER_RETAINED_PRODUCER_RELEASE_SOURCE_SHA256 = {
 # expose a repaired transition or liveness rank, but never promote a bounded
 # model-checking result to deductive proof status.
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2Revision4CertifiedFenceReservation.tla",
+    "revision4_certified_fence_reservation_fixed.cfg",
+    "revision4_certified_fence_reservation_blocked_bug.cfg",
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla",
     "SumeragiV2RestartTerminalDurabilityMutation.tla",
     "SumeragiV2ExactIngressTicketPriorityMutation.tla",
@@ -1442,10 +1445,10 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
         2,
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
-        30,
-        73,
+        31,
+        90,
         0,
-        1,
+        2,
         0,
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
@@ -2080,6 +2083,8 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
+    "SumeragiV2Revision4CertifiedFenceReservation*.tla",
+    "revision4_certified_fence_reservation_*.cfg",
     "SumeragiV2LocalIngressSchedulerReservation*.tla",
     "SumeragiV2RestartTerminalDurability*.tla",
     "SumeragiV2ExactIngressTicketPriority*.tla",

@@ -3200,6 +3200,8 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     outstanding_requests: OutstandingCertifiedBodyRequests,
     retained_certified_body_response: Option<RetainedCertifiedBodyResponse>,
     ready_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ReadyBody>,
+    /// Last reducer incarnation whose executor-side view transition completed.
+    reconciled_tag: Option<EventTag>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
     pending_tip_recovery: Option<PendingKuraApplyRecoveryEvidence>,
@@ -3783,6 +3785,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         runtime
             .configure_external_lifecycle_owner_capacity(config.max_pending_work)
             .map_err(EffectExecutorError::Runtime)?;
+        let reconciled_tag = runtime.authoritative_tag();
         let outstanding_requests =
             OutstandingCertifiedBodyRequests::new(config.max_certified_requests)
                 .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
@@ -3806,6 +3809,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             outstanding_requests,
             retained_certified_body_response: None,
             ready_bodies: BTreeMap::new(),
+            reconciled_tag,
             protected_lock: None,
             protected_decision: None,
             pending_tip_recovery: None,
@@ -4591,6 +4595,49 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         frontier: RuntimeReconciliationFrontier,
     ) -> Result<Option<EventTag>, EffectExecutorError> {
         let entering_view = Self::entering_view_tag(effects)?;
+        if entering_view.is_some()
+            && !matches!(effects.first(), Some(AdapterEffect::EnterView { .. }))
+        {
+            return Err(EffectExecutorError::Contract(
+                "EnterView must be the first effect in its reducer macro-step".to_owned(),
+            ));
+        }
+        match (self.reconciled_tag, frontier.tag) {
+            (Some(current), Some(next)) if current == next => {
+                if entering_view.is_some() {
+                    return Err(EffectExecutorError::Contract(
+                        "EnterView did not advance the reconciled reducer incarnation".to_owned(),
+                    ));
+                }
+            }
+            (Some(current), Some(next)) if next.strictly_advances(current) => {
+                if entering_view != Some(next) {
+                    return Err(EffectExecutorError::Contract(
+                        "an advancing reducer frontier omitted its leading EnterView".to_owned(),
+                    ));
+                }
+            }
+            (None, None) => {
+                if entering_view.is_some() {
+                    return Err(EffectExecutorError::Contract(
+                        "EnterView has no authoritative reducer incarnation".to_owned(),
+                    ));
+                }
+            }
+            (None, Some(next)) => {
+                if entering_view != Some(next) {
+                    return Err(EffectExecutorError::Contract(
+                        "the first authoritative reducer incarnation omitted EnterView".to_owned(),
+                    ));
+                }
+            }
+            (Some(_), None) | (Some(_), Some(_)) => {
+                return Err(EffectExecutorError::Contract(
+                    "the reducer reconciliation frontier regressed or changed incomparably"
+                        .to_owned(),
+                ));
+            }
+        }
         let mut protected = effects.iter().filter_map(|effect| match effect {
             AdapterEffect::EnterView {
                 tag,
@@ -10648,7 +10695,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .map_err(EffectExecutorError::Runtime)?;
         services
             .entered_view(tag, certificate)
-            .map_err(service_error)
+            .map_err(service_error)?;
+        self.reconciled_tag = Some(tag);
+        Ok(())
     }
 
     fn ensure_pending_slot(&self) -> Result<(), EffectExecutorError> {
@@ -16251,6 +16300,7 @@ mod tests {
         let (replacement_subject, _) = distinct_body(&fixture);
         let higher = (round(&fixture.context, 1), replacement_subject);
         executor.runtime.round_tag = Some(consumer);
+        executor.reconciled_tag = Some(consumer);
         executor
             .reconcile_locked_body_for_recovery(consumer, first, &mut services)
             .expect("publish the initial lock");
@@ -16294,6 +16344,7 @@ mod tests {
         let next_tag = tag(2);
         let first = (round(&fixture.context, 0), fixture.manifest.subject);
         executor.runtime.round_tag = Some(old_tag);
+        executor.reconciled_tag = Some(old_tag);
         executor
             .reconcile_locked_body_for_recovery(old_tag, first, &mut services)
             .expect("publish the old lock");
@@ -16372,6 +16423,101 @@ mod tests {
         assert_eq!(executor.protected_lock, Some(higher));
         assert!(executor.parked_effect_batch.is_none());
         assert!(services.store_tasks.is_empty());
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn advancing_frontier_without_enter_view_fails_before_dispatch() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor.runtime.round_tag = Some(tag(1));
+
+        assert!(matches!(
+            executor.consume_effects(Vec::new(), &mut services),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("omitted its leading EnterView")
+        ));
+        assert!(services.sign_tasks.is_empty());
+        assert!(services.entered_views.is_empty());
+        assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn reordered_enter_view_fails_before_fresh_sign_dispatch() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let next_tag = tag(1);
+        executor.runtime.round_tag = Some(next_tag);
+        let mut fresh_vote = vote(&fixture);
+        fresh_vote.round = round(&fixture.context, 1);
+        fresh_vote.proposal_round = fresh_vote.round;
+
+        assert!(matches!(
+            executor.consume_effects(
+                vec![
+                    AdapterEffect::Sign {
+                        tag: next_tag,
+                        request: SignRequest::Vote(fresh_vote),
+                    },
+                    AdapterEffect::EnterView {
+                        tag: next_tag,
+                        certificate: timeout_at_view(&fixture, 0),
+                        protected_body: None,
+                    },
+                ],
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("must be the first effect")
+        ));
+        assert!(services.sign_tasks.is_empty());
+        assert!(services.entered_views.is_empty());
+        assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn same_view_higher_generation_tc_requires_and_installs_leading_enter_view() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+
+        for view in [1, 2] {
+            let next_tag = tag(view);
+            executor.runtime.round_tag = Some(next_tag);
+            executor
+                .consume_effects(
+                    vec![AdapterEffect::EnterView {
+                        tag: next_tag,
+                        certificate: timeout_at_view(&fixture, view - 1),
+                        protected_body: None,
+                    }],
+                    &mut services,
+                )
+                .expect("install the ordinary certified view transition");
+        }
+
+        let current = tag(2);
+        let upgraded = EventTag::new(
+            current.height(),
+            current.view(),
+            Generation::new(current.generation().get() + 1),
+        );
+        executor.runtime.round_tag = Some(upgraded);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::EnterView {
+                    tag: upgraded,
+                    certificate: timeout_at_view(&fixture, 1),
+                    protected_body: None,
+                }],
+                &mut services,
+            )
+            .expect("install the alternate same-view TC generation");
+
+        assert_eq!(executor.reconciled_tag, Some(upgraded));
+        assert_eq!(services.entered_views.last(), Some(&upgraded));
         assert!(!executor.status().fail_closed);
     }
 
@@ -21228,6 +21374,7 @@ mod tests {
         complete_local_proposal_chain(&mut executor, &mut services);
         let current_tag = EventTag::new(1, 1, Generation::new(8));
         executor.runtime.round_tag = Some(current_tag);
+        executor.reconciled_tag = Some(current_tag);
         let commit = fixture.qc(wire::GlobalPhase::Commit);
         executor.runtime.decided_body = Some((
             commit.round,
@@ -23611,9 +23758,8 @@ mod tests {
 
         // Keep ApplicationCompleted queued in the fake runtime and reproduce
         // the production timer/CommitQC race which rediscovered Apply first.
-        // The reducer may already have drained its authoritative tag, so the
-        // durable completion itself must remain the exact retry tombstone.
-        executor.runtime.round_tag = None;
+        // The runtime retains its authoritative incarnation after finality;
+        // the durable completion itself remains the exact retry tombstone.
         for _ in 0..8 {
             executor
                 .consume_effects(vec![effect.clone()], &mut services)

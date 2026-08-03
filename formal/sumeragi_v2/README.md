@@ -271,11 +271,11 @@ height-context state are not migrated in place.
   same-owner item retries without displacing another protected slot. Immutable
   authenticated history remains separate from this consumer state. Fair
   transport ingress for a non-empty roster has the exact minimum
-  `4 * |ValidatorIds| + 2 * H + 2` entries, where `H` is the configured maximum
+  `5 * |ValidatorIds| + 3 * H + 2` entries, where `H` is the configured maximum
   number of simultaneously materialized authenticated non-validator source
-  lanes. The potential separately reserves four owners per validator, two
+  lanes. The potential separately reserves five owners per validator, three
   owners per materialized authenticated non-validator lane, and two anonymous
-  owners. With no roster the diagnostic minimum is `2 * H + 1`, because no
+  owners. With no roster the diagnostic minimum is `3 * H + 1`, because no
   roster-origin TransportCompletion can be valid on the anonymous lane. A
   semantic duplicate carrying a newly authenticated reply route is merged into
   its existing request before the new-lane `H` gate is evaluated. The
@@ -283,8 +283,9 @@ height-context state are not migrated in place.
   most the aggregate ingress capacity, matching the runtime admission gate;
   this makes one-item removal decrease the counted depth by exactly one even
   when preservation is checked from an arbitrary invariant state. Each
-  authenticated validator source also leaves a distinct configured 64 KiB
-  timeout-vote reserve unavailable to ordinary traffic (in addition to body
+  authenticated source also leaves a distinct configured 64 KiB certified-fence-escape
+  reserve unavailable to ordinary traffic. Each validator additionally leaves a
+  64 KiB timeout-vote reserve unavailable to ordinary traffic (in addition to body
   envelope headroom). That isolated region exceeds the conservative 4 KiB
   maximum valid timeout-vote envelope, including a 128-signer PrepareQC. A
   validator lane owns at most one distinct queued TimeoutVote in that region;
@@ -1407,9 +1408,9 @@ daemon relay quotas, and the active watchdog. The 232-name baseline already
 included two exact locked-Commit
 progress-witness regressions and six outer TransportCompletion-corridor
 regressions. The current
-geometry pins four owners per validator, two owners for each of the `H`
+geometry pins five owners per validator, three owners for each of the `H`
 simultaneously materialized authenticated non-validator lanes, and two
-anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
+anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
@@ -1426,7 +1427,7 @@ inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, post-decision timeout/TC quiescence, and the exact
-`4N+2H+2`/`2N+3` admission boundaries in addition to exact-lock,
+`5N+3H+2`/`2N+3` admission boundaries in addition to exact-lock,
 completion-ownership, future-acquisition rejection, rebound durable retry, and
 executor-batch boundaries. Those adapter boundaries pin a maximum flattened
 persistence macro-step of five effects within the reducer's eight-effect bound,

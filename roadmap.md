@@ -25975,11 +25975,12 @@ included in each edge-triggered record.
 
 Reliable transport ownership now covers the bounded local seams in both
 directions. For outer ingress, the exact non-empty-roster count geometry is
-`4N+2H+2`: each validator transport hop owns generic, non-timeout Progress,
-TimeoutVote, and TransportCompletion positions; each of the at most `H`
-simultaneously materialized authenticated non-validator lanes owns generic and
-TransportCompletion positions; and the persistent anonymous lane owns the
-final pair. The no-roster diagnostic minimum is `2H+1`. Semantic origin remains
+`5N+3H+2`: each validator transport hop owns generic, ordinary Progress,
+certified-fence-escape, TimeoutVote, and TransportCompletion positions; each of
+the at most `H` simultaneously materialized authenticated non-validator lanes
+owns generic, certified-fence-escape, and TransportCompletion positions; and
+the persistent anonymous lane owns the final pair. The no-roster diagnostic
+minimum is `3H+1`. Semantic origin remains
 available to the protocol, but authenticated `via` owns count, bytes, fairness,
 and reservations, so relay identity churn cannot multiply capacity or borrow a
 validator reserve. Semantic duplicate/alternate-route attachment precedes the
@@ -26216,7 +26217,7 @@ scheduler/adapter/effect regressions raised it to 218, and four final
 post-WAL, terminal-readiness, real-adapter-ordering, and production-capacity
 adversarial regressions raised the preceding inventory to 222. Six outer
 TransportCompletion-corridor regressions raise it to 228; explicitly pinning
-the four-per-validator plus two shared relay-lane owners (`4N+2` total)
+the five-per-validator plus two shared relay-lane owners (`5N+2` total)
 capacity-negative raises it to
 229; and the four-validator exact PrepareQC count-and-power quorum regression
 raised the preceding inventory to 230. Atomic lane-certificate, authenticated-
@@ -26640,7 +26641,7 @@ runtime premise on the final signed source.
   fourteen scheduler/adapter/effect regressions raised it to 218, and four
   final adversarial regressions raised the preceding inventory to 222. Six
   outer TransportCompletion-corridor regressions, explicit inventory coverage
-  of the four-per-validator plus two shared relay-lane owners (`4N+2` total)
+  of the five-per-validator plus two shared relay-lane owners (`5N+2` total)
   capacity-negative, and one
   four-validator exact PrepareQC count-and-power quorum regression raise the
   preceding inventory to 230. Atomic lane, authenticated-via, historical-

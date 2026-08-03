@@ -6041,6 +6041,8 @@ impl Sumeragi {
         let manifest_wire_bytes =
             defaults::sumeragi::TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES;
         let timeout_vote_reserve = defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES;
+        let certified_fence_escape_reserve =
+            defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES;
         let lane_progress_bytes = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
         let lane_completion_bytes = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
         let minimum_source_bytes = block
@@ -6057,12 +6059,13 @@ impl Sumeragi {
                     .map(|completion| completion.max(lane_completion_bytes))
                     .and_then(|completion| ordinary.checked_add(completion))
             })
+            .and_then(|minimum| minimum.checked_add(certified_fence_escape_reserve))
             .and_then(|minimum| minimum.checked_add(timeout_vote_reserve));
         match minimum_source_bytes {
             Some(minimum) if queues.body_source_bytes.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, and {timeout_vote_reserve} timeout-vote bytes (minimum {minimum}, configured {})",
+                        "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, {certified_fence_escape_reserve} certified-fence-escape bytes, and {timeout_vote_reserve} timeout-vote bytes (minimum {minimum}, configured {})",
                         queues.body_source_bytes,
                     )),
                 );
@@ -6072,7 +6075,7 @@ impl Sumeragi {
             None => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "Sumeragi max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, and {timeout_vote_reserve} timeout-vote bytes exceed the platform size representation"
+                        "Sumeragi max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, {certified_fence_escape_reserve} certified-fence-escape bytes, and {timeout_vote_reserve} timeout-vote bytes exceed the platform size representation"
                     )),
                 );
                 valid = false;
@@ -6086,13 +6089,13 @@ impl Sumeragi {
         let minimum_body_messages = queues
             .authenticated_non_validator_sources
             .get()
-            .checked_mul(2)
-            .and_then(|hubs| hubs.checked_add(6));
+            .checked_mul(3)
+            .and_then(|hubs| hubs.checked_add(7));
         match minimum_body_messages {
             Some(minimum) if queues.bodies.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.bodies must reserve four positions for at least one validator, two per authenticated non-validator source, and two anonymous positions (minimum {minimum}, configured {})",
+                        "sumeragi.queues.bodies must reserve five positions for at least one validator, three per authenticated non-validator source, and two anonymous positions (minimum {minimum}, configured {})",
                         queues.bodies,
                     )),
                 );

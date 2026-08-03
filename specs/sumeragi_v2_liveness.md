@@ -507,13 +507,13 @@ proposal, QC, TC, body response, or payload chunk from the same authenticated
 validator. The source still consumes only one turn, and the retained head is
 selected first as soon as it becomes admissible.
 
-An empty validator lane reserves an ordinary first-message slot, a non-timeout
-Progress slot, a distinct TimeoutVote slot, and one shared
+An empty validator lane reserves an ordinary first-message slot, an ordinary
+Progress slot, a certified-fence-escape slot, a distinct TimeoutVote slot, and one shared
 TransportCompletion slot for either a payload chunk or certified-body
 response. Short non-empty lanes retain the continuation potential needed to
-restore all four reservations after any service step. Each simultaneously
-materialized authenticated non-validator lane has two owners: one generic
-message slot and one TransportCompletion slot for either a current-roster
+restore all five reservations after any service step. Each simultaneously
+materialized authenticated non-validator lane has three owners: one generic
+message slot, one certified-fence-escape slot, and one TransportCompletion slot for either a current-roster
 completion forwarded through that source or a proof-carrying historical lane
 response from an authenticated predecessor signer. The anonymous lane has the
 same two owners when the roster is non-empty, while its no-roster diagnostic
@@ -521,7 +521,7 @@ geometry needs only the generic slot because no anonymous completion can be
 valid. If `H` is the
 configured maximum number of simultaneously materialized authenticated
 non-validator lanes, the exact non-empty-roster count minimum is therefore
-`4 * roster_len + 2 * H + 2`; the no-roster minimum is `2 * H + 1`.
+`5 * roster_len + 3 * H + 2`; the no-roster minimum is `3 * H + 1`.
 `H` is independent of exact-output reply-route capacity `R`, which is derived
 from the effective `network.max_total_connections`. Root validation resolves
 the selected lane profile before deriving `R`, so `lane_profile = "home"` with
@@ -534,10 +534,12 @@ Authenticated non-validator lanes are created on demand and removed when empty.
 A semantic duplicate carrying an alternate authenticated reply route is merged
 into the existing request before a new-lane `H` admission check; only a
 semantically distinct request requiring a new source lane consumes another
-lane. Non-timeout
-Progress includes Commit votes, QCs, TCs, certified-body requests, and both
+lane. Ordinary
+Progress includes Commit votes, PrepareQCs, certified-body requests, and both
 Commit-certificate request/response directions. Proposals, Prepare votes, and
 manifests remain ordinary; TimeoutVote uses its own signer-bounded corridor;
+TC, direct CommitQC, and a Commit-certificate response carrying CommitQC use a
+separate certified-fence-escape corridor;
 `PayloadChunk`, `CertifiedBodyResponse`, and
 `LaneHistoricalRecoveryResponse` share TransportCompletion. The first two
 require a current-roster semantic origin. The historical response may instead
@@ -556,15 +558,18 @@ each of the `H` authenticated non-validator source lanes, and the anonymous
 lane, while `sumeragi.queues.body_bytes` bounds their aggregate ownership at no
 less than `(roster_len + H + 1) * body_source_bytes`. Roster installation fails
 closed if the aggregate cannot provide every source partition. Each
-authenticated validator source also retains an
-isolated timeout-vote byte reserve and an independent full TransportCompletion
+authenticated source retains an isolated certified-fence-escape byte reserve;
+each validator additionally retains an isolated timeout-vote byte reserve, and
+every source retains an independent full TransportCompletion
 envelope reserve, so ordinary traffic cannot consume the capacity required to
 advance a view or finish body recovery. Height activation derives the latter
 with checked arithmetic from the frozen DA layout and the exact bare-Norito
 framing of the largest valid `PayloadChunk`, `CertifiedBodyResponse`, and
 bounded historical lane response; an
 overflow or undersized source partition fails closed before ingress opens.
-These count, byte, Progress, timeout, and completion reservations prevent one
+Height activation also checks the exact maximal TC, direct QC, and CommitQC-response
+wire ceiling against the certified reserve. These count, byte, Progress,
+certified, timeout, and completion reservations prevent one
 authenticated source from consuming another validator's recovery capacity or
 turning the count-bounded queue into multi-gigabyte memory ownership.
 
@@ -1473,8 +1478,8 @@ fail-stop regressions are pinned alongside them in the current inventory.
 Daemon saturation now returns the exact occurrence to its durable remote
 source under an explicit source-release disposition; the former route-era
 "reconstruction" names are retired and no capability is synthesized.
-The current inventory retains the four-per-validator, two-per-materialized
-authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
+The current inventory retains the five-per-validator, three-per-materialized
+authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
@@ -1691,8 +1696,8 @@ adapter-owned successor activation, runner ingress
 handoff, watchdog predecessor/successor separation, and recovery-derived
 successor identity. The worker leg also pins rejection of an unissued future
 physical acquisition and exact latest-consumer rebind across unavailable-body
-recovery. The authoritative ingress leg pins `4N+2H+2` count potential, the
-TimeoutVote and TransportCompletion byte reserves, frozen-layout wire-size
+recovery. The authoritative ingress leg pins `5N+3H+2` count potential, the
+certified-fence-escape, TimeoutVote, and TransportCompletion byte reserves, frozen-layout wire-size
 activation, cross-validator isolation, and fair service; the
 adapter/runtime legs pin the independent `2N+3` Busy-deferred partitions and
 runtime Progress admission. They also pin the five-effect maximum flattened

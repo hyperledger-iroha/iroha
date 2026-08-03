@@ -243,10 +243,10 @@ fn round_timeout_for_view(base_timeout: Duration, view: u64) -> Duration {
 ///
 /// Normal network traffic may use only the non-reserved prefix. Progress
 /// messages (PrepareQCs, CommitQCs, TCs, and authenticated Timeout votes) may
-/// additionally use the progress reserve, and trusted asynchronous completions
-/// may use the whole queue. This prevents an unbounded proposal/Prepare stream
-/// from excluding view-change, CommitQC, or completion work while preserving
-/// FIFO order within each service class.
+/// additionally use the progress reserve. Trusted asynchronous completions may
+/// use every ordinary slot, while one final physical slot is reserved solely
+/// for an authenticated TC or CommitQC. This prevents completion or retrying
+/// Prepare traffic from excluding the certificate which retires its fence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueConfig {
     capacity: usize,
@@ -275,6 +275,7 @@ impl RuntimeQueueConfig {
             || self
                 .progress_reserve
                 .checked_add(self.completion_reserve)
+                .and_then(|reserved| reserved.checked_add(1))
                 .is_none_or(|reserved| reserved >= self.capacity)
         {
             return Err(RuntimeConfigError::InvalidQueueAllocation);
@@ -283,11 +284,19 @@ impl RuntimeQueueConfig {
     }
 
     const fn normal_limit(self) -> usize {
-        self.capacity - self.progress_reserve - self.completion_reserve
+        self.capacity - self.progress_reserve - self.completion_reserve - 1
     }
 
     const fn progress_limit(self) -> usize {
-        self.capacity - self.completion_reserve
+        self.capacity - self.completion_reserve - 1
+    }
+
+    const fn ordinary_total_limit(self) -> usize {
+        self.capacity - 1
+    }
+
+    const fn certified_progress_limit(self) -> usize {
+        self.progress_limit() + 1
     }
 }
 
@@ -4442,7 +4451,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .count();
         if normal > self.config.normal_limit()
             || normal.saturating_add(progress) > self.config.progress_limit()
-            || total > self.config.capacity
+            || total > self.config.ordinary_total_limit()
         {
             return Err(EnqueueError::FailClosed);
         }
@@ -4492,7 +4501,15 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
 
     fn enqueue_classified_command(
         &mut self,
+        command: TaggedCommand<C>,
+    ) -> Result<(), EnqueueError> {
+        self.enqueue_classified_command_with_capacity(command, false)
+    }
+
+    fn enqueue_classified_command_with_capacity(
+        &mut self,
         mut command: TaggedCommand<C>,
+        certified_fence_escape: bool,
     ) -> Result<(), EnqueueError> {
         if !command.validate_admission_identity() {
             return Err(EnqueueError::FailClosed);
@@ -4502,7 +4519,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         let dormant_replacement = self.dormant_local_fifo_replacement(&command)?;
         self.validate_preassigned_lifecycle_owner(&command, &[])?;
-        self.check_capacity_change(command.class, usize::from(dormant_replacement.is_some()), 1)?;
+        self.check_capacity_change_inner(
+            command.class,
+            usize::from(dormant_replacement.is_some()),
+            1,
+            certified_fence_escape,
+        )?;
         self.with_checked_admission_ordinal_range(
             1,
             move |ingress, admission_ordinal, successor| {
@@ -5009,6 +5031,23 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         dormant_replacements: usize,
         additions: usize,
     ) -> Result<(), EnqueueError> {
+        self.check_capacity_change_inner(class, dormant_replacements, additions, false)
+    }
+
+    fn check_certified_fence_escape_capacity(&self) -> Result<(), EnqueueError> {
+        self.check_capacity_change_inner(CommandClass::Progress, 0, 1, true)
+    }
+
+    fn check_capacity_change_inner(
+        &self,
+        class: CommandClass,
+        dormant_replacements: usize,
+        additions: usize,
+        certified_fence_escape: bool,
+    ) -> Result<(), EnqueueError> {
+        if certified_fence_escape && class != CommandClass::Progress {
+            return Err(EnqueueError::FailClosed);
+        }
         if dormant_replacements != 0 && class != CommandClass::Completion {
             return Err(EnqueueError::FailClosed);
         }
@@ -5017,7 +5056,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .checked_sub(dormant_replacements)
             .and_then(|occupied| occupied.checked_add(additions))
             .ok_or(EnqueueError::FailClosed)?;
-        if occupied_after > self.config.capacity {
+        let physical_limit = if certified_fence_escape {
+            self.config.capacity
+        } else {
+            self.config.ordinary_total_limit()
+        };
+        if occupied_after > physical_limit {
             return Err(EnqueueError::Full);
         }
 
@@ -5046,9 +5090,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let noncompletion_after = normal_after
             .checked_add(progress_after)
             .ok_or(EnqueueError::FailClosed)?;
-        if normal_after > self.config.normal_limit()
-            || noncompletion_after > self.config.progress_limit()
-        {
+        let progress_limit = if certified_fence_escape {
+            self.config.certified_progress_limit()
+        } else {
+            self.config.progress_limit()
+        };
+        if normal_after > self.config.normal_limit() || noncompletion_after > progress_limit {
             return Err(EnqueueError::ReservedCapacity);
         }
         Ok(())
@@ -5794,7 +5841,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     }
 
     fn remaining_capacity(&self) -> usize {
-        self.config.capacity.saturating_sub(
+        self.config.ordinary_total_limit().saturating_sub(
             self.occupied_with_dormant_reservations()
                 .unwrap_or(usize::MAX),
         )
@@ -5813,7 +5860,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let capacity = match class {
             CommandClass::Normal => self.config.normal_limit(),
             CommandClass::Progress => self.config.progress_limit(),
-            CommandClass::Completion => self.config.capacity,
+            CommandClass::Completion => self.config.ordinary_total_limit(),
         };
         RuntimeQueueLaneSnapshot {
             depth,
@@ -6557,6 +6604,9 @@ impl BoundedIngress<AdapterCommand> {
                 Err(RuntimeIngressMergeError::IndependentOccurrence) => {}
             }
         }
+        if wire_payload_is_certified_fence_escape(&message.payload) {
+            return self.check_certified_fence_escape_capacity();
+        }
         match self.check_capacity(default_class) {
             Ok(()) => Ok(()),
             Err(_) if may_use_progress => self.check_capacity(CommandClass::Progress),
@@ -6573,6 +6623,9 @@ impl BoundedIngress<AdapterCommand> {
     ) -> Result<(), EnqueueError> {
         if self.authenticated_wire_tag(message).is_some() {
             return Ok(());
+        }
+        if wire_payload_is_certified_fence_escape(&message.payload) {
+            return self.check_certified_fence_escape_capacity();
         }
         match self.check_capacity(default_class) {
             Ok(()) => Ok(()),
@@ -6614,6 +6667,11 @@ impl BoundedIngress<AdapterCommand> {
         restored_owner: Option<(&RuntimeLifecycleOwner, u8)>,
     ) -> Result<EventTag, EnqueueError> {
         if !ingress_ownership.matches_authenticated(&authenticated) {
+            return Err(EnqueueError::FailClosed);
+        }
+        let certified_fence_escape =
+            wire_payload_is_certified_fence_escape(authenticated.payload());
+        if certified_fence_escape && class != CommandClass::Progress {
             return Err(EnqueueError::FailClosed);
         }
         let mut tagged = TaggedCommand::with_ingress_ownership(
@@ -6674,7 +6732,7 @@ impl BoundedIngress<AdapterCommand> {
                 Err(RuntimeIngressMergeError::IndependentOccurrence) => {}
             }
         }
-        self.enqueue(tagged)?;
+        self.enqueue_classified_command_with_capacity(tagged, certified_fence_escape)?;
         Ok(tag)
     }
 
@@ -6834,7 +6892,7 @@ impl BoundedIngress<AdapterCommand> {
             .checked_add(dormant_reservations_after)
             .and_then(|occupied| occupied.checked_add(1))
             .ok_or(EnqueueError::FailClosed)?;
-        if occupied_after_commit > self.config.capacity {
+        if occupied_after_commit > self.config.ordinary_total_limit() {
             return Err(EnqueueError::Full);
         }
         let queue_len_before =
@@ -7732,16 +7790,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
         matches!(
             command,
             AdapterCommand::Authenticated(authenticated)
-                if matches!(
-                    authenticated.payload(),
-                    wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-                        | wire::ConsensusMessageV2Payload::QuorumCertificate(
-                            wire::QuorumCertificate {
-                                phase: wire::GlobalPhase::Commit,
-                                ..
-                            }
-                        )
-                )
+                if wire_payload_is_certified_fence_escape(authenticated.payload())
         )
     }
 
@@ -11783,9 +11832,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// Slots into which trusted asynchronous completions can be admitted now.
     ///
     /// Completion producers must consult this bound before removing work from
-    /// their own bounded queues. Unlike normal and progress traffic,
-    /// completions may use the entire ingress, so this is the exact free
-    /// capacity.
+    /// their own bounded queues. It excludes the one physical slot reserved
+    /// for an authenticated TC or CommitQC, so local callbacks cannot pin the
+    /// certificate which retires their own fence.
     pub(crate) fn remaining_completion_capacity(&self) -> usize {
         self.ingress.remaining_capacity()
     }
@@ -11802,6 +11851,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &self,
         payload: &wire::ConsensusMessageV2Payload,
     ) -> bool {
+        if wire_payload_is_certified_fence_escape(payload) {
+            return self.ingress.check_certified_fence_escape_capacity().is_ok();
+        }
         let class = if self.driver.wire_ingress_may_use_progress(payload) {
             Some(CommandClass::Progress)
         } else {
@@ -12513,10 +12565,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let may_use_progress = self
             .driver
             .wire_ingress_may_use_progress(&runtime_message.payload);
-        let capacity = match self.ingress.check_capacity(default_class) {
-            Ok(()) => Ok(()),
-            Err(_) if may_use_progress => self.ingress.check_capacity(CommandClass::Progress),
-            Err(error) => Err(error),
+        let capacity = if wire_payload_is_certified_fence_escape(&runtime_message.payload) {
+            self.ingress.check_certified_fence_escape_capacity()
+        } else {
+            match self.ingress.check_capacity(default_class) {
+                Ok(()) => Ok(()),
+                Err(_) if may_use_progress => self.ingress.check_capacity(CommandClass::Progress),
+                Err(error) => Err(error),
+            }
         };
         Some(capacity.is_ok())
     }
@@ -13548,6 +13604,28 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     }
 }
 
+pub(crate) const fn wire_payload_is_certified_fence_escape(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    matches!(
+        payload,
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+                phase: wire::GlobalPhase::Commit,
+                ..
+            })
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                wire::CommitCertificateResponse {
+                    certificate: wire::QuorumCertificate {
+                        phase: wire::GlobalPhase::Commit,
+                        ..
+                    },
+                    ..
+                }
+            )
+    )
+}
+
 fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
     match payload {
         wire::ConsensusMessageV2Payload::QuorumCertificate(_)
@@ -14120,6 +14198,20 @@ mod tests {
         keys: &[KeyPair],
         marker: u8,
     ) -> wire::QuorumCertificate {
+        signed_runtime_quorum_certificate_for_phase(
+            context,
+            keys,
+            marker,
+            wire::GlobalPhase::Commit,
+        )
+    }
+
+    fn signed_runtime_quorum_certificate_for_phase(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        marker: u8,
+        phase: wire::GlobalPhase,
+    ) -> wire::QuorumCertificate {
         let round = wire::ConsensusRound {
             context_id: context.id(),
             height: context.height,
@@ -14140,7 +14232,7 @@ mod tests {
         let preimage = wire::Vote {
             round,
             proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
+            phase,
             subject,
             execution_commitment,
             signer: signers[0],
@@ -14162,7 +14254,7 @@ mod tests {
         wire::QuorumCertificate {
             round,
             proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
+            phase,
             subject,
             execution_commitment,
             signers,
@@ -15950,7 +16042,7 @@ mod tests {
             start,
             RuntimeQueueConfig::new(8, 2, 2),
         );
-        assert_eq!(runtime.remaining_completion_capacity(), 8);
+        assert_eq!(runtime.remaining_completion_capacity(), 7);
         assert_eq!(runtime.round_timeout(), Duration::from_secs(10));
         assert_eq!(runtime.retransmit_interval(), Duration::from_secs(2));
         assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(12));
@@ -16109,7 +16201,12 @@ mod tests {
         );
         let first =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate(&context, &keys, 0xD8),
+                signed_runtime_quorum_certificate_for_phase(
+                    &context,
+                    &keys,
+                    0xD8,
+                    wire::GlobalPhase::Prepare,
+                ),
             ));
         let second = first.clone();
         let source_one = context.roster[1].validator.clone();
@@ -16563,7 +16660,12 @@ mod tests {
         .clone();
         let target =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate(&context, &keys, 0xDB),
+                signed_runtime_quorum_certificate_for_phase(
+                    &context,
+                    &keys,
+                    0xDB,
+                    wire::GlobalPhase::Prepare,
+                ),
             ));
         let target_origin = context.roster[1].validator.clone();
         let (_leader_wire_directory, _leader_wire_ingress, ownerships) =
@@ -17429,7 +17531,7 @@ mod tests {
         let mut runtime = runtime(
             FakeDriver::new(initial),
             start,
-            RuntimeQueueConfig::new(4, 1, 1),
+            RuntimeQueueConfig::new(5, 2, 1),
         );
         assert_eq!(runtime.remaining_completion_capacity(), 4);
 
@@ -17441,14 +17543,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(runtime.remaining_completion_capacity(), 3);
-        enqueue_fake(
-            &mut runtime,
-            initial,
-            CommandClass::Normal,
-            FakeCommand::record(2),
-        )
-        .unwrap();
-        assert_eq!(runtime.remaining_completion_capacity(), 2);
         assert_eq!(
             enqueue_fake(
                 &mut runtime,
@@ -17458,13 +17552,15 @@ mod tests {
             ),
             Err(EnqueueError::ReservedCapacity)
         );
-        enqueue_fake(
-            &mut runtime,
-            initial,
-            CommandClass::Progress,
-            FakeCommand::record(3),
-        )
-        .expect("reserved progress slot");
+        for value in [2, 3] {
+            enqueue_fake(
+                &mut runtime,
+                initial,
+                CommandClass::Progress,
+                FakeCommand::record(value),
+            )
+            .expect("each configured progress slot remains reserved");
+        }
         assert_eq!(runtime.remaining_completion_capacity(), 1);
         enqueue_fake(
             &mut runtime,
@@ -17885,7 +17981,7 @@ mod tests {
         let owner_tag = tag(0);
         let mut driver = FakeDriver::new(owner_tag);
         assert!(driver.retry_once.insert(2));
-        let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(3, 1, 1));
+        let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(4, 1, 1));
         enqueue_fake(
             &mut runtime,
             owner_tag,
@@ -19800,7 +19896,7 @@ mod tests {
             driver,
             started_at,
             Duration::from_secs(10),
-            RuntimeQueueConfig::new(6, 1, 2),
+            RuntimeQueueConfig::new(7, 1, 2),
             Vec::new(),
             lifecycle_ordinals,
         )
@@ -19960,7 +20056,7 @@ mod tests {
         let first_key = Hash::new(b"first dormant validation lifecycle");
         let second_key = Hash::new(b"second dormant validation lifecycle");
         let mut ingress = BoundedIngress::with_lifecycle_ordinals(
-            RuntimeQueueConfig::new(4, 1, 1),
+            RuntimeQueueConfig::new(5, 1, 1),
             RuntimeLifecycleOrdinalSource::after_high_watermark(2),
         );
         ingress
@@ -20021,7 +20117,7 @@ mod tests {
         let lifecycle_key = Hash::new(b"immutable dormant completion lifecycle");
         let new_ingress = || {
             let mut ingress = BoundedIngress::with_lifecycle_ordinals(
-                RuntimeQueueConfig::new(4, 1, 1),
+                RuntimeQueueConfig::new(5, 1, 1),
                 RuntimeLifecycleOrdinalSource::after_high_watermark(2),
             );
             ingress
@@ -20063,7 +20159,7 @@ mod tests {
         assert_eq!(wrong_ordinal.remaining_capacity(), 3);
 
         let mut over_capacity = BoundedIngress::<FakeCommand>::with_lifecycle_ordinals(
-            RuntimeQueueConfig::new(4, 1, 1),
+            RuntimeQueueConfig::new(5, 1, 1),
             RuntimeLifecycleOrdinalSource::after_high_watermark(5),
         );
         let forged = (1_u128..=5)
@@ -20111,7 +20207,7 @@ mod tests {
         let owner_tag = tag(0);
         let lifecycle_key = Hash::new(b"persisted producer lifecycle");
         let mut ingress = BoundedIngress::with_lifecycle_ordinals(
-            RuntimeQueueConfig::new(4, 1, 1),
+            RuntimeQueueConfig::new(5, 1, 1),
             RuntimeLifecycleOrdinalSource::after_high_watermark(1),
         );
         let restored_with_ordinal = |value, producer_stage, tag, class, lifecycle_ordinal| {
@@ -20650,7 +20746,7 @@ mod tests {
         };
         let canonical_proposal = authenticated_proposal_for_test(canonical.clone());
         let conflicting_proposal = authenticated_proposal_for_test(conflicting);
-        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(1, 0, 0));
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(2, 0, 0));
 
         let reservation = ingress
             .reserve_canonical_body_available(tag(0), canonical)
@@ -20697,7 +20793,7 @@ mod tests {
     fn aborted_body_completion_retry_reclaims_the_entire_token_without_reminting() {
         let directory = TempDir::new().expect("temporary body retry directory");
         let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(3, 1, 1));
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
         let owner_tag = runtime.round_tag();
         let manifest = runtime_manifest(&context, 0xB1);
         runtime
@@ -20839,7 +20935,7 @@ mod tests {
         let dormant = RuntimeDormantLocalFifoReservation::completion(lifecycle_key, 1, 8);
         let source = RuntimeLifecycleOrdinalSource::after_high_watermark(1);
         let mut ingress = BoundedIngress::with_lifecycle_ordinals(
-            RuntimeQueueConfig::new(1, 0, 0),
+            RuntimeQueueConfig::new(2, 0, 0),
             source.clone(),
         );
         ingress
@@ -20997,7 +21093,7 @@ mod tests {
         };
         let original_tag = tag(4);
         let replacement_tag = tag(5);
-        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(1, 0, 0));
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(2, 0, 0));
 
         ingress
             .enqueue_canonical_body_available(original_tag, original.clone())
@@ -21702,7 +21798,12 @@ mod tests {
 
         let message =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate(&context, &keys, 0x79),
+                signed_runtime_quorum_certificate_for_phase(
+                    &context,
+                    &keys,
+                    0x79,
+                    wire::GlobalPhase::Prepare,
+                ),
             ));
         let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
         let mutation_ordinal = lifecycle_ordinals
@@ -21901,7 +22002,12 @@ mod tests {
 
         let message =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate(&context, &keys, 0x7A),
+                signed_runtime_quorum_certificate_for_phase(
+                    &context,
+                    &keys,
+                    0x7A,
+                    wire::GlobalPhase::Prepare,
+                ),
             ));
         let first_source = context.roster[2].validator.clone();
         let second_source = context.roster[1].validator.clone();
@@ -22041,7 +22147,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_authenticated_tc_from_distinct_sources_retains_one_busy_owner() {
+    fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
         let directory = TempDir::new().expect("temporary multi-source TC directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
@@ -22057,11 +22163,6 @@ mod tests {
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
                 signed_runtime_timeout_certificate(&context, &keys),
             ));
-        let request_lifecycle_ordinal = runtime
-            .ingress
-            .lifecycle_ordinals
-            .reserve_one()
-            .expect("preown the exact TC before timeout signing");
         let deadline = now + runtime.round_timeout();
         let timeout_step = runtime
             .step(deadline)
@@ -22076,15 +22177,15 @@ mod tests {
             .take_effect_ownership(timeout_effects.len())
             .expect("timeout Sign retains its lifecycle owner");
         assert_eq!(timeout_effect_ownership.len(), 1);
-        let (signature_tag, signature_preimage) = match timeout_effects.as_slice() {
+        match timeout_effects.as_slice() {
             [
                 AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::TimeoutVote(vote),
+                    request: SignRequest::TimeoutVote(_),
+                    ..
                 },
-            ] => (*tag, vote.signature_preimage()),
+            ] => {}
             effects => panic!("unexpected timeout effects: {effects:?}"),
-        };
+        }
         runtime
             .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
             .expect("publish the pending timeout signer owner");
@@ -22094,13 +22195,7 @@ mod tests {
                 runtime
                     .enqueue_network_with_ingress_ownership(
                         message.clone(),
-                        fair_runtime_ownership_at_lifecycle(
-                            fair_network_ownership(
-                                &message,
-                                PeerId::new(source.public_key().clone()),
-                            ),
-                            request_lifecycle_ordinal,
-                        ),
+                        fair_network_ownership(&message, PeerId::new(source.public_key().clone()),),
                     )
                     .expect("each authenticated TC carrier coalesces"),
                 owner_tag
@@ -22116,92 +22211,49 @@ mod tests {
         assert_eq!(queued.direct.len(), 2);
         assert!(queued.validate_exact());
 
+        let step = runtime
+            .try_step_pacemaker_escape(deadline)
+            .expect("certified pacemaker selection remains valid")
+            .expect("the queued TC owns one typed pacemaker turn");
+        let RuntimeStep::Advanced(effects) = step else {
+            panic!("certified TC unexpectedly idled")
+        };
         assert!(matches!(
-            runtime.step(deadline),
-            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+            effects.as_slice(),
+            [AdapterEffect::EnterView { tag, .. }] if tag.view() == owner_tag.view() + 1
         ));
         let fifo_owner = runtime
             .take_last_scheduler_ownership()
-            .expect("Busy TC dispatch retains its exact FIFO owner");
+            .expect("certified TC dispatch retains its exact FIFO owner");
         assert!(fifo_owner.validate_exact().is_ok());
-        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
-        let deferred = runtime
-            .deferred_ingress_ownership
-            .values()
-            .next()
-            .expect("the Busy TC owns one deferred ordinal");
-        assert_eq!(deferred.direct.len(), 2);
-        assert!(deferred.validate_exact());
-
         assert_eq!(
-            runtime
-                .enqueue_network_with_ingress_ownership(
-                    message.clone(),
-                    fair_runtime_ownership_at_lifecycle(
-                        fair_network_ownership(
-                            &message,
-                            PeerId::new(keys[2].public_key().clone()),
-                        ),
-                        request_lifecycle_ordinal,
-                    ),
-                )
-                .expect("a later authenticated carrier merges into the Busy TC"),
-            owner_tag
+            fifo_owner.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
         );
-        assert_eq!(runtime.queued_commands(), 0);
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &fifo_owner.candidate else {
+            panic!("certified TC must retain its exact queued candidate")
+        };
         assert_eq!(
-            runtime
-                .deferred_ingress_ownership
-                .values()
-                .next()
-                .expect("the Busy TC retains its merged carrier set")
-                .direct
-                .len(),
-            3
+            candidate.selection_seal.kind,
+            RuntimeQueueSelectionKind::PacemakerCertifiedProgress
         );
-
-        let signature = Signature::new(keys[0].private_key(), &signature_preimage)
-            .payload()
-            .to_vec();
-        runtime
-            .enqueue_signature_with_owner(signature_tag, signature, &timeout_effect_ownership[0])
-            .expect("enqueue the exact signing completion");
-        runtime
-            .set_external_lifecycle_owners(Vec::new())
-            .expect("retire the pending signer after completion enqueue");
-        assert!(matches!(
-            runtime.step(deadline),
-            Ok(RuntimeStep::Advanced(ref effects))
-                if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
-        ));
-        assert!(runtime.take_last_scheduler_ownership().is_some());
-        runtime
-            .take_effect_ownership(1)
-            .expect("the executor consumes the TimeoutVote broadcast owner");
-        let deferred_step = runtime
-            .step(deadline)
-            .expect("service the exact deferred TC owner");
-        let RuntimeStep::Advanced(deferred_effects) = deferred_step else {
-            panic!("deferred TC service unexpectedly idled")
-        };
-        let deferred_owner = runtime
-            .take_last_scheduler_ownership()
-            .expect("deferred TC service hands off its exact owner");
-        runtime
-            .take_effect_ownership(deferred_effects.len())
-            .expect("the executor consumes the deferred TC effect owner");
-        assert!(deferred_owner.validate_exact().is_ok());
-        let RuntimeSelectedCandidateOwnership::ExactDeferred(deferred) = &deferred_owner.candidate
-        else {
-            panic!("expected exact deferred TC scheduler ownership")
-        };
         assert!(
-            deferred
+            candidate
                 .ingress_ownership
                 .as_ref()
-                .is_some_and(|ownership| ownership.direct.len() == 3)
+                .is_some_and(|ownership| {
+                    ownership.validate_exact() && ownership.direct.len() == 2
+                })
         );
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("the executor consumes the TC EnterView owner");
+        runtime
+            .set_external_lifecycle_owners(Vec::new())
+            .expect("the executor retires the superseded signer owner");
+        assert_eq!(runtime.queued_commands(), 0);
         assert!(runtime.deferred_ingress_ownership.is_empty());
+        assert!(runtime.deferred_lifecycle_ownership.is_empty());
         assert!(!runtime.fail_closed);
     }
 
@@ -23477,7 +23529,7 @@ mod tests {
 
         let atomic_directory = TempDir::new().expect("temporary atomic validation directory");
         let (mut atomic_runtime, context, _keys) =
-            authenticated_network_runtime(&atomic_directory, RuntimeQueueConfig::new(3, 1, 1));
+            authenticated_network_runtime(&atomic_directory, RuntimeQueueConfig::new(4, 1, 1));
         let owner_tag = atomic_runtime.round_tag();
         let manifests = [0x9D, 0x9E, 0x9F, 0xA0].map(|seed| runtime_manifest(&context, seed));
         let failures = manifests
@@ -24614,7 +24666,7 @@ mod tests {
     fn pre_dequeue_probe_validates_unfrozen_leader_wire_identity() {
         let directory = TempDir::new().expect("temporary pre-dequeue probe directory");
         let (runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(3, 1, 1));
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
         let fixture = leader_wire_proposal_fixture(
             &directory,
             &context,
@@ -25978,336 +26030,178 @@ mod tests {
     }
 
     #[test]
-    fn commit_certificate_response_waits_for_embedded_qc_progress_capacity() {
-        let directory = TempDir::new().expect("temporary runtime ingress directory");
+    fn certified_commit_uses_physical_slot_reserved_from_completions() {
+        let directory = TempDir::new().expect("temporary certified-capacity directory");
         let (mut runtime, context, keys) =
             authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"response-capacity-block")),
-            payload_hash: Hash::new(b"response-capacity-payload"),
-        };
-        let certificate = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
-            subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
-                Hash::new(b"response capacity parent state"),
-                Hash::new(b"response capacity post state"),
-                Hash::new(b"response capacity ordinary writes"),
-                Hash::new(b"response capacity executed block wire"),
-            ),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![1],
-        };
-        let response = |certificate| {
-            wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CommitCertificateResponse(
-                    wire::CommitCertificateResponse {
-                        request_hash: HashOf::from_untyped_unchecked(Hash::new(
-                            b"response capacity request",
-                        )),
-                        certificate,
-                        responder: PeerId::new(keys[0].public_key().clone()),
-                        signature: vec![1],
-                    },
-                ),
-            )
-        };
-        let exact_response = response(certificate.clone());
-        let mut distinct_certificate = certificate.clone();
-        distinct_certificate.aggregate_signature = vec![2];
-        let distinct_response = response(distinct_certificate);
         let owner_tag = runtime.round_tag();
 
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![3]),
-        );
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![4]),
+        for signature in [vec![3], vec![4], vec![5]] {
+            stage_completion_for_queue_test(
+                &mut runtime,
+                owner_tag,
+                AdapterCommand::SignatureCompleted(signature),
+            );
+        }
+        assert_eq!(runtime.queued_commands(), 3);
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
+
+        let commit =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0xE0),
+            ));
+        assert!(
+            runtime.can_admit_network_message(&commit),
+            "the authenticated CommitQC owns the one slot hidden from completion producers"
         );
         runtime
-            .ingress
-            .enqueue_authenticated(
-                owner_tag,
-                CommandClass::Progress,
-                AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
-                )),
-            )
-            .expect("authenticated CommitQC fills the Progress prefix");
-        assert_eq!(runtime.queued_commands(), 3);
-
-        assert!(
-            !runtime.can_admit_network_message(&distinct_response),
-            "a distinct response remains in outer ingress while inner Progress is full"
-        );
-        assert!(
-            runtime.can_admit_network_message(&exact_response),
-            "an exact embedded CommitQC can coalesce with its queued owner"
-        );
-
-        let released = runtime
-            .ingress
-            .pop_next()
-            .expect("release one shared-capacity owner");
-        assert_eq!(released.class, CommandClass::Completion);
-        assert!(
-            runtime.can_admit_network_message(&distinct_response),
-            "the retained response can drain after Progress capacity returns"
-        );
+            .enqueue_network(commit)
+            .expect("the CommitQC consumes its reserved physical slot");
+        assert_eq!(runtime.queued_commands(), 4);
+        assert!(matches!(
+            runtime.ingress.check_capacity(CommandClass::Completion),
+            Err(EnqueueError::Full)
+        ));
+        assert!(!runtime.fail_closed);
     }
 
     #[test]
-    fn commit_certificate_response_coalesces_with_exact_busy_deferred_qc() {
-        let directory = TempDir::new().expect("temporary deferred-QC runtime directory");
+    fn certified_tc_crosses_full_retry_retained_prepare_prefix() {
+        let directory = TempDir::new().expect("temporary certified-prefix directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
             RuntimeQueueConfig::new(4, 1, 1),
             Some(0),
         );
-        let owner_tag = runtime.round_tag();
-        let exact_certificate = signed_runtime_quorum_certificate(&context, &keys, 0xE1);
-        let distinct_certificate = signed_runtime_quorum_certificate(&context, &keys, 0xE2);
-        let exact_message = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(exact_certificate.clone()),
-        );
         let now = Instant::now();
         runtime
             .arm_live_clocks(now)
-            .expect("arm the production runtime before dispatch");
-
+            .expect("arm runtime before opening the signing fence");
+        let owner_tag = runtime.round_tag();
         let timeout = runtime
             .driver
             .timeout_elapsed(owner_tag)
-            .expect("open a signer fence before CommitQC dispatch");
+            .expect("open one local TimeoutVote signing fence");
+        assert!(matches!(
+            timeout.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+
+        let prepare = |marker| {
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate_for_phase(
+                    &context,
+                    &keys,
+                    marker,
+                    wire::GlobalPhase::Prepare,
+                ),
+            ))
+        };
+        runtime
+            .enqueue_network(prepare(0xE1))
+            .expect("admit the first PrepareQC");
+        let first = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("first PrepareQC scheduling is valid")
+            .expect("first PrepareQC owns a pacemaker turn");
+        assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        let first_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("first PrepareQC retains scheduler ownership");
+        assert_eq!(
+            first_owner.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
+        );
+        assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
+        assert!(!runtime.driver().deferred_work_is_serviceable());
+
+        runtime
+            .enqueue_network(prepare(0xE2))
+            .expect("admit the second PrepareQC");
+        let retry = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("retry-retained PrepareQC scheduling is valid")
+            .expect("the second PrepareQC owns one bounded retry");
+        assert!(matches!(retry, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        let retry_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("retry-retained PrepareQC keeps exact scheduler ownership");
+        assert_eq!(
+            retry_owner.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+
+        runtime
+            .enqueue_network(prepare(0xE3))
+            .expect("fill the second ordinary Progress slot");
+        runtime
+            .enqueue_network(prepare(0xE4))
+            .expect("fill the final ordinary Progress slot");
+        assert_eq!(runtime.queued_commands(), 3);
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
+
+        let tc =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ));
         assert!(
-            matches!(
-                timeout.effects(),
-                [AdapterEffect::Sign {
-                    request: SignRequest::TimeoutVote(_),
-                    ..
-                }]
-            ),
-            "unexpected timeout effects: {:?}",
-            timeout.effects()
+            runtime.can_admit_network_message(&tc),
+            "the certified escape slot remains available after every ordinary slot fills"
         );
         runtime
-            .enqueue_network_with_ingress_ownership(
-                exact_message.clone(),
-                fair_network_ownership(&exact_message, PeerId::new(keys[0].public_key().clone())),
-            )
-            .expect("enqueue the authenticated CommitQC before the fence is observed");
-        assert!(matches!(
-            runtime
-                .step(now)
-                .expect("move the Busy CommitQC into adapter ownership"),
-            RuntimeStep::Advanced(ref effects) if effects.is_empty()
-        ));
-        assert_eq!(runtime.queued_commands(), 0);
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_authenticated_message_owner(&exact_message)
-                .map(|(tag, _)| tag),
-            Some(owner_tag)
-        );
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_quorum_certificate_owner_tag(&exact_certificate),
-            Some(owner_tag),
-            "the exact canonical QC retains its Busy-deferred owner"
-        );
-        let distinct_message = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(distinct_certificate.clone()),
-        );
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_authenticated_message_owner(&distinct_message)
-                .map(|(tag, _)| tag),
-            None
-        );
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_quorum_certificate_owner_tag(&distinct_certificate),
-            None
-        );
-        let mut reordered_signers = exact_certificate.clone();
-        reordered_signers.signers.reverse();
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_quorum_certificate_owner_tag(&reordered_signers),
-            None,
-            "canonical signer order is part of the deferred QC identity"
-        );
-        let mut altered_aggregate = exact_certificate.clone();
-        altered_aggregate.aggregate_signature.push(0xFF);
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_quorum_certificate_owner_tag(&altered_aggregate),
-            None,
-            "the aggregate signature is part of the deferred QC identity"
-        );
-        let mut altered_proposal_round = exact_certificate.clone();
-        altered_proposal_round.proposal_round.view =
-            altered_proposal_round.proposal_round.view.saturating_add(1);
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_quorum_certificate_owner_tag(&altered_proposal_round),
-            None,
-            "the proposal round is part of the deferred QC identity"
-        );
+            .enqueue_network(tc)
+            .expect("the TC consumes the reserved certified slot");
+        assert_eq!(runtime.queued_commands(), 4);
 
-        for signature in [vec![3], vec![4], vec![5]] {
-            runtime
-                .enqueue_signature(owner_tag, signature)
-                .expect("completion traffic saturates the shared Progress prefix");
-        }
-        assert_eq!(runtime.queued_commands(), 3);
-
-        let response = |certificate| {
-            wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CommitCertificateResponse(
-                    wire::CommitCertificateResponse {
-                        request_hash: HashOf::from_untyped_unchecked(Hash::new(
-                            b"deferred-QC coalescing request",
-                        )),
-                        certificate,
-                        responder: PeerId::new(keys[0].public_key().clone()),
-                        signature: vec![1],
-                    },
-                ),
-            )
+        let certified = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("certified selection remains valid")
+            .expect("the later TC bypasses the older retry owner");
+        let RuntimeStep::Advanced(effects) = certified else {
+            panic!("certified TC unexpectedly idled")
         };
-        assert!(
-            runtime.can_admit_network_message(&response(exact_certificate.clone())),
-            "an exact response can reach authentication through its Busy-deferred owner"
-        );
-        assert!(
-            !runtime.can_admit_network_message(&response(distinct_certificate.clone())),
-            "a distinct response remains blocked while the Progress prefix is saturated"
-        );
-
-        let queued_before = runtime.queued_commands();
-        assert_eq!(
-            runtime
-                .enqueue_network_with_ingress_ownership(
-                    exact_message.clone(),
-                    fair_network_ownership(
-                        &exact_message,
-                        PeerId::new(keys[1].public_key().clone()),
-                    ),
-                )
-                .expect("an exact QC from another source coalesces with adapter ownership"),
-            owner_tag
-        );
-        let exact_response = response(exact_certificate.clone());
-        assert_eq!(
-            runtime
-                .enqueue_network_with_ingress_ownership(
-                    exact_message.clone(),
-                    fair_network_ownership(
-                        &exact_response,
-                        PeerId::new(keys[2].public_key().clone()),
-                    ),
-                )
-                .expect("the authenticated discovery response coalesces with adapter ownership"),
-            owner_tag
-        );
-        assert_eq!(
-            runtime.queued_commands(),
-            queued_before,
-            "authenticated coalescing must not create a runtime-queued duplicate"
-        );
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_authenticated_message_owner(&wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::QuorumCertificate(exact_certificate.clone(),),
-                ))
-                .map(|(tag, _)| tag),
-            Some(owner_tag),
-            "request completion leaves the sole Busy-deferred owner intact"
-        );
-        let retained = runtime
-            .deferred_ingress_ownership
-            .values()
-            .next()
-            .expect("the Busy-deferred QC retains its ingress carriers");
-        assert!(retained.validate_exact());
-        assert_eq!(retained.direct.len(), 2);
-        assert_eq!(retained.commit_certificate_response.len(), 1);
-        assert!(!runtime.fail_closed);
-
-        for _ in 2..MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM {
-            let source = PeerId::from(KeyPair::random().public_key().clone());
-            let candidate = RuntimeIngressOwnershipEvidence::from_fair_ingress(
-                &exact_message,
-                fair_network_ownership(&exact_message, source),
-            )
-            .expect("independent Busy-deferred carrier is exact");
-            runtime
-                .deferred_ingress_ownership
-                .values_mut()
-                .next()
-                .expect("the Busy-deferred QC retains its ingress carriers")
-                .merge_downstream(candidate)
-                .expect("every protocol-bounded Busy-deferred carrier remains exact");
-        }
-        let deferred_owner_before = runtime
-            .deferred_ingress_ownership
-            .values()
-            .next()
-            .expect("the Busy-deferred carrier set is full")
-            .clone();
-        let excess_source = PeerId::from(KeyPair::random().public_key().clone());
         assert!(matches!(
-            runtime.enqueue_network_with_ingress_ownership(
-                exact_message.clone(),
-                fair_network_ownership(&exact_message, excess_source),
-            ),
-            Err(NetworkIngressError::Backpressure(EnqueueError::Full))
+            effects.as_slice(),
+            [AdapterEffect::EnterView { tag, .. }] if tag.view() == owner_tag.view() + 1
         ));
+        let certified_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("TC retains exact certified scheduler ownership");
         assert_eq!(
-            runtime
-                .deferred_ingress_ownership
-                .values()
-                .next()
-                .expect("backpressure preserves the full Busy-deferred carrier set"),
-            &deferred_owner_before
+            certified_owner.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
         );
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &certified_owner.candidate else {
+            panic!("TC must own one exact queued candidate")
+        };
+        assert_eq!(
+            candidate.selection_seal.kind,
+            RuntimeQueueSelectionKind::PacemakerCertifiedProgress
+        );
+        assert!(certified_owner.validate_exact().is_ok());
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("the executor consumes the TC EnterView ownership");
+        assert!(runtime.driver().deferred_work_is_serviceable());
+        let retired = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("the now-unblocked retained PrepareQC remains schedulable")
+            .expect("the retained PrepareQC receives its terminal service turn");
+        assert!(matches!(retired, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("retired PrepareQC preserves its exact scheduler owner");
+        assert!(runtime.deferred_ingress_ownership.is_empty());
+        assert!(runtime.deferred_lifecycle_ownership.is_empty());
         assert!(!runtime.fail_closed);
-        assert!(runtime.fail_closed_reason.is_none());
-        assert!(matches!(
-            runtime.enqueue_network(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::QuorumCertificate(distinct_certificate),
-            )),
-            Err(NetworkIngressError::Backpressure(
-                EnqueueError::ReservedCapacity
-            ))
-        ));
-        assert_eq!(runtime.queued_commands(), queued_before);
     }
 
     #[test]
-    fn exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot()
-    {
+    fn exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer() {
         let directory = TempDir::new().expect("temporary multi-source TC directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
             &directory,
@@ -26370,21 +26264,34 @@ mod tests {
         assert!(retained.validate_exact());
         assert_eq!(retained.direct.len(), 2);
 
+        let effects = match runtime.step(now) {
+            Ok(RuntimeStep::Advanced(effects)) => effects,
+            other => panic!("authenticated TC did not apply immediately: {other:?}"),
+        };
         assert!(matches!(
-            runtime.step(now),
-            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+            effects.as_slice(),
+            [AdapterEffect::EnterView { tag, .. }] if tag.view() == round_tag.view() + 1
         ));
         let selected = runtime
             .take_last_scheduler_ownership()
-            .expect("the Busy TC dispatch retains its exact runtime owner");
+            .expect("the applied TC dispatch retains its exact runtime owner");
         assert!(selected.validate_exact().is_ok());
-        let deferred = runtime
-            .deferred_ingress_ownership
-            .values()
-            .next()
-            .expect("the Busy TC retains the coalesced source carriers");
-        assert!(deferred.validate_exact());
-        assert_eq!(deferred.direct.len(), 2);
+        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &selected.candidate else {
+            panic!("the applied TC must retain its exact queued owner")
+        };
+        assert!(
+            candidate
+                .ingress_ownership
+                .as_ref()
+                .is_some_and(|ownership| {
+                    ownership.validate_exact() && ownership.direct.len() == 2
+                })
+        );
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("the executor consumes the TC EnterView owner");
+        assert!(runtime.deferred_ingress_ownership.is_empty());
+        assert!(runtime.deferred_lifecycle_ownership.is_empty());
         assert!(!runtime.fail_closed);
     }
 
@@ -26775,6 +26682,10 @@ mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
         };
+        let mut prepare_certificate = certificate.clone();
+        prepare_certificate.phase = wire::GlobalPhase::Prepare;
+        let prepare_qc =
+            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_certificate);
         let commit_qc = wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone());
         let timeout_vote = wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
             round,
@@ -26782,6 +26693,12 @@ mod tests {
             signer: 0,
             signature: vec![1],
         });
+        let timeout_certificate = wire::ConsensusMessageV2Payload::TimeoutCertificate(
+            wire::TimeoutCertificate {
+                round,
+                groups: Vec::new(),
+            },
+        );
         let commit_response = wire::ConsensusMessageV2Payload::CommitCertificateResponse(
             wire::CommitCertificateResponse {
                 request_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime commit request")),
@@ -26806,19 +26723,19 @@ mod tests {
             Some(CommandClass::Progress)
         );
         assert!(runtime.can_admit_network_payload(&vote));
+        assert!(runtime.can_admit_network_payload(&prepare_qc));
         assert!(runtime.can_admit_network_payload(&commit_qc));
         assert!(runtime.can_admit_network_payload(&timeout_vote));
+        assert!(runtime.can_admit_network_payload(&timeout_certificate));
         assert!(runtime.can_admit_network_payload(&commit_response));
 
-        for value in [1, 2] {
-            enqueue_fake(
-                &mut runtime,
-                initial,
-                CommandClass::Normal,
-                FakeCommand::record(value),
-            )
-            .expect("fill the normal prefix");
-        }
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Normal,
+            FakeCommand::record(1),
+        )
+        .expect("fill the normal prefix while preserving every reserved class");
         assert!(!runtime.can_admit_network_payload(&vote));
         assert!(
             !runtime.can_admit_network_payload(&mismatched_commit_vote),
@@ -26848,9 +26765,23 @@ mod tests {
         assert!(!runtime.can_admit_network_payload(&vote));
         assert!(!runtime.can_admit_network_payload(&mismatched_commit_vote));
         assert!(!runtime.can_admit_network_payload(&locked_commit_vote));
-        assert!(!runtime.can_admit_network_payload(&commit_qc));
+        assert!(
+            !runtime.can_admit_network_payload(&prepare_qc),
+            "PrepareQC cannot spend the final physical certified-fence slot"
+        );
+        assert!(
+            runtime.can_admit_network_payload(&commit_qc),
+            "CommitQC owns the final physical certified-fence slot"
+        );
         assert!(!runtime.can_admit_network_payload(&timeout_vote));
-        assert!(!runtime.can_admit_network_payload(&commit_response));
+        assert!(
+            runtime.can_admit_network_payload(&timeout_certificate),
+            "TC owns the final physical certified-fence slot"
+        );
+        assert!(
+            runtime.can_admit_network_payload(&commit_response),
+            "a CommitQC recovery response owns the final physical certified-fence slot"
+        );
 
         let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {
             round,
@@ -27129,7 +27060,7 @@ mod tests {
             Err(RuntimeConfigError::InvalidRoundTimeout)
         ));
 
-        let invalid_queue = RuntimeQueueConfig::new(2, 1, 1).validate();
+        let invalid_queue = RuntimeQueueConfig::new(3, 1, 1).validate();
         assert_eq!(
             invalid_queue,
             Err(RuntimeConfigError::InvalidQueueAllocation)
