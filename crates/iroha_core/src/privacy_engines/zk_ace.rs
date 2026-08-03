@@ -554,6 +554,7 @@ mod tests {
             source: account(1),
             destination: account(2),
             asset_definition_id: asset(),
+            public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
             amount: 19,
             authorization_epoch: 7,
             replay_nullifier: PrivacyNullifierV1::new([0; 32]),

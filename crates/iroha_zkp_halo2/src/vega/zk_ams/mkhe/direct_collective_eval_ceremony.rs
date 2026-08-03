@@ -200,9 +200,7 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         profile.validate()?;
         if transcript_digest == [0; 32]
             || collective_public_key_digest == [0; 32]
-            || secret_lineage_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
+            || secret_lineage_digests.contains(&[0; 32])
             || digit_index >= profile.gadget_digits
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -455,9 +453,7 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         let profile = release_profile_v1();
         if transcript_digest == [0; 32]
             || collective_public_key_digest == [0; 32]
-            || secret_lineage_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
+            || secret_lineage_digests.contains(&[0; 32])
             || digit_index >= profile.gadget_digits
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -586,7 +582,7 @@ fn direct_secret_lineage_root(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     lineage_digests: &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    if lineage_digests.iter().any(|digest| *digest == [0; 32]) {
+    if lineage_digests.contains(&[0; 32]) {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let mut hash = Keccak256::new();
@@ -681,7 +677,7 @@ pub fn zk_ams_mkhe_direct_proof_audit_v1() -> Result<ZkAmsMkheDirectProofAuditV1
 fn derive_direct_proof_audit_v1() -> ZkAmsMkheDirectProofAuditV1 {
     let mut value = ZkAmsMkheDirectProofAuditV1 {
         sparse_challenge_weight: ACTIVE_SPARSE_CHALLENGE_WEIGHT_V1,
-        challenge_weight_is_even: ACTIVE_SPARSE_CHALLENGE_WEIGHT_V1 % 2 == 0,
+        challenge_weight_is_even: ACTIVE_SPARSE_CHALLENGE_WEIGHT_V1.is_multiple_of(2),
         challenge_difference_unit_guaranteed: false,
         exact_extractor_pinned: false,
         structured_module_sis_reduction_pinned: false,
@@ -2159,9 +2155,7 @@ impl ZkAmsMkheDirectCoordinatorV1 {
             }
         };
         if aggregate_polynomial_digests.len() != expected_polynomials
-            || aggregate_polynomial_digests
-                .iter()
-                .any(|digest| *digest == [0; 32])
+            || aggregate_polynomial_digests.contains(&[0; 32])
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -2531,7 +2525,7 @@ fn ordered_evidence_set_digest(
     prior_round_digest: [u8; 32],
     evidence_digests: &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    if evidence_digests.iter().any(|digest| *digest == [0; 32]) {
+    if evidence_digests.contains(&[0; 32]) {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let mut hash = Keccak256::new();

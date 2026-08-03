@@ -6,7 +6,7 @@
 
 use super::{
     BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, MaskedRelaxedRandomSourceV1,
-    RnsPolynomial, SecretPolynomial, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
+    RnsPolynomial, Scalar, SecretPolynomial, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::{
         ZkAmsMkheActiveCollectivePublicKeyStatementV1, ZkAmsMkheActiveCollectivePublicKeyWitnessV1,
         ZkAmsMkheActivePartySecretV1, ZkAmsMkheActiveRkgProofV1, ZkAmsMkheGovernedActiveRosterV1,
@@ -16,20 +16,29 @@ use super::{
     },
     active_exact_binding::{
         PersistentWitnessConsumerV1, VerifiedPersistentWitnessBindingV1,
-        prove_and_mint_collective_secret_binding_v1,
+        mint_collective_secret_binding_from_verified_cpk_v1,
     },
     checked_coefficient_work, checked_ring_multiplication_work,
+    cpk_relation::{VerifiedZkAmsMkheCpkContributionV1, ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1},
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_release_manifest_v1,
         zk_ams_mkhe_security_certificate_v1,
     },
     packing::{ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1, packed_plaintext_to_rns_v1},
+    persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
     wire::{
         ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
         ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheWireBindingV1, governed_roster_digest,
     },
 };
-use crate::vega::sponge::{Keccak256, keccak256};
+use crate::vega::{
+    VegaT256PointV1 as Point,
+    bulletproof_t256::{
+        ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZkAmsT256MembershipBoundV1,
+        commit_zk_ams_t256_membership_chunk_v1,
+    },
+    sponge::{Keccak256, keccak256},
+};
 
 const COLLECTIVE_CIPHERTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.compact-collective-ciphertext";
@@ -57,6 +66,91 @@ impl Drop for ZeroizingSecretCoefficients {
     fn drop(&mut self) {
         self.0.fill(0);
     }
+}
+
+/// Short-lived canonical T256 view of an owned RLWE secret.
+///
+/// The state remains the only long-lived owner. This adapter exists solely to
+/// bind the complete CPK relation to the exact state opening and erases its
+/// narrowed copy on every ordinary, error, and unwind exit.
+struct ZeroizingT256MembershipCoefficientsV1(Vec<i8>);
+
+impl ZeroizingT256MembershipCoefficientsV1 {
+    fn from_ternary_secret(secret: &SecretPolynomial) -> Result<Self, ZkAmsMkheErrorV1> {
+        let expected_coefficients = ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1
+            .checked_mul(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if secret.coefficients.len() != expected_coefficients {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        // Establish the erasing owner before any subsequent fallible
+        // conversion so a malformed coefficient cannot leave a populated
+        // ordinary `Vec` to be freed without clearing it.
+        let mut coefficients = Self(Vec::new());
+        coefficients
+            .0
+            .try_reserve_exact(expected_coefficients)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        for coefficient in secret.coefficients.iter().copied() {
+            let coefficient =
+                i8::try_from(coefficient).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+            if !(-1..=1).contains(&coefficient) {
+                return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+            }
+            coefficients.0.push(coefficient);
+        }
+        Ok(coefficients)
+    }
+
+    fn as_slice(&self) -> &[i8] {
+        &self.0
+    }
+}
+
+impl Drop for ZeroizingT256MembershipCoefficientsV1 {
+    fn drop(&mut self) {
+        let coefficients = core::hint::black_box(&mut self.0);
+        coefficients.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *coefficients);
+    }
+}
+
+fn commit_persistent_secret_opening_v1(
+    coefficients: &[i8],
+    blindings: &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
+) -> Result<[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1], ZkAmsMkheErrorV1> {
+    let chunks = coefficients.chunks_exact(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1);
+    if !chunks.remainder().is_empty() || chunks.len() != blindings.len() {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let mut commitments = Vec::new();
+    commitments
+        .try_reserve_exact(blindings.len())
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    for (chunk, blinding) in chunks.zip(blindings.iter()) {
+        commitments.push(
+            commit_zk_ams_t256_membership_chunk_v1(
+                ZkAmsT256MembershipBoundV1::One,
+                chunk,
+                blinding,
+            )
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+        );
+    }
+    commitments
+        .try_into()
+        .map_err(|_: Vec<Point>| ZkAmsMkheErrorV1::InvalidKeyMaterial)
+}
+
+fn ensure_state_owned_cpk_commitments_v1(
+    verified: &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
+    expected: &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    if verified != expected {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(())
 }
 
 struct ZeroizingCanonicalPlaintext(Vec<[u8; 32]>);
@@ -206,11 +300,144 @@ impl Drop for ZkAmsMkheCollectiveEncryptionOpeningV1 {
     }
 }
 
+const PERSISTENT_BLINDING_ENTROPY_BYTES_V1: usize = 64;
+const PERSISTENT_BLINDING_CANONICAL_BYTES_V1: usize = 32;
+const PERSISTENT_BLINDING_STATE_BYTES_V1: usize =
+    ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 * PERSISTENT_BLINDING_CANONICAL_BYTES_V1;
+
+/// One fallible entropy request whose named bytes are erased on every exit.
+///
+/// The scalar reduction necessarily receives one by-value array copy. Rust
+/// cannot guarantee erasure of that compiler-managed temporary, but this
+/// owner covers the complete caller-visible buffer across errors and unwinds.
+struct PersistentSecretCommitmentBlindingEntropyV1([u8; PERSISTENT_BLINDING_ENTROPY_BYTES_V1]);
+
+impl PersistentSecretCommitmentBlindingEntropyV1 {
+    const fn zeroed() -> Self {
+        Self([0; PERSISTENT_BLINDING_ENTROPY_BYTES_V1])
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    fn expose_copy(&self) -> [u8; PERSISTENT_BLINDING_ENTROPY_BYTES_V1] {
+        self.0
+    }
+}
+
+impl Drop for PersistentSecretCommitmentBlindingEntropyV1 {
+    fn drop(&mut self) {
+        let bytes = core::hint::black_box(&mut self.0);
+        bytes.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *bytes);
+
+        #[cfg(test)]
+        if bytes.iter().all(|byte| *byte == 0) {
+            let _ = PERSISTENT_BLINDING_ENTROPY_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+    }
+}
+
+/// Move-only owner of the eight persistent membership-commitment blindings.
+///
+/// This type deliberately implements neither `Clone`, `Copy`, `Default`, nor
+/// serialization. Only an immutable array borrow crosses the sibling-module
+/// proof boundary, and every named scalar is erased on drop.
+pub(super) struct PersistentSecretCommitmentBlindingsV1(
+    [Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
+);
+
+impl PersistentSecretCommitmentBlindingsV1 {
+    fn sample<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<Self, ZkAmsMkheErrorV1> {
+        // Own the complete zero-initialized array before making the first
+        // fallible or panicking entropy request. This makes every partial
+        // construction path subject to the owner's destructor.
+        let mut owner = Self([Scalar::zero(); ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1]);
+        for blinding in &mut owner.0 {
+            let mut accepted = false;
+            for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
+                let mut entropy = PersistentSecretCommitmentBlindingEntropyV1::zeroed();
+                random
+                    .fill_bytes(entropy.as_mut_slice())
+                    .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
+                *blinding = Scalar::from_uniform_le_bytes(entropy.expose_copy());
+                if !blinding.is_zero() {
+                    accepted = true;
+                    break;
+                }
+            }
+            if !accepted {
+                return Err(ZkAmsMkheErrorV1::RandomUnavailable);
+            }
+        }
+        Ok(owner)
+    }
+
+    /// Borrow the exact ordered blindings for the sibling native CPK prover.
+    ///
+    /// No by-value or mutable access is exposed: the party state remains the
+    /// sole owner until the complete relation is proven or the state drops.
+    #[allow(dead_code)]
+    pub(super) const fn as_array(&self) -> &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for PersistentSecretCommitmentBlindingsV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("PersistentSecretCommitmentBlindingsV1([REDACTED])")
+    }
+}
+
+impl Drop for PersistentSecretCommitmentBlindingsV1 {
+    fn drop(&mut self) {
+        let blindings = core::hint::black_box(&mut self.0);
+        for blinding in blindings.iter_mut() {
+            blinding.clear_secret();
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *blindings);
+
+        #[cfg(test)]
+        if blindings.iter().all(|blinding| blinding.is_zero()) {
+            let _ = PERSISTENT_BLINDING_OWNER_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+    }
+}
+
+const _: () = {
+    assert!(ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 == 8);
+    assert!(PERSISTENT_BLINDING_STATE_BYTES_V1 == 256);
+    assert!(core::mem::size_of::<PersistentSecretCommitmentBlindingsV1>() == 256);
+};
+
+#[cfg(test)]
+std::thread_local! {
+    static PERSISTENT_BLINDING_ENTROPY_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PERSISTENT_BLINDING_OWNER_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
 /// Opaque RLWE state owned by one exact governed party and secret epoch.
 ///
-/// The ternary secret and centered-binomial public-key error are generated
-/// internally, are redacted from debug output, and are zeroized by their
-/// underlying secret containers on drop.
+/// The ternary secret, centered-binomial public-key error, and eight persistent
+/// commitment blindings are generated internally, are redacted from debug
+/// output, and are zeroized by their underlying secret containers on drop.
+/// The state is move-only so the persistent secret material has one owner:
+///
+/// ```compile_fail,E0277
+/// use iroha_zkp_halo2::vega::ZkAmsMkheCollectivePartyStateV1;
+///
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<ZkAmsMkheCollectivePartyStateV1>();
+/// ```
 pub struct ZkAmsMkheCollectivePartyStateV1 {
     profile_digest: [u8; 32],
     security_certificate_digest: [u8; 32],
@@ -222,6 +449,7 @@ pub struct ZkAmsMkheCollectivePartyStateV1 {
     party: ZkAmsMkhePartyIdV1,
     public_share_digest: [u8; 32],
     persistent_secret_binding: Option<VerifiedPersistentWitnessBindingV1>,
+    persistent_secret_commitment_blindings: PersistentSecretCommitmentBlindingsV1,
     secret: SecretPolynomial,
     public_error: SecretPolynomial,
 }
@@ -247,6 +475,10 @@ impl core::fmt::Debug for ZkAmsMkheCollectivePartyStateV1 {
             .field(
                 "persistent_secret_binding_verified",
                 &self.persistent_secret_binding.is_some(),
+            )
+            .field(
+                "persistent_secret_commitment_blindings",
+                &self.persistent_secret_commitment_blindings,
             )
             .field("secret", &"[REDACTED]")
             .field("public_error", &"[REDACTED]")
@@ -301,6 +533,16 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         &self.public_error
     }
 
+    /// Borrow the retained blindings for the complete sibling CPK relation.
+    /// Absence of a connected consumer remains a release blocker; it is never
+    /// permission to resample or accept an independently supplied opening.
+    #[allow(dead_code)]
+    pub(super) const fn persistent_secret_commitment_blindings(
+        &self,
+    ) -> &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
+        self.persistent_secret_commitment_blindings.as_array()
+    }
+
     pub(super) const fn profile_digest_internal(&self) -> [u8; 32] {
         self.profile_digest
     }
@@ -317,40 +559,98 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         self.key_material_digest
     }
 
-    /// Mint and retain the sole persistent commitment capability for this
-    /// state-owned `s_i`.  Callers cannot supply commitment points, proof
-    /// digests, or lineage identifiers.  Until the exact T256 membership
-    /// backend is implemented this boundary fails closed and leaves the state
-    /// unchanged.
+    /// Validate the complete state/share axes and lend the exact state-owned
+    /// persistent commitment opening to one sibling CPK operation.
+    ///
+    /// The narrowed coefficient copy is always erased before this call
+    /// returns. This boundary does not accept caller-supplied openings or
+    /// provide any resampling path.
     #[allow(dead_code)]
-    pub(super) fn mint_persistent_secret_binding<R: MaskedRelaxedRandomSourceV1>(
-        &mut self,
+    pub(super) fn with_validated_cpk_secret_opening_v1<T>(
+        &self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
-        random: &mut R,
-    ) -> Result<&VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        adapter: impl FnOnce(
+            &[i8],
+            &[Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
+        ) -> Result<T, ZkAmsMkheErrorV1>,
+    ) -> Result<T, ZkAmsMkheErrorV1> {
+        roster.validate()?;
+        let party_index = usize::from(self.party_index);
         if self.profile_digest != roster.profile_digest()
             || self.roster_digest != roster.roster_digest()
             || self.key_material_digest != roster.key_material_digest()
             || self.epoch != roster.epoch()
-            || usize::from(self.party_index) >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
-            || self.party != roster.participants()[usize::from(self.party_index)].party()
+            || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+            || self.party != roster.participants()[party_index].party()
             || self.transcript_digest == [0; 32]
             || self.public_share_digest == [0; 32]
+            || self.persistent_secret_binding.is_some()
+            || share.profile_digest != self.profile_digest
+            || share.security_certificate_digest != self.security_certificate_digest
+            || share.roster_digest != self.roster_digest
+            || share.key_material_digest != self.key_material_digest
+            || share.epoch != self.epoch
+            || share.transcript_digest != self.transcript_digest
+            || share.party_index != self.party_index
+            || share.party != self.party
+            || share.digest != self.public_share_digest
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-        if self.persistent_secret_binding.is_none() {
-            let binding = prove_and_mint_collective_secret_binding_v1(
+        validate_collective_public_key_share(roster, self.transcript_digest, party_index, share)?;
+        let coefficients =
+            ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&self.secret)?;
+        adapter(
+            coefficients.as_slice(),
+            self.persistent_secret_commitment_blindings.as_array(),
+        )
+    }
+
+    /// Admit and retain the sole persistent commitment capability for this
+    /// state-owned share by consuming a complete native CPK relation.
+    ///
+    /// The relation is rebound to the exact canonical `b_i` payload here.
+    /// Membership-only receipts, raw commitment digests, and a capability for
+    /// another state/share cannot enter the persistent runtime graph.
+    #[allow(dead_code)]
+    pub(super) fn admit_verified_cpk_contribution(
+        &mut self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        contribution: VerifiedZkAmsMkheCpkContributionV1,
+    ) -> Result<&VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
+        let party_index = usize::from(self.party_index);
+        let expected_commitments = self.with_validated_cpk_secret_opening_v1(
+            roster,
+            share,
+            commit_persistent_secret_opening_v1,
+        )?;
+        let party_b_payload_blake3 = cpk_party_b_payload_blake3_v1(&share.party_public_b)?;
+        let source = contribution
+            .into_collective_binding_source(
                 roster,
-                self.security_certificate_digest,
                 self.transcript_digest,
-                usize::from(self.party_index),
-                self.public_share_digest,
-                &self.secret.coefficients,
-                random,
-            )?;
-            self.persistent_secret_binding = Some(binding);
-        }
+                party_index,
+                party_b_payload_blake3,
+            )
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        ensure_state_owned_cpk_commitments_v1(source.commitments(), &expected_commitments)?;
+        let binding = mint_collective_secret_binding_from_verified_cpk_v1(
+            roster,
+            self.transcript_digest,
+            party_index,
+            self.public_share_digest,
+            source,
+        )?;
+        binding.validate_for(
+            roster,
+            self.transcript_digest,
+            party_index,
+            self.public_share_digest,
+            PersistentWitnessConsumerV1::CollectivePublicKey,
+        )?;
+        self.persistent_secret_binding = Some(binding);
         let binding = self
             .persistent_secret_binding
             .as_ref()
@@ -549,7 +849,7 @@ impl ZkAmsMkheCollectivePublicKeyV1 {
             || self.epoch == 0
             || self.transcript_digest == [0; 32]
             || self.parties.parties.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
-            || self.share_digests.iter().any(|digest| *digest == [0; 32])
+            || self.share_digests.contains(&[0; 32])
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -639,6 +939,8 @@ pub fn generate_zk_ams_mkhe_collective_party_state_v1<R: MaskedRelaxedRandomSour
     };
     share.digest = collective_public_key_share_digest(&share)?;
     validate_collective_public_key_share(roster, transcript_digest, party_index, &share)?;
+    let persistent_secret_commitment_blindings =
+        PersistentSecretCommitmentBlindingsV1::sample(random)?;
     let state = ZkAmsMkheCollectivePartyStateV1 {
         profile_digest: share.profile_digest,
         security_certificate_digest,
@@ -650,6 +952,7 @@ pub fn generate_zk_ams_mkhe_collective_party_state_v1<R: MaskedRelaxedRandomSour
         party: share.party,
         public_share_digest: share.digest,
         persistent_secret_binding: None,
+        persistent_secret_commitment_blindings,
         secret,
         public_error,
     };
@@ -832,6 +1135,34 @@ fn update_wire_polynomial_hash(
     Ok(())
 }
 
+/// BLAKE3 content address of the exact direct-object party-`b` framing.
+fn cpk_party_b_payload_blake3_v1(
+    polynomial: &ZkAmsMkheRnsPolynomialWireV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    polynomial.encoded_len()?;
+    let coefficient_count = u32::try_from(polynomial.residues().len())
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let payload_bytes = polynomial
+        .residues()
+        .len()
+        .checked_mul(core::mem::size_of::<u64>())
+        .and_then(|bytes| bytes.checked_add(core::mem::size_of::<u32>()))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if payload_bytes != ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1 {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let mut hash = norito::streaming::Blake3Hasher::new();
+    hash.update(&coefficient_count.to_be_bytes());
+    for residue in polynomial.residues() {
+        hash.update(&residue.to_be_bytes());
+    }
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    Ok(digest)
+}
+
 /// Exact native collective ciphertext containing only `(c_0, c_1)`.
 ///
 /// The transcript digest is the artifact-lineage commitment.  Constructors
@@ -964,6 +1295,10 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
         self.evaluation_key_digest
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the constructor binds every independently authenticated ciphertext field"
+    )]
     pub(super) fn new(
         profile: &BgvProfile,
         parties: &super::PartySet,
@@ -1055,10 +1390,18 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
         Ok(())
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed collective evaluated-key runtime"
+    )]
     pub(super) const fn constant(&self) -> &RnsPolynomial {
         &self.constant
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed collective evaluated-key runtime"
+    )]
     pub(super) const fn linear(&self) -> &RnsPolynomial {
         &self.linear
     }
@@ -1150,6 +1493,7 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[cfg(test)]
     fn with_validated_native_proof_witness_v1<T>(
         &self,
         profile: &BgvProfile,
@@ -1779,6 +2123,10 @@ impl ZkAmsMkheCollectiveLevelOneV1 {
         &self.linear
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed collective evaluated-key runtime"
+    )]
     pub(super) const fn quadratic(&self) -> &RnsPolynomial {
         &self.quadratic
     }
@@ -2318,6 +2666,107 @@ mod tests {
         ) -> Result<(), MaskedRelaxedRandomErrorV1> {
             Err(MaskedRelaxedRandomErrorV1::Unavailable)
         }
+    }
+
+    fn persistent_blinding_uniform_block(value: u64) -> [u8; 64] {
+        let mut block = [0; 64];
+        block[..8].copy_from_slice(&value.to_le_bytes());
+        block
+    }
+
+    struct ScriptedPersistentBlindingRandom {
+        blocks: Vec<[u8; 64]>,
+        next: usize,
+        request_lengths: Vec<usize>,
+    }
+
+    impl ScriptedPersistentBlindingRandom {
+        fn from_scalars(values: impl IntoIterator<Item = u64>) -> Self {
+            Self {
+                blocks: values
+                    .into_iter()
+                    .map(persistent_blinding_uniform_block)
+                    .collect(),
+                next: 0,
+                request_lengths: Vec::new(),
+            }
+        }
+    }
+
+    impl MaskedRelaxedRandomSourceV1 for ScriptedPersistentBlindingRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            self.request_lengths.push(destination.len());
+            let Some(block) = self.blocks.get(self.next) else {
+                return Err(MaskedRelaxedRandomErrorV1::Unavailable);
+            };
+            self.next += 1;
+            if destination.len() != block.len() {
+                return Err(MaskedRelaxedRandomErrorV1::Unavailable);
+            }
+            destination.copy_from_slice(block);
+            Ok(())
+        }
+    }
+
+    struct PartialFailurePersistentBlindingRandom {
+        successful_requests: usize,
+        calls: usize,
+        partial_bytes: usize,
+    }
+
+    impl MaskedRelaxedRandomSourceV1 for PartialFailurePersistentBlindingRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            assert_eq!(destination.len(), PERSISTENT_BLINDING_ENTROPY_BYTES_V1);
+            let call = self.calls;
+            self.calls += 1;
+            if call < self.successful_requests {
+                destination.copy_from_slice(&persistent_blinding_uniform_block(
+                    u64::try_from(call + 1).expect("test request index fits u64"),
+                ));
+                return Ok(());
+            }
+            destination[..self.partial_bytes].fill(0xa5);
+            Err(MaskedRelaxedRandomErrorV1::Unavailable)
+        }
+    }
+
+    struct PartialPanicPersistentBlindingRandom {
+        successful_requests: usize,
+        calls: usize,
+        partial_bytes: usize,
+    }
+
+    impl MaskedRelaxedRandomSourceV1 for PartialPanicPersistentBlindingRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            assert_eq!(destination.len(), PERSISTENT_BLINDING_ENTROPY_BYTES_V1);
+            let call = self.calls;
+            self.calls += 1;
+            if call < self.successful_requests {
+                destination.copy_from_slice(&persistent_blinding_uniform_block(
+                    u64::try_from(call + 1).expect("test request index fits u64"),
+                ));
+                return Ok(());
+            }
+            destination[..self.partial_bytes].fill(0x5a);
+            panic!("injected persistent-blinding entropy panic");
+        }
+    }
+
+    fn reset_persistent_blinding_drop_audits() {
+        PERSISTENT_BLINDING_ENTROPY_ZEROIZED_DROPS_V1.with(|drops| drops.set(0));
+        PERSISTENT_BLINDING_OWNER_ZEROIZED_DROPS_V1.with(|drops| drops.set(0));
+    }
+
+    fn persistent_blinding_drop_audits() -> (usize, usize) {
+        let entropy = PERSISTENT_BLINDING_ENTROPY_ZEROIZED_DROPS_V1.with(std::cell::Cell::get);
+        let owner = PERSISTENT_BLINDING_OWNER_ZEROIZED_DROPS_V1.with(std::cell::Cell::get);
+        (entropy, owner)
+    }
+
+    fn test_persistent_secret_commitment_blindings() -> PersistentSecretCommitmentBlindingsV1 {
+        PersistentSecretCommitmentBlindingsV1(core::array::from_fn(|index| {
+            Scalar::from_u64(u64::try_from(index + 17).expect("test blinding index fits u64"))
+        }))
     }
 
     struct RepeatedHealthyBlockRandom;
@@ -3195,6 +3644,240 @@ mod tests {
     }
 
     #[test]
+    fn persistent_commitment_blindings_have_exact_shape_order_and_redaction() {
+        reset_persistent_blinding_drop_audits();
+        let mut random = ScriptedPersistentBlindingRandom::from_scalars(
+            1..=u64::try_from(ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1)
+                .expect("release chunk count fits u64"),
+        );
+        let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
+            .expect("eight nonzero scripted blindings");
+
+        assert_eq!(
+            random.request_lengths,
+            vec![PERSISTENT_BLINDING_ENTROPY_BYTES_V1; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1]
+        );
+        for (index, scalar) in owner.as_array().iter().enumerate() {
+            assert_eq!(
+                *scalar,
+                Scalar::from_u64(u64::try_from(index + 1).expect("test index fits u64"))
+            );
+            assert!(!scalar.is_zero());
+        }
+        let canonical_bytes = owner
+            .as_array()
+            .iter()
+            .flat_map(|scalar| scalar.to_le_bytes())
+            .collect::<Vec<_>>();
+        assert_eq!(canonical_bytes.len(), PERSISTENT_BLINDING_STATE_BYTES_V1);
+        assert_eq!(canonical_bytes.len(), 256);
+        assert_eq!(
+            core::mem::size_of::<PersistentSecretCommitmentBlindingsV1>(),
+            256
+        );
+        assert_eq!(
+            format!("{owner:?}"),
+            "PersistentSecretCommitmentBlindingsV1([REDACTED])"
+        );
+        assert_eq!(persistent_blinding_drop_audits(), (8, 0));
+        drop(owner);
+        assert_eq!(persistent_blinding_drop_audits(), (8, 1));
+    }
+
+    #[test]
+    fn persistent_secret_membership_view_rejects_wrong_shape_and_non_ternary_state() {
+        let exact_len =
+            ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 * ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1;
+        let mut valid = SecretPolynomial {
+            coefficients: vec![0; exact_len],
+        };
+        valid.coefficients[0] = -1;
+        valid.coefficients[exact_len - 1] = 1;
+        let narrowed = ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&valid)
+            .expect("exact release ternary secret narrows without changing order");
+        assert_eq!(narrowed.as_slice().len(), exact_len);
+        assert_eq!(narrowed.as_slice()[0], -1);
+        assert_eq!(narrowed.as_slice()[exact_len - 1], 1);
+        drop(narrowed);
+
+        let short = SecretPolynomial {
+            coefficients: vec![0; exact_len - 1],
+        };
+        assert!(matches!(
+            ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&short),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        ));
+
+        valid.coefficients[ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1] = 2;
+        assert!(matches!(
+            ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&valid),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        ));
+    }
+
+    #[test]
+    fn state_owned_cpk_commitments_reject_secret_blinding_order_and_splice_changes() {
+        let exact_len =
+            ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 * ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1;
+        let mut coefficients = vec![0_i8; exact_len];
+        coefficients[0] = -1;
+        coefficients[ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1] = 1;
+        let blindings = core::array::from_fn(|index| {
+            Scalar::from_u64(u64::try_from(index + 17).expect("test index fits u64"))
+        });
+        let expected = commit_persistent_secret_opening_v1(&coefficients, &blindings)
+            .expect("exact state-owned opening commits all eight chunks");
+        ensure_state_owned_cpk_commitments_v1(&expected, &expected)
+            .expect("the exact ordered set is accepted");
+
+        let mut changed_coefficients =
+            coefficients[..ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1].to_vec();
+        changed_coefficients[0] = 0;
+        let changed_secret_point = commit_zk_ams_t256_membership_chunk_v1(
+            ZkAmsT256MembershipBoundV1::One,
+            &changed_coefficients,
+            &blindings[0],
+        )
+        .expect("mutated ternary chunk remains a valid commitment opening");
+        assert_ne!(changed_secret_point, expected[0]);
+
+        let changed_blinding_point = commit_zk_ams_t256_membership_chunk_v1(
+            ZkAmsT256MembershipBoundV1::One,
+            &coefficients[..ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1],
+            &Scalar::from_u64(0x5a),
+        )
+        .expect("replacement nonzero blinding remains a valid opening");
+        assert_ne!(changed_blinding_point, expected[0]);
+
+        let mut reordered = expected;
+        reordered.swap(0, 1);
+        assert!(matches!(
+            ensure_state_owned_cpk_commitments_v1(&reordered, &expected),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        ));
+
+        let mut duplicated = expected;
+        duplicated[1] = duplicated[0];
+        assert!(matches!(
+            ensure_state_owned_cpk_commitments_v1(&duplicated, &expected),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        ));
+
+        let mut spliced = expected;
+        spliced[0] = changed_secret_point;
+        assert!(matches!(
+            ensure_state_owned_cpk_commitments_v1(&spliced, &expected),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        ));
+
+        let mut zero_blinding = blindings;
+        zero_blinding[3] = Scalar::zero();
+        assert!(matches!(
+            commit_persistent_secret_opening_v1(&coefficients, &zero_blinding),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        ));
+        assert!(matches!(
+            commit_persistent_secret_opening_v1(&coefficients[..exact_len - 1], &blindings),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        ));
+    }
+
+    #[test]
+    fn persistent_commitment_blindings_retry_zero_without_reordering() {
+        reset_persistent_blinding_drop_audits();
+        let mut random =
+            ScriptedPersistentBlindingRandom::from_scalars(core::iter::once(0).chain(1..=8));
+        let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
+            .expect("zero is retried before the ordered nonzero values");
+
+        assert_eq!(random.request_lengths, vec![64; 9]);
+        assert_eq!(
+            owner
+                .as_array()
+                .iter()
+                .map(|scalar| scalar.to_le_bytes()[0])
+                .collect::<Vec<_>>(),
+            (1_u8..=8).collect::<Vec<_>>()
+        );
+        assert_eq!(persistent_blinding_drop_audits(), (9, 0));
+        drop(owner);
+        assert_eq!(persistent_blinding_drop_audits(), (9, 1));
+    }
+
+    #[test]
+    fn persistent_commitment_blindings_stop_at_exact_zero_rejection_ceiling() {
+        reset_persistent_blinding_drop_audits();
+        let mut random = ScriptedPersistentBlindingRandom::from_scalars(core::iter::repeat_n(
+            0,
+            MAX_RANDOM_REJECTION_ATTEMPTS_V1,
+        ));
+        assert!(matches!(
+            PersistentSecretCommitmentBlindingsV1::sample(&mut random),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        ));
+        assert_eq!(random.next, MAX_RANDOM_REJECTION_ATTEMPTS_V1);
+        assert_eq!(
+            random.request_lengths,
+            vec![PERSISTENT_BLINDING_ENTROPY_BYTES_V1; MAX_RANDOM_REJECTION_ATTEMPTS_V1]
+        );
+        assert_eq!(
+            persistent_blinding_drop_audits(),
+            (MAX_RANDOM_REJECTION_ATTEMPTS_V1, 1)
+        );
+    }
+
+    #[test]
+    fn persistent_commitment_blindings_erase_partial_state_on_rng_failure() {
+        reset_persistent_blinding_drop_audits();
+        let mut random = PartialFailurePersistentBlindingRandom {
+            successful_requests: 3,
+            calls: 0,
+            partial_bytes: 23,
+        };
+        assert!(matches!(
+            PersistentSecretCommitmentBlindingsV1::sample(&mut random),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        ));
+        assert_eq!(random.calls, 4);
+        assert_eq!(persistent_blinding_drop_audits(), (4, 1));
+    }
+
+    #[test]
+    fn persistent_commitment_blindings_erase_partial_state_during_unwind() {
+        reset_persistent_blinding_drop_audits();
+        let mut random = PartialPanicPersistentBlindingRandom {
+            successful_requests: 2,
+            calls: 0,
+            partial_bytes: 41,
+        };
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = PersistentSecretCommitmentBlindingsV1::sample(&mut random);
+        }));
+        assert!(panic.is_err());
+        assert_eq!(random.calls, 3);
+        assert_eq!(persistent_blinding_drop_audits(), (3, 1));
+    }
+
+    #[test]
+    fn persistent_commitment_blindings_move_without_duplicate_drop() {
+        fn move_once(
+            owner: PersistentSecretCommitmentBlindingsV1,
+        ) -> PersistentSecretCommitmentBlindingsV1 {
+            owner
+        }
+
+        reset_persistent_blinding_drop_audits();
+        let mut random = ScriptedPersistentBlindingRandom::from_scalars(1..=8);
+        let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
+            .expect("scripted nonzero blindings");
+        let owner = move_once(owner);
+        let owner = move_once(owner);
+        assert_eq!(persistent_blinding_drop_audits(), (8, 0));
+        drop(owner);
+        assert_eq!(persistent_blinding_drop_audits(), (8, 1));
+    }
+
+    #[test]
     fn opaque_party_state_debug_and_api_do_not_expose_rlwe_coefficients() {
         let state = ZkAmsMkheCollectivePartyStateV1 {
             profile_digest: [1; 32],
@@ -3207,6 +3890,7 @@ mod tests {
             party: test_parties().parties[0],
             public_share_digest: [6; 32],
             persistent_secret_binding: None,
+            persistent_secret_commitment_blindings: test_persistent_secret_commitment_blindings(),
             secret: SecretPolynomial {
                 coefficients: vec![1, -1, 0],
             },
@@ -3215,10 +3899,21 @@ mod tests {
             },
         };
         let debug = format!("{state:?}");
-        assert!(debug.contains("[REDACTED]"));
+        assert_eq!(debug.matches("[REDACTED]").count(), 3);
         assert!(!debug.contains("-1"));
         assert!(!debug.contains("-2"));
+        assert!(!debug.contains("17"));
         assert_eq!(state.secret().coefficients.len(), 3);
         assert_eq!(state.public_error().coefficients.len(), 3);
+        assert_eq!(
+            state.persistent_secret_commitment_blindings().len(),
+            ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1
+        );
+        assert!(
+            state
+                .persistent_secret_commitment_blindings()
+                .iter()
+                .all(|blinding| !blinding.is_zero())
+        );
     }
 }

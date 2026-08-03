@@ -270,11 +270,10 @@ impl GuardDirectorySnapshotV2 {
                 ));
             }
             self.validate_relay_certificate_window(&bundle.certificate)?;
-            let verified = if let Some(at_unix) = at_unix {
-                bundle.verify_at(&issuer.0, issuer.1, validation_phase, at_unix)
-            } else {
-                bundle.verify_signatures(&issuer.0, issuer.1, validation_phase)
-            };
+            let verified = at_unix.map_or_else(
+                || bundle.verify_signatures(&issuer.0, issuer.1, validation_phase),
+                |at_unix| bundle.verify_at(&issuer.0, issuer.1, validation_phase, at_unix),
+            );
             verified.map_err(|err| {
                 norito::Error::Message(format!(
                     "guard directory relay certificate signature verification failed: {err}"

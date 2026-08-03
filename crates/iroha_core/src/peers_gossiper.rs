@@ -17,7 +17,7 @@ use iroha_data_model::peer::{Peer, PeerId};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{
     Broadcast, PeerTransportCapabilities, UpdatePeerCapabilities, UpdatePeers, UpdateTopology,
-    UpdateTrustedPeers,
+    UpdateTrustedPeers, UpdateValidatorTopology,
 };
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
 use norito::{NoritoDeserialize, NoritoSerialize, codec::Encode, core as ncore};
@@ -297,6 +297,9 @@ pub struct PeersGossiper {
     trusted_peers: BTreeSet<PeerId>,
     /// Configured peers that stay trusted even if topology excludes them (e.g., observers).
     static_trusted_peers: BTreeSet<PeerId>,
+    /// Configured validator identities eligible for pairwise dial ownership.
+    /// Dynamic/gossiped identities and configured observers never enter this set.
+    configured_validator_peers: BTreeSet<PeerId>,
     /// Peers we can re-promote once trust decays above the floor.
     trust_candidates: BTreeSet<PeerId>,
     /// Peers received via gossiping from other peers
@@ -401,6 +404,7 @@ impl PeersGossiper {
     pub fn start(
         peer_id: PeerId,
         trusted_peers: TrustedPeers,
+        mut configured_validator_peers: BTreeSet<PeerId>,
         key_pair: KeyPair,
         gossip_period: Duration,
         gossip_max_period: Duration,
@@ -421,6 +425,7 @@ impl PeersGossiper {
             trusted_list.iter().map(|peer| peer.id().clone()).collect();
         trusted_set.insert(peer_id.clone());
         let static_trusted_peers = trusted_set.clone();
+        configured_validator_peers.retain(|peer_id| static_trusted_peers.contains(peer_id));
         let initial_topology: BTreeSet<_> = trusted_set.clone();
         let trust_candidates = trusted_set.clone();
         let gossip_max_period = gossip_max_period.max(gossip_period);
@@ -431,6 +436,7 @@ impl PeersGossiper {
             consensus_mode,
             trusted_peers: trusted_set,
             static_trusted_peers,
+            configured_validator_peers,
             trust_candidates,
             gossip_peers: BTreeMap::new(),
             peer_capabilities: BTreeMap::new(),
@@ -454,14 +460,18 @@ impl PeersGossiper {
             ),
             network,
         };
-        // Seed the network with the initial topology so peers start dialing immediately.
-        if !initial_topology.is_empty() {
-            let topology_update: HashSet<_> =
-                initial_topology.iter().cloned().collect::<HashSet<_>>();
-            gossiper
-                .network
-                .update_topology(UpdateTopology(topology_update));
-        }
+        // Seed consensus membership and pairwise dial ownership as one actor
+        // transition so startup cannot expose validators as eager dynamic peers.
+        gossiper
+            .network
+            .update_validator_topology(UpdateValidatorTopology {
+                topology: initial_topology.iter().cloned().collect(),
+                validator_dial_roster: gossiper
+                    .configured_validator_peers
+                    .iter()
+                    .cloned()
+                    .collect(),
+            });
         gossiper
             .trust
             .seed(gossiper.trusted_peers.clone(), std::time::Instant::now());
@@ -549,6 +559,11 @@ impl PeersGossiper {
 
     fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) -> bool {
         let force_disconnect = topology.is_empty();
+        let validator_dial_roster: HashSet<_> = topology
+            .iter()
+            .filter(|peer_id| self.configured_validator_peers.contains(*peer_id))
+            .cloned()
+            .collect();
         let mut new_topology: BTreeSet<_> = topology.into_iter().collect();
         if !force_disconnect {
             new_topology.extend(self.static_trusted_peers.iter().cloned());
@@ -616,7 +631,10 @@ impl PeersGossiper {
         // Keep the network dial set in sync with the current topology so removed peers
         // are disconnected promptly and new peers are contacted.
         self.network
-            .update_topology(UpdateTopology(new_topology.iter().cloned().collect()));
+            .update_validator_topology(UpdateValidatorTopology {
+                topology: new_topology.iter().cloned().collect(),
+                validator_dial_roster,
+            });
         self.network_update_peers_addresses();
         if capabilities_changed {
             self.network_update_peer_capabilities();
@@ -1256,6 +1274,7 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             trusted_peers: topology.clone(),
             static_trusted_peers: topology.clone(),
+            configured_validator_peers: BTreeSet::new(),
             trust_candidates: topology.clone(),
             gossip_peers: BTreeMap::new(),
             peer_capabilities: BTreeMap::new(),
@@ -1617,6 +1636,7 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             trusted_peers: trusted_set.clone(),
             static_trusted_peers: trusted_set.clone(),
+            configured_validator_peers: BTreeSet::new(),
             trust_candidates,
             gossip_peers: BTreeMap::new(),
             peer_capabilities: BTreeMap::new(),
@@ -1725,6 +1745,7 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             trusted_peers: trusted_set.clone(),
             static_trusted_peers: trusted_set,
+            configured_validator_peers: BTreeSet::new(),
             trust_candidates,
             gossip_peers: BTreeMap::new(),
             peer_capabilities: BTreeMap::new(),

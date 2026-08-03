@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /**
- * Generate the Torii OpenAPI spec in artifacts/openapi/torii.json.
+ * Synchronize the canonical Torii OpenAPI spec into its version aliases.
  *
- * This script runs the workspace `xtask` binary from the repository root. The
- * `package.json` `sync-openapi` script orchestrates the call.
+ * The CLI consumes the spec already emitted by `xtask openapi --output-root`;
+ * it never resolves Rust dependencies or launches Cargo itself.
  */
-import {spawn} from 'node:child_process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {dirname, join, relative, resolve} from 'node:path';
+import {dirname, isAbsolute, join, relative, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {cp, lstat, mkdtemp, mkdir, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -51,28 +50,61 @@ export function parseArgs(argv) {
     mirrors: [],
     requireSigned: true,
   };
+  let versionSeen = false;
+  let latestSeen = false;
+  let signaturePolicySeen = false;
 
   for (const arg of argv) {
     if (arg.startsWith('--version=')) {
+      if (versionSeen) {
+        throw new Error('sync-openapi accepts --version only once');
+      }
+      versionSeen = true;
       options.version = arg.slice('--version='.length);
     } else if (arg === '--latest') {
+      if (latestSeen) {
+        throw new Error('sync-openapi accepts --latest only once');
+      }
+      latestSeen = true;
       options.latest = true;
     } else if (arg.startsWith('--mirror=')) {
       const mirror = arg.slice('--mirror='.length);
       if (!mirror) {
         throw new Error('mirror label must not be empty');
       }
+      if (options.mirrors.includes(mirror)) {
+        throw new Error(`mirror label '${mirror}' may be supplied only once`);
+      }
       options.mirrors.push(mirror);
     } else if (arg === '--allow-unsigned') {
+      if (signaturePolicySeen) {
+        throw new Error('sync-openapi accepts one signature policy flag');
+      }
+      signaturePolicySeen = true;
       options.requireSigned = false;
     } else if (arg === '--require-signed') {
+      if (signaturePolicySeen) {
+        throw new Error('sync-openapi accepts one signature policy flag');
+      }
+      signaturePolicySeen = true;
       options.requireSigned = true;
     } else if (arg.startsWith('--allowed-signers=')) {
+      if (options.allowedSignersFile !== undefined) {
+        throw new Error('sync-openapi accepts --allowed-signers only once');
+      }
       const allowedSignersFile = arg.slice('--allowed-signers='.length).trim();
       if (!allowedSignersFile) {
         throw new Error('allowed signers path must not be empty');
       }
       options.allowedSignersFile = resolve(allowedSignersFile);
+    } else if (arg.startsWith('--output-dir=')) {
+      if (options.outputDir !== undefined) {
+        throw new Error('sync-openapi accepts --output-dir only once');
+      }
+      options.outputDir = parseOutputDirectory(
+        arg.slice('--output-dir='.length),
+        '--output-dir',
+      );
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -82,11 +114,41 @@ export function parseArgs(argv) {
   for (const mirror of options.mirrors) {
     validateVersionLabel(mirror, 'mirror');
   }
+  if (new Set([options.version, ...options.mirrors]).size !== options.mirrors.length + 1) {
+    throw new Error('version and mirror labels must be distinct');
+  }
   if (collectTargetLabels(options).includes('current') && !options.latest) {
     throw new Error("updating the 'current' OpenAPI version requires --latest");
   }
-
   return options;
+}
+
+function parseOutputDirectory(value, option) {
+  if (
+    !value ||
+    value.trim() !== value ||
+    value.startsWith('-') ||
+    value.split(/[\\/]/u).some((segment) => segment === '.' || segment === '..')
+  ) {
+    throw new Error(`${option} requires an unambiguous directory path`);
+  }
+  const outputDir = resolve(value);
+  if (dirname(outputDir) === outputDir) {
+    throw new Error(`${option} must not be the filesystem root`);
+  }
+  if (outputDir === defaultRepoRoot) {
+    throw new Error(`${option} must not be the repository root`);
+  }
+  const gitMetadata = join(defaultRepoRoot, '.git');
+  const relativeToGitMetadata = relative(gitMetadata, outputDir);
+  if (
+    relativeToGitMetadata === '' ||
+    (!relativeToGitMetadata.startsWith('..') &&
+      !isAbsolute(relativeToGitMetadata))
+  ) {
+    throw new Error(`${option} must not write inside Git metadata`);
+  }
+  return outputDir;
 }
 
 function validateVersionLabel(label, kind) {
@@ -103,55 +165,48 @@ function validateVersionLabel(label, kind) {
   }
 }
 
-function runCargo(repoRoot, args) {
-  return new Promise((resolve) => {
-    const child = spawn('cargo', args, {
-      cwd: repoRoot,
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        NORITO_SKIP_BINDINGS_SYNC: '1'
-      }
-    });
-    child.on('close', (code) => resolve(code ?? 1));
-  });
-}
-
 const defaultContext = {
   repoRoot: defaultRepoRoot,
   outputDir: defaultOutputDir,
   versionsDir: defaultVersionsDir,
   allowedSignersFile: join(defaultOutputDir, 'allowed_signers.json'),
-  async generateSpec(repoRoot, outputFile) {
-    const code = await runCargo(repoRoot, [
-      'run',
-      '--locked',
-      '--offline',
-      '-p',
-      'xtask',
-      '--features',
-      'dev-tools',
-      '--bin',
-      'xtask',
-      '--',
-      'openapi',
-      '--output',
-      outputFile,
-    ]);
-    if (code !== 0) {
-      throw new Error(`OpenAPI generation failed (cargo exit code ${code})`);
-    }
-  },
 };
 
-export async function syncOpenApi(options, context = defaultContext) {
-  const {
-    repoRoot,
+export function createCliContext(options) {
+  if (options.outputDir === undefined) {
+    throw new Error(
+      'sync-openapi requires explicit --output-dir; generate its canonical torii.json with xtask first',
+    );
+  }
+  const outputDir = options.outputDir;
+  const canonicalSpec = join(outputDir, 'torii.json');
+  return {
+    ...defaultContext,
     outputDir,
-    versionsDir,
-    generateSpec,
-    allowedSignersFile: contextAllowedSignersFile = join(outputDir, 'allowed_signers.json'),
-  } = context;
+    versionsDir: join(outputDir, 'versions'),
+    allowedSignersFile: join(outputDir, 'allowed_signers.json'),
+    async generateSpec(_repoRoot, outputFile) {
+      const specBytes = await readOpenApiStableFile(canonicalSpec, {
+        label: `canonical OpenAPI specification ${canonicalSpec}`,
+        maxBytes: OPENAPI_SPEC_MAX_BYTES,
+      });
+      validateReleaseOpenApiDocumentBytes(specBytes, {
+        label: `canonical OpenAPI specification ${canonicalSpec}`,
+      });
+      await writeFile(outputFile, specBytes);
+    },
+  };
+}
+
+export async function syncOpenApi(options, context = defaultContext) {
+  const {repoRoot, generateSpec} = context;
+  const outputDir = options.outputDir ?? context.outputDir;
+  const versionsDir = options.outputDir
+    ? join(outputDir, 'versions')
+    : context.versionsDir;
+  const contextAllowedSignersFile = options.outputDir
+    ? join(outputDir, 'allowed_signers.json')
+    : (context.allowedSignersFile ?? join(outputDir, 'allowed_signers.json'));
   const requireSignedManifest = options.requireSigned !== false;
   const allowedSignersFile = options.allowedSignersFile ?? contextAllowedSignersFile;
 
@@ -798,7 +853,7 @@ function serializeJson(value) {
 
 async function runCli() {
   const options = parseArgs(process.argv.slice(2));
-  await syncOpenApi(options);
+  await syncOpenApi(options, createCliContext(options));
 }
 
 const invokedUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;

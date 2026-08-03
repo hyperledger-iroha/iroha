@@ -1734,12 +1734,17 @@ mod tests {
         fn proposal(&self, subject: wire_v2::BlockSubject) -> wire_v2::Proposal {
             let round = self.round(0);
             let proposer = self.context.leader(0);
+            let body = [subject.payload_hash.as_ref()[0]];
+            let chunks = wire_v2::encode_payload_chunks(self.context.da_layout, &body)
+                .expect("encode complete v2 evidence fixture chunks");
+            // Evidence cases supply the exact subject under test, so derive
+            // against that subject after constructing canonical RS16 chunks.
             let manifest = wire_v2::PayloadManifest::derive(
                 &self.context,
                 round,
                 subject,
-                1,
-                &[vec![subject.payload_hash.as_ref()[0]]],
+                u64::try_from(body.len()).expect("small evidence fixture body length fits u64"),
+                &chunks,
             )
             .expect("v2 evidence manifest");
             let mut proposal = wire_v2::Proposal {

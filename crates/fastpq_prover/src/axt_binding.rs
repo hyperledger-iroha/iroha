@@ -648,27 +648,27 @@ fn normalized_claim_type(value: &str) -> Result<String> {
 fn canonicalize_effect_binding(binding: &AxtEffectBinding) -> Result<AxtEffectBinding> {
     Ok(AxtEffectBinding {
         destination_domain: canonical_optional_string(
-            &binding.destination_domain,
+            binding.destination_domain.as_deref(),
             "effect_binding.destination_domain",
         )?,
         destination_account_id: canonical_optional_string(
-            &binding.destination_account_id,
+            binding.destination_account_id.as_deref(),
             "effect_binding.destination_account_id",
         )?,
         vault_account_id: canonical_optional_string(
-            &binding.vault_account_id,
+            binding.vault_account_id.as_deref(),
             "effect_binding.vault_account_id",
         )?,
         issuance_account_id: canonical_optional_string(
-            &binding.issuance_account_id,
+            binding.issuance_account_id.as_deref(),
             "effect_binding.issuance_account_id",
         )?,
         source_asset_definition_id: canonical_optional_string(
-            &binding.source_asset_definition_id,
+            binding.source_asset_definition_id.as_deref(),
             "effect_binding.source_asset_definition_id",
         )?,
         destination_asset_definition_id: canonical_optional_string(
-            &binding.destination_asset_definition_id,
+            binding.destination_asset_definition_id.as_deref(),
             "effect_binding.destination_asset_definition_id",
         )?,
         source_amount_i64: binding.source_amount_i64,
@@ -676,11 +676,8 @@ fn canonicalize_effect_binding(binding: &AxtEffectBinding) -> Result<AxtEffectBi
     })
 }
 
-fn canonical_optional_string(value: &Option<String>, field: &str) -> Result<Option<String>> {
-    value
-        .as_deref()
-        .map(|value| required_string(value, field))
-        .transpose()
+fn canonical_optional_string(value: Option<&str>, field: &str) -> Result<Option<String>> {
+    value.map(|value| required_string(value, field)).transpose()
 }
 
 fn require_canonical_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBinding> {

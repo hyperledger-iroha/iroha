@@ -214,19 +214,16 @@ fileprivate func exactCanonicalToriiAccountAddress(
 }
 
 fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String) throws -> String {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    let exact = try requireToriiExactNonEmptyQueryValue(raw, field: field)
+    if exact.contains("@") {
+        return try normalizeToriiAccountAliasLiteral(exact, field: field)
     }
-    if trimmed.contains("@") {
-        return try normalizeToriiAccountAliasLiteral(trimmed, field: field)
-    }
-    if trimmed.contains("%") || trimmed.contains("/") || trimmed.contains("?") || trimmed.contains("#") {
+    if exact.contains("%") || exact.contains("/") || exact.contains("?") || exact.contains("#") {
         throw ToriiClientError.invalidPayload(
             "\(field) must be an encoded account id (i105)."
         )
     }
-    if let canonical = try? exactCanonicalToriiAccountAddress(trimmed) {
+    if let canonical = try? exactCanonicalToriiAccountAddress(exact) {
         return try canonical.address.toI105(
             networkPrefix: canonical.chainDiscriminant
         )
@@ -13284,6 +13281,26 @@ fileprivate enum ToriiRequestValidation {
         return trimmed
     }
 
+    static func exactToken(_ value: String, field: String) throws -> String {
+        guard !value.isEmpty,
+              value.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              value.rangeOfCharacter(from: .controlCharacters) == nil else {
+            throw ToriiClientError.invalidPayload(
+                "\(field) must be exact non-empty text without whitespace or control characters."
+            )
+        }
+        return value
+    }
+
+    static func governanceSelector(_ value: String, field: String) throws -> String {
+        guard GovernanceSelectorV1.isValid(value) else {
+            throw ToriiClientError.invalidPayload(
+                "\(field) must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot."
+            )
+        }
+        return value
+    }
+
     static func normalizedOptionalNonEmpty(_ value: String?, field: String) throws -> String? {
         guard let value else { return nil }
         return try normalizedNonEmpty(value, field: field)
@@ -20138,9 +20155,39 @@ public struct ToriiGovernanceWindow: Codable, Sendable {
     public var lower: UInt64
     public var upper: UInt64
 
+    private enum CodingKeys: String, CodingKey {
+        case lower
+        case upper
+    }
+
     public init(lower: UInt64, upper: UInt64) {
         self.lower = lower
         self.upper = upper
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lower = try container.decode(UInt64.self, forKey: .lower)
+        upper = try container.decode(UInt64.self, forKey: .upper)
+        guard lower <= upper else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "governance window upper bound must not precede its lower bound"
+                )
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard lower <= upper else {
+            throw ToriiClientError.invalidPayload(
+                "governance window upper bound must not precede its lower bound."
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(lower, forKey: .lower)
+        try container.encode(upper, forKey: .upper)
     }
 }
 
@@ -20152,8 +20199,7 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
     public var abiVersion: String
     public var window: ToriiGovernanceWindow?
     public var mode: ToriiGovernanceReferendumMode?
-    public var limits: ToriiJSONValue?
-    public var manifestProvenance: ToriiJSONValue?
+    public var manifestProvenance: ToriiContractManifestProvenance?
 
     private enum CodingKeys: String, CodingKey {
         case contractAddress = "contract_address"
@@ -20163,7 +20209,6 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
         case abiVersion = "abi_version"
         case window
         case mode
-        case limits
         case manifestProvenance = "manifest_provenance"
     }
 
@@ -20174,8 +20219,7 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
                 abiVersion: String = "1",
                 window: ToriiGovernanceWindow? = nil,
                 mode: ToriiGovernanceReferendumMode? = nil,
-                limits: ToriiJSONValue? = nil,
-                manifestProvenance: ToriiJSONValue? = nil) {
+                manifestProvenance: ToriiContractManifestProvenance? = nil) {
         self.contractAddress = contractAddress
         self.contractAlias = contractAlias
         self.codeHashHex = codeHashHex
@@ -20183,7 +20227,6 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
         self.abiVersion = abiVersion
         self.window = window
         self.mode = mode
-        self.limits = limits
         self.manifestProvenance = manifestProvenance
     }
 
@@ -20193,173 +20236,138 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
             contractAlias: contractAlias,
             field: "governanceProposeDeployContract"
         )
-        let normalizedCodeHash = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "code_hash")
-        let normalizedAbiHash = try ToriiRequestValidation.normalized32ByteHex(abiHashHex, field: "abi_hash")
-        let normalizedAbiVersion = try ToriiRequestValidation.normalizedNonEmpty(abiVersion, field: "abi_version")
+        let normalizedCodeHash = try canonicalizeGovernanceHex32(codeHashHex, field: "code_hash")
+        let normalizedAbiHash = try canonicalizeGovernanceHex32(abiHashHex, field: "abi_hash")
+        guard abiVersion == "1" else {
+            throw ToriiClientError.invalidPayload("abi_version must be exactly 1.")
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
         try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
         try container.encode(normalizedCodeHash, forKey: .codeHashHex)
         try container.encode(normalizedAbiHash, forKey: .abiHashHex)
-        try container.encode(normalizedAbiVersion, forKey: .abiVersion)
+        try container.encode(abiVersion, forKey: .abiVersion)
         try container.encodeIfPresent(window, forKey: .window)
         try container.encodeIfPresent(mode, forKey: .mode)
-        try container.encodeIfPresent(limits, forKey: .limits)
         try container.encodeIfPresent(manifestProvenance, forKey: .manifestProvenance)
     }
 }
 
-public struct ToriiGovernanceZkBallotRequest: Encodable, Sendable {
-    public var authority: String
-    public var chainId: String
-    public var electionId: String
-    public var proofB64: String
-    public var publicInputs: [String: ToriiJSONValue]?
+public enum ToriiGovernanceBallotDirection: String, Codable, Sendable {
+    case aye = "Aye"
+    case nay = "Nay"
+    case abstain = "Abstain"
+}
+
+fileprivate struct NormalizedGovernanceZkPublicInputs {
+    var rootHint: String?
+    var owner: String?
+    var amount: String?
+    var durationBlocks: UInt64?
+    var direction: ToriiGovernanceBallotDirection?
+    var nullifier: String?
+}
+
+/// The complete public-input surface accepted by governance ZK ballot routes.
+///
+/// Signing keys, witnesses, and arbitrary extension fields are intentionally not
+/// representable. The three lock hints are atomic: callers either omit all of
+/// `owner`, `amount`, and `durationBlocks`, or provide all three.
+public struct GovernanceZkBallotPublicInputs: Encodable, Sendable {
+    public var rootHint: String?
+    public var owner: String?
+    public var amount: String?
+    public var durationBlocks: UInt64?
+    public var direction: ToriiGovernanceBallotDirection?
+    public var nullifier: String?
 
     private enum CodingKeys: String, CodingKey {
-        case authority
-        case chainId = "chain_id"
-        case electionId = "election_id"
-        case proofB64 = "proof_b64"
-        case publicInputs = "public"
+        case rootHint = "root_hint"
+        case owner
+        case amount
+        case durationBlocks = "duration_blocks"
+        case direction
+        case nullifier
     }
 
-    public init(authority: String,
-                chainId: String,
-                electionId: String,
-                proofB64: String,
-                publicInputs: [String: ToriiJSONValue]? = nil) {
-        self.authority = authority
-        self.chainId = chainId
-        self.electionId = electionId
-        self.proofB64 = proofB64
-        self.publicInputs = publicInputs
+    public init(rootHint: String? = nil,
+                owner: String? = nil,
+                amount: String? = nil,
+                durationBlocks: UInt64? = nil,
+                direction: ToriiGovernanceBallotDirection? = nil,
+                nullifier: String? = nil) {
+        self.rootHint = rootHint
+        self.owner = owner
+        self.amount = amount
+        self.durationBlocks = durationBlocks
+        self.direction = direction
+        self.nullifier = nullifier
+    }
+
+    fileprivate func normalized(field: String) throws -> NormalizedGovernanceZkPublicInputs {
+        let hasOwner = owner != nil
+        let hasAmount = amount != nil
+        let hasDuration = durationBlocks != nil
+        if (hasOwner || hasAmount || hasDuration) && !(hasOwner && hasAmount && hasDuration) {
+            throw ToriiClientError.invalidPayload(
+                "\(field) must include owner, amount, and duration_blocks when providing lock hints."
+            )
+        }
+
+        let normalizedOwner: String? = try owner.map { raw in
+            let canonical = try canonicalizeGovernanceZkOwnerLiteral(raw, field: field)
+            guard canonical == raw else {
+                throw ToriiClientError.invalidPayload(
+                    "\(field).owner must use canonical I105 account id form."
+                )
+            }
+            return canonical
+        }
+        return try NormalizedGovernanceZkPublicInputs(
+            rootHint: rootHint.map {
+                try canonicalizeGovernanceHex32($0, field: "\(field).root_hint")
+            },
+            owner: normalizedOwner,
+            amount: amount.map {
+                try canonicalGovernanceQuantity($0, field: "\(field).amount")
+            },
+            durationBlocks: durationBlocks,
+            direction: direction,
+            nullifier: nullifier.map {
+                try canonicalizeGovernanceHex32($0, field: "\(field).nullifier")
+            }
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority, field: "authority")
-        let normalizedChainId = try ToriiRequestValidation.normalizedNonEmpty(chainId, field: "chain_id")
-        let normalizedElectionId = try ToriiRequestValidation.normalizedNonEmpty(electionId, field: "election_id")
-        let normalizedProof = try ToriiRequestValidation.normalizedBase64(proofB64, field: "proof_b64")
-        let normalizedPublicInputs: [String: ToriiJSONValue]? = try {
-            guard let publicInputs else { return nil }
-            return try normalizeGovernanceZkPublicInputs(publicInputs, field: "public inputs")
-        }()
+        let normalized = try normalized(field: "governance ZK public inputs")
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedChainId, forKey: .chainId)
-        try container.encode(normalizedElectionId, forKey: .electionId)
-        try container.encode(normalizedProof, forKey: .proofB64)
-        try container.encodeIfPresent(normalizedPublicInputs, forKey: .publicInputs)
+        try container.encodeIfPresent(normalized.rootHint, forKey: .rootHint)
+        try container.encodeIfPresent(normalized.owner, forKey: .owner)
+        try container.encodeIfPresent(normalized.amount, forKey: .amount)
+        try container.encodeIfPresent(normalized.durationBlocks, forKey: .durationBlocks)
+        try container.encodeIfPresent(normalized.direction, forKey: .direction)
+        try container.encodeIfPresent(normalized.nullifier, forKey: .nullifier)
     }
 }
 
-fileprivate func normalizeGovernanceZkPublicInputs(_ inputs: [String: ToriiJSONValue],
-                                                   field: String) throws -> [String: ToriiJSONValue] {
-    var normalized = inputs
-    try rejectGovernanceZkPublicInputKey(&normalized,
-                                         key: "durationBlocks",
-                                         canonicalKey: "duration_blocks",
-                                         field: field)
-    try rejectGovernanceZkPublicInputKey(&normalized,
-                                         key: "root_hint_hex",
-                                         canonicalKey: "root_hint",
-                                         field: field)
-    try rejectGovernanceZkPublicInputKey(&normalized,
-                                         key: "rootHintHex",
-                                         canonicalKey: "root_hint",
-                                         field: field)
-    try rejectGovernanceZkPublicInputKey(&normalized,
-                                         key: "rootHint",
-                                         canonicalKey: "root_hint",
-                                         field: field)
-    try rejectGovernanceZkPublicInputKey(&normalized,
-                                         key: "nullifier_hex",
-                                         canonicalKey: "nullifier",
-                                         field: field)
-    try rejectGovernanceZkPublicInputKey(&normalized,
-                                         key: "nullifierHex",
-                                         canonicalKey: "nullifier",
-                                         field: field)
-    try normalizeGovernanceZkPublicInputHex(&normalized, key: "root_hint", field: field)
-    try normalizeGovernanceZkPublicInputHex(&normalized, key: "nullifier", field: field)
-    let hasOwner = governanceZkHintPresent(normalized["owner"])
-    let hasAmount = governanceZkHintPresent(normalized["amount"])
-    let hasDuration = governanceZkHintPresent(normalized["duration_blocks"])
-    let hasAnyHint = hasOwner || hasAmount || hasDuration
-    if hasAnyHint && !(hasOwner && hasAmount && hasDuration) {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must include owner, amount, and duration_blocks when providing lock hints."
-        )
-    }
-    if hasAmount {
-        guard case let .string(amount)? = normalized["amount"] else {
-            throw ToriiClientError.invalidPayload(
-                "\(field).amount must be a canonical non-negative Kotodama V1 Quantity string."
-            )
-        }
-        normalized["amount"] = .string(
-            try canonicalGovernanceQuantity(amount, field: "\(field).amount")
-        )
-    }
-    try ensureGovernanceZkOwnerCanonical(normalized, field: field)
-    return normalized
-}
-
-fileprivate func rejectGovernanceZkPublicInputKey(_ inputs: inout [String: ToriiJSONValue],
-                                                 key: String,
-                                                 canonicalKey: String,
-                                                 field: String) throws {
-    guard inputs[key] != nil else { return }
-    throw ToriiClientError.invalidPayload(
-        "\(field) must use \(canonicalKey) (unsupported key \(key))."
-    )
-}
-
-fileprivate func normalizeGovernanceZkPublicInputHex(_ inputs: inout [String: ToriiJSONValue],
-                                                     key: String,
-                                                     field: String) throws {
-    guard let value = inputs[key] else { return }
-    if case .null = value { return }
-    guard case let .string(raw) = value else {
-        throw ToriiClientError.invalidPayload(
-            "\(field).\(key) must be a 32-byte hex string."
-        )
-    }
-    let canonical = try canonicalizeZkBallotHexHint(raw, field: "\(field).\(key)")
-    inputs[key] = .string(canonical)
-}
-
-fileprivate func canonicalizeZkBallotHexHint(_ raw: String, field: String) throws -> String {
-    var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let colonIndex = trimmed.firstIndex(of: ":") {
-        let scheme = String(trimmed[..<colonIndex])
-        let rest = String(trimmed[trimmed.index(after: colonIndex)...])
-        if !scheme.isEmpty && scheme.lowercased() != "blake2b32" {
+fileprivate func canonicalizeGovernanceHex32(_ raw: String, field: String) throws -> String {
+    var body = raw
+    if let colonIndex = body.firstIndex(of: ":") {
+        let scheme = String(body[..<colonIndex])
+        let rest = String(body[body.index(after: colonIndex)...])
+        if scheme.isEmpty || scheme.lowercased() != "blake2b32" {
             throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string.")
         }
-        trimmed = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+        body = rest
     }
-    if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-        trimmed = String(trimmed.dropFirst(2))
+    if body.hasPrefix("0x") || body.hasPrefix("0X") {
+        body = String(body.dropFirst(2))
     }
-    guard trimmed.count == 64, Data(hexString: trimmed) != nil else {
+    guard body.count == 64, Data(hexString: body) != nil else {
         throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string.")
     }
-    return trimmed.lowercased()
-}
-
-fileprivate func ensureGovernanceZkOwnerCanonical(_ inputs: [String: ToriiJSONValue],
-                                                  field: String) throws {
-    guard let value = inputs["owner"] else { return }
-    if case .null = value { return }
-    guard case let .string(owner) = value else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
-    }
-    let canonical = try canonicalizeGovernanceZkOwnerLiteral(owner, field: field)
-    if canonical != owner {
-        throw ToriiClientError.invalidPayload("\(field).owner must use canonical I105 account id form.")
-    }
+    return body.lowercased()
 }
 
 fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: String) throws -> String {
@@ -20383,14 +20391,6 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
     }
 }
 
-fileprivate func governanceZkHintPresent(_ value: ToriiJSONValue?) -> Bool {
-    guard let value else { return false }
-    if case .null = value {
-        return false
-    }
-    return true
-}
-
 fileprivate func canonicalGovernanceQuantity(_ value: String, field: String) throws -> String {
     do {
         return try KotodamaNumericV1Codec.decodeQuantityJSON(value).canonicalString
@@ -20408,7 +20408,7 @@ public struct ToriiGovernancePlainBallotRequest: Encodable, Sendable {
     public var owner: String
     public var amount: String
     public var durationBlocks: UInt64
-    public var direction: String
+    public var direction: ToriiGovernanceBallotDirection
 
     private enum CodingKeys: String, CodingKey {
         case authority
@@ -20426,7 +20426,7 @@ public struct ToriiGovernancePlainBallotRequest: Encodable, Sendable {
                 owner: String,
                 amount: String,
                 durationBlocks: UInt64,
-                direction: String) {
+                direction: ToriiGovernanceBallotDirection) {
         self.authority = authority
         self.chainId = chainId
         self.referendumId = referendumId
@@ -20442,16 +20442,251 @@ public struct ToriiGovernancePlainBallotRequest: Encodable, Sendable {
             field: "governance plain ballot amount"
         )
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(authority, forKey: .authority)
-        try container.encode(chainId, forKey: .chainId)
-        try container.encode(referendumId, forKey: .referendumId)
-        try container.encode(owner, forKey: .owner)
+        try container.encode(
+            ToriiRequestValidation.exactToken(authority, field: "authority"),
+            forKey: .authority
+        )
+        try container.encode(
+            ToriiRequestValidation.exactToken(chainId, field: "chain_id"),
+            forKey: .chainId
+        )
+        try container.encode(
+            ToriiRequestValidation.governanceSelector(referendumId, field: "referendum_id"),
+            forKey: .referendumId
+        )
+        try container.encode(
+            ToriiRequestValidation.exactToken(owner, field: "owner"),
+            forKey: .owner
+        )
         try container.encode(canonicalAmount, forKey: .amount)
-        try container.encode(durationBlocks, forKey: .durationBlocks)
+        try container.encode(String(durationBlocks), forKey: .durationBlocks)
         try container.encode(direction, forKey: .direction)
     }
 }
 
+public struct ToriiGovernanceZkBallotV1Request: Encodable, Sendable {
+    public var authority: String
+    public var chainId: String
+    public var electionId: String
+    public var backend: String
+    public var envelopeB64: String
+    public var publicInputs: GovernanceZkBallotPublicInputs
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case chainId = "chain_id"
+        case electionId = "election_id"
+        case backend
+        case envelopeB64 = "envelope_b64"
+        case rootHint = "root_hint"
+        case owner
+        case amount
+        case durationBlocks = "duration_blocks"
+        case direction
+        case nullifier
+    }
+
+    public init(authority: String,
+                chainId: String,
+                electionId: String,
+                backend: String,
+                envelopeB64: String,
+                publicInputs: GovernanceZkBallotPublicInputs = .init()) {
+        self.authority = authority
+        self.chainId = chainId
+        self.electionId = electionId
+        self.backend = backend
+        self.envelopeB64 = envelopeB64
+        self.publicInputs = publicInputs
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedPublic = try publicInputs.normalized(
+            field: "governance ZK ballot V1 public inputs"
+        )
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(
+            ToriiRequestValidation.exactToken(authority, field: "authority"),
+            forKey: .authority
+        )
+        try container.encode(
+            ToriiRequestValidation.exactToken(chainId, field: "chain_id"),
+            forKey: .chainId
+        )
+        try container.encode(
+            ToriiRequestValidation.governanceSelector(electionId, field: "election_id"),
+            forKey: .electionId
+        )
+        try container.encode(
+            ToriiRequestValidation.exactToken(backend, field: "backend"),
+            forKey: .backend
+        )
+        try container.encode(
+            ToriiRequestValidation.normalizedExactBase64(envelopeB64, field: "envelope_b64"),
+            forKey: .envelopeB64
+        )
+        try container.encodeIfPresent(normalizedPublic.rootHint, forKey: .rootHint)
+        try container.encodeIfPresent(normalizedPublic.owner, forKey: .owner)
+        try container.encodeIfPresent(normalizedPublic.amount, forKey: .amount)
+        try container.encodeIfPresent(normalizedPublic.durationBlocks, forKey: .durationBlocks)
+        try container.encodeIfPresent(normalizedPublic.direction, forKey: .direction)
+        try container.encodeIfPresent(normalizedPublic.nullifier, forKey: .nullifier)
+    }
+}
+
+public struct ToriiGovernanceBallotProof: Encodable, Sendable {
+    public var backend: String
+    public var envelopeBytesB64: String
+    public var publicInputs: GovernanceZkBallotPublicInputs
+
+    private enum CodingKeys: String, CodingKey {
+        case backend
+        case envelopeBytesB64 = "envelope_bytes"
+        case rootHint = "root_hint"
+        case owner
+        case nullifier
+        case amount
+        case durationBlocks = "duration_blocks"
+        case direction
+    }
+
+    public init(backend: String,
+                envelopeBytesB64: String,
+                publicInputs: GovernanceZkBallotPublicInputs = .init()) {
+        self.backend = backend
+        self.envelopeBytesB64 = envelopeBytesB64
+        self.publicInputs = publicInputs
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedPublic = try publicInputs.normalized(
+            field: "governance ballot proof public inputs"
+        )
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(
+            ToriiRequestValidation.exactToken(backend, field: "backend"),
+            forKey: .backend
+        )
+        try container.encode(
+            ToriiRequestValidation.normalizedExactBase64(
+                envelopeBytesB64,
+                field: "envelope_bytes"
+            ),
+            forKey: .envelopeBytesB64
+        )
+        try container.encodeIfPresent(normalizedPublic.rootHint, forKey: .rootHint)
+        try container.encodeIfPresent(normalizedPublic.owner, forKey: .owner)
+        try container.encodeIfPresent(normalizedPublic.nullifier, forKey: .nullifier)
+        try container.encodeIfPresent(normalizedPublic.amount, forKey: .amount)
+        try container.encodeIfPresent(normalizedPublic.durationBlocks, forKey: .durationBlocks)
+        try container.encodeIfPresent(normalizedPublic.direction, forKey: .direction)
+    }
+}
+
+public struct ToriiGovernanceZkBallotProofRequest: Encodable, Sendable {
+    public var authority: String
+    public var chainId: String
+    public var electionId: String
+    public var ballot: ToriiGovernanceBallotProof
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case chainId = "chain_id"
+        case electionId = "election_id"
+        case ballot
+    }
+
+    public init(authority: String,
+                chainId: String,
+                electionId: String,
+                ballot: ToriiGovernanceBallotProof) {
+        self.authority = authority
+        self.chainId = chainId
+        self.electionId = electionId
+        self.ballot = ballot
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(
+            ToriiRequestValidation.exactToken(authority, field: "authority"),
+            forKey: .authority
+        )
+        try container.encode(
+            ToriiRequestValidation.exactToken(chainId, field: "chain_id"),
+            forKey: .chainId
+        )
+        try container.encode(
+            ToriiRequestValidation.governanceSelector(electionId, field: "election_id"),
+            forKey: .electionId
+        )
+        try container.encode(ballot, forKey: .ballot)
+    }
+}
+
+public enum ToriiGovernanceParliamentBody: String, Codable, Sendable {
+    case rulesCommittee = "rules-committee"
+    case agendaCouncil = "agenda-council"
+    case interestPanel = "interest-panel"
+    case reviewPanel = "review-panel"
+    case policyJury = "policy-jury"
+    case oversightCommittee = "oversight-committee"
+    case fmaCommittee = "fma-committee"
+}
+
+public enum ToriiGovernanceParliamentDecision: String, Codable, Sendable {
+    case approve
+    case reject
+    case abstain
+}
+
+public struct ToriiGovernanceParliamentBallotRequest: Encodable, Sendable {
+    public var authority: String
+    public var chainId: String
+    public var proposalId: String
+    public var body: ToriiGovernanceParliamentBody
+    public var decision: ToriiGovernanceParliamentDecision
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case chainId = "chain_id"
+        case proposalId = "proposal_id"
+        case body
+        case decision
+    }
+
+    public init(authority: String,
+                chainId: String,
+                proposalId: String,
+                body: ToriiGovernanceParliamentBody,
+                decision: ToriiGovernanceParliamentDecision) {
+        self.authority = authority
+        self.chainId = chainId
+        self.proposalId = proposalId
+        self.body = body
+        self.decision = decision
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(
+            ToriiRequestValidation.exactToken(authority, field: "authority"),
+            forKey: .authority
+        )
+        try container.encode(
+            ToriiRequestValidation.exactToken(chainId, field: "chain_id"),
+            forKey: .chainId
+        )
+        try container.encode(
+            canonicalizeGovernanceHex32(proposalId, field: "proposal_id"),
+            forKey: .proposalId
+        )
+        try container.encode(body, forKey: .body)
+        try container.encode(decision, forKey: .decision)
+    }
+}
+
+/// Finalizes the referendum identified by the proposal's exact lowercase 32-byte digest.
 public struct ToriiGovernanceFinalizeRequest: Encodable, Sendable {
     public var referendumId: String
     public var proposalId: String
@@ -20467,44 +20702,43 @@ public struct ToriiGovernanceFinalizeRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedReferendumId = try ToriiRequestValidation.normalizedNonEmpty(referendumId,
-                                                                                   field: "referendum_id")
-        let normalizedProposalId = try ToriiRequestValidation.normalized32ByteHex(proposalId,
-                                                                                  field: "proposal_id")
+        let exactReferendumId = try ToriiRequestValidation.exactLowercase32ByteHex(
+            referendumId,
+            field: "referendum_id"
+        )
+        let exactProposalId = try ToriiRequestValidation.exactLowercase32ByteHex(
+            proposalId,
+            field: "proposal_id"
+        )
+        guard exactReferendumId == exactProposalId else {
+            throw ToriiClientError.invalidPayload(
+                "referendum_id must equal proposal_id"
+            )
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedReferendumId, forKey: .referendumId)
-        try container.encode(normalizedProposalId, forKey: .proposalId)
+        try container.encode(exactReferendumId, forKey: .referendumId)
+        try container.encode(exactProposalId, forKey: .proposalId)
     }
 }
 
 public struct ToriiGovernanceEnactRequest: Encodable, Sendable {
     public var proposalId: String
-    public var preimageHash: String?
-    public var window: ToriiGovernanceWindow?
 
     private enum CodingKeys: String, CodingKey {
         case proposalId = "proposal_id"
-        case preimageHash = "preimage_hash"
-        case window
     }
 
-    public init(proposalId: String,
-                preimageHash: String? = nil,
-                window: ToriiGovernanceWindow? = nil) {
+    public init(proposalId: String) {
         self.proposalId = proposalId
-        self.preimageHash = preimageHash
-        self.window = window
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedProposalId = try ToriiRequestValidation.normalized32ByteHex(proposalId,
-                                                                                  field: "proposal_id")
-        let normalizedPreimage = try ToriiRequestValidation.normalizedOptional32ByteHex(preimageHash,
-                                                                                        field: "preimage_hash")
+        let exactProposalId = try ToriiRequestValidation.exactLowercase32ByteHex(
+            proposalId,
+            field: "proposal_id"
+        )
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedProposalId, forKey: .proposalId)
-        try container.encodeIfPresent(normalizedPreimage, forKey: .preimageHash)
-        try container.encodeIfPresent(window, forKey: .window)
+        try container.encode(exactProposalId, forKey: .proposalId)
     }
 }
 
@@ -27277,9 +27511,21 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func submitGovernanceZkBallot(_ requestBody: ToriiGovernanceZkBallotRequest,
-                                         completion: @escaping (Result<ToriiGovernanceBallotResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitGovernanceZkBallot(requestBody) }
+    public func submitGovernanceParliamentBallot(_ requestBody: ToriiGovernanceParliamentBallotRequest,
+                                                 completion: @escaping (Result<ToriiGovernanceBallotResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitGovernanceParliamentBallot(requestBody) }
+    }
+
+    @discardableResult
+    public func submitGovernanceZkBallotV1(_ requestBody: ToriiGovernanceZkBallotV1Request,
+                                           completion: @escaping (Result<ToriiGovernanceBallotResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitGovernanceZkBallotV1(requestBody) }
+    }
+
+    @discardableResult
+    public func submitGovernanceZkBallotProofV1(_ requestBody: ToriiGovernanceZkBallotProofRequest,
+                                                completion: @escaping (Result<ToriiGovernanceBallotResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitGovernanceZkBallotProofV1(requestBody) }
     }
 
     @discardableResult
@@ -29109,8 +29355,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                      responseType: ToriiGovernanceBallotResponse.self)
     }
 
-    public func submitGovernanceZkBallot(_ requestBody: ToriiGovernanceZkBallotRequest) async throws -> ToriiGovernanceBallotResponse {
-        try await postGovernanceJSON(path: "/v1/gov/ballots/zk",
+    public func submitGovernanceParliamentBallot(_ requestBody: ToriiGovernanceParliamentBallotRequest) async throws -> ToriiGovernanceBallotResponse {
+        try await postGovernanceJSON(path: "/v1/gov/parliament/ballots",
+                                     body: requestBody,
+                                     responseType: ToriiGovernanceBallotResponse.self)
+    }
+
+    public func submitGovernanceZkBallotV1(_ requestBody: ToriiGovernanceZkBallotV1Request) async throws -> ToriiGovernanceBallotResponse {
+        try await postGovernanceJSON(path: "/v1/gov/ballots/zk-v1",
+                                     body: requestBody,
+                                     responseType: ToriiGovernanceBallotResponse.self)
+    }
+
+    public func submitGovernanceZkBallotProofV1(_ requestBody: ToriiGovernanceZkBallotProofRequest) async throws -> ToriiGovernanceBallotResponse {
+        try await postGovernanceJSON(path: "/v1/gov/ballots/zk-v1/ballot-proof",
                                      body: requestBody,
                                      responseType: ToriiGovernanceBallotResponse.self)
     }
@@ -29128,25 +29386,38 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getGovernanceProposal(idHex: String) async throws -> ToriiGovernanceProposalGetResponse {
-        let normalized = try ToriiRequestValidation.normalized32ByteHex(idHex, field: "idHex")
-        let encoded = encodePathComponent(normalized)
+        let exact = try ToriiRequestValidation.exactToken(idHex, field: "idHex")
+        let proposalId = try ToriiRequestValidation.exactLowercase32ByteHex(
+            exact,
+            field: "idHex"
+        )
+        let encoded = encodePathComponent(proposalId)
         return try await getGovernanceJSON(path: "/v1/gov/proposals/\(encoded)",
                                            responseType: ToriiGovernanceProposalGetResponse.self)
     }
 
     public func getGovernanceLocks(referendumId: String) async throws -> ToriiGovernanceLocksResponse {
-        try await getGovernanceJSON(path: "/v1/gov/locks/\(referendumId)",
-                                    responseType: ToriiGovernanceLocksResponse.self)
+        let exact = try ToriiRequestValidation.governanceSelector(
+            referendumId,
+            field: "referendumId"
+        )
+        let encoded = encodePathComponent(exact)
+        return try await getGovernanceJSON(path: "/v1/gov/locks/\(encoded)",
+                                           responseType: ToriiGovernanceLocksResponse.self)
     }
 
     public func getGovernanceReferendum(id: String) async throws -> ToriiGovernanceReferendumResponse {
-        try await getGovernanceJSON(path: "/v1/gov/referenda/\(id)",
-                                    responseType: ToriiGovernanceReferendumResponse.self)
+        let exact = try ToriiRequestValidation.governanceSelector(id, field: "id")
+        let encoded = encodePathComponent(exact)
+        return try await getGovernanceJSON(path: "/v1/gov/referenda/\(encoded)",
+                                           responseType: ToriiGovernanceReferendumResponse.self)
     }
 
     public func getGovernanceTally(id: String) async throws -> ToriiGovernanceTallyResponse {
-        try await getGovernanceJSON(path: "/v1/gov/tally/\(id)",
-                                    responseType: ToriiGovernanceTallyResponse.self)
+        let exact = try ToriiRequestValidation.governanceSelector(id, field: "id")
+        let encoded = encodePathComponent(exact)
+        return try await getGovernanceJSON(path: "/v1/gov/tally/\(encoded)",
+                                           responseType: ToriiGovernanceTallyResponse.self)
     }
 
     public func getGovernanceUnlockStats(height: UInt64? = nil,

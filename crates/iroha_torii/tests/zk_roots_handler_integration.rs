@@ -162,7 +162,6 @@ fn seeded_zk_roots_state(
                 true,
                 None,
                 None,
-                None,
             )
             .into(),
         ];
@@ -180,27 +179,21 @@ fn seeded_zk_roots_state(
         )
         .execute(&owner, &mut stx)
         .expect("bind asset alias");
+        let mut zk_state = stx
+            .world
+            .zk_assets()
+            .get(&asset_def_id)
+            .cloned()
+            .expect("registered confidential asset state");
         for i in 0..commitment_count {
             let mut note = [0u8; 32];
             note[0] = i.saturating_add(1);
-            let ib: InstructionBox = iroha_data_model::isi::zk::Shield::new(
-                asset_def_id.clone(),
-                owner.clone(),
-                1u128,
-                note,
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
-                    [0xA1; 32],
-                    [0xB2; 24],
-                    vec![0xC3, i],
-                ),
-            )
-            .into();
-            stx.world
-                .executor()
-                .clone()
-                .execute_instruction(&mut stx, &owner, ib)
-                .unwrap();
+            zk_state
+                .push_commitment(note, nonzero!(64_usize))
+                .expect("seed authenticated commitment root");
         }
+        stx.world.zk_assets.remove(asset_def_id.clone());
+        stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
         stx.apply();
         block.transactions.insert_block(
             HashSet::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>::new(

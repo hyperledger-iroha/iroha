@@ -241,6 +241,7 @@ fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() 
     let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
         PrivacyPoolIdV1::new(raw(210)),
         asset_definition_id(),
+        AssetBalanceScope::Global,
         account(211),
     )
     .expect("canonical Orchard pool bootstrap");
@@ -277,6 +278,7 @@ fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() 
         PrivacyOrchardPoolBootstrapV1::new(
             PrivacyPoolIdV1::new([0; 32]),
             asset_definition_id(),
+            AssetBalanceScope::Global,
             account(211),
         ),
         Err(PrivacyOrchardPoolBootstrapValidationErrorV1::ZeroPoolId)
@@ -295,6 +297,7 @@ fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
             PrivacyIvmPrivateNotePoolBootstrapV1 {
                 pool_id: PrivacyPoolIdV1::new(raw(214)),
                 asset_definition_id: asset_definition_id(),
+                public_balance_scope: AssetBalanceScope::Global,
                 reserve_account: account(215),
                 program_id: PrivacyProgramIdV1::new(raw(216)),
                 initial_note_commitments: vec![commitment(3), commitment(4)],
@@ -399,6 +402,7 @@ fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
         PrivacyIvmPrivateNotePoolBootstrapV1 {
             pool_id: PrivacyPoolIdV1::new(raw(219)),
             asset_definition_id: asset_definition_id(),
+            public_balance_scope: AssetBalanceScope::Global,
             reserve_account: account(220),
             program_id: PrivacyProgramIdV1::new([0; 32]),
             initial_note_commitments: vec![commitment(10)],

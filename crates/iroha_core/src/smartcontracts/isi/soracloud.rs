@@ -11,7 +11,6 @@ use iroha_crypto::fhe_bfv::{
     BfvFullBootstrapExecutionProofInputMaterialV1,
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1,
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1,
-    validate_bfv_full_bootstrap_execution_proof_input_material_v1,
 };
 #[cfg(feature = "zk-stark")]
 use iroha_crypto::fhe_bfv::{
@@ -16493,89 +16492,6 @@ pub(crate) fn prove_soracloud_fhe_full_bootstrap_execution_proof_v1(
     )))
 }
 
-/// Prove a governed Soracloud FHE full-bootstrap execution test statement from typed input material.
-///
-/// The typed material is validated, converted into the canonical BFV arithmetic trace/AIR
-/// evaluation material, and wrapped as the governed native STARK/FRI proof envelope for
-/// release-prover boundary fixtures.
-///
-/// # Errors
-/// Returns an execution error when the verifier key is not the governed STARK/FRI key for the
-/// execution circuit, when the proof input material is stale or malformed, or when the native BFV
-/// STARK/FRI envelope cannot be built within production limits.
-#[cfg(all(test, feature = "zk-stark"))]
-fn prove_soracloud_fhe_full_bootstrap_execution_proof_from_input_material_v1(
-    input_material: &BfvFullBootstrapExecutionProofInputMaterialV1,
-    verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
-) -> Result<SoracloudFheFullBootstrapExecutionProofV1, InstructionExecutionError> {
-    let canonical_verifier_key = canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
-        "FHE full-bootstrap execution proof",
-        verifier_key,
-        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-    )?;
-    validate_bfv_full_bootstrap_execution_proof_input_material_v1(input_material).map_err(
-        |err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution proof input material failed validation: {err}"
-            ))
-        },
-    )?;
-    validate_soracloud_fhe_full_bootstrap_prover_statement_hash(
-        "FHE full-bootstrap execution proof",
-        input_material.statement_hash,
-    )?;
-    let native_air_envelope_bytes =
-        build_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_from_input_material_v1(
-            input_material,
-        )?;
-    soracloud_fhe_full_bootstrap_execution_proof_from_native_air_envelope_v1(
-        input_material.statement_hash,
-        &canonical_verifier_key,
-        native_air_envelope_bytes,
-    )
-}
-
-/// Build native BFV AIR STARK/FRI envelope bytes from typed proof input material.
-///
-/// The returned envelope is derived from the canonical arithmetic trace and
-/// AIR evaluation material produced from
-/// [`BfvFullBootstrapExecutionProofInputMaterialV1`]. It is retained for
-/// release-prover boundary fixtures and carries the same native AIR payload
-/// accepted by the governed execution verifier.
-///
-/// # Errors
-/// Returns an execution error when proof input material validation, trace
-/// derivation, AIR evaluation, or native STARK/FRI envelope construction fails.
-#[cfg(all(test, feature = "zk-stark"))]
-fn build_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_from_input_material_v1(
-    input_material: &BfvFullBootstrapExecutionProofInputMaterialV1,
-) -> Result<Vec<u8>, InstructionExecutionError> {
-    validate_bfv_full_bootstrap_execution_proof_input_material_v1(input_material).map_err(
-        |err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution proof input material failed validation: {err}"
-            ))
-        },
-    )?;
-    let arithmetic_trace_material = bfv_full_bootstrap_arithmetic_trace_material_v1(input_material)
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution arithmetic trace material failed validation: {err}"
-            ))
-        })?;
-    let arithmetic_air_evaluation_material =
-        bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(&arithmetic_trace_material)
-            .map_err(|err| {
-                invalid_parameter(format!(
-                    "FHE full-bootstrap execution arithmetic AIR evaluation material failed validation: {err}"
-                ))
-            })?;
-    build_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_from_trace_material_v1(
-        &arithmetic_trace_material,
-        &arithmetic_air_evaluation_material,
-    )
-}
-
 /// Build native BFV AIR STARK/FRI envelope bytes from release-prover material.
 ///
 /// The returned envelope commits the governed row-major arithmetic trace and
@@ -16619,88 +16535,6 @@ fn build_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_from_p
             "FHE full-bootstrap execution native AIR envelope shared BFV verifier rejected release-prover material",
         ));
     }
-    Ok(envelope_bytes)
-}
-
-#[cfg(all(test, feature = "zk-stark"))]
-fn build_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_from_trace_material_v1(
-    arithmetic_trace_material: &iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTraceMaterialV1,
-    arithmetic_air_evaluation_material: &iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
-) -> Result<Vec<u8>, InstructionExecutionError> {
-    validate_bfv_full_bootstrap_arithmetic_trace_material_v1(arithmetic_trace_material).map_err(
-        |err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution arithmetic trace material failed validation: {err}"
-            ))
-        },
-    )?;
-    validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1(
-        arithmetic_trace_material,
-        arithmetic_air_evaluation_material,
-    )
-    .map_err(|err| {
-        invalid_parameter(format!(
-            "FHE full-bootstrap execution arithmetic AIR evaluation material failed validation: {err}"
-        ))
-    })?;
-    let statement_hash = arithmetic_trace_material
-        .proof_input_material
-        .statement_hash;
-    validate_soracloud_fhe_full_bootstrap_prover_statement_hash(
-        "FHE full-bootstrap execution proof",
-        statement_hash,
-    )?;
-    let stark_params = soracloud_fhe_full_bootstrap_native_air_stark_params_v1(statement_hash);
-    let trace_material_digest =
-        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_material_digest_v1(
-            arithmetic_trace_material,
-        )
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution arithmetic trace material digest failed validation: {err}"
-            ))
-        })?;
-    let expected_base_indices =
-        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
-            statement_hash,
-            trace_material_digest,
-        )
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution native AIR opening schedule derivation failed: {err}"
-            ))
-        })?
-        .into_iter()
-        .map(|index| {
-            usize::try_from(index).map_err(|_| {
-                invalid_parameter(
-                    "FHE full-bootstrap execution native AIR opening index exceeds platform usize",
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let envelope_bytes =
-        crate::zk_stark::prove_stark_fri_reserved_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
-            stark_params,
-            soracloud_fhe_full_bootstrap_native_air_transcript_label_v1(0),
-            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-            <[u8; Hash::LENGTH]>::from(statement_hash),
-            arithmetic_trace_material.rows.clone(),
-            arithmetic_air_evaluation_material
-                .composition_values
-                .clone(),
-            &expected_base_indices,
-        )
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution native AIR envelope generation failed: {err}"
-            ))
-        })?;
-    validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for_trace_material_v1(
-        &envelope_bytes,
-        arithmetic_trace_material,
-        arithmetic_air_evaluation_material,
-    )?;
     Ok(envelope_bytes)
 }
 
@@ -17409,23 +17243,10 @@ mod tests {
     use iroha_crypto::{
         Hash, KeyPair,
         fhe_bfv::{
-            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN,
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1,
-            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1,
-            BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1, BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1,
-            BfvCiphertext, BfvEvaluationKeyBundle, BfvFullBootstrapAccumulatorV1,
-            BfvFullBootstrapCircuitArtifactBundleV1, BfvFullBootstrapCircuitArtifactRoleV1,
-            BfvFullBootstrapCircuitMaterialV1, BfvFullBootstrapLinearTransformDiagonalV1,
-            BfvFullBootstrapLinearTransformV1, BfvFullBootstrapProofKeyV1,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, BfvCiphertext, BfvEvaluationKeyBundle,
+            BfvFullBootstrapAccumulatorV1, BfvFullBootstrapCircuitArtifactBundleV1,
+            BfvFullBootstrapCircuitArtifactRoleV1, BfvFullBootstrapCircuitMaterialV1,
+            BfvFullBootstrapLinearTransformDiagonalV1, BfvFullBootstrapLinearTransformV1,
             BfvFullBootstrapSampleExtractionV1, BfvIdentifierCiphertext,
             BfvIdentifierPublicParameters, BfvParameters, BfvPublicKey, BfvSecretKey,
             apply_galois_automorphism_ciphertext, bfv_balanced_multiplication_depth,
@@ -18890,19 +18711,6 @@ mod tests {
         }
     }
 
-    fn service_config_delete_manifest_provenance(
-        service_name: &iroha_data_model::name::Name,
-        config_name: &str,
-    ) -> ManifestProvenance {
-        let payload =
-            encode_delete_service_config_provenance_payload(service_name.as_ref(), config_name)
-                .expect("service config delete payload");
-        ManifestProvenance {
-            signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
-        }
-    }
-
     fn sample_bundle_with_state_binding(
         service_name: &str,
         service_version: &str,
@@ -19436,33 +19244,6 @@ mod tests {
             verifier_key_material_commitment,
             max_bootstrap_depth,
         }
-    }
-
-    fn full_bootstrap_proof_key_artifact_with_stale_material_commitment(
-        params: &BfvParameters,
-        role: BfvFullBootstrapCircuitArtifactRoleV1,
-        artifact: &[u8],
-        stale_commitment_domain: &[u8],
-    ) -> (Vec<u8>, Hash) {
-        let artifact_payload = norito::decode_from_bytes::<
-            iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1,
-        >(artifact)
-        .expect("decode valid full-bootstrap proof-key artifact envelope");
-        let mut key =
-            norito::decode_from_bytes::<BfvFullBootstrapProofKeyV1>(&artifact_payload.payload)
-                .expect("decode valid full-bootstrap proof-key payload");
-        let proof_key_pair_commitment = key.proof_key_pair_commitment;
-        key.key_material_commitment = Hash::new(stale_commitment_domain);
-        (
-            encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
-                params,
-                1,
-                role,
-                &norito::to_bytes(&key).expect("encode stale proof-key payload"),
-            )
-            .expect("encode stale proof-key artifact envelope"),
-            proof_key_pair_commitment,
-        )
     }
 
     fn add_full_bootstrap_blind_rotation_galois_keys(
@@ -22729,16 +22510,6 @@ mod tests {
                 ) if message.contains(expected)
             ) || debug.contains(expected),
             "unexpected error: expected {expected:?}, got {err:?}"
-        );
-    }
-
-    #[cfg(feature = "zk-stark")]
-    #[track_caller]
-    fn assert_bfv_error_contains(err: &iroha_crypto::fhe_bfv::BfvError, expected: &str) {
-        let debug = format!("{err:?}");
-        assert!(
-            debug.contains(expected),
-            "unexpected BFV error: expected {expected:?}, got {err:?}"
         );
     }
 
@@ -27857,36 +27628,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(feature = "zk-stark")]
-    #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
-    #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
-    #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
     #[cfg(feature = "zk-stark")]
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -33114,8 +32855,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "zk-stark")]
-    #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
     #[cfg(feature = "zk-stark")]
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_generic_air_drift()

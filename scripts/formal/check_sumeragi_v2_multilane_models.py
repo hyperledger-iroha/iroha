@@ -1388,6 +1388,7 @@ EXPECTED_CLOSURE_MUTATIONS = {
 EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS = {
     "ML-MUT-API-01": (
         "crates/iroha_core/src/state.rs",
+        "crates/iroha_core/src/state/tests.rs",
         "crates/iroha_torii/src/routing.rs",
         "crates/iroha_torii/src/tests/routing.rs",
     ),
@@ -1417,6 +1418,10 @@ FORBIDDEN_PRODUCTION_TOKENS = {
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "reconcile_lane_reservation_ownership",
     ): ("merge_ledger_all_entries",),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "finalize_conflicting_global_admission_locked",
+    ): ("removed_hashes.insert",),
 }
 NATIVE_PREPUBLICATION_MODULE = "SumeragiV2NativeApplicationEvidence"
 NATIVE_PREPUBLICATION_BINDINGS = (
@@ -1844,7 +1849,7 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
             "install_plan_journal(",
             "replay_plan_journal(&state)",
             "finalize_plan_journal_startup_recovery()",
-            "IrohaNetwork::start_with_crypto(",
+            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
         ),
     ),
 )
@@ -1963,7 +1968,7 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
             "install_plan_journal(",
             "replay_plan_journal(&state)",
             "finalize_plan_journal_startup_recovery()",
-            "IrohaNetwork::start_with_crypto(",
+            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
         ),
     ),
 )

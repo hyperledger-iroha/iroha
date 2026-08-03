@@ -169,7 +169,7 @@ impl DurableStateOverlay {
     }
 
     fn decode_persisted(bytes: &[u8]) -> Result<BTreeMap<StatePath, Vec<u8>>, VMError> {
-        let val: Value = json::from_slice(&bytes).map_err(|_| VMError::NoritoInvalid)?;
+        let val: Value = json::from_slice(bytes).map_err(|_| VMError::NoritoInvalid)?;
         let obj = val.as_object().ok_or(VMError::NoritoInvalid)?;
         let mut map = BTreeMap::new();
         for (k, v) in obj {

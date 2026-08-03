@@ -5907,14 +5907,10 @@ mod tests {
             )),
             payload_hash: Hash::new(&body),
         };
-        let manifest = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject,
-            u64::try_from(body.len()).expect("small runner fixture body"),
-            std::slice::from_ref(&body),
-        )
-        .expect("runner leader-wire fixture manifest");
+        let manifest = encode_payload(&context, round, subject, &body)
+            .expect("encode runner leader-wire fixture payload")
+            .manifest()
+            .clone();
         let proposer = context.leader(round.view);
         let mut proposal = wire::Proposal {
             round,
@@ -8201,14 +8197,16 @@ mod tests {
             height: context.height,
             view: tag.view(),
         };
+        let body = b"replayed proposal payload";
         let subject = wire::BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replayed proposal block")),
-            payload_hash: Hash::new(b"replayed proposal payload"),
+            payload_hash: Hash::new(body),
         };
-        let manifest =
-            wire::PayloadManifest::derive(&context, round, subject, 5, &[b"chunk".to_vec()])
-                .expect("fixture manifest");
+        let manifest = encode_payload(&context, round, subject, body)
+            .expect("encode replayed proposal fixture payload")
+            .manifest()
+            .clone();
         let proposal = wire::Proposal {
             round,
             proposer: context.leader(round.view),
@@ -8363,14 +8361,10 @@ mod tests {
         );
         assert!(v2_payload_is_terminal_reducer_control(&response));
 
-        let manifest = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject,
-            u64::try_from(body.len()).expect("fixture body length fits u64"),
-            std::slice::from_ref(&body),
-        )
-        .expect("terminal body manifest");
+        let manifest = encode_payload(&context, round, subject, &body)
+            .expect("encode terminal body fixture payload")
+            .manifest()
+            .clone();
         assert!(!v2_payload_is_terminal_reducer_control(
             &wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
         ));

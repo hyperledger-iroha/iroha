@@ -67,3 +67,33 @@ fn ballot_proof_json_hex_hints_accept_prefixes() {
     assert_eq!(parsed.root_hint, Some([0xAA; 32]));
     assert_eq!(parsed.nullifier, Some([0xBB; 32]));
 }
+
+#[test]
+fn ballot_proof_json_hex_hints_reject_undeclared_aliases() {
+    use iroha_data_model::isi::governance::BallotProof;
+
+    let canonical = "aa".repeat(32);
+    for root_hint in [
+        format!(":{canonical}"),
+        format!(" {canonical}"),
+        format!("{canonical} "),
+        format!("sha256:{canonical}"),
+    ] {
+        let json = format!(
+            r#"{{
+                "backend": "halo2/ipa",
+                "envelope_bytes": "AAE=",
+                "root_hint": "{root_hint}",
+                "owner": null,
+                "nullifier": null,
+                "amount": null,
+                "duration_blocks": null,
+                "direction": null
+            }}"#
+        );
+        assert!(
+            norito::json::from_str::<BallotProof>(&json).is_err(),
+            "unexpectedly accepted root_hint {root_hint:?}"
+        );
+    }
+}

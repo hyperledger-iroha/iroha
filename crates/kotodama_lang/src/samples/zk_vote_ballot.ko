@@ -1,0 +1,42 @@
+// Demonstrates shielded ballot submission using Kotodama ZK intrinsics.
+//
+// These intrinsics lower to IVM syscalls with strict pointer‑ABI:
+//   - `ledger::governance::verify_ballot(...)` verifies ballot proofs.
+//   - the ballot submit helper rejects mismatched instruction kinds.
+//
+// Note: This sample uses string literals and inline builders to construct
+// bytes/NoritoBytes pointers for illustration. Real clients should prepare
+// proper Norito TLVs (envelopes and InstructionBox bytes) and may preload them
+// into INPUT.
+seiyaku ZkVote {
+    // Verify a ballot proof, then enqueue a prebuilt SubmitBallot instruction via the vendor bridge.
+    fn verify_and_submit_ballot(bytes proof_env, bytes submit) {
+        // 1) Verify the ballot using ZK_VOTE_VERIFY_BALLOT.
+        //    `proof_env` must be a Norito-encoded OpenVerifyEnvelope in a NoritoBytes TLV.
+        ledger::governance::verify_ballot(proof_env);
+        // 2) Enqueue the prebuilt SubmitBallot InstructionBox.
+        ledger::governance::submit_ballot(submit);
+    }
+
+    // Optional demo kotoage: verifies a proof and enqueues a ballot using literal data.
+    // The vendor bridge is privileged, so kotoage functions that reach it must
+    // declare a permission tag.
+    kotoage fn demo() authorize("Admin") {
+        // Mock envelope bytes (opaque here); in practice, pass a Norito-encoded OpenVerifyEnvelope.
+        let env_ballot = b"ENV-BALLOT";
+        let nullifier = b"0123456789abcdef0123456789abcdef";
+        let proof = b"proof-bytes";
+        let vk = b"vk-bytes";
+        // Inline builders require literal inputs; for runtime data, prebuild
+        // the Norito InstructionBox and pass it as a bytes/NoritoBytes pointer.
+        let submit = ledger::governance::build_submit_ballot(
+            election_id: "election-1",
+            ciphertext: b"ciphertext",
+            nullifier: nullifier,
+            backend: "halo2/ipa",
+            proof: proof,
+            verification_key: vk,
+        );
+        verify_and_submit_ballot(proof_env: env_ballot, submit: submit);
+    }
+}

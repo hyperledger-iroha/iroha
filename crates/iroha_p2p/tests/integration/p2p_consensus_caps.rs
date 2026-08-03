@@ -16,7 +16,6 @@ use iroha_config::parameters::{
     defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
 use iroha_config_base::WithOrigin;
-use iroha_crypto::KeyPair;
 use iroha_data_model::{
     block::consensus_v2::ConsensusMode,
     prelude::{ChainId, PeerId},
@@ -242,8 +241,8 @@ async fn assert_peer_stays_offline(network: &NetworkHandle<Dummy>, forbidden: &P
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
     let chain = ChainId::from("initial-source-authority-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let id1 = PeerId::from(kp1.public_key().clone());
     let id2 = PeerId::from(kp2.public_key().clone());
     let addr1 = super::next_addr();
@@ -257,7 +256,7 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
 
     let (net1, _child1) =
         match NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
-            kp1,
+            super::p2p_identity_keys(kp1),
             cfg1,
             chain.clone(),
             None,
@@ -273,7 +272,7 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
         };
     let (net2, _child2) =
         match NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
-            kp2,
+            super::p2p_identity_keys(kp2),
             cfg2,
             chain,
             None,
@@ -300,8 +299,8 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consensus_caps_match_connects() {
     let chain = ChainId::from("caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
     let config_caps = sample_consensus_config_caps();
@@ -314,7 +313,7 @@ async fn consensus_caps_match_connects() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         Some(caps.clone()),
@@ -327,7 +326,7 @@ async fn consensus_caps_match_connects() {
         Err(_e) => return, // Skip if sockets unavailable
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         Some(caps.clone()),
@@ -350,8 +349,8 @@ async fn consensus_caps_match_connects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consensus_caps_mismatch_rejected() {
     let chain = ChainId::from("caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
     let config_caps = sample_consensus_config_caps();
@@ -370,7 +369,7 @@ async fn consensus_caps_mismatch_rejected() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         Some(caps_ok.clone()),
@@ -383,7 +382,7 @@ async fn consensus_caps_mismatch_rejected() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         Some(caps_bad.clone()),
@@ -406,8 +405,8 @@ async fn consensus_caps_mismatch_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consensus_config_caps_mismatch_rejected() {
     let chain = ChainId::from("caps-config-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
 
@@ -429,7 +428,7 @@ async fn consensus_config_caps_mismatch_rejected() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         Some(caps_ok.clone()),
@@ -442,7 +441,7 @@ async fn consensus_config_caps_mismatch_rejected() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         Some(caps_bad.clone()),
@@ -465,8 +464,8 @@ async fn consensus_config_caps_mismatch_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_match_connects() {
     let chain = ChainId::from("conf-caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
 
@@ -486,7 +485,7 @@ async fn confidential_caps_match_connects() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         None,
@@ -499,7 +498,7 @@ async fn confidential_caps_match_connects() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         None,
@@ -522,8 +521,8 @@ async fn confidential_caps_match_connects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_mismatch_rejected() {
     let chain = ChainId::from("conf-caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
 
@@ -549,7 +548,7 @@ async fn confidential_caps_mismatch_rejected() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         None,
@@ -562,7 +561,7 @@ async fn confidential_caps_mismatch_rejected() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         None,
@@ -585,8 +584,8 @@ async fn confidential_caps_mismatch_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_backend_mismatch_rejected() {
     let chain = ChainId::from("conf-caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
 
@@ -612,7 +611,7 @@ async fn confidential_caps_backend_mismatch_rejected() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         None,
@@ -625,7 +624,7 @@ async fn confidential_caps_backend_mismatch_rejected() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         None,
@@ -648,8 +647,8 @@ async fn confidential_caps_backend_mismatch_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_features_mismatch_rejected() {
     let chain = ChainId::from("conf-caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
 
@@ -682,7 +681,7 @@ async fn confidential_caps_features_mismatch_rejected() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         None,
@@ -695,7 +694,7 @@ async fn confidential_caps_features_mismatch_rejected() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         None,
@@ -718,8 +717,8 @@ async fn confidential_caps_features_mismatch_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_stale_digest_recovers_after_alignment() {
     let chain = ChainId::from("conf-caps-recover-test");
-    let validator_kp = KeyPair::random();
-    let peer_kp = KeyPair::random();
+    let validator_kp = super::random_node_key_pair();
+    let peer_kp = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr_stale = super::next_addr();
     let addr_fresh = super::next_addr();
@@ -741,7 +740,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
 
     let shutdown_validator = ShutdownSignal::new();
     let (net1, _child1) = match NetworkHandle::<Dummy>::start(
-        validator_kp.clone(),
+        super::p2p_identity_keys(validator_kp.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         None,
@@ -761,7 +760,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
 
     let shutdown_stale = ShutdownSignal::new();
     let (net2_stale, _child2_stale) = match NetworkHandle::<Dummy>::start(
-        peer_kp.clone(),
+        super::p2p_identity_keys(peer_kp.clone()),
         cfg(addr_stale.clone()),
         chain.clone(),
         None,
@@ -804,7 +803,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
 
     let shutdown_fresh = ShutdownSignal::new();
     let (net2_fresh, _child2_fresh) = match NetworkHandle::<Dummy>::start(
-        peer_kp.clone(),
+        super::p2p_identity_keys(peer_kp.clone()),
         cfg(addr_fresh.clone()),
         chain.clone(),
         None,
@@ -865,8 +864,8 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crypto_caps_match_connects() {
     let chain = ChainId::from("crypto-caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
 
@@ -878,7 +877,7 @@ async fn crypto_caps_match_connects() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         None,
@@ -892,7 +891,7 @@ async fn crypto_caps_match_connects() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         None,
@@ -916,8 +915,8 @@ async fn crypto_caps_match_connects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crypto_caps_mismatch_rejected() {
     let chain = ChainId::from("crypto-caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
 
@@ -935,7 +934,7 @@ async fn crypto_caps_mismatch_rejected() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         None,
@@ -949,7 +948,7 @@ async fn crypto_caps_mismatch_rejected() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         None,
@@ -973,8 +972,8 @@ async fn crypto_caps_mismatch_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crypto_caps_mismatch_allowed_when_permissive() {
     let chain = ChainId::from("crypto-caps-test");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
     let addr2 = super::next_addr();
 
@@ -992,7 +991,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
     };
 
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(addr1.clone()),
         chain.clone(),
         None,
@@ -1006,7 +1005,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
         Err(_e) => return,
     };
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
         None,

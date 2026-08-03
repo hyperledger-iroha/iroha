@@ -8,11 +8,17 @@
 
 use std::{
     ffi::{OsStr, OsString},
+    fmt,
     fs::{self, File},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
+
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -25,6 +31,28 @@ unsafe extern "C" {
 }
 
 const DEFAULT_CHILD_ENTRY_LIMIT: usize = 1_000_000;
+const TWO_SLOT_FORMAT_VERSION_V1: u8 = 1;
+const TWO_SLOT_HEADER_RESERVED_BYTES_V1: usize = 128;
+const TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1: usize = 64;
+const TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1: usize = 64;
+pub(super) const TWO_SLOT_MAX_PAYLOAD_BYTES_V1: usize = 196 * 1024 * 1024;
+const TWO_SLOT_STORE_NAME_MAX_BYTES_V1: usize = 128;
+const TWO_SLOT_STAGE_ENTRY_HARD_CAP_V1: usize = 16;
+const TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1: usize = 16;
+const TWO_SLOT_LOST_FOUND_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
+const TWO_SLOT_NAMES_V1: [&str; 2] = ["slot-0.v1", "slot-1.v1"];
+const TWO_SLOT_COMMIT_MARKER_V1: [u8; 16] = *b"iroha-slot-v1-ok";
+const TWO_SLOT_ZERO_DIGEST: [u8; 32] = [0; 32];
+static TWO_SLOT_STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const ATOMIC_RETAINED_SUFFIX_V1: &str = ".retained-v1-";
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+/// Number of canonical V1 predecessor slots reserved per atomic target.
+pub(super) const ATOMIC_RETAINED_SLOT_COUNT_V1: usize = 1_024;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+const ATOMIC_RETAINED_SLOT_WIDTH_V1: usize = 4;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+/// Aggregate retained-predecessor byte ceiling for one directory.
+pub(super) const ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
 
 #[cfg(any(windows, test))]
 mod windows_dacl {
@@ -448,6 +476,511 @@ pub(super) struct FileIdentity {
     file_index: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TwoSlotFileIdentityV1 {
+    platform: u8,
+    first: u64,
+    second: u64,
+}
+
+impl From<FileIdentity> for TwoSlotFileIdentityV1 {
+    fn from(identity: FileIdentity) -> Self {
+        #[cfg(unix)]
+        {
+            Self {
+                platform: 1,
+                first: identity.device,
+                second: identity.inode,
+            }
+        }
+        #[cfg(windows)]
+        {
+            Self {
+                platform: 2,
+                first: u64::from(identity.volume_serial_number),
+                second: identity.file_index,
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = identity;
+            Self {
+                platform: 0,
+                first: 0,
+                second: 0,
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TwoSlotBindingMaterialV1 {
+    format_version: u8,
+    store_name_digest: [u8; 32],
+    domain: [u8; 32],
+    store_nonce: [u8; 32],
+    max_payload_bytes: u64,
+    header_region_bytes: u64,
+    record_header_region_bytes: u64,
+    commit_trailer_region_bytes: u64,
+    init_lock_identity: TwoSlotFileIdentityV1,
+    slot_identities: [TwoSlotFileIdentityV1; 2],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TwoSlotHeaderV1 {
+    binding: TwoSlotBindingMaterialV1,
+    binding_digest: [u8; 32],
+    slot_id: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TwoSlotHeaderRegionV1 {
+    header: TwoSlotHeaderV1,
+    reserved: [u8; TWO_SLOT_HEADER_RESERVED_BYTES_V1],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TwoSlotRecordHeaderV1 {
+    format_version: u8,
+    binding_digest: [u8; 32],
+    slot_id: u8,
+    generation: u64,
+    predecessor_digest: [u8; 32],
+    payload_len: u64,
+    payload_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TwoSlotRecordHeaderRegionV1 {
+    header: TwoSlotRecordHeaderV1,
+    reserved: [u8; TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TwoSlotCommitTrailerV1 {
+    format_version: u8,
+    binding_digest: [u8; 32],
+    slot_id: u8,
+    generation: u64,
+    record_digest: [u8; 32],
+    commit_marker: [u8; 16],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TwoSlotCommitTrailerRegionV1 {
+    trailer: TwoSlotCommitTrailerV1,
+    reserved: [u8; TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TwoSlotLayoutV1 {
+    header_region_bytes: usize,
+    record_header_region_bytes: usize,
+    payload_offset: u64,
+    trailer_offset: u64,
+    commit_trailer_region_bytes: usize,
+    slot_file_bytes: u64,
+}
+
+/// Immutable identity and byte bounds for one local two-slot V1 store.
+///
+/// `store_nonce` is a caller-owned stable identifier. Callers must persist or
+/// derive the same non-zero value on every restart; this layer never invents a
+/// replacement nonce while opening an existing store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TwoSlotStoreConfigV1 {
+    store_name: String,
+    domain: [u8; 32],
+    store_nonce: [u8; 32],
+    max_payload_bytes: usize,
+}
+
+impl TwoSlotStoreConfigV1 {
+    /// Validate and construct one stable two-slot store identity.
+    pub(super) fn try_new(
+        store_name: impl Into<OsString>,
+        domain: [u8; 32],
+        store_nonce: [u8; 32],
+        max_payload_bytes: usize,
+    ) -> io::Result<Self> {
+        let store_name = store_name.into();
+        validate_component(&store_name)?;
+        let store_name = store_name.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance two-slot store name must be canonical UTF-8",
+            )
+        })?;
+        let name_bytes = store_name.as_bytes().len();
+        if name_bytes == 0
+            || name_bytes > TWO_SLOT_STORE_NAME_MAX_BYTES_V1
+            || store_name.starts_with('.')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance two-slot store name is hidden or exceeds its V1 byte bound",
+            ));
+        }
+        if domain == TWO_SLOT_ZERO_DIGEST || store_nonce == TWO_SLOT_ZERO_DIGEST {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance two-slot domain and stable store nonce must be non-zero",
+            ));
+        }
+        if max_payload_bytes == 0 || max_payload_bytes > TWO_SLOT_MAX_PAYLOAD_BYTES_V1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance two-slot payload bound is outside the V1 limit",
+            ));
+        }
+        Ok(Self {
+            store_name: store_name.to_owned(),
+            domain,
+            store_nonce,
+            max_payload_bytes,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TwoSlotFileV1 {
+    handle: Arc<File>,
+    identity: FileIdentity,
+    name: OsString,
+}
+
+/// One exact selected record returned by a two-slot V1 store.
+///
+/// The snapshot binds the complete store identity as well as its selected
+/// generation and record digest, so it can be used as a compare-and-swap
+/// predecessor without accepting a snapshot from another store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TwoSlotSnapshotV1 {
+    domain: [u8; 32],
+    store_nonce: [u8; 32],
+    max_payload_bytes: usize,
+    binding_digest: [u8; 32],
+    generation: u64,
+    record_digest: [u8; 32],
+    payload: Vec<u8>,
+}
+
+impl TwoSlotSnapshotV1 {
+    /// Return the committed monotonic generation.
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Borrow the exact committed payload.
+    pub(super) fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    /// Return the domain-separated digest of this complete record.
+    pub(super) fn record_digest(&self) -> [u8; 32] {
+        self.record_digest
+    }
+}
+
+/// A bounded local store backed by two fixed, retained private files.
+#[derive(Debug, Clone)]
+pub(super) struct TwoSlotStoreV1 {
+    directory: RootedDirectory,
+    config: TwoSlotStoreConfigV1,
+    layout: TwoSlotLayoutV1,
+    init_lock_identity: FileIdentity,
+    binding_digest: [u8; 32],
+    slots: [TwoSlotFileV1; 2],
+    process_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TwoSlotCommittedRecordV1 {
+    slot_id: usize,
+    generation: u64,
+    predecessor_digest: [u8; 32],
+    record_digest: [u8; 32],
+    payload: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct TwoSlotStageV1 {
+    name: OsString,
+    directory: RootedDirectory,
+    byte_count: u64,
+    complete: bool,
+}
+
+#[derive(Debug)]
+struct TwoSlotStageInventoryV1 {
+    byte_count: u64,
+    has_full_pair: bool,
+    canonical_header_count: usize,
+}
+
+fn two_slot_codec_error(label: &str, error: impl fmt::Display) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{label} is not canonical Norito: {error}"),
+    )
+}
+
+fn encode_two_slot_value<T: norito::NoritoSerialize>(
+    value: &T,
+    label: &str,
+) -> io::Result<Vec<u8>> {
+    norito::to_bytes(value).map_err(|error| two_slot_codec_error(label, error))
+}
+
+fn decode_two_slot_value<T>(bytes: &[u8], label: &str) -> io::Result<T>
+where
+    for<'decode> T: norito::NoritoDeserialize<'decode> + norito::NoritoSerialize,
+{
+    let value =
+        norito::decode_from_bytes(bytes).map_err(|error| two_slot_codec_error(label, error))?;
+    let canonical = encode_two_slot_value(&value, label)?;
+    if canonical != bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} uses a noncanonical Norito encoding"),
+        ));
+    }
+    Ok(value)
+}
+
+fn zero_two_slot_binding_material() -> TwoSlotBindingMaterialV1 {
+    TwoSlotBindingMaterialV1 {
+        format_version: TWO_SLOT_FORMAT_VERSION_V1,
+        store_name_digest: TWO_SLOT_ZERO_DIGEST,
+        domain: TWO_SLOT_ZERO_DIGEST,
+        store_nonce: TWO_SLOT_ZERO_DIGEST,
+        max_payload_bytes: 0,
+        header_region_bytes: 0,
+        record_header_region_bytes: 0,
+        commit_trailer_region_bytes: 0,
+        init_lock_identity: TwoSlotFileIdentityV1 {
+            platform: 0,
+            first: 0,
+            second: 0,
+        },
+        slot_identities: [
+            TwoSlotFileIdentityV1 {
+                platform: 0,
+                first: 0,
+                second: 0,
+            },
+            TwoSlotFileIdentityV1 {
+                platform: 0,
+                first: 0,
+                second: 0,
+            },
+        ],
+    }
+}
+
+fn two_slot_layout(max_payload_bytes: usize) -> io::Result<TwoSlotLayoutV1> {
+    let header_region_bytes = encode_two_slot_value(
+        &TwoSlotHeaderRegionV1 {
+            header: TwoSlotHeaderV1 {
+                binding: zero_two_slot_binding_material(),
+                binding_digest: TWO_SLOT_ZERO_DIGEST,
+                slot_id: 0,
+            },
+            reserved: [0; TWO_SLOT_HEADER_RESERVED_BYTES_V1],
+        },
+        "governance two-slot header region",
+    )?
+    .len();
+    let record_header_region_bytes = encode_two_slot_value(
+        &TwoSlotRecordHeaderRegionV1 {
+            header: TwoSlotRecordHeaderV1 {
+                format_version: TWO_SLOT_FORMAT_VERSION_V1,
+                binding_digest: TWO_SLOT_ZERO_DIGEST,
+                slot_id: 0,
+                generation: 0,
+                predecessor_digest: TWO_SLOT_ZERO_DIGEST,
+                payload_len: 0,
+                payload_digest: TWO_SLOT_ZERO_DIGEST,
+            },
+            reserved: [0; TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1],
+        },
+        "governance two-slot record-header region",
+    )?
+    .len();
+    let commit_trailer_region_bytes = encode_two_slot_value(
+        &TwoSlotCommitTrailerRegionV1 {
+            trailer: TwoSlotCommitTrailerV1 {
+                format_version: TWO_SLOT_FORMAT_VERSION_V1,
+                binding_digest: TWO_SLOT_ZERO_DIGEST,
+                slot_id: 0,
+                generation: 0,
+                record_digest: TWO_SLOT_ZERO_DIGEST,
+                commit_marker: TWO_SLOT_COMMIT_MARKER_V1,
+            },
+            reserved: [0; TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1],
+        },
+        "governance two-slot commit-trailer region",
+    )?
+    .len();
+    let payload_offset = header_region_bytes
+        .checked_add(record_header_region_bytes)
+        .ok_or_else(|| io::Error::other("governance two-slot payload offset overflowed"))?;
+    let trailer_offset = payload_offset
+        .checked_add(max_payload_bytes)
+        .ok_or_else(|| io::Error::other("governance two-slot trailer offset overflowed"))?;
+    let slot_file_bytes = trailer_offset
+        .checked_add(commit_trailer_region_bytes)
+        .ok_or_else(|| io::Error::other("governance two-slot file length overflowed"))?;
+    Ok(TwoSlotLayoutV1 {
+        header_region_bytes,
+        record_header_region_bytes,
+        payload_offset: u64::try_from(payload_offset)
+            .map_err(|_| io::Error::other("governance two-slot payload offset exceeds u64"))?,
+        trailer_offset: u64::try_from(trailer_offset)
+            .map_err(|_| io::Error::other("governance two-slot trailer offset exceeds u64"))?,
+        commit_trailer_region_bytes,
+        slot_file_bytes: u64::try_from(slot_file_bytes)
+            .map_err(|_| io::Error::other("governance two-slot file length exceeds u64"))?,
+    })
+}
+
+fn two_slot_store_name_digest(config: &TwoSlotStoreConfigV1) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.governance.two-slot.store-name.v1\0");
+    hasher.update(config.store_name.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn two_slot_store_namespace(config: &TwoSlotStoreConfigV1) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = two_slot_store_name_digest(config);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn two_slot_binding_material(
+    config: &TwoSlotStoreConfigV1,
+    layout: TwoSlotLayoutV1,
+    init_lock_identity: FileIdentity,
+    identities: [FileIdentity; 2],
+) -> io::Result<TwoSlotBindingMaterialV1> {
+    Ok(TwoSlotBindingMaterialV1 {
+        format_version: TWO_SLOT_FORMAT_VERSION_V1,
+        store_name_digest: two_slot_store_name_digest(config),
+        domain: config.domain,
+        store_nonce: config.store_nonce,
+        max_payload_bytes: u64::try_from(config.max_payload_bytes)
+            .map_err(|_| io::Error::other("governance two-slot payload bound exceeds u64"))?,
+        header_region_bytes: u64::try_from(layout.header_region_bytes)
+            .map_err(|_| io::Error::other("governance two-slot header region exceeds u64"))?,
+        record_header_region_bytes: u64::try_from(layout.record_header_region_bytes).map_err(
+            |_| io::Error::other("governance two-slot record-header region exceeds u64"),
+        )?,
+        commit_trailer_region_bytes: u64::try_from(layout.commit_trailer_region_bytes).map_err(
+            |_| io::Error::other("governance two-slot commit-trailer region exceeds u64"),
+        )?,
+        init_lock_identity: init_lock_identity.into(),
+        slot_identities: identities.map(Into::into),
+    })
+}
+
+fn two_slot_binding_digest(material: &TwoSlotBindingMaterialV1) -> io::Result<[u8; 32]> {
+    let encoded = encode_two_slot_value(material, "governance two-slot binding material")?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.governance.two-slot.binding.v1\0");
+    hasher.update(&encoded);
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn two_slot_record_digest(header: &TwoSlotRecordHeaderV1, payload: &[u8]) -> io::Result<[u8; 32]> {
+    let encoded = encode_two_slot_value(header, "governance two-slot record header")?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.governance.two-slot.record.v1\0");
+    hasher.update(&encoded);
+    hasher.update(payload);
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn read_exact_file_region(file: &File, offset: u64, bytes: usize) -> io::Result<Vec<u8>> {
+    let mut region = vec![0; bytes];
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt as _;
+        file.read_exact_at(&mut region, offset)?;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileExt as _;
+        let mut read = 0_usize;
+        while read < region.len() {
+            let position = offset
+                .checked_add(
+                    u64::try_from(read).map_err(|_| {
+                        io::Error::other("governance two-slot read offset exceeds u64")
+                    })?,
+                )
+                .ok_or_else(|| io::Error::other("governance two-slot read offset overflowed"))?;
+            let count = file.seek_read(&mut region[read..], position)?;
+            if count == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "governance two-slot region is truncated",
+                ));
+            }
+            read = read
+                .checked_add(count)
+                .ok_or_else(|| io::Error::other("governance two-slot read length overflowed"))?;
+        }
+    }
+    #[cfg(any(unix, windows))]
+    {
+        Ok(region)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (file, offset, region);
+        Err(platform::unsupported())
+    }
+}
+
+fn write_exact_file_region(file: &File, offset: u64, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt as _;
+        return file.write_all_at(bytes, offset);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileExt as _;
+        let mut written = 0_usize;
+        while written < bytes.len() {
+            let position = offset
+                .checked_add(u64::try_from(written).map_err(|_| {
+                    io::Error::other("governance two-slot write offset exceeds u64")
+                })?)
+                .ok_or_else(|| io::Error::other("governance two-slot write offset overflowed"))?;
+            let count = file.seek_write(&bytes[written..], position)?;
+            if count == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "governance two-slot region write made no progress",
+                ));
+            }
+            written = written
+                .checked_add(count)
+                .ok_or_else(|| io::Error::other("governance two-slot write length overflowed"))?;
+        }
+        return Ok(());
+    }
+    #[cfg(not(any(unix, windows)))]
+    Err(platform::unsupported())
+}
+
 /// One exact opened regular-file binding retained across later verification.
 #[derive(Debug, Clone)]
 pub(super) struct FileBinding {
@@ -621,6 +1154,20 @@ impl RootedDirectory {
         self.verify_handle()
     }
 
+    /// Return a path-free digest of this exact retained directory identity.
+    pub(super) fn identity_digest(&self) -> io::Result<[u8; 32]> {
+        self.verify()?;
+        let identity = TwoSlotFileIdentityV1::from(self.identity);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"sorafs.governance-rooted-fs.directory-identity.v1\0");
+        hasher.update(&[identity.platform]);
+        hasher.update(&identity.first.to_le_bytes());
+        hasher.update(&identity.second.to_le_bytes());
+        let digest = *hasher.finalize().as_bytes();
+        self.verify()?;
+        Ok(digest)
+    }
+
     fn verify_handle(&self) -> io::Result<()> {
         let before = self.handle.metadata()?;
         validate_directory_metadata(&self.display_path, &before)?;
@@ -727,6 +1274,133 @@ impl RootedDirectory {
             }
             Err(error) => Err(error),
         }
+    }
+
+    /// Create one direct child directory without adopting a pre-existing name.
+    fn create_child_directory_exclusive(&self, name: &OsStr) -> io::Result<Self> {
+        validate_component(name)?;
+        if !self.writable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "read-only governance directory cannot create a two-slot staging directory",
+            ));
+        }
+        self.verify()?;
+        platform::create_directory(&self.handle, name)?;
+        let child = self.open_directory(name)?;
+        self.verify()?;
+        child.verify()?;
+        Ok(child)
+    }
+
+    /// Move one exact retained child directory to a create-only rooted name.
+    ///
+    /// This operation never replaces or removes a pathname. The returned
+    /// capability is reopened below the destination parent and checked against
+    /// the exact source-directory identity retained before the rename.
+    fn move_child_directory_exclusive(
+        &self,
+        child: Self,
+        destination_parent: &Self,
+        destination_name: &OsStr,
+    ) -> io::Result<Self> {
+        validate_component(destination_name)?;
+        if !self.writable || !destination_parent.writable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "read-only governance directory cannot move two-slot recovery state",
+            ));
+        }
+        let binding = child.binding.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance root cannot be moved as a two-slot child",
+            )
+        })?;
+        if binding.parent_identity != self.identity || !Arc::ptr_eq(&binding.parent, &self.handle) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "two-slot staging directory belongs to another retained parent",
+            ));
+        }
+        self.verify()?;
+        destination_parent.verify()?;
+        child.verify()?;
+        let source_name = binding.name.clone();
+        let identity = child.identity;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            platform::rename_exclusive(
+                &self.handle,
+                &source_name,
+                &destination_parent.handle,
+                destination_name,
+            )?;
+        }
+        #[cfg(windows)]
+        {
+            platform::rename_open_file(
+                &destination_parent.handle,
+                &child.handle,
+                &source_name,
+                destination_name,
+            )?;
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            return Err(platform::unsupported());
+        }
+
+        let installed = destination_parent.open_directory(destination_name)?;
+        if installed.identity != identity || file_identity(&child.handle.metadata()?)? != identity {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "two-slot directory rename installed a substituted object",
+            ));
+        }
+        match self.open_directory(&source_name) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(replacement) => {
+                drop(replacement);
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "two-slot source name was substituted during directory rename",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+        installed.verify()?;
+        Ok(installed)
+    }
+
+    /// Open or atomically initialize a bounded two-fixed-slot V1 store.
+    pub(super) fn open_or_create_two_slot_store_v1(
+        &self,
+        config: TwoSlotStoreConfigV1,
+        initial_payload: &[u8],
+    ) -> io::Result<TwoSlotStoreV1> {
+        open_or_create_two_slot_store_v1_with(self, config, initial_payload, |_| Ok(()))
+    }
+
+    /// Load an already initialized two-slot store without mutation.
+    pub(super) fn load_existing_two_slot_store_v1(
+        &self,
+        config: TwoSlotStoreConfigV1,
+    ) -> io::Result<TwoSlotSnapshotV1> {
+        load_existing_two_slot_store_v1(self, config)
+    }
+
+    #[cfg(test)]
+    fn open_or_create_two_slot_store_v1_with_init_hook<Hook>(
+        &self,
+        config: TwoSlotStoreConfigV1,
+        initial_payload: &[u8],
+        after_step: Hook,
+    ) -> io::Result<TwoSlotStoreV1>
+    where
+        Hook: FnMut(&'static str) -> io::Result<()>,
+    {
+        open_or_create_two_slot_store_v1_with(self, config, initial_payload, after_step)
     }
 
     /// Resolve a relative target below this retained directory.
@@ -925,27 +1599,38 @@ impl RootedDirectory {
         name: &OsStr,
         max_bytes: usize,
     ) -> io::Result<Option<FileBinding>> {
-        self.file_binding_with_policy(name, max_bytes, false)
+        self.file_binding_with_policy_and_access(name, max_bytes, false, false)
     }
 
-    /// Retain one private direct child and its exact name binding, if present.
-    pub(super) fn private_file_binding(
+    /// Retain one direct regular child with deletion access to its exact handle.
+    pub(super) fn removal_file_binding(
         &self,
         name: &OsStr,
         max_bytes: usize,
     ) -> io::Result<Option<FileBinding>> {
-        self.file_binding_with_policy(name, max_bytes, true)
+        self.file_binding_with_policy_and_access(name, max_bytes, false, true)
     }
 
-    fn file_binding_with_policy(
+    /// Retain one private direct regular child with deletion access to its exact handle.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn private_removal_file_binding(
+        &self,
+        name: &OsStr,
+        max_bytes: usize,
+    ) -> io::Result<Option<FileBinding>> {
+        self.file_binding_with_policy_and_access(name, max_bytes, true, true)
+    }
+
+    fn file_binding_with_policy_and_access(
         &self,
         name: &OsStr,
         max_bytes: usize,
         private: bool,
+        delete_access: bool,
     ) -> io::Result<Option<FileBinding>> {
         validate_component(name)?;
         self.verify()?;
-        let handle = match platform::open_file(&self.handle, name, false) {
+        let handle = match platform::open_file(&self.handle, name, delete_access) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 self.verify()?;
@@ -966,11 +1651,6 @@ impl RootedDirectory {
             max_bytes,
             private,
         }))
-    }
-
-    /// Return the stable identity of a private direct regular child, if present.
-    pub(super) fn private_file_identity(&self, name: &OsStr) -> io::Result<Option<FileIdentity>> {
-        self.file_identity_with_policy(name, true)
     }
 
     fn file_identity_with_policy(
@@ -1002,6 +1682,13 @@ impl RootedDirectory {
     }
 
     /// Atomically replace the target only if its stable identity is unchanged.
+    ///
+    /// Linux/macOS exchange both bindings before retaining the predecessor.
+    /// Windows supports create-only installation and exact-byte no-ops, but
+    /// fails changed existing-target replacement closed because it has no
+    /// rooted atomic exchange that preserves every raced object. Retained
+    /// generations are immutable online; saturation requires offline archival
+    /// or cleanup while the writer is stopped.
     pub(super) fn atomic_write(
         &self,
         name: &OsStr,
@@ -1014,21 +1701,24 @@ impl RootedDirectory {
             temporary_name,
             data,
             expected,
+            || Ok(()),
             |file| file.sync_all(),
             |directory| directory.sync_all(),
         )
     }
 
-    fn atomic_write_with_sync<FileSync, DirectorySync>(
+    fn atomic_write_with_sync<BeforePromote, FileSync, DirectorySync>(
         &self,
         name: &OsStr,
         temporary_name: &OsStr,
         data: &[u8],
         expected: ExpectedFile,
+        before_promote: BeforePromote,
         mut sync_file: FileSync,
         mut sync_directory: DirectorySync,
     ) -> io::Result<()>
     where
+        BeforePromote: FnOnce() -> io::Result<()>,
         FileSync: FnMut(&File) -> io::Result<()>,
         DirectorySync: FnMut(&File) -> io::Result<()>,
     {
@@ -1064,6 +1754,42 @@ impl RootedDirectory {
                 ),
             )
         })?;
+        if let ExpectedFile::Identity(expected_binding) = &expected {
+            let current = if expected_binding.private {
+                self.read_private_file(name, expected_binding.max_bytes)?
+            } else {
+                self.read_file(name, expected_binding.max_bytes)?
+            };
+            if current.binding.identity != expected_binding.identity {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!(
+                        "governance atomic predecessor `{}` changed before exact-byte comparison",
+                        self.display_path.join(name).display()
+                    ),
+                ));
+            }
+            if current.bytes == data {
+                expected_binding.verify()?;
+                current.binding.verify()?;
+                self.verify()?;
+                return Ok(());
+            }
+            #[cfg(windows)]
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Windows governance existing-target replacement is disabled because the platform has no rooted atomic exchange that preserves every raced object",
+            ));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let retained_name = match &expected {
+            ExpectedFile::Identity(binding) => {
+                let metadata = binding.handle.metadata()?;
+                validate_regular_file_metadata(&self.display_path.join(name), &metadata)?;
+                Some(self.available_atomic_retained_name(name, metadata.len(), binding.private)?)
+            }
+            ExpectedFile::Missing => None,
+        };
         let mut temporary =
             platform::create_file(&self.handle, temporary_name).map_err(|error| {
                 io::Error::new(
@@ -1075,6 +1801,7 @@ impl RootedDirectory {
                 )
             })?;
         let temporary_path = self.display_path.join(temporary_name);
+        #[cfg(windows)]
         let mut renamed = false;
         let result = (|| {
             temporary.write_all(data).map_err(|error| {
@@ -1096,18 +1823,7 @@ impl RootedDirectory {
                 )
             })?;
             let temporary_metadata = temporary.metadata()?;
-            validate_regular_file_metadata(&temporary_path, &temporary_metadata)?;
-            #[cfg(unix)]
-            if temporary_metadata.mode() & 0o600 != 0o600 {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "governance atomic temporary `{}` lacks owner read/write mode: {:o}",
-                        temporary_path.display(),
-                        temporary_metadata.mode() & 0o7777
-                    ),
-                ));
-            }
+            validate_private_regular_file_metadata(&temporary_path, &temporary_metadata)?;
             let temporary_identity = file_identity(&temporary_metadata)?;
             verify_expected_file(self, name, &expected).map_err(|error| {
                 io::Error::new(
@@ -1127,13 +1843,13 @@ impl RootedDirectory {
                     ),
                 )
             })?;
-            platform::rename_open_file(
-                &self.handle,
-                &temporary,
-                temporary_name,
-                name,
-                matches!(&expected, ExpectedFile::Identity(_)),
-            )
+            before_promote()?;
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            if retained_name.is_some() {
+                platform::exchange_open_file(&self.handle, &temporary, temporary_name, name)
+            } else {
+                platform::rename_open_file(&self.handle, &temporary, temporary_name, name)
+            }
             .map_err(|error| {
                 io::Error::new(
                     error.kind(),
@@ -1144,7 +1860,48 @@ impl RootedDirectory {
                     ),
                 )
             })?;
-            renamed = true;
+            #[cfg(windows)]
+            {
+                platform::rename_open_file(
+                    &self.handle,
+                    &temporary,
+                    temporary_name,
+                    name,
+                )
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "promote governance atomic temporary `{}` to `{}` without replacement: {error}",
+                            temporary_path.display(),
+                            self.display_path.join(name).display()
+                        ),
+                    )
+                })?;
+                renamed = true;
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+            platform::rename_open_file(&self.handle, &temporary, temporary_name, name).map_err(
+                |error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "promote governance atomic temporary `{}` to `{}`: {error}",
+                            temporary_path.display(),
+                            self.display_path.join(name).display()
+                        ),
+                    )
+                },
+            )?;
+            sync_directory(&self.handle).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "sync governance atomic directory `{}`: {error}",
+                        self.display_path.display()
+                    ),
+                )
+            })?;
             let promoted = platform::open_file(&self.handle, name, false).map_err(|error| {
                 io::Error::new(
                     error.kind(),
@@ -1155,22 +1912,95 @@ impl RootedDirectory {
                 )
             })?;
             let promoted_metadata = promoted.metadata()?;
-            validate_regular_file_metadata(&self.display_path.join(name), &promoted_metadata)?;
+            validate_private_regular_file_metadata(
+                &self.display_path.join(name),
+                &promoted_metadata,
+            )?;
             if file_identity(&promoted_metadata)? != temporary_identity {
                 return Err(io::Error::other(format!(
                     "governance atomic target `{}` is not the promoted temporary object",
                     self.display_path.join(name).display()
                 )));
             }
-            sync_directory(&self.handle).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "sync governance atomic directory `{}`: {error}",
-                        self.display_path.display()
-                    ),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            if let Some(retained_name) = retained_name.as_deref() {
+                let (expected_identity, expected_max_bytes, expected_private) = match &expected {
+                    ExpectedFile::Identity(binding) => {
+                        (binding.identity, binding.max_bytes, binding.private)
+                    }
+                    ExpectedFile::Missing => unreachable!("retained replacement has an identity"),
+                };
+                let predecessor = platform::open_file(&self.handle, temporary_name, false)
+                    .map_err(|error| {
+                        io::Error::new(
+                            error.kind(),
+                            format!(
+                                "open exchanged governance atomic predecessor `{}`: {error}",
+                                temporary_path.display()
+                            ),
+                        )
+                    })?;
+                let predecessor_metadata = predecessor.metadata()?;
+                validate_file_metadata(
+                    &temporary_path,
+                    &predecessor_metadata,
+                    expected_max_bytes,
+                    expected_private,
+                )?;
+                if file_identity(&predecessor_metadata)? != expected_identity {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        format!(
+                            "governance atomic predecessor `{}` was substituted during exchange; both objects were preserved",
+                            self.display_path.join(name).display()
+                        ),
+                    ));
+                }
+                platform::rename_exclusive(
+                    &self.handle,
+                    temporary_name,
+                    &self.handle,
+                    retained_name,
                 )
-            })?;
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "retain governance atomic predecessor `{}` as `{}`: {error}; the predecessor remains preserved for offline recovery",
+                            temporary_path.display(),
+                            self.display_path.join(retained_name).display()
+                        ),
+                    )
+                })?;
+                sync_directory(&self.handle).map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "sync governance atomic predecessor retention directory `{}`: {error}",
+                            self.display_path.display()
+                        ),
+                    )
+                })?;
+                let retained_path = self.display_path.join(retained_name);
+                let retained = platform::open_file(&self.handle, retained_name, false)?;
+                let retained_metadata = retained.metadata()?;
+                validate_file_metadata(
+                    &retained_path,
+                    &retained_metadata,
+                    expected_max_bytes,
+                    expected_private,
+                )?;
+                if file_identity(&retained_metadata)? != expected_identity
+                    || file_identity(&predecessor.metadata()?)? != expected_identity
+                    || retained_metadata.len() != predecessor_metadata.len()
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "retained governance atomic predecessor was substituted; every observed object remains preserved for offline inspection",
+                    ));
+                }
+                self.require_file_name_absent(temporary_name)?;
+            }
             self.verify().map_err(|error| {
                 io::Error::new(
                     error.kind(),
@@ -1190,7 +2020,10 @@ impl RootedDirectory {
                 )
             })?;
             let durable_metadata = durable.metadata()?;
-            validate_regular_file_metadata(&self.display_path.join(name), &durable_metadata)?;
+            validate_private_regular_file_metadata(
+                &self.display_path.join(name),
+                &durable_metadata,
+            )?;
             if file_identity(&durable_metadata)? != temporary_identity {
                 return Err(io::Error::other(format!(
                     "governance atomic target `{}` changed before durable readback",
@@ -1199,6 +2032,7 @@ impl RootedDirectory {
             }
             Ok(())
         })();
+        #[cfg(windows)]
         if result.is_err() && !renamed {
             let _ = platform::remove_open_file(
                 &self.handle,
@@ -1207,7 +2041,106 @@ impl RootedDirectory {
                 file_identity(&temporary.metadata()?).ok(),
             );
         }
+        // POSIX has no conditional unlink-by-descriptor, so a failed
+        // transaction keeps every ambiguous object available for recovery.
+        // Successful replacement retains the exact predecessor in a bounded
+        // V1 slot. Windows never enters existing-target replacement.
         result
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn available_atomic_retained_name(
+        &self,
+        target_name: &OsStr,
+        predecessor_bytes: u64,
+        private: bool,
+    ) -> io::Result<OsString> {
+        let target_name = target_name.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance atomic retention target is not canonical UTF-8",
+            )
+        })?;
+        let mut occupied = [false; ATOMIC_RETAINED_SLOT_COUNT_V1];
+        let mut retained_bytes = 0_u64;
+        for name in self.child_names_bounded(DEFAULT_CHILD_ENTRY_LIMIT)? {
+            let Some(name_utf8) = name.to_str() else {
+                continue;
+            };
+            let Some((retained_target, slot)) = atomic_retained_target_and_slot(name_utf8) else {
+                if is_atomic_retained_candidate_for(name_utf8, target_name) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "governance atomic retention name `{}` is not canonical; offline inspection is required",
+                            self.display_path.join(&name).display()
+                        ),
+                    ));
+                }
+                continue;
+            };
+            let retained = platform::open_file(&self.handle, &name, false)?;
+            let metadata = retained.metadata()?;
+            validate_file_metadata(
+                &self.display_path.join(&name),
+                &metadata,
+                usize::MAX,
+                private && retained_target == target_name,
+            )?;
+            let identity = file_identity(&metadata)?;
+            let linked = platform::open_file(&self.handle, &name, false)?;
+            let linked_metadata = linked.metadata()?;
+            validate_file_metadata(
+                &self.display_path.join(&name),
+                &linked_metadata,
+                usize::MAX,
+                private && retained_target == target_name,
+            )?;
+            if file_identity(&linked_metadata)? != identity {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "governance atomic retained generation changed during bounded inventory",
+                ));
+            }
+            retained_bytes = retained_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance atomic retained-generation byte total overflowed",
+                )
+            })?;
+            if retained_target == target_name {
+                occupied[slot] = true;
+            }
+        }
+        let total = retained_bytes
+            .checked_add(predecessor_bytes)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance atomic retained-generation byte total overflowed",
+                )
+            })?;
+        if total > ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1 {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "governance atomic retained generations would exceed the {}-byte V1 aggregate bound; stop the writer and archive or clear retained generations offline",
+                    ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1
+                ),
+            ));
+        }
+        let slot = occupied
+            .iter()
+            .position(|occupied| !occupied)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!(
+                        "all {ATOMIC_RETAINED_SLOT_COUNT_V1} V1 predecessor slots for `{target_name}` are occupied; stop the writer and archive or clear them offline"
+                    ),
+                )
+            })?;
+        atomic_retained_name(OsStr::new(target_name), slot)
     }
 
     /// Atomically write, binding replacement to the currently opened target.
@@ -1225,6 +2158,7 @@ impl RootedDirectory {
     }
 
     /// Enumerate direct child names while retaining this exact directory.
+    #[cfg(test)]
     pub(super) fn child_names(&self) -> io::Result<Vec<OsString>> {
         self.child_names_bounded(DEFAULT_CHILD_ENTRY_LIMIT)
     }
@@ -1245,6 +2179,7 @@ impl RootedDirectory {
     }
 
     /// Remove matching atomic crash temporaries below this exact directory.
+    #[cfg(any(windows, test))]
     pub(super) fn remove_atomic_temps_for(&self, target_name: &str) -> io::Result<usize> {
         validate_component(OsStr::new(target_name))?;
         self.remove_atomic_temps_matching(DEFAULT_CHILD_ENTRY_LIMIT, |candidate| {
@@ -1253,6 +2188,7 @@ impl RootedDirectory {
     }
 
     /// Remove bounded atomic crash temporaries whose decoded target is allowed.
+    #[cfg(any(windows, test))]
     pub(super) fn remove_atomic_temps_matching<Allowed>(
         &self,
         max_entries: usize,
@@ -1299,34 +2235,131 @@ impl RootedDirectory {
         Ok(removed)
     }
 
-    /// Remove one direct regular child by exact opened identity.
-    pub(super) fn remove_file_if_exists(&self, name: &OsStr) -> io::Result<bool> {
-        validate_component(name)?;
-        self.verify()?;
-        let file = match platform::open_file(&self.handle, name, true) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        let metadata = file.metadata()?;
-        validate_regular_file_metadata(&self.display_path.join(name), &metadata)?;
-        let identity = file_identity(&metadata)?;
-        let linked = platform::open_file(&self.handle, name, false)?;
-        let linked_metadata = linked.metadata()?;
-        validate_regular_file_metadata(&self.display_path.join(name), &linked_metadata)?;
-        if file_identity(&linked_metadata)? != identity {
-            return Err(io::Error::other(format!(
-                "governance state `{}` changed before deletion",
-                self.display_path.join(name).display()
-            )));
+    /// Atomically isolate one exact regular-file binding without unlinking it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn isolate_file_binding(
+        &self,
+        binding: FileBinding,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+    ) -> io::Result<FileSnapshot> {
+        self.isolate_file_binding_with(binding, quarantine, quarantine_name, || Ok(()))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn isolate_file_binding_with<BeforeRename>(
+        &self,
+        binding: FileBinding,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+        before_rename: BeforeRename,
+    ) -> io::Result<FileSnapshot>
+    where
+        BeforeRename: FnOnce() -> io::Result<()>,
+    {
+        self.isolate_file_binding_with_sync(
+            binding,
+            quarantine,
+            quarantine_name,
+            before_rename,
+            |directory| directory.sync_all(),
+            |directory| directory.sync_all(),
+        )
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn isolate_file_binding_with_sync<BeforeRename, SyncSource, SyncQuarantine>(
+        &self,
+        binding: FileBinding,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+        before_rename: BeforeRename,
+        sync_source: SyncSource,
+        sync_quarantine: SyncQuarantine,
+    ) -> io::Result<FileSnapshot>
+    where
+        BeforeRename: FnOnce() -> io::Result<()>,
+        SyncSource: FnOnce(&File) -> io::Result<()>,
+        SyncQuarantine: FnOnce(&File) -> io::Result<()>,
+    {
+        validate_component(quarantine_name)?;
+        if !self.writable || !quarantine.writable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "read-only governance directory cannot isolate recovery children",
+            ));
         }
-        platform::remove_open_file(&self.handle, &file, name, Some(identity))?;
-        drop(linked);
-        drop(file);
-        self.require_file_name_absent(name)?;
-        self.handle.sync_all()?;
         self.verify()?;
-        Ok(true)
+        quarantine.verify()?;
+        binding.verify()?;
+        if binding.parent.identity != self.identity
+            || !Arc::ptr_eq(&binding.parent.handle, &self.handle)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "planned governance file binding belongs to a different parent",
+            ));
+        }
+        if self.identity == quarantine.identity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance recovery quarantine must be a distinct directory",
+            ));
+        }
+        let FileBinding {
+            handle,
+            identity,
+            name,
+            max_bytes,
+            private,
+            ..
+        } = binding;
+        before_rename()?;
+        platform::rename_exclusive(&self.handle, &name, &quarantine.handle, quarantine_name)?;
+        let source_sync = sync_source(&self.handle);
+        let quarantine_sync = sync_quarantine(&quarantine.handle);
+        source_sync?;
+        quarantine_sync?;
+
+        let snapshot = quarantine.read_file_with_policy(quarantine_name, max_bytes, private)?;
+        if snapshot.binding.identity != identity || file_identity(&handle.metadata()?)? != identity
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance recovery quarantine captured a substituted file; the preserved entry requires offline inspection",
+            ));
+        }
+        self.require_file_name_absent(&name)?;
+        snapshot.binding.verify()?;
+        self.verify()?;
+        quarantine.verify()?;
+        Ok(snapshot)
+    }
+
+    /// Remove one direct regular child by exact opened identity.
+    #[cfg(any(windows, test))]
+    pub(super) fn remove_file_binding(&self, binding: FileBinding) -> io::Result<()> {
+        self.verify()?;
+        binding.verify()?;
+        if binding.parent.identity != self.identity
+            || !Arc::ptr_eq(&binding.parent.handle, &self.handle)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "planned governance file binding belongs to a different parent",
+            ));
+        }
+        let FileBinding {
+            handle,
+            identity,
+            name,
+            ..
+        } = binding;
+        platform::remove_open_file(&self.handle, &handle, &name, Some(identity))?;
+        drop(handle);
+        self.require_file_name_absent(&name)?;
+        self.handle.sync_all()?;
+        self.verify()
     }
 
     fn require_file_name_absent(&self, name: &OsStr) -> io::Result<()> {
@@ -1346,9 +2379,135 @@ impl RootedDirectory {
         }
     }
 
+    /// Atomically isolate one exact empty directory without unlinking it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn isolate_empty_directory_binding(
+        &self,
+        child: Self,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+    ) -> io::Result<()> {
+        self.isolate_empty_directory_binding_with(child, quarantine, quarantine_name, || Ok(()))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn isolate_empty_directory_binding_with<BeforeRename>(
+        &self,
+        child: Self,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+        before_rename: BeforeRename,
+    ) -> io::Result<()>
+    where
+        BeforeRename: FnOnce() -> io::Result<()>,
+    {
+        self.isolate_empty_directory_binding_with_sync(
+            child,
+            quarantine,
+            quarantine_name,
+            before_rename,
+            |directory| directory.sync_all(),
+            |directory| directory.sync_all(),
+        )
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn isolate_empty_directory_binding_with_sync<BeforeRename, SyncSource, SyncQuarantine>(
+        &self,
+        child: Self,
+        quarantine: &Self,
+        quarantine_name: &OsStr,
+        before_rename: BeforeRename,
+        sync_source: SyncSource,
+        sync_quarantine: SyncQuarantine,
+    ) -> io::Result<()>
+    where
+        BeforeRename: FnOnce() -> io::Result<()>,
+        SyncSource: FnOnce(&File) -> io::Result<()>,
+        SyncQuarantine: FnOnce(&File) -> io::Result<()>,
+    {
+        validate_component(quarantine_name)?;
+        let binding = child.binding.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance root cannot be isolated as a retained child",
+            )
+        })?;
+        validate_component(&binding.name)?;
+        if !self.writable || !quarantine.writable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "read-only governance directory cannot isolate recovery children",
+            ));
+        }
+        self.verify()?;
+        child.verify()?;
+        quarantine.verify()?;
+        if binding.parent_identity != self.identity || !Arc::ptr_eq(&binding.parent, &self.handle) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "planned governance directory binding belongs to a different parent",
+            ));
+        }
+        if self.identity == quarantine.identity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance recovery quarantine must be a distinct directory",
+            ));
+        }
+        if !child.child_names_bounded(1)?.is_empty() {
+            return Err(io::Error::other(format!(
+                "governance directory `{}` is not empty",
+                child.display_path.display()
+            )));
+        }
+        let name = binding.name.clone();
+        let identity = child.identity;
+        before_rename()?;
+        platform::rename_exclusive(&self.handle, &name, &quarantine.handle, quarantine_name)?;
+        let source_sync = sync_source(&self.handle);
+        let quarantine_sync = sync_quarantine(&quarantine.handle);
+        source_sync?;
+        quarantine_sync?;
+
+        let isolated = quarantine.open_directory(quarantine_name)?;
+        if isolated.identity != identity || file_identity(&child.handle.metadata()?)? != identity {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance recovery quarantine captured a substituted directory; the preserved entry requires offline inspection",
+            ));
+        }
+        if !isolated.child_names_bounded(1)?.is_empty() {
+            return Err(io::Error::other(
+                "isolated governance recovery directory changed after quarantine",
+            ));
+        }
+        match self.open_directory(&name) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(replacement) => {
+                drop(replacement);
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "governance directory was replaced during recovery isolation",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+        isolated.verify()?;
+        self.verify()?;
+        quarantine.verify()
+    }
+
     /// Remove one direct empty child directory by its exact retained identity.
-    pub(super) fn remove_empty_directory_if_exists(&self, name: &OsStr) -> io::Result<bool> {
-        validate_component(name)?;
+    #[cfg(any(windows, test))]
+    pub(super) fn remove_empty_directory_binding(&self, child: Self) -> io::Result<()> {
+        let binding = child.binding.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance root cannot be removed as a retained child",
+            )
+        })?;
+        validate_component(&binding.name)?;
         if !self.writable {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -1356,23 +2515,24 @@ impl RootedDirectory {
             ));
         }
         self.verify()?;
-        let child = match self.open_directory(name) {
-            Ok(child) => child,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error),
-        };
+        child.verify()?;
+        if binding.parent_identity != self.identity || !Arc::ptr_eq(&binding.parent, &self.handle) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "planned governance directory binding belongs to a different parent",
+            ));
+        }
         if !child.child_names_bounded(1)?.is_empty() {
             return Err(io::Error::other(format!(
                 "governance directory `{}` is not empty",
                 child.display_path.display()
             )));
         }
-        self.verify()?;
-        child.verify()?;
+        let name = binding.name.clone();
         let identity = child.identity;
-        platform::remove_open_directory(&self.handle, &child.handle, name, Some(identity))?;
+        platform::remove_open_directory(&self.handle, &child.handle, &name, Some(identity))?;
         drop(child);
-        match self.open_directory(name) {
+        match self.open_directory(&name) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Ok(replacement) => {
                 drop(replacement);
@@ -1380,15 +2540,14 @@ impl RootedDirectory {
                     io::ErrorKind::WouldBlock,
                     format!(
                         "governance directory `{}` was replaced during removal",
-                        self.display_path.join(name).display()
+                        self.display_path.join(&name).display()
                     ),
                 ));
             }
             Err(error) => return Err(error),
         }
         self.handle.sync_all()?;
-        self.verify()?;
-        Ok(true)
+        self.verify()
     }
 
     #[cfg(test)]
@@ -1405,14 +2564,1624 @@ impl RootedDirectory {
         FileSync: FnMut(&File) -> io::Result<()>,
         DirectorySync: FnMut(&File) -> io::Result<()>,
     {
+        self.atomic_write_with_test_hooks(
+            name,
+            temporary_name,
+            data,
+            expected,
+            || Ok(()),
+            sync_file,
+            sync_directory,
+        )
+    }
+
+    #[cfg(test)]
+    fn atomic_write_with_test_hooks<BeforePromote, FileSync, DirectorySync>(
+        &self,
+        name: &OsStr,
+        temporary_name: &OsStr,
+        data: &[u8],
+        expected: ExpectedFile,
+        before_promote: BeforePromote,
+        sync_file: FileSync,
+        sync_directory: DirectorySync,
+    ) -> io::Result<()>
+    where
+        BeforePromote: FnOnce() -> io::Result<()>,
+        FileSync: FnMut(&File) -> io::Result<()>,
+        DirectorySync: FnMut(&File) -> io::Result<()>,
+    {
         self.atomic_write_with_sync(
             name,
             temporary_name,
             data,
             expected,
+            before_promote,
             sync_file,
             sync_directory,
         )
+    }
+}
+
+fn two_slot_file_byte_limit(layout: TwoSlotLayoutV1) -> io::Result<usize> {
+    usize::try_from(layout.slot_file_bytes)
+        .map_err(|_| io::Error::other("governance two-slot file length exceeds host limits"))
+}
+
+fn expected_two_slot_header_region(
+    material: &TwoSlotBindingMaterialV1,
+    binding_digest: [u8; 32],
+    slot_id: usize,
+) -> io::Result<Vec<u8>> {
+    let slot_id = u8::try_from(slot_id)
+        .map_err(|_| io::Error::other("governance two-slot slot id exceeds u8"))?;
+    encode_two_slot_value(
+        &TwoSlotHeaderRegionV1 {
+            header: TwoSlotHeaderV1 {
+                binding: material.clone(),
+                binding_digest,
+                slot_id,
+            },
+            reserved: [0; TWO_SLOT_HEADER_RESERVED_BYTES_V1],
+        },
+        "governance two-slot header region",
+    )
+}
+
+fn open_existing_two_slot_file(
+    directory: &RootedDirectory,
+    name: &OsStr,
+    layout: TwoSlotLayoutV1,
+) -> io::Result<TwoSlotFileV1> {
+    validate_component(name)?;
+    directory.verify()?;
+    let handle = if directory.writable {
+        platform::open_read_write_file(&directory.handle, name)?
+    } else {
+        platform::open_file(&directory.handle, name, false)?
+    };
+    let metadata = handle.metadata()?;
+    let path = directory.display_path.join(name);
+    let max_bytes = two_slot_file_byte_limit(layout)?;
+    validate_file_metadata(&path, &metadata, max_bytes, true)?;
+    if metadata.len() != layout.slot_file_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "governance two-slot file `{}` has length {}, expected {}",
+                path.display(),
+                metadata.len(),
+                layout.slot_file_bytes
+            ),
+        ));
+    }
+    let identity = file_identity(&metadata)?;
+    directory.verify_file_binding(name, &handle, identity, max_bytes, true)?;
+    Ok(TwoSlotFileV1 {
+        handle: Arc::new(handle),
+        identity,
+        name: name.to_os_string(),
+    })
+}
+
+fn verify_two_slot_file(store: &TwoSlotStoreV1, slot: &TwoSlotFileV1) -> io::Result<()> {
+    let max_bytes = two_slot_file_byte_limit(store.layout)?;
+    let path = store.directory.display_path.join(&slot.name);
+    let metadata = slot.handle.metadata()?;
+    validate_file_metadata(&path, &metadata, max_bytes, true)?;
+    if metadata.len() != store.layout.slot_file_bytes || file_identity(&metadata)? != slot.identity
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!(
+                "governance two-slot file `{}` changed identity or length",
+                path.display()
+            ),
+        ));
+    }
+    store
+        .directory
+        .verify_file_binding(&slot.name, &slot.handle, slot.identity, max_bytes, true)
+}
+
+fn verify_two_slot_headers(store: &TwoSlotStoreV1) -> io::Result<()> {
+    store.directory.verify()?;
+    let mut children = store
+        .directory
+        .child_names_bounded(TWO_SLOT_NAMES_V1.len())?;
+    children.sort();
+    let mut expected_children = TWO_SLOT_NAMES_V1.map(OsString::from).to_vec();
+    expected_children.sort();
+    if children != expected_children {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot store inventory diverged from its exact V1 pair",
+        ));
+    }
+    if store.slots[0].identity == store.slots[1].identity {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot files alias the same filesystem object",
+        ));
+    }
+    let material = two_slot_binding_material(
+        &store.config,
+        store.layout,
+        store.init_lock_identity,
+        [store.slots[0].identity, store.slots[1].identity],
+    )?;
+    if two_slot_binding_digest(&material)? != store.binding_digest {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot in-memory binding digest diverged",
+        ));
+    }
+    for (slot_id, slot) in store.slots.iter().enumerate() {
+        verify_two_slot_file(store, slot)?;
+        let actual = read_exact_file_region(&slot.handle, 0, store.layout.header_region_bytes)?;
+        let decoded: TwoSlotHeaderRegionV1 =
+            decode_two_slot_value(&actual, "governance two-slot header region")?;
+        if decoded.reserved != [0; TWO_SLOT_HEADER_RESERVED_BYTES_V1]
+            || actual != expected_two_slot_header_region(&material, store.binding_digest, slot_id)?
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "governance two-slot immutable header `{}` diverged",
+                    store.directory.display_path.join(&slot.name).display()
+                ),
+            ));
+        }
+    }
+    store.directory.verify()
+}
+
+fn open_existing_two_slot_store(
+    directory: RootedDirectory,
+    config: TwoSlotStoreConfigV1,
+    init_lock_identity: FileIdentity,
+) -> io::Result<TwoSlotStoreV1> {
+    let mut children = directory.child_names_bounded(TWO_SLOT_NAMES_V1.len())?;
+    children.sort();
+    let mut expected = TWO_SLOT_NAMES_V1.map(OsString::from).to_vec();
+    expected.sort();
+    if children != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot store inventory is not the exact V1 pair",
+        ));
+    }
+    let layout = two_slot_layout(config.max_payload_bytes)?;
+    let slots = [
+        open_existing_two_slot_file(&directory, OsStr::new(TWO_SLOT_NAMES_V1[0]), layout)?,
+        open_existing_two_slot_file(&directory, OsStr::new(TWO_SLOT_NAMES_V1[1]), layout)?,
+    ];
+    if slots[0].identity == slots[1].identity {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot files alias the same identity",
+        ));
+    }
+    let material = two_slot_binding_material(
+        &config,
+        layout,
+        init_lock_identity,
+        [slots[0].identity, slots[1].identity],
+    )?;
+    let binding_digest = two_slot_binding_digest(&material)?;
+    let store = TwoSlotStoreV1 {
+        directory,
+        config,
+        layout,
+        init_lock_identity,
+        binding_digest,
+        slots,
+        process_lock: Arc::new(Mutex::new(())),
+    };
+    verify_two_slot_headers(&store)?;
+    Ok(store)
+}
+
+fn read_two_slot_record_once(
+    store: &TwoSlotStoreV1,
+    slot_id: usize,
+) -> io::Result<Option<TwoSlotCommittedRecordV1>> {
+    let slot = store.slots.get(slot_id).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance two-slot id is invalid",
+        )
+    })?;
+    let trailer_before = read_exact_file_region(
+        &slot.handle,
+        store.layout.trailer_offset,
+        store.layout.commit_trailer_region_bytes,
+    )?;
+    let record_region = read_exact_file_region(
+        &slot.handle,
+        u64::try_from(store.layout.header_region_bytes).map_err(|_| {
+            io::Error::other("governance two-slot record-header offset exceeds u64")
+        })?,
+        store.layout.record_header_region_bytes,
+    )?;
+    let absent_if_zero_trailer_stable = || {
+        let trailer_after = read_exact_file_region(
+            &slot.handle,
+            store.layout.trailer_offset,
+            store.layout.commit_trailer_region_bytes,
+        )?;
+        if trailer_before == trailer_after {
+            Ok(None)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance two-slot trailer changed during invalid-record read",
+            ))
+        }
+    };
+    let corrupt_if_trailer_stable = || {
+        let trailer_after = read_exact_file_region(
+            &slot.handle,
+            store.layout.trailer_offset,
+            store.layout.commit_trailer_region_bytes,
+        )?;
+        if trailer_before == trailer_after {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot record has a stable nonzero malformed commit trailer or committed body",
+            ))
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance two-slot trailer changed during malformed-record read",
+            ))
+        }
+    };
+    if trailer_before.iter().all(|byte| *byte == 0) {
+        return absent_if_zero_trailer_stable();
+    }
+    let trailer_region: TwoSlotCommitTrailerRegionV1 =
+        match decode_two_slot_value(&trailer_before, "governance two-slot commit trailer") {
+            Ok(trailer) => trailer,
+            Err(_) => return corrupt_if_trailer_stable(),
+        };
+    let record_region: TwoSlotRecordHeaderRegionV1 =
+        match decode_two_slot_value(&record_region, "governance two-slot record-header region") {
+            Ok(record) => record,
+            Err(_) => return corrupt_if_trailer_stable(),
+        };
+    let trailer = trailer_region.trailer;
+    let header = record_region.header;
+    let expected_slot =
+        u8::try_from(slot_id).map_err(|_| io::Error::other("governance two-slot id exceeds u8"))?;
+    if trailer_region.reserved != [0; TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1]
+        || record_region.reserved != [0; TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1]
+        || trailer.format_version != TWO_SLOT_FORMAT_VERSION_V1
+        || header.format_version != TWO_SLOT_FORMAT_VERSION_V1
+        || trailer.binding_digest != store.binding_digest
+        || header.binding_digest != store.binding_digest
+        || trailer.slot_id != expected_slot
+        || header.slot_id != expected_slot
+        || trailer.generation == 0
+        || trailer.generation != header.generation
+        || (header.generation == 1 && header.predecessor_digest != TWO_SLOT_ZERO_DIGEST)
+        || (header.generation > 1 && header.predecessor_digest == TWO_SLOT_ZERO_DIGEST)
+        || trailer.commit_marker != TWO_SLOT_COMMIT_MARKER_V1
+    {
+        return corrupt_if_trailer_stable();
+    }
+    let payload_len = match usize::try_from(header.payload_len) {
+        Ok(payload_len) if payload_len <= store.config.max_payload_bytes => payload_len,
+        _ => return corrupt_if_trailer_stable(),
+    };
+    let payload = read_exact_file_region(&slot.handle, store.layout.payload_offset, payload_len)?;
+    let trailer_after = read_exact_file_region(
+        &slot.handle,
+        store.layout.trailer_offset,
+        store.layout.commit_trailer_region_bytes,
+    )?;
+    if trailer_before != trailer_after {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "governance two-slot trailer changed while reading its record",
+        ));
+    }
+    let record_digest = two_slot_record_digest(&header, &payload)?;
+    if trailer.record_digest != record_digest
+        || header.payload_digest != *blake3::hash(&payload).as_bytes()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot committed record or payload digest is invalid",
+        ));
+    }
+    Ok(Some(TwoSlotCommittedRecordV1 {
+        slot_id,
+        generation: header.generation,
+        predecessor_digest: header.predecessor_digest,
+        record_digest,
+        payload,
+    }))
+}
+
+fn read_two_slot_record_stable(
+    store: &TwoSlotStoreV1,
+    slot_id: usize,
+) -> io::Result<Option<TwoSlotCommittedRecordV1>> {
+    const MAX_RETRIES: usize = 3;
+    for _ in 0..MAX_RETRIES {
+        match read_two_slot_record_once(store, slot_id) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
+            result => return result,
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "governance two-slot record did not stabilize during bounded read",
+    ))
+}
+
+fn select_two_slot_record_unlocked(store: &TwoSlotStoreV1) -> io::Result<TwoSlotCommittedRecordV1> {
+    verify_two_slot_headers(store)?;
+    let left = read_two_slot_record_stable(store, 0)?;
+    let right = read_two_slot_record_stable(store, 1)?;
+    verify_two_slot_headers(store)?;
+    match (left, right) {
+        (None, None) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot store has no committed record",
+        )),
+        (Some(record), None) | (None, Some(record)) => Ok(record),
+        (Some(left), Some(right)) => {
+            if left.generation == right.generation {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance two-slot records have an ambiguous equal generation",
+                ));
+            }
+            let (older, newer) = if left.generation < right.generation {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            if older.generation.checked_add(1) != Some(newer.generation)
+                || newer.predecessor_digest != older.record_digest
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance two-slot records are nonconsecutive or have divergent lineage",
+                ));
+            }
+            Ok(newer)
+        }
+    }
+}
+
+fn two_slot_snapshot(
+    store: &TwoSlotStoreV1,
+    record: TwoSlotCommittedRecordV1,
+) -> TwoSlotSnapshotV1 {
+    TwoSlotSnapshotV1 {
+        domain: store.config.domain,
+        store_nonce: store.config.store_nonce,
+        max_payload_bytes: store.config.max_payload_bytes,
+        binding_digest: store.binding_digest,
+        generation: record.generation,
+        record_digest: record.record_digest,
+        payload: record.payload,
+    }
+}
+
+struct TwoSlotOsLock<'file> {
+    file: &'file File,
+    locked: bool,
+}
+
+impl<'file> TwoSlotOsLock<'file> {
+    fn acquire(file: &'file File) -> io::Result<Self> {
+        File::lock(file)?;
+        Ok(Self { file, locked: true })
+    }
+
+    fn release(mut self) -> io::Result<()> {
+        let result = File::unlock(self.file);
+        if result.is_ok() {
+            self.locked = false;
+        }
+        result
+    }
+}
+
+impl Drop for TwoSlotOsLock<'_> {
+    fn drop(&mut self) {
+        if self.locked {
+            let _ = File::unlock(self.file);
+        }
+    }
+}
+
+struct TwoSlotInitFileLockV1 {
+    root: RootedDirectory,
+    name: OsString,
+    handle: File,
+    identity: FileIdentity,
+    locked: bool,
+}
+
+impl TwoSlotInitFileLockV1 {
+    fn acquire(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
+        let name = two_slot_init_lock_name(config);
+        root.verify()?;
+        let handle = match platform::open_read_write_file(&root.handle, &name) {
+            Ok(handle) => handle,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match platform::create_file(&root.handle, &name) {
+                    Ok(handle) => handle,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                        platform::open_read_write_file(&root.handle, &name)?
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) => return Err(error),
+        };
+        let metadata = handle.metadata()?;
+        let path = root.display_path.join(&name);
+        validate_file_metadata(&path, &metadata, 0, true)?;
+        if metadata.len() != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot init lock must remain an empty fixed file",
+            ));
+        }
+        let identity = file_identity(&metadata)?;
+        root.verify_file_binding(&name, &handle, identity, 0, true)?;
+        // Every contender establishes the empty lock file and its parent
+        // binding durably before it can serialize initialization. This covers
+        // the race where a non-creator opens the name before the creator has
+        // reached its parent-directory fsync.
+        handle.sync_all()?;
+        root.sync_all()?;
+        File::lock(&handle)?;
+        let lock = Self {
+            root: root.clone(),
+            name,
+            handle,
+            identity,
+            locked: true,
+        };
+        lock.verify()?;
+        Ok(lock)
+    }
+
+    fn verify(&self) -> io::Result<()> {
+        let metadata = self.handle.metadata()?;
+        let path = self.root.display_path.join(&self.name);
+        validate_file_metadata(&path, &metadata, 0, true)?;
+        if metadata.len() != 0 || file_identity(&metadata)? != self.identity {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance two-slot init lock changed identity or length",
+            ));
+        }
+        self.root
+            .verify_file_binding(&self.name, &self.handle, self.identity, 0, true)
+    }
+
+    fn release(mut self) -> io::Result<()> {
+        let verification = self.verify();
+        let unlock = File::unlock(&self.handle);
+        if unlock.is_ok() {
+            self.locked = false;
+        }
+        match (verification, unlock) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) | (Ok(()), Err(error)) => Err(error),
+        }
+    }
+}
+
+impl Drop for TwoSlotInitFileLockV1 {
+    fn drop(&mut self) {
+        if self.locked {
+            let _ = File::unlock(&self.handle);
+        }
+    }
+}
+
+impl TwoSlotStoreV1 {
+    fn with_exclusive_lock<ResultValue>(
+        &self,
+        operation: impl FnOnce(&Self) -> io::Result<ResultValue>,
+    ) -> io::Result<ResultValue> {
+        let process_guard = self
+            .process_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let os_lock = TwoSlotOsLock::acquire(&self.slots[0].handle)?;
+        verify_two_slot_headers(self)?;
+        let result = operation(self);
+        let unlock = os_lock.release();
+        drop(process_guard);
+        match (result, unlock) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+        }
+    }
+
+    /// Load the highest complete record after strict pair and lineage checks.
+    pub(super) fn load(&self) -> io::Result<TwoSlotSnapshotV1> {
+        self.with_exclusive_lock(|store| {
+            select_two_slot_record_unlocked(store).map(|record| two_slot_snapshot(store, record))
+        })
+    }
+
+    /// Commit one direct successor of `expected`, or return an exact-byte no-op.
+    pub(super) fn compare_and_swap(
+        &self,
+        expected: &TwoSlotSnapshotV1,
+        payload: &[u8],
+    ) -> io::Result<TwoSlotSnapshotV1> {
+        self.compare_and_swap_with(expected, payload, |_| Ok(()))
+    }
+
+    fn compare_and_swap_with<Hook>(
+        &self,
+        expected: &TwoSlotSnapshotV1,
+        payload: &[u8],
+        mut after_step: Hook,
+    ) -> io::Result<TwoSlotSnapshotV1>
+    where
+        Hook: FnMut(&'static str) -> io::Result<()>,
+    {
+        if payload.len() > self.config.max_payload_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance two-slot successor payload is outside its configured bound",
+            ));
+        }
+        if expected.domain != self.config.domain
+            || expected.store_nonce != self.config.store_nonce
+            || expected.max_payload_bytes != self.config.max_payload_bytes
+            || expected.binding_digest != self.binding_digest
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance two-slot predecessor belongs to another store or layout",
+            ));
+        }
+        self.with_exclusive_lock(|store| {
+            let current = select_two_slot_record_unlocked(store)?;
+            if current.generation != expected.generation
+                || current.record_digest != expected.record_digest
+                || current.payload != expected.payload
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "governance two-slot compare-and-swap predecessor changed",
+                ));
+            }
+            if current.payload == payload {
+                return Ok(two_slot_snapshot(store, current));
+            }
+            let generation = current.generation.checked_add(1).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance two-slot generation exhausted",
+                )
+            })?;
+            let inactive_id = 1_usize.checked_sub(current.slot_id).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance active slot id is invalid",
+                )
+            })?;
+            verify_two_slot_headers(store)?;
+            let active_before = read_two_slot_record_stable(store, current.slot_id)?
+                .ok_or_else(|| io::Error::other("governance active slot disappeared"))?;
+            if active_before != current {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "governance active two-slot record changed before commit",
+                ));
+            }
+            let inactive = &store.slots[inactive_id];
+            write_exact_file_region(
+                &inactive.handle,
+                store.layout.trailer_offset,
+                &vec![0; store.layout.commit_trailer_region_bytes],
+            )?;
+            after_step("inactive-zero-trailer-written")?;
+            inactive.handle.sync_all()?;
+            after_step("inactive-trailer-invalidated")?;
+            verify_two_slot_headers(store)?;
+
+            let slot_id = u8::try_from(inactive_id)
+                .map_err(|_| io::Error::other("governance inactive slot id exceeds u8"))?;
+            let header = TwoSlotRecordHeaderV1 {
+                format_version: TWO_SLOT_FORMAT_VERSION_V1,
+                binding_digest: store.binding_digest,
+                slot_id,
+                generation,
+                predecessor_digest: current.record_digest,
+                payload_len: u64::try_from(payload.len()).map_err(|_| {
+                    io::Error::other("governance two-slot payload length exceeds u64")
+                })?,
+                payload_digest: *blake3::hash(payload).as_bytes(),
+            };
+            let header_region = encode_two_slot_value(
+                &TwoSlotRecordHeaderRegionV1 {
+                    header: header.clone(),
+                    reserved: [0; TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1],
+                },
+                "governance two-slot record-header region",
+            )?;
+            if header_region.len() != store.layout.record_header_region_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance two-slot record-header layout changed",
+                ));
+            }
+            write_exact_file_region(
+                &inactive.handle,
+                u64::try_from(store.layout.header_region_bytes).map_err(|_| {
+                    io::Error::other("governance two-slot record offset exceeds u64")
+                })?,
+                &header_region,
+            )?;
+            // The authenticated length is the sole semantic payload boundary.
+            // Bytes beyond it are private fixed-slot residue and are never
+            // decoded, hashed, or returned; avoiding a full 192 MiB wipe keeps
+            // short governance commits bounded by their actual payload size.
+            write_exact_file_region(&inactive.handle, store.layout.payload_offset, payload)?;
+            after_step("inactive-record-written")?;
+            inactive.handle.sync_all()?;
+            after_step("inactive-record-synced")?;
+            verify_two_slot_headers(store)?;
+
+            let record_digest = two_slot_record_digest(&header, payload)?;
+            let trailer_region = encode_two_slot_value(
+                &TwoSlotCommitTrailerRegionV1 {
+                    trailer: TwoSlotCommitTrailerV1 {
+                        format_version: TWO_SLOT_FORMAT_VERSION_V1,
+                        binding_digest: store.binding_digest,
+                        slot_id,
+                        generation,
+                        record_digest,
+                        commit_marker: TWO_SLOT_COMMIT_MARKER_V1,
+                    },
+                    reserved: [0; TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1],
+                },
+                "governance two-slot commit-trailer region",
+            )?;
+            if trailer_region.len() != store.layout.commit_trailer_region_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance two-slot commit-trailer layout changed",
+                ));
+            }
+            write_exact_file_region(
+                &inactive.handle,
+                store.layout.trailer_offset,
+                &trailer_region,
+            )?;
+            after_step("inactive-commit-trailer-written")?;
+            inactive.handle.sync_all()?;
+            after_step("inactive-commit-trailer-synced")?;
+            verify_two_slot_headers(store)?;
+            let active_after = read_two_slot_record_stable(store, current.slot_id)?
+                .ok_or_else(|| io::Error::other("governance active slot became invalid"))?;
+            if active_after != current {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "governance active slot changed during successor commit",
+                ));
+            }
+            let selected = select_two_slot_record_unlocked(store)?;
+            if selected.slot_id != inactive_id
+                || selected.generation != generation
+                || selected.record_digest != record_digest
+                || selected.payload != payload
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance two-slot durable successor readback diverged",
+                ));
+            }
+            after_step("successor-readback-verified")?;
+            Ok(two_slot_snapshot(store, selected))
+        })
+    }
+
+    #[cfg(test)]
+    fn compare_and_swap_with_test_hook<Hook>(
+        &self,
+        expected: &TwoSlotSnapshotV1,
+        payload: &[u8],
+        after_step: Hook,
+    ) -> io::Result<TwoSlotSnapshotV1>
+    where
+        Hook: FnMut(&'static str) -> io::Result<()>,
+    {
+        self.compare_and_swap_with(expected, payload, after_step)
+    }
+}
+
+fn two_slot_stage_prefix(config: &TwoSlotStoreConfigV1) -> String {
+    format!(
+        ".iroha-two-slot-{}-stage-v1-",
+        two_slot_store_namespace(config)
+    )
+}
+
+fn two_slot_lost_found_name(config: &TwoSlotStoreConfigV1) -> OsString {
+    format!(
+        ".iroha-two-slot-{}-lost-found-v1",
+        two_slot_store_namespace(config)
+    )
+    .into()
+}
+
+fn two_slot_init_lock_name(config: &TwoSlotStoreConfigV1) -> OsString {
+    format!(
+        ".iroha-two-slot-{}-init-lock-v1",
+        two_slot_store_namespace(config)
+    )
+    .into()
+}
+
+fn is_canonical_two_slot_stage_name(name: &OsStr, prefix: &str) -> bool {
+    fn is_lower_hex(byte: u8) -> bool {
+        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+    }
+
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let Some(suffix) = name.strip_prefix(prefix) else {
+        return false;
+    };
+    let Some((process, sequence)) = suffix.split_once('-') else {
+        return false;
+    };
+    process.len() == 16
+        && sequence.len() == 16
+        && process.bytes().all(is_lower_hex)
+        && sequence.bytes().all(is_lower_hex)
+}
+
+fn is_canonical_two_slot_lost_found_entry(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let Some(index) = name.strip_prefix("entry-v1-") else {
+        return false;
+    };
+    index.len() == 4 && index.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn two_slot_stage_inventory(
+    directory: &RootedDirectory,
+    layout: TwoSlotLayoutV1,
+) -> io::Result<TwoSlotStageInventoryV1> {
+    let names = directory.child_names_bounded(TWO_SLOT_NAMES_V1.len() + 1)?;
+    let max_bytes = two_slot_file_byte_limit(layout)?;
+    let mut seen = [false; TWO_SLOT_NAMES_V1.len()];
+    let mut byte_count = 0_u64;
+    let mut canonical_header_count = 0_usize;
+    for name in names {
+        let Some(slot_id) = TWO_SLOT_NAMES_V1
+            .iter()
+            .position(|expected| name == OsStr::new(expected))
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "governance two-slot recovery directory `{}` contains a non-slot entry",
+                    directory.display_path.display()
+                ),
+            ));
+        };
+        if seen[slot_id] {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot recovery inventory contains a duplicate slot name",
+            ));
+        }
+        seen[slot_id] = true;
+        let handle = platform::open_read_write_file(&directory.handle, &name)?;
+        let metadata = handle.metadata()?;
+        let path = directory.display_path.join(&name);
+        validate_file_metadata(&path, &metadata, max_bytes, true)?;
+        let identity = file_identity(&metadata)?;
+        directory.verify_file_binding(&name, &handle, identity, max_bytes, true)?;
+        byte_count = byte_count.checked_add(metadata.len()).ok_or_else(|| {
+            io::Error::other("governance two-slot recovery byte count overflowed")
+        })?;
+        if metadata.len() == layout.slot_file_bytes {
+            let encoded = read_exact_file_region(&handle, 0, layout.header_region_bytes)?;
+            if let Ok(region) = decode_two_slot_value::<TwoSlotHeaderRegionV1>(
+                &encoded,
+                "governance two-slot recovery header",
+            ) && region.reserved == [0; TWO_SLOT_HEADER_RESERVED_BYTES_V1]
+                && region.header.binding.format_version == TWO_SLOT_FORMAT_VERSION_V1
+                && region.header.slot_id == u8::try_from(slot_id).unwrap_or(u8::MAX)
+            {
+                canonical_header_count =
+                    canonical_header_count.checked_add(1).ok_or_else(|| {
+                        io::Error::other("governance two-slot header count overflowed")
+                    })?;
+            }
+        }
+        directory.verify_file_binding(&name, &handle, identity, max_bytes, true)?;
+    }
+    directory.verify()?;
+    Ok(TwoSlotStageInventoryV1 {
+        byte_count,
+        has_full_pair: seen.into_iter().all(|present| present),
+        canonical_header_count,
+    })
+}
+
+fn two_slot_initial_stage_is_complete(
+    store: &TwoSlotStoreV1,
+    initial_payload: &[u8],
+) -> io::Result<bool> {
+    store.with_exclusive_lock(|store| {
+        verify_two_slot_headers(store)?;
+        let left = read_two_slot_record_stable(store, 0)?;
+        let right = read_two_slot_record_stable(store, 1)?;
+        match (left, right) {
+            (None, None) => Ok(false),
+            (Some(record), None)
+                if record.slot_id == 0
+                    && record.generation == 1
+                    && record.predecessor_digest == TWO_SLOT_ZERO_DIGEST
+                    && record.payload == initial_payload =>
+            {
+                Ok(true)
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot stage contains a divergent committed history",
+            )),
+        }
+    })
+}
+
+fn classify_two_slot_stage(
+    name: OsString,
+    directory: RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+    init_lock_identity: FileIdentity,
+    initial_payload: &[u8],
+) -> io::Result<TwoSlotStageV1> {
+    let layout = two_slot_layout(config.max_payload_bytes)?;
+    let inventory = two_slot_stage_inventory(&directory, layout)?;
+    let complete = match open_existing_two_slot_store(
+        directory.clone(),
+        config.clone(),
+        init_lock_identity,
+    ) {
+        Ok(store) => two_slot_initial_stage_is_complete(&store, initial_payload)?,
+        Err(error) => {
+            if inventory.has_full_pair && inventory.canonical_header_count == 2 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "governance two-slot stage `{}` has complete typed headers but a divergent binding: {error}",
+                        directory.display_path.display()
+                    ),
+                ));
+            }
+            false
+        }
+    };
+    Ok(TwoSlotStageV1 {
+        name,
+        directory,
+        byte_count: inventory.byte_count,
+        complete,
+    })
+}
+
+fn collect_two_slot_stages(
+    root: &RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+    init_lock_identity: FileIdentity,
+    initial_payload: &[u8],
+) -> io::Result<Vec<TwoSlotStageV1>> {
+    let prefix = two_slot_stage_prefix(config);
+    let mut stage_names = Vec::new();
+    for name in root.child_names_bounded(DEFAULT_CHILD_ENTRY_LIMIT)? {
+        if !name.as_encoded_bytes().starts_with(prefix.as_bytes()) {
+            continue;
+        }
+        if !is_canonical_two_slot_stage_name(&name, &prefix) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "governance two-slot stage name `{}` is noncanonical",
+                    name.to_string_lossy()
+                ),
+            ));
+        }
+        stage_names.push(name);
+        if stage_names.len() > TWO_SLOT_STAGE_ENTRY_HARD_CAP_V1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot staging entry cap is exceeded",
+            ));
+        }
+    }
+    stage_names.sort();
+    stage_names
+        .into_iter()
+        .map(|name| {
+            let directory = root.open_directory(&name)?;
+            classify_two_slot_stage(name, directory, config, init_lock_identity, initial_payload)
+        })
+        .collect()
+}
+
+fn open_or_create_two_slot_lost_found(
+    root: &RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+) -> io::Result<RootedDirectory> {
+    let name = two_slot_lost_found_name(config);
+    match root.open_directory(&name) {
+        Ok(directory) => Ok(directory),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match root.create_child_directory_exclusive(&name) {
+                Ok(directory) => {
+                    root.sync_all()?;
+                    Ok(directory)
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    root.open_directory(&name)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn two_slot_lost_found_state(
+    directory: &RootedDirectory,
+    layout: TwoSlotLayoutV1,
+) -> io::Result<([bool; TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1], usize, u64)> {
+    let names = directory.child_names_bounded(TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1)?;
+    let mut occupied = [false; TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1];
+    let mut total_bytes = 0_u64;
+    for name in names {
+        if !is_canonical_two_slot_lost_found_entry(&name) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "governance two-slot lost+found entry `{}` is noncanonical",
+                    name.to_string_lossy()
+                ),
+            ));
+        }
+        let index = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("entry-v1-"))
+            .and_then(|index| index.parse::<usize>().ok())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance two-slot lost+found index is invalid",
+                )
+            })?;
+        if index >= occupied.len() || occupied[index] {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot lost+found index is duplicated or out of bounds",
+            ));
+        }
+        occupied[index] = true;
+        let child = directory.open_directory(&name)?;
+        let inventory = two_slot_stage_inventory(&child, layout)?;
+        total_bytes = total_bytes
+            .checked_add(inventory.byte_count)
+            .ok_or_else(|| io::Error::other("governance lost+found byte count overflowed"))?;
+        if total_bytes > TWO_SLOT_LOST_FOUND_TOTAL_MAX_BYTES_V1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot lost+found byte cap is exceeded",
+            ));
+        }
+    }
+    let entry_count = occupied.iter().filter(|occupied| **occupied).count();
+    directory.verify()?;
+    Ok((occupied, entry_count, total_bytes))
+}
+
+fn quarantine_two_slot_stages(
+    root: &RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+    stages: Vec<TwoSlotStageV1>,
+) -> io::Result<bool> {
+    if stages.is_empty() {
+        return Ok(true);
+    }
+    let layout = two_slot_layout(config.max_payload_bytes)?;
+    let lost_found = open_or_create_two_slot_lost_found(root, config)?;
+    let (mut occupied, entry_count, existing_bytes) =
+        two_slot_lost_found_state(&lost_found, layout)?;
+    let required_bytes = stages.iter().try_fold(0_u64, |total, stage| {
+        total
+            .checked_add(stage.byte_count)
+            .ok_or_else(|| io::Error::other("governance two-slot quarantine byte count overflowed"))
+    })?;
+    if entry_count
+        .checked_add(stages.len())
+        .is_none_or(|count| count > TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1)
+        || existing_bytes
+            .checked_add(required_bytes)
+            .is_none_or(|bytes| bytes > TWO_SLOT_LOST_FOUND_TOTAL_MAX_BYTES_V1)
+    {
+        return Ok(false);
+    }
+    for stage in stages {
+        let inventory = two_slot_stage_inventory(&stage.directory, layout)?;
+        if inventory.byte_count != stage.byte_count {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance two-slot stage changed before quarantine",
+            ));
+        }
+        let index = occupied
+            .iter()
+            .position(|occupied| !*occupied)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "governance two-slot lost+found has no free bounded entry",
+                )
+            })?;
+        let destination_name = OsString::from(format!("entry-v1-{index:04}"));
+        root.move_child_directory_exclusive(
+            stage.directory.clone(),
+            &lost_found,
+            &destination_name,
+        )?;
+        root.sync_all()?;
+        lost_found.sync_all()?;
+        occupied[index] = true;
+    }
+    Ok(true)
+}
+
+fn create_unique_two_slot_stage(
+    root: &RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+) -> io::Result<(OsString, RootedDirectory)> {
+    let prefix = two_slot_stage_prefix(config);
+    let existing = root
+        .child_names_bounded(DEFAULT_CHILD_ENTRY_LIMIT)?
+        .into_iter()
+        .filter(|name| name.as_encoded_bytes().starts_with(prefix.as_bytes()))
+        .count();
+    if existing >= TWO_SLOT_STAGE_ENTRY_HARD_CAP_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "governance two-slot staging entry cap is exhausted",
+        ));
+    }
+    for _ in 0..TWO_SLOT_STAGE_ENTRY_HARD_CAP_V1 {
+        let sequence = TWO_SLOT_STAGE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let name = OsString::from(format!(
+            "{prefix}{:016x}-{sequence:016x}",
+            u64::from(std::process::id())
+        ));
+        match root.create_child_directory_exclusive(&name) {
+            Ok(directory) => return Ok((name, directory)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "governance two-slot could not allocate a unique bounded staging name",
+    ))
+}
+
+fn create_two_slot_file<Hook>(
+    directory: &RootedDirectory,
+    name: &OsStr,
+    layout: TwoSlotLayoutV1,
+    labels: [&'static str; 2],
+    after_step: &mut Hook,
+) -> io::Result<TwoSlotFileV1>
+where
+    Hook: FnMut(&'static str) -> io::Result<()>,
+{
+    let handle = platform::create_file(&directory.handle, name)?;
+    let path = directory.display_path.join(name);
+    let max_bytes = two_slot_file_byte_limit(layout)?;
+    let before = handle.metadata()?;
+    validate_file_metadata(&path, &before, max_bytes, true)?;
+    if before.len() != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "new governance two-slot file was not empty",
+        ));
+    }
+    let identity = file_identity(&before)?;
+    directory.verify_file_binding(name, &handle, identity, max_bytes, true)?;
+    after_step(labels[0])?;
+    handle.set_len(layout.slot_file_bytes)?;
+    let after = handle.metadata()?;
+    validate_file_metadata(&path, &after, max_bytes, true)?;
+    if after.len() != layout.slot_file_bytes || file_identity(&after)? != identity {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "new governance two-slot file changed while being sized",
+        ));
+    }
+    directory.verify_file_binding(name, &handle, identity, max_bytes, true)?;
+    after_step(labels[1])?;
+    Ok(TwoSlotFileV1 {
+        handle: Arc::new(handle),
+        identity,
+        name: name.to_os_string(),
+    })
+}
+
+fn write_two_slot_record_unlocked<Hook>(
+    store: &TwoSlotStoreV1,
+    slot_id: usize,
+    generation: u64,
+    predecessor_digest: [u8; 32],
+    payload: &[u8],
+    labels: [&'static str; 6],
+    after_step: &mut Hook,
+) -> io::Result<TwoSlotCommittedRecordV1>
+where
+    Hook: FnMut(&'static str) -> io::Result<()>,
+{
+    if generation == 0
+        || (generation == 1 && predecessor_digest != TWO_SLOT_ZERO_DIGEST)
+        || (generation > 1 && predecessor_digest == TWO_SLOT_ZERO_DIGEST)
+        || payload.len() > store.config.max_payload_bytes
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance two-slot record generation, lineage, or payload is invalid",
+        ));
+    }
+    let slot = store.slots.get(slot_id).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance two-slot id is invalid",
+        )
+    })?;
+    verify_two_slot_headers(store)?;
+    write_exact_file_region(
+        &slot.handle,
+        store.layout.trailer_offset,
+        &vec![0; store.layout.commit_trailer_region_bytes],
+    )?;
+    after_step(labels[0])?;
+    slot.handle.sync_all()?;
+    after_step(labels[1])?;
+    verify_two_slot_headers(store)?;
+
+    let encoded_slot_id =
+        u8::try_from(slot_id).map_err(|_| io::Error::other("governance two-slot id exceeds u8"))?;
+    let header = TwoSlotRecordHeaderV1 {
+        format_version: TWO_SLOT_FORMAT_VERSION_V1,
+        binding_digest: store.binding_digest,
+        slot_id: encoded_slot_id,
+        generation,
+        predecessor_digest,
+        payload_len: u64::try_from(payload.len())
+            .map_err(|_| io::Error::other("governance two-slot payload exceeds u64"))?,
+        payload_digest: *blake3::hash(payload).as_bytes(),
+    };
+    let header_region = encode_two_slot_value(
+        &TwoSlotRecordHeaderRegionV1 {
+            header: header.clone(),
+            reserved: [0; TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1],
+        },
+        "governance two-slot record-header region",
+    )?;
+    if header_region.len() != store.layout.record_header_region_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot record-header layout changed",
+        ));
+    }
+    let record_offset = u64::try_from(store.layout.header_region_bytes)
+        .map_err(|_| io::Error::other("governance two-slot record offset exceeds u64"))?;
+    write_exact_file_region(&slot.handle, record_offset, &header_region)?;
+    write_exact_file_region(&slot.handle, store.layout.payload_offset, payload)?;
+    after_step(labels[2])?;
+    slot.handle.sync_all()?;
+    after_step(labels[3])?;
+    verify_two_slot_headers(store)?;
+
+    let record_digest = two_slot_record_digest(&header, payload)?;
+    let trailer_region = encode_two_slot_value(
+        &TwoSlotCommitTrailerRegionV1 {
+            trailer: TwoSlotCommitTrailerV1 {
+                format_version: TWO_SLOT_FORMAT_VERSION_V1,
+                binding_digest: store.binding_digest,
+                slot_id: encoded_slot_id,
+                generation,
+                record_digest,
+                commit_marker: TWO_SLOT_COMMIT_MARKER_V1,
+            },
+            reserved: [0; TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1],
+        },
+        "governance two-slot commit-trailer region",
+    )?;
+    if trailer_region.len() != store.layout.commit_trailer_region_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot commit-trailer layout changed",
+        ));
+    }
+    write_exact_file_region(&slot.handle, store.layout.trailer_offset, &trailer_region)?;
+    after_step(labels[4])?;
+    slot.handle.sync_all()?;
+    after_step(labels[5])?;
+    verify_two_slot_headers(store)?;
+    let committed = read_two_slot_record_stable(store, slot_id)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot committed record failed exact readback",
+        )
+    })?;
+    if committed.generation != generation
+        || committed.predecessor_digest != predecessor_digest
+        || committed.record_digest != record_digest
+        || committed.payload != payload
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot committed record readback diverged",
+        ));
+    }
+    Ok(committed)
+}
+
+fn initialize_two_slot_stage<Hook>(
+    root: &RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+    init_lock_identity: FileIdentity,
+    initial_payload: &[u8],
+    after_step: &mut Hook,
+) -> io::Result<TwoSlotStageV1>
+where
+    Hook: FnMut(&'static str) -> io::Result<()>,
+{
+    let layout = two_slot_layout(config.max_payload_bytes)?;
+    let (name, directory) = create_unique_two_slot_stage(root, config)?;
+    after_step("stage-directory-created")?;
+    root.sync_all()?;
+    after_step("stage-parent-synced")?;
+
+    let slot_0 = create_two_slot_file(
+        &directory,
+        OsStr::new(TWO_SLOT_NAMES_V1[0]),
+        layout,
+        ["slot-0-created", "slot-0-sized"],
+        after_step,
+    )?;
+    slot_0.handle.sync_all()?;
+    after_step("slot-0-sized-and-synced")?;
+    let slot_1 = create_two_slot_file(
+        &directory,
+        OsStr::new(TWO_SLOT_NAMES_V1[1]),
+        layout,
+        ["slot-1-created", "slot-1-sized"],
+        after_step,
+    )?;
+    slot_1.handle.sync_all()?;
+    after_step("slot-1-sized-and-synced")?;
+
+    let material = two_slot_binding_material(
+        config,
+        layout,
+        init_lock_identity,
+        [slot_0.identity, slot_1.identity],
+    )?;
+    let binding_digest = two_slot_binding_digest(&material)?;
+    for (slot_id, slot) in [&slot_0, &slot_1].into_iter().enumerate() {
+        let header = expected_two_slot_header_region(&material, binding_digest, slot_id)?;
+        if header.len() != layout.header_region_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot immutable header layout changed",
+            ));
+        }
+        write_exact_file_region(&slot.handle, 0, &header)?;
+        after_step(if slot_id == 0 {
+            "slot-0-header-written"
+        } else {
+            "slot-1-header-written"
+        })?;
+        slot.handle.sync_all()?;
+        after_step(if slot_id == 0 {
+            "slot-0-header-synced"
+        } else {
+            "slot-1-header-synced"
+        })?;
+    }
+    let store = TwoSlotStoreV1 {
+        directory: directory.clone(),
+        config: config.clone(),
+        layout,
+        init_lock_identity,
+        binding_digest,
+        slots: [slot_0, slot_1],
+        process_lock: Arc::new(Mutex::new(())),
+    };
+    write_two_slot_record_unlocked(
+        &store,
+        0,
+        1,
+        TWO_SLOT_ZERO_DIGEST,
+        initial_payload,
+        [
+            "initial-trailer-invalidated",
+            "initial-trailer-invalidation-synced",
+            "initial-record-written",
+            "initial-record-synced",
+            "initial-commit-trailer-written",
+            "initial-commit-trailer-synced",
+        ],
+        after_step,
+    )?;
+    after_step("initial-record-readback-verified")?;
+    directory.sync_all()?;
+    after_step("stage-directory-synced")?;
+    let stage =
+        classify_two_slot_stage(name, directory, config, init_lock_identity, initial_payload)?;
+    if !stage.complete {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "new governance two-slot stage is not complete after durable initialization",
+        ));
+    }
+    Ok(stage)
+}
+
+fn promote_two_slot_stage<Hook>(
+    root: &RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+    init_lock_identity: FileIdentity,
+    initial_payload: &[u8],
+    stage: TwoSlotStageV1,
+    after_step: &mut Hook,
+) -> io::Result<TwoSlotStoreV1>
+where
+    Hook: FnMut(&'static str) -> io::Result<()>,
+{
+    let stage = classify_two_slot_stage(
+        stage.name,
+        stage.directory,
+        config,
+        init_lock_identity,
+        initial_payload,
+    )?;
+    if !stage.complete {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "governance two-slot stage became incomplete before promotion",
+        ));
+    }
+    after_step("before-directory-rename")?;
+    let stage = classify_two_slot_stage(
+        stage.name,
+        stage.directory,
+        config,
+        init_lock_identity,
+        initial_payload,
+    )?;
+    if !stage.complete {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "governance two-slot stage changed at the promotion boundary",
+        ));
+    }
+    let installed =
+        root.move_child_directory_exclusive(stage.directory, root, OsStr::new(&config.store_name))?;
+    after_step("directory-renamed")?;
+    root.sync_all()?;
+    after_step("parent-synced")?;
+    let store = open_existing_two_slot_store(installed, config.clone(), init_lock_identity)?;
+    if !two_slot_initial_stage_is_complete(&store, initial_payload)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "promoted governance two-slot store lost its initial record",
+        ));
+    }
+    after_step("initialization-postcheck")?;
+    Ok(store)
+}
+
+fn open_valid_two_slot_canonical(
+    root: &RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+    init_lock_identity: FileIdentity,
+) -> io::Result<Option<TwoSlotStoreV1>> {
+    match root.open_directory(OsStr::new(&config.store_name)) {
+        Ok(directory) => {
+            let store =
+                open_existing_two_slot_store(directory, config.clone(), init_lock_identity)?;
+            let _ = store.load()?;
+            Ok(Some(store))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn load_existing_two_slot_store_v1(
+    root: &RootedDirectory,
+    config: TwoSlotStoreConfigV1,
+) -> io::Result<TwoSlotSnapshotV1> {
+    let store = open_existing_read_only_two_slot_store_v1(root, config)?;
+    let snapshot = store.load()?;
+    root.verify()?;
+    Ok(snapshot)
+}
+
+fn open_existing_read_only_two_slot_store_v1(
+    root: &RootedDirectory,
+    config: TwoSlotStoreConfigV1,
+) -> io::Result<TwoSlotStoreV1> {
+    if root.writable {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "existing governance two-slot reads require a read-only rooted capability",
+        ));
+    }
+    root.verify()?;
+    let init_lock_name = two_slot_init_lock_name(&config);
+    let init_lock = platform::open_file(&root.handle, &init_lock_name, false)?;
+    let init_lock_metadata = init_lock.metadata()?;
+    let init_lock_path = root.display_path.join(&init_lock_name);
+    validate_file_metadata(&init_lock_path, &init_lock_metadata, 0, true)?;
+    if init_lock_metadata.len() != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "governance two-slot init lock must remain an empty fixed file",
+        ));
+    }
+    let init_lock_identity = file_identity(&init_lock_metadata)?;
+    root.verify_file_binding(&init_lock_name, &init_lock, init_lock_identity, 0, true)?;
+    let directory = root.open_directory(OsStr::new(&config.store_name))?;
+    let store = open_existing_two_slot_store(directory, config, init_lock_identity)?;
+    let _ = store.load()?;
+    root.verify_file_binding(&init_lock_name, &init_lock, init_lock_identity, 0, true)?;
+    root.verify()?;
+    Ok(store)
+}
+
+fn open_or_create_two_slot_store_v1_once<Hook>(
+    root: &RootedDirectory,
+    config: &TwoSlotStoreConfigV1,
+    init_lock_identity: FileIdentity,
+    initial_payload: &[u8],
+    after_step: &mut Hook,
+) -> io::Result<TwoSlotStoreV1>
+where
+    Hook: FnMut(&'static str) -> io::Result<()>,
+{
+    root.verify()?;
+    if let Some(store) = open_valid_two_slot_canonical(root, config, init_lock_identity)? {
+        let stages = collect_two_slot_stages(root, config, init_lock_identity, initial_payload)?;
+        // A valid canonical store remains available even when bounded
+        // preservation space is full. Every stage remains untouched for
+        // offline archival, while divergent stages still fail during the
+        // classification above.
+        let _all_preserved = quarantine_two_slot_stages(root, config, stages)?;
+        return Ok(store);
+    }
+
+    let mut stages = collect_two_slot_stages(root, config, init_lock_identity, initial_payload)?;
+    if let Some(index) = stages.iter().position(|stage| stage.complete) {
+        let selected = stages.remove(index);
+        if !quarantine_two_slot_stages(root, config, stages)? {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance two-slot lost+found capacity is exhausted; archive it offline",
+            ));
+        }
+        return promote_two_slot_stage(
+            root,
+            config,
+            init_lock_identity,
+            initial_payload,
+            selected,
+            after_step,
+        );
+    }
+    if !quarantine_two_slot_stages(root, config, stages)? {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "governance two-slot lost+found capacity is exhausted; archive it offline",
+        ));
+    }
+    let stage = initialize_two_slot_stage(
+        root,
+        config,
+        init_lock_identity,
+        initial_payload,
+        after_step,
+    )?;
+    promote_two_slot_stage(
+        root,
+        config,
+        init_lock_identity,
+        initial_payload,
+        stage,
+        after_step,
+    )
+}
+
+fn open_or_create_two_slot_store_v1_with<Hook>(
+    root: &RootedDirectory,
+    config: TwoSlotStoreConfigV1,
+    initial_payload: &[u8],
+    mut after_step: Hook,
+) -> io::Result<TwoSlotStoreV1>
+where
+    Hook: FnMut(&'static str) -> io::Result<()>,
+{
+    if !root.writable {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "read-only governance directory cannot open a mutable two-slot store",
+        ));
+    }
+    if initial_payload.len() > config.max_payload_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance two-slot initial payload exceeds its configured bound",
+        ));
+    }
+    let init_file_lock = TwoSlotInitFileLockV1::acquire(root, &config)?;
+    const RACE_RETRIES: usize = 4;
+    let result = (|| {
+        for attempt in 0..RACE_RETRIES {
+            init_file_lock.verify()?;
+            match open_or_create_two_slot_store_v1_once(
+                root,
+                &config,
+                init_file_lock.identity,
+                initial_payload,
+                &mut after_step,
+            ) {
+                Err(error)
+                    if attempt + 1 < RACE_RETRIES
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::AlreadyExists
+                                | io::ErrorKind::NotFound
+                                | io::ErrorKind::WouldBlock
+                        ) =>
+                {
+                    continue;
+                }
+                result => return result,
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "governance two-slot initialization race did not converge",
+        ))
+    })();
+    let unlock = init_file_lock.release();
+    match (result, unlock) {
+        (Ok(store), Ok(())) => Ok(store),
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
     }
 }
 
@@ -1480,6 +4249,13 @@ fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::R
     }
     #[cfg(unix)]
     if metadata.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "governance state `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    #[cfg(windows)]
+    if metadata.number_of_links() != Some(1) {
         return Err(io::Error::other(format!(
             "governance state `{}` must have exactly one hard link",
             path.display()
@@ -1582,6 +4358,15 @@ fn metadata_stable_during_read(_before: &fs::Metadata, _after: &fs::Metadata) ->
     false
 }
 
+/// Return whether a name claims the legacy atomic-temporary namespace for
+/// `target`, including malformed names that require offline inspection.
+pub(super) fn is_atomic_temp_candidate_for(name: &str, target: &str) -> bool {
+    name.strip_prefix('.')
+        .and_then(|name| name.strip_prefix(target))
+        .is_some_and(|suffix| suffix.starts_with(".tmp-"))
+}
+
+#[cfg(any(windows, test))]
 fn atomic_temp_target_name(name: &str) -> Option<&str> {
     let name = name.strip_prefix('.')?;
     let (target_name, suffix) = name.rsplit_once(".tmp-")?;
@@ -1601,6 +4386,48 @@ fn atomic_temp_target_name(name: &str) -> Option<&str> {
     Some(target_name)
 }
 
+/// Return one bounded V1 sibling slot used to retain an exact predecessor.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn atomic_retained_name(name: &OsStr, slot: usize) -> io::Result<OsString> {
+    if slot >= ATOMIC_RETAINED_SLOT_COUNT_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance atomic retained-generation slot exceeds the V1 bound",
+        ));
+    }
+    let name = name.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance atomic retention target is not canonical UTF-8",
+        )
+    })?;
+    validate_component(OsStr::new(name))?;
+    let retained = OsString::from(format!(".{name}{ATOMIC_RETAINED_SUFFIX_V1}{slot:04}"));
+    validate_component(&retained)?;
+    Ok(retained)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn atomic_retained_target_and_slot(name: &str) -> Option<(&str, usize)> {
+    let name = name.strip_prefix('.')?;
+    let (target, slot) = name.rsplit_once(ATOMIC_RETAINED_SUFFIX_V1)?;
+    if target.is_empty()
+        || slot.len() != ATOMIC_RETAINED_SLOT_WIDTH_V1
+        || !slot.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let slot = slot.parse::<usize>().ok()?;
+    (slot < ATOMIC_RETAINED_SLOT_COUNT_V1).then_some((target, slot))
+}
+
+/// Return whether a name claims the V1 retained namespace for `target`.
+pub(super) fn is_atomic_retained_candidate_for(name: &str, target: &str) -> bool {
+    name.strip_prefix('.')
+        .and_then(|name| name.strip_prefix(target))
+        .is_some_and(|suffix| suffix.starts_with(ATOMIC_RETAINED_SUFFIX_V1))
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform {
     #[cfg(target_os = "macos")]
@@ -1617,7 +4444,9 @@ mod platform {
         path::Path,
     };
 
-    use super::{FileIdentity, RootedDirectory, file_identity};
+    #[cfg(test)]
+    use super::FileIdentity;
+    use super::{RootedDirectory, file_identity};
 
     #[cfg(target_os = "linux")]
     const O_CREATE: c_int = 0x40;
@@ -1641,24 +4470,23 @@ mod platform {
     const O_DIRECTORY: c_int = 0x10_0000;
     const O_READ_ONLY: c_int = 0;
     const O_READ_WRITE: c_int = 2;
-    #[cfg(target_os = "linux")]
+    #[cfg(all(test, target_os = "linux"))]
     const AT_REMOVE_DIRECTORY: c_int = 0x200;
-    #[cfg(target_os = "macos")]
+    #[cfg(all(test, target_os = "macos"))]
     const AT_REMOVE_DIRECTORY: c_int = 0x80;
     #[cfg(target_os = "linux")]
-    const RENAME_NO_REPLACE: c_uint = 1;
+    const RENAME_NOREPLACE: c_uint = 1;
+    #[cfg(target_os = "linux")]
+    const RENAME_EXCHANGE: c_uint = 2;
     #[cfg(target_os = "macos")]
-    const RENAME_EXCLUSIVE: c_uint = 0x0000_0004;
+    const RENAME_EXCL: c_uint = 0x0000_0004;
+    #[cfg(target_os = "macos")]
+    const RENAME_SWAP: c_uint = 0x0000_0002;
 
     unsafe extern "C" {
         fn openat(directory: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
         fn mkdirat(directory: c_int, path: *const c_char, mode: c_uint) -> c_int;
-        fn renameat(
-            source_directory: c_int,
-            source: *const c_char,
-            destination_directory: c_int,
-            destination: *const c_char,
-        ) -> c_int;
+        #[cfg(test)]
         fn unlinkat(directory: c_int, path: *const c_char, flags: c_int) -> c_int;
     }
 
@@ -2057,50 +4885,40 @@ mod platform {
         _temporary: &File,
         temporary_name: &OsStr,
         target_name: &OsStr,
-        replace: bool,
+    ) -> io::Result<()> {
+        rename_exclusive(parent, temporary_name, parent, target_name)
+    }
+
+    pub(super) fn exchange_open_file(
+        parent: &File,
+        _temporary: &File,
+        temporary_name: &OsStr,
+        target_name: &OsStr,
     ) -> io::Result<()> {
         let temporary_name = c_name(temporary_name)?;
         let target_name = c_name(target_name)?;
-        let result = if replace {
-            // SAFETY: both names are direct components below the retained
-            // directory descriptor and remain valid for the call.
-            unsafe {
-                renameat(
-                    parent.as_raw_fd(),
-                    temporary_name.as_ptr(),
-                    parent.as_raw_fd(),
-                    target_name.as_ptr(),
-                )
-            }
-        } else {
-            #[cfg(target_os = "linux")]
-            {
-                // SAFETY: as above; RENAME_NOREPLACE gives atomic create-only
-                // promotion when recovery expects an absent destination.
-                unsafe {
-                    renameat2(
-                        parent.as_raw_fd(),
-                        temporary_name.as_ptr(),
-                        parent.as_raw_fd(),
-                        target_name.as_ptr(),
-                        RENAME_NO_REPLACE,
-                    )
-                }
-            }
-            #[cfg(target_os = "macos")]
-            {
-                // SAFETY: as above; RENAME_EXCL is the macOS create-only
-                // counterpart of Linux RENAME_NOREPLACE.
-                unsafe {
-                    renameatx_np(
-                        parent.as_raw_fd(),
-                        temporary_name.as_ptr(),
-                        parent.as_raw_fd(),
-                        target_name.as_ptr(),
-                        RENAME_EXCLUSIVE,
-                    )
-                }
-            }
+        #[cfg(target_os = "linux")]
+        // SAFETY: both names are direct components below the same retained
+        // directory descriptor. RENAME_EXCHANGE preserves both bindings.
+        let result = unsafe {
+            renameat2(
+                parent.as_raw_fd(),
+                temporary_name.as_ptr(),
+                parent.as_raw_fd(),
+                target_name.as_ptr(),
+                RENAME_EXCHANGE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        // SAFETY: as above; RENAME_SWAP is the macOS atomic exchange primitive.
+        let result = unsafe {
+            renameatx_np(
+                parent.as_raw_fd(),
+                temporary_name.as_ptr(),
+                parent.as_raw_fd(),
+                target_name.as_ptr(),
+                RENAME_SWAP,
+            )
         };
         if result == 0 {
             Ok(())
@@ -2109,18 +4927,66 @@ mod platform {
         }
     }
 
+    pub(super) fn rename_exclusive(
+        source_parent: &File,
+        source_name: &OsStr,
+        destination_parent: &File,
+        destination_name: &OsStr,
+    ) -> io::Result<()> {
+        let source_name = c_name(source_name)?;
+        let destination_name = c_name(destination_name)?;
+        #[cfg(target_os = "linux")]
+        // SAFETY: both names are direct components below retained directory
+        // descriptors. RENAME_NOREPLACE prevents destination substitution or
+        // overwrite while atomically isolating the current source binding.
+        let result = unsafe {
+            renameat2(
+                source_parent.as_raw_fd(),
+                source_name.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination_name.as_ptr(),
+                RENAME_NOREPLACE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        // SAFETY: as above; RENAME_EXCL is the macOS create-only counterpart
+        // of Linux RENAME_NOREPLACE.
+        let result = unsafe {
+            renameatx_np(
+                source_parent.as_raw_fd(),
+                source_name.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination_name.as_ptr(),
+                RENAME_EXCL,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn remove_open_file(
         parent: &File,
-        _file: &File,
+        file: &File,
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let linked = open_file(parent, name, false)?;
-        let linked_identity = file_identity(&linked.metadata()?)?;
-        if expected.is_some_and(|expected| expected != linked_identity) {
+        let actual = file_identity(&file.metadata()?)?;
+        if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
-                "governance temporary changed before unlink",
+                "retained governance file changed before unlink",
+            ));
+        }
+        let linked = open_file(parent, name, false)?;
+        let linked_identity = file_identity(&linked.metadata()?)?;
+        if linked_identity != actual {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance file binding changed before unlink",
             ));
         }
         let name = c_name(name)?;
@@ -2133,6 +4999,7 @@ mod platform {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn remove_open_directory(
         parent: &File,
         directory: &File,
@@ -2747,6 +5614,24 @@ mod platform {
         disposition: u32,
         options: u32,
     ) -> io::Result<File> {
+        nt_open_relative_with_share(
+            parent,
+            name,
+            desired_access,
+            disposition,
+            options,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        )
+    }
+
+    fn nt_open_relative_with_share(
+        parent: &File,
+        name: &OsStr,
+        desired_access: u32,
+        disposition: u32,
+        options: u32,
+        share_access: u32,
+    ) -> io::Result<File> {
         validate_component(name)?;
         let mut name_wide = name.encode_wide().collect::<Vec<_>>();
         let byte_len = name_wide
@@ -2788,7 +5673,7 @@ mod platform {
                 &mut status_block,
                 ptr::null_mut(),
                 FILE_ATTRIBUTE_NORMAL,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                share_access,
                 disposition,
                 options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT,
                 ptr::null_mut(),
@@ -2870,7 +5755,6 @@ mod platform {
         temporary: &File,
         _temporary_name: &OsStr,
         target_name: &OsStr,
-        replace: bool,
     ) -> io::Result<()> {
         validate_component(target_name)?;
         let target_wide = target_name.encode_wide().collect::<Vec<_>>();
@@ -2899,7 +5783,7 @@ mod platform {
         // SAFETY: `storage` is aligned for every field, has at least
         // `total_bytes`, and `file_name_offset` is the actual repr(C) offset.
         unsafe {
-            (*info).replace_or_flags = u32::from(replace);
+            (*info).replace_or_flags = 0;
             (*info).root_directory = parent.as_raw_handle();
             (*info).file_name_length = target_byte_len;
             ptr::copy_nonoverlapping(
@@ -3381,7 +6265,6 @@ mod platform {
         _temporary: &File,
         _temporary_name: &OsStr,
         _target_name: &OsStr,
-        _replace: bool,
     ) -> io::Result<()> {
         Err(unsupported())
     }
@@ -3416,15 +6299,20 @@ mod platform {
 mod tests {
     use std::{
         ffi::{OsStr, OsString},
-        fs, io,
+        fs,
+        io::{self, Seek as _, SeekFrom, Write as _},
+        panic::AssertUnwindSafe,
+        sync::{Arc, Barrier, mpsc},
+        thread,
+        time::Duration,
     };
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    use std::cell::Cell;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
     #[cfg(target_os = "macos")]
     use std::process::Command;
-    #[cfg(not(windows))]
-    use std::sync::Arc;
     #[cfg(target_os = "linux")]
     use std::{
         ffi::{CString, c_char, c_int, c_void},
@@ -3433,7 +6321,14 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{ExpectedFile, RootedDirectory};
+    use super::{
+        ExpectedFile, RootedDirectory, TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1, TWO_SLOT_NAMES_V1,
+        TWO_SLOT_ZERO_DIGEST, TwoSlotInitFileLockV1, TwoSlotSnapshotV1, TwoSlotStageV1,
+        TwoSlotStoreConfigV1, TwoSlotStoreV1, decode_two_slot_value, encode_two_slot_value,
+        initialize_two_slot_stage, open_existing_two_slot_store, read_exact_file_region,
+        two_slot_init_lock_name, two_slot_lost_found_name, two_slot_stage_prefix,
+        write_exact_file_region, write_two_slot_record_unlocked,
+    };
 
     fn test_root(path: &std::path::Path) -> RootedDirectory {
         #[cfg(windows)]
@@ -3446,6 +6341,1371 @@ mod tests {
             RootedDirectory::from_retained(path.to_path_buf(), handle, true)
                 .expect("retain rooted test directory")
         }
+    }
+
+    fn read_only_test_root(path: &std::path::Path) -> RootedDirectory {
+        #[cfg(windows)]
+        {
+            RootedDirectory::open_root(path, false)
+                .expect("retain read-only rooted Windows test directory")
+        }
+        #[cfg(not(windows))]
+        {
+            let handle = Arc::new(fs::File::open(path).expect("open read-only test root"));
+            RootedDirectory::from_retained(path.to_path_buf(), handle, false)
+                .expect("retain read-only rooted test directory")
+        }
+    }
+
+    fn two_slot_config(name: &str) -> TwoSlotStoreConfigV1 {
+        TwoSlotStoreConfigV1::try_new(name, [0x51; 32], [0xa7; 32], 512)
+            .expect("valid bounded two-slot test config")
+    }
+
+    fn two_slot_fault(label: &'static str) -> io::Error {
+        io::Error::other(format!("injected two-slot fault after {label}"))
+    }
+
+    fn raw_test_record(
+        store: &TwoSlotStoreV1,
+        slot_id: usize,
+        generation: u64,
+        predecessor_digest: [u8; 32],
+        payload: &[u8],
+    ) {
+        let mut no_fault = |_| Ok(());
+        store
+            .with_exclusive_lock(|store| {
+                write_two_slot_record_unlocked(
+                    store,
+                    slot_id,
+                    generation,
+                    predecessor_digest,
+                    payload,
+                    ["test"; 6],
+                    &mut no_fault,
+                )
+                .map(drop)
+            })
+            .expect("write exact test record");
+    }
+
+    fn initialize_test_stage(
+        root: &RootedDirectory,
+        config: &TwoSlotStoreConfigV1,
+        payload: &[u8],
+    ) -> TwoSlotStageV1 {
+        let lock = TwoSlotInitFileLockV1::acquire(root, config).expect("lock test initializer");
+        let mut no_fault = |_| Ok(());
+        let stage = initialize_two_slot_stage(root, config, lock.identity, payload, &mut no_fault)
+            .expect("create complete test stage");
+        lock.release().expect("unlock test initializer");
+        stage
+    }
+
+    fn try_load_test_canonical(
+        root: &RootedDirectory,
+        config: &TwoSlotStoreConfigV1,
+    ) -> io::Result<TwoSlotSnapshotV1> {
+        let lock = TwoSlotInitFileLockV1::acquire(root, config)?;
+        let result = root
+            .open_directory(OsStr::new(&config.store_name))
+            .and_then(|directory| {
+                open_existing_two_slot_store(directory, config.clone(), lock.identity)
+            })
+            .and_then(|store| store.load());
+        let unlock = lock.release();
+        match (result, unlock) {
+            (Ok(snapshot), Ok(())) => Ok(snapshot),
+            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        }
+    }
+
+    fn root_two_slot_stage_names(
+        root: &RootedDirectory,
+        config: &TwoSlotStoreConfigV1,
+    ) -> Vec<OsString> {
+        let prefix = two_slot_stage_prefix(config);
+        root.child_names()
+            .expect("enumerate test root")
+            .into_iter()
+            .filter(|name| name.as_encoded_bytes().starts_with(prefix.as_bytes()))
+            .collect()
+    }
+
+    #[test]
+    fn two_slot_store_initializes_noops_and_reads_shorter_payload_exactly() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("bounded-store");
+        let initial = vec![0x5a; 257];
+        let store = root
+            .open_or_create_two_slot_store_v1(config, &initial)
+            .expect("initialize two-slot store");
+        let first = store.load().expect("load initial record");
+        assert_eq!(first.generation(), 1);
+        assert_eq!(first.payload(), initial);
+
+        let before = store
+            .slots
+            .iter()
+            .map(|slot| {
+                read_exact_file_region(
+                    &slot.handle,
+                    0,
+                    usize::try_from(store.layout.slot_file_bytes).expect("test slot fits usize"),
+                )
+                .expect("read exact slot")
+            })
+            .collect::<Vec<_>>();
+        let no_op = store
+            .compare_and_swap(&first, &initial)
+            .expect("exact payload is a no-op");
+        assert_eq!(no_op, first);
+        let after = store
+            .slots
+            .iter()
+            .map(|slot| {
+                read_exact_file_region(
+                    &slot.handle,
+                    0,
+                    usize::try_from(store.layout.slot_file_bytes).expect("test slot fits usize"),
+                )
+                .expect("read exact slot")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(after, before, "no-op must not write either fixed slot");
+
+        let slot_1_long = vec![0x6b; 301];
+        let second = store
+            .compare_and_swap(&no_op, &slot_1_long)
+            .expect("commit long payload to slot one");
+        let third = store
+            .compare_and_swap(&second, &vec![0x7c; 299])
+            .expect("advance through slot zero");
+        let short = b"x";
+        let fourth = store
+            .compare_and_swap(&third, short)
+            .expect("reuse slot one with a shorter payload");
+        assert_eq!(fourth.generation(), 4);
+        assert_eq!(fourth.payload(), short);
+        write_exact_file_region(
+            &store.slots[1].handle,
+            store.layout.payload_offset + 100,
+            &[0xe1],
+        )
+        .expect("mutate unauthenticated private stale tail");
+        assert_eq!(store.load().expect("reload exact short payload"), fourth);
+
+        let mut names = store
+            .directory
+            .child_names_bounded(2)
+            .expect("enumerate fixed inventory");
+        names.sort();
+        let mut expected = TWO_SLOT_NAMES_V1.map(OsString::from).to_vec();
+        expected.sort();
+        assert_eq!(names, expected);
+        for slot in &store.slots {
+            assert_eq!(
+                slot.handle.metadata().expect("slot metadata").len(),
+                store.layout.slot_file_bytes
+            );
+        }
+    }
+
+    #[test]
+    fn two_slot_store_loads_through_a_read_only_root_without_initializing() {
+        let temp = tempdir().expect("tempdir");
+        let config = two_slot_config("read-only-store");
+        let writer_root = test_root(temp.path());
+        let store = writer_root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("initialize writer store");
+        let initial = store.load().expect("load initial writer record");
+        store
+            .compare_and_swap(&initial, b"committed")
+            .expect("commit writer successor");
+        drop(store);
+        drop(writer_root);
+
+        let reader_root = read_only_test_root(temp.path());
+        let read_only_store =
+            super::open_existing_read_only_two_slot_store_v1(&reader_root, config.clone())
+                .expect("open exact store through read-only descriptors");
+        let read_only_predecessor = read_only_store.load().expect("load read-only predecessor");
+        for slot in &read_only_store.slots {
+            let error =
+                write_exact_file_region(&slot.handle, read_only_store.layout.payload_offset, b"X")
+                    .expect_err("retained reader slot descriptor must reject writes");
+            assert_ne!(error.kind(), io::ErrorKind::Interrupted);
+        }
+        assert!(
+            read_only_store
+                .compare_and_swap(&read_only_predecessor, b"forbidden")
+                .is_err(),
+            "a store reopened through read-only descriptors must not commit"
+        );
+        let snapshot = reader_root
+            .load_existing_two_slot_store_v1(config)
+            .expect("load existing store through a read-only capability");
+        assert_eq!(snapshot.generation(), 2);
+        assert_eq!(snapshot.payload(), b"committed");
+
+        let absent = two_slot_config("absent-read-only-store");
+        let error = reader_root
+            .load_existing_two_slot_store_v1(absent.clone())
+            .expect_err("read-only loading must not initialize an absent store");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            !temp.path().join(&absent.store_name).exists(),
+            "read-only loading must not create the requested store"
+        );
+        assert!(
+            !temp.path().join(two_slot_init_lock_name(&absent)).exists(),
+            "read-only loading must not create an initializer lock"
+        );
+    }
+
+    #[test]
+    fn read_only_root_cannot_open_or_initialize_mutable_two_slot_store() {
+        let temp = tempdir().expect("tempdir");
+        let writable_root = test_root(temp.path());
+        let existing_config = two_slot_config("existing-store");
+        let existing_store = writable_root
+            .open_or_create_two_slot_store_v1(existing_config.clone(), b"existing")
+            .expect("initialize existing test store");
+        let before = writable_root.child_names().expect("enumerate test root");
+
+        let read_only_root = read_only_test_root(temp.path());
+        let existing_error = read_only_root
+            .open_or_create_two_slot_store_v1(existing_config, b"replacement")
+            .expect_err("read-only root must not return a mutable existing store");
+        assert_eq!(existing_error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            writable_root.child_names().expect("re-enumerate test root"),
+            before,
+            "read-only open must not create an initializer or staging artifact"
+        );
+        assert_eq!(
+            existing_store
+                .load()
+                .expect("reload existing store")
+                .payload(),
+            b"existing",
+            "read-only open must not mutate the existing store"
+        );
+
+        let absent_config = two_slot_config("absent-store");
+        let absent_error = read_only_root
+            .open_or_create_two_slot_store_v1(absent_config, b"initial")
+            .expect_err("read-only root must not initialize an absent store");
+        assert_eq!(absent_error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            writable_root
+                .child_names()
+                .expect("enumerate after rejection"),
+            before,
+            "read-only initialization must not create an init lock, stage, or canonical store"
+        );
+    }
+
+    #[test]
+    fn two_slot_store_remains_two_fixed_files_after_more_than_1024_updates() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("long-lived-store");
+        let store = root
+            .open_or_create_two_slot_store_v1(config, b"initial")
+            .expect("initialize two-slot store");
+        let mut snapshot = store.load().expect("load initial record");
+        for generation in 0..1_025_u64 {
+            let payload = format!("bounded-update-{generation:04}");
+            snapshot = store
+                .compare_and_swap(&snapshot, payload.as_bytes())
+                .expect("commit bounded update");
+        }
+        assert_eq!(snapshot.generation(), 1_026);
+        assert_eq!(store.load().expect("load final update"), snapshot);
+        assert_eq!(
+            store
+                .directory
+                .child_names_bounded(2)
+                .expect("bounded inventory")
+                .len(),
+            2
+        );
+        let logical_bytes = store
+            .slots
+            .iter()
+            .map(|slot| slot.handle.metadata().expect("slot metadata").len())
+            .sum::<u64>();
+        assert_eq!(logical_bytes, store.layout.slot_file_bytes * 2);
+    }
+
+    #[test]
+    fn two_slot_initialization_recovers_after_every_injected_boundary() {
+        const LABELS: &[&str] = &[
+            "stage-directory-created",
+            "stage-parent-synced",
+            "slot-0-created",
+            "slot-0-sized",
+            "slot-0-sized-and-synced",
+            "slot-1-created",
+            "slot-1-sized",
+            "slot-1-sized-and-synced",
+            "slot-0-header-written",
+            "slot-0-header-synced",
+            "slot-1-header-written",
+            "slot-1-header-synced",
+            "initial-trailer-invalidated",
+            "initial-trailer-invalidation-synced",
+            "initial-record-written",
+            "initial-record-synced",
+            "initial-commit-trailer-written",
+            "initial-commit-trailer-synced",
+            "initial-record-readback-verified",
+            "stage-directory-synced",
+            "before-directory-rename",
+            "directory-renamed",
+            "parent-synced",
+            "initialization-postcheck",
+        ];
+
+        for &fault_label in LABELS {
+            let temp = tempdir().expect("tempdir");
+            let root = test_root(temp.path());
+            let config = two_slot_config("faulted-init");
+            let error = root
+                .open_or_create_two_slot_store_v1_with_init_hook(
+                    config.clone(),
+                    b"initial",
+                    |step| {
+                        if step == fault_label {
+                            Err(two_slot_fault(fault_label))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+                .expect_err("fault must stop this initialization attempt");
+            assert!(error.to_string().contains(fault_label));
+            let recovered = root
+                .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+                .unwrap_or_else(|error| panic!("recover after {fault_label}: {error}"));
+            let snapshot = recovered
+                .load()
+                .unwrap_or_else(|error| panic!("load after {fault_label}: {error}"));
+            assert_eq!(snapshot.generation(), 1, "fault label {fault_label}");
+            assert_eq!(snapshot.payload(), b"initial", "fault label {fault_label}");
+            assert!(
+                root_two_slot_stage_names(&root, &config).is_empty(),
+                "recovery must preserve stages in lost+found after {fault_label}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_slot_cas_recovers_after_every_injected_boundary() {
+        const LABELS: &[&str] = &[
+            "inactive-zero-trailer-written",
+            "inactive-trailer-invalidated",
+            "inactive-record-written",
+            "inactive-record-synced",
+            "inactive-commit-trailer-written",
+            "inactive-commit-trailer-synced",
+            "successor-readback-verified",
+        ];
+        for &fault_label in LABELS {
+            let temp = tempdir().expect("tempdir");
+            let root = test_root(temp.path());
+            let store = root
+                .open_or_create_two_slot_store_v1(two_slot_config("faulted-cas"), b"old")
+                .expect("initialize CAS store");
+            let old = store.load().expect("load old record");
+            let error = store
+                .compare_and_swap_with_test_hook(&old, b"new", |step| {
+                    if step == fault_label {
+                        Err(two_slot_fault(fault_label))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .expect_err("fault must stop CAS call");
+            assert!(error.to_string().contains(fault_label));
+            let observed = store.load().expect("load after CAS fault");
+            let committed = matches!(
+                fault_label,
+                "inactive-commit-trailer-written"
+                    | "inactive-commit-trailer-synced"
+                    | "successor-readback-verified"
+            );
+            if committed {
+                assert_eq!(observed.generation(), 2);
+                assert_eq!(observed.payload(), b"new");
+            } else {
+                assert_eq!(observed, old);
+                let retried = store
+                    .compare_and_swap(&observed, b"new")
+                    .expect("reuse torn peer slot");
+                assert_eq!(retried.generation(), 2);
+                assert_eq!(retried.payload(), b"new");
+            }
+        }
+    }
+
+    #[test]
+    fn two_slot_compare_and_swap_serializes_concurrent_writers() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("concurrent-cas");
+        let first_store = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"old")
+            .expect("initialize concurrent store");
+        let second_store = root
+            .open_or_create_two_slot_store_v1(config, b"old")
+            .expect("reopen with independent handles");
+        assert!(!Arc::ptr_eq(
+            &first_store.slots[0].handle,
+            &second_store.slots[0].handle
+        ));
+        let expected = first_store.load().expect("load predecessor");
+        let barrier = Arc::new(Barrier::new(3));
+        let mut writers = Vec::new();
+        for (store, payload) in [
+            (first_store.clone(), b"left".as_slice()),
+            (second_store, b"right".as_slice()),
+        ] {
+            let expected = expected.clone();
+            let barrier = Arc::clone(&barrier);
+            let payload = payload.to_vec();
+            writers.push(thread::spawn(move || {
+                barrier.wait();
+                store.compare_and_swap(&expected, &payload)
+            }));
+        }
+        barrier.wait();
+        let results = writers
+            .into_iter()
+            .map(|writer| writer.join().expect("writer did not panic"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        let failure = results
+            .iter()
+            .find_map(|result| result.as_ref().err())
+            .expect("one stale writer must fail");
+        assert_eq!(failure.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(first_store.load().expect("load winner").generation(), 2);
+    }
+
+    #[test]
+    fn two_slot_open_create_is_concurrent_and_canonical_wins() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("concurrent-init");
+        let barrier = Arc::new(Barrier::new(3));
+        let mut openers = Vec::new();
+        for _ in 0..2 {
+            let root = root.clone();
+            let config = config.clone();
+            let barrier = Arc::clone(&barrier);
+            openers.push(thread::spawn(move || {
+                barrier.wait();
+                root.open_or_create_two_slot_store_v1(config, b"initial")
+                    .and_then(|store| store.load())
+            }));
+        }
+        barrier.wait();
+        for opener in openers {
+            let snapshot = opener
+                .join()
+                .expect("opener did not panic")
+                .expect("concurrent open/create succeeds");
+            assert_eq!(snapshot.generation(), 1);
+            assert_eq!(snapshot.payload(), b"initial");
+        }
+
+        let canonical = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("open canonical");
+        let current = canonical.load().expect("load canonical");
+        let advanced = canonical
+            .compare_and_swap(&current, b"canonical-winner")
+            .expect("advance canonical");
+        let extra = initialize_test_stage(&root, &config, b"initial");
+        drop(extra);
+        let reopened = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("canonical wins over exact race stage");
+        assert_eq!(reopened.load().expect("load canonical winner"), advanced);
+        assert!(root_two_slot_stage_names(&root, &config).is_empty());
+        let lost = root
+            .open_directory(&two_slot_lost_found_name(&config))
+            .expect("race stage preserved in lost+found");
+        assert_eq!(lost.child_names().expect("lost+found entries").len(), 1);
+    }
+
+    #[test]
+    fn two_slot_init_file_lock_blocks_independent_handle_until_release() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("init-lock-handoff");
+        let first = TwoSlotInitFileLockV1::acquire(&root, &config).expect("first init lock");
+        let first_identity = first.identity;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let second_root = root.clone();
+        let second_config = config.clone();
+        let waiter = thread::spawn(move || {
+            started_tx.send(()).expect("signal waiter start");
+            let second = TwoSlotInitFileLockV1::acquire(&second_root, &second_config)
+                .expect("second init lock");
+            acquired_tx
+                .send(second.identity)
+                .expect("signal second acquisition");
+            second.release().expect("release second init lock");
+        });
+        started_rx.recv().expect("waiter started");
+        assert_eq!(
+            acquired_rx.recv_timeout(Duration::from_millis(150)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "independent init-lock handle must block"
+        );
+        first.release().expect("release first init lock");
+        assert_eq!(
+            acquired_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("second lock acquires after handoff"),
+            first_identity
+        );
+        waiter.join().expect("init-lock waiter did not panic");
+    }
+
+    #[test]
+    fn two_slot_unrelated_store_progresses_while_another_os_lock_is_held() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let blocked = root
+            .open_or_create_two_slot_store_v1(two_slot_config("blocked-store"), b"blocked")
+            .expect("initialize blocked store");
+        let independent = root
+            .open_or_create_two_slot_store_v1(two_slot_config("independent-store"), b"independent")
+            .expect("initialize independent store");
+        let blocker = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(blocked.directory.display_path.join(TWO_SLOT_NAMES_V1[0]))
+            .expect("open independent blocker handle");
+        fs::File::lock(&blocker).expect("hold blocked store OS lock");
+
+        let (blocked_started_tx, blocked_started_rx) = mpsc::channel();
+        let blocked_wait_store = blocked.clone();
+        let blocked_waiter = thread::spawn(move || {
+            blocked_started_tx.send(()).expect("signal blocked load");
+            blocked_wait_store.load()
+        });
+        blocked_started_rx.recv().expect("blocked load started");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match blocked.process_lock.try_lock() {
+                Err(std::sync::TryLockError::WouldBlock) => break,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                    drop(poisoned.into_inner());
+                }
+                Ok(guard) => drop(guard),
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "blocked load did not reach its per-store OS-lock wait"
+            );
+            thread::yield_now();
+        }
+        let (independent_tx, independent_rx) = mpsc::channel();
+        let independent_waiter = thread::spawn(move || {
+            independent_tx
+                .send(independent.load())
+                .expect("send independent result");
+        });
+        let independent_result = independent_rx.recv_timeout(Duration::from_secs(2));
+        fs::File::unlock(&blocker).expect("release blocked store OS lock");
+        let blocked_result = blocked_waiter
+            .join()
+            .expect("blocked waiter did not panic")
+            .expect("blocked store resumes");
+        independent_waiter
+            .join()
+            .expect("independent waiter did not panic");
+        assert_eq!(blocked_result.payload(), b"blocked");
+        assert_eq!(
+            independent_result
+                .expect("unrelated store progresses before blocker release")
+                .expect("independent load succeeds")
+                .payload(),
+            b"independent"
+        );
+    }
+
+    #[test]
+    fn two_slot_empty_initial_payload_roundtrips() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let store = root
+            .open_or_create_two_slot_store_v1(two_slot_config("empty-payload"), b"")
+            .expect("initialize empty payload");
+        let snapshot = store.load().expect("load empty payload");
+        assert_eq!(snapshot.generation(), 1);
+        assert!(snapshot.payload().is_empty());
+        assert_eq!(
+            store
+                .compare_and_swap(&snapshot, b"")
+                .expect("empty exact no-op"),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn two_slot_recovery_promotes_lexically_first_complete_stage() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("deterministic-init");
+        let first = initialize_test_stage(&root, &config, b"initial");
+        let second = initialize_test_stage(&root, &config, b"initial");
+        let mut candidates = [
+            (first.name.clone(), first.directory.identity),
+            (second.name.clone(), second.directory.identity),
+        ];
+        candidates.sort_by(|left, right| left.0.cmp(&right.0));
+        let expected_identity = candidates[0].1;
+        drop((first, second));
+
+        let store = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("promote deterministic stage");
+        assert_eq!(store.directory.identity, expected_identity);
+        assert_eq!(store.load().expect("load promoted stage").generation(), 1);
+        let lost = root
+            .open_directory(&two_slot_lost_found_name(&config))
+            .expect("other complete stage is preserved");
+        assert_eq!(lost.child_names().expect("lost+found entries").len(), 1);
+    }
+
+    #[test]
+    fn two_slot_selection_rejects_ambiguous_generations_and_bad_lineage() {
+        for case in ["equal", "gap", "lineage"] {
+            let temp = tempdir().expect("tempdir");
+            let root = test_root(temp.path());
+            let store = root
+                .open_or_create_two_slot_store_v1(two_slot_config(case), b"one")
+                .expect("initialize record-selection case");
+            let first = store.load().expect("load generation one");
+            match case {
+                "equal" => raw_test_record(&store, 1, 1, TWO_SLOT_ZERO_DIGEST, b"other"),
+                "gap" => raw_test_record(&store, 1, 3, first.record_digest(), b"three"),
+                "lineage" => raw_test_record(&store, 1, 2, [0x99; 32], b"two"),
+                _ => unreachable!(),
+            }
+            let error = store
+                .load()
+                .expect_err("ambiguous history must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "case {case}");
+        }
+    }
+
+    #[test]
+    fn two_slot_compare_and_swap_rejects_foreign_snapshot() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let left = root
+            .open_or_create_two_slot_store_v1(two_slot_config("left-store"), b"left")
+            .expect("initialize left store");
+        let right = root
+            .open_or_create_two_slot_store_v1(two_slot_config("right-store"), b"right")
+            .expect("initialize right store");
+        let foreign = left.load().expect("load foreign snapshot");
+        let error = right
+            .compare_and_swap(&foreign, b"substitute")
+            .expect_err("foreign snapshot must not authorize CAS");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            right.load().expect("right store unchanged").payload(),
+            b"right"
+        );
+    }
+
+    #[test]
+    fn two_slot_canonical_header_corruption_fails_without_overwrite() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("corrupt-canonical");
+        let store = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("initialize canonical store");
+        let identity = store.directory.identity;
+        let offset = u64::try_from(store.layout.header_region_bytes - 1)
+            .expect("test header offset fits u64");
+        write_exact_file_region(&store.slots[0].handle, offset, &[0x7f])
+            .expect("corrupt immutable reserved byte");
+        store.slots[0].handle.sync_all().expect("sync corruption");
+        assert!(store.load().is_err());
+        assert!(
+            root.open_or_create_two_slot_store_v1(config.clone(), b"replacement")
+                .is_err(),
+            "invalid canonical must never be overwritten"
+        );
+        assert_eq!(
+            root.open_directory(OsStr::new(&config.store_name))
+                .expect("canonical remains present")
+                .identity,
+            identity
+        );
+    }
+
+    #[test]
+    fn two_slot_binding_detects_slot_substitution_and_hard_links() {
+        let substitution_temp = tempdir().expect("tempdir");
+        let substitution_root = test_root(substitution_temp.path());
+        let substitution_store = substitution_root
+            .open_or_create_two_slot_store_v1(two_slot_config("substitution"), b"initial")
+            .expect("initialize substitution store");
+        let canonical_path = substitution_store.directory.display_path.clone();
+        let slot_path = canonical_path.join(TWO_SLOT_NAMES_V1[1]);
+        let preserved_path = canonical_path.join("preserved-slot");
+        fs::rename(&slot_path, &preserved_path).expect("preserve original slot");
+        let replacement = fs::File::create(&slot_path).expect("create replacement slot");
+        replacement
+            .set_len(substitution_store.layout.slot_file_bytes)
+            .expect("size replacement slot");
+        #[cfg(unix)]
+        fs::set_permissions(&slot_path, fs::Permissions::from_mode(0o600))
+            .expect("make replacement private");
+        assert!(substitution_store.load().is_err());
+        assert!(preserved_path.exists());
+        assert!(slot_path.exists());
+
+        let hard_link_temp = tempdir().expect("tempdir");
+        let hard_link_root = test_root(hard_link_temp.path());
+        let hard_link_store = hard_link_root
+            .open_or_create_two_slot_store_v1(two_slot_config("hard-link"), b"initial")
+            .expect("initialize hard-link store");
+        let slot_path = hard_link_store
+            .directory
+            .display_path
+            .join(TWO_SLOT_NAMES_V1[0]);
+        let alias_path = hard_link_store.directory.display_path.join("slot-alias");
+        fs::hard_link(&slot_path, &alias_path).expect("create hard link");
+        assert!(hard_link_store.load().is_err());
+        assert!(slot_path.exists());
+        assert!(alias_path.exists());
+    }
+
+    #[test]
+    fn two_slot_promotion_rejects_source_substitution_and_new_hard_link() {
+        let substitution_temp = tempdir().expect("tempdir");
+        let substitution_root = test_root(substitution_temp.path());
+        let substitution_config = two_slot_config("stage-substitution");
+        let mut substituted = false;
+        let mut substituted_stage_name = None;
+        let result = substitution_root.open_or_create_two_slot_store_v1_with_init_hook(
+            substitution_config.clone(),
+            b"initial",
+            |step| {
+                if step == "before-directory-rename" && !substituted {
+                    let stage = root_two_slot_stage_names(&substitution_root, &substitution_config)
+                        .into_iter()
+                        .next()
+                        .expect("stage exists before promotion");
+                    let stage_path = substitution_temp.path().join(&stage);
+                    let detached = substitution_temp.path().join("detached-stage");
+                    fs::rename(&stage_path, &detached).expect("detach exact stage");
+                    fs::create_dir(&stage_path).expect("install substituted stage directory");
+                    substituted_stage_name = Some(stage);
+                    substituted = true;
+                }
+                Ok(())
+            },
+        );
+        if let Ok(store) = result {
+            assert_eq!(
+                store
+                    .load()
+                    .expect("only the exact original may be trusted")
+                    .payload(),
+                b"initial"
+            );
+        }
+        let stage_name = substituted_stage_name.expect("substitution hook ran");
+        let mut candidates = vec![
+            substitution_temp.path().join("detached-stage"),
+            substitution_temp
+                .path()
+                .join(&substitution_config.store_name),
+            substitution_temp.path().join(stage_name),
+        ];
+        let lost_path = substitution_temp
+            .path()
+            .join(two_slot_lost_found_name(&substitution_config));
+        if lost_path.is_dir() {
+            candidates.extend(
+                fs::read_dir(&lost_path)
+                    .expect("inspect substitution lost+found")
+                    .map(|entry| entry.expect("lost+found entry").path()),
+            );
+        }
+        let inventories = candidates
+            .iter()
+            .filter(|path| path.is_dir())
+            .map(|path| {
+                fs::read_dir(path)
+                    .expect("inspect preserved object")
+                    .count()
+            })
+            .collect::<Vec<_>>();
+        assert!(inventories.iter().any(|entries| *entries == 2));
+        assert!(inventories.contains(&0));
+
+        let hard_link_temp = tempdir().expect("tempdir");
+        let hard_link_root = test_root(hard_link_temp.path());
+        let hard_link_config = two_slot_config("stage-hard-link");
+        let mut linked = false;
+        let result = hard_link_root.open_or_create_two_slot_store_v1_with_init_hook(
+            hard_link_config.clone(),
+            b"initial",
+            |step| {
+                if step == "before-directory-rename" && !linked {
+                    let stage = root_two_slot_stage_names(&hard_link_root, &hard_link_config)
+                        .into_iter()
+                        .next()
+                        .expect("stage exists before promotion");
+                    let stage = hard_link_temp.path().join(stage);
+                    fs::hard_link(stage.join(TWO_SLOT_NAMES_V1[0]), stage.join("slot-alias"))
+                        .expect("hard-link stage slot");
+                    linked = true;
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        if hard_link_root
+            .open_directory(OsStr::new(&hard_link_config.store_name))
+            .is_ok()
+        {
+            assert!(
+                try_load_test_canonical(&hard_link_root, &hard_link_config).is_err(),
+                "hard-linked promotion target must never be trusted"
+            );
+        }
+        assert_eq!(
+            root_two_slot_stage_names(&hard_link_root, &hard_link_config).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn two_slot_lost_found_preserves_multiple_stages_and_uses_free_slot() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("lost-found");
+        let lost = root
+            .open_or_create_directory(&two_slot_lost_found_name(&config))
+            .expect("create lost+found");
+        lost.create_child_directory_exclusive(OsStr::new("entry-v1-0000"))
+            .expect("preoccupy first lost+found slot");
+        let prefix = two_slot_stage_prefix(&config);
+        for suffix in [
+            "0000000000000000-0000000000000000",
+            "0000000000000000-0000000000000001",
+        ] {
+            root.create_child_directory_exclusive(OsStr::new(&format!("{prefix}{suffix}")))
+                .expect("create incomplete stage");
+        }
+        let store = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("preserve partial stages and continue");
+        assert_eq!(
+            store.load().expect("load initialized store").payload(),
+            b"initial"
+        );
+        assert!(root_two_slot_stage_names(&root, &config).is_empty());
+        let mut names = lost.child_names().expect("lost+found inventory");
+        names.sort();
+        assert_eq!(
+            names,
+            ["entry-v1-0000", "entry-v1-0001", "entry-v1-0002"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn two_slot_lost_found_saturation_fails_without_deleting_stage() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("saturated-lost-found");
+        let lost = root
+            .open_or_create_directory(&two_slot_lost_found_name(&config))
+            .expect("create lost+found");
+        for index in 0..TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1 {
+            lost.create_child_directory_exclusive(OsStr::new(&format!("entry-v1-{index:04}")))
+                .expect("fill bounded lost+found");
+        }
+        let stage_name = OsString::from(format!(
+            "{}0000000000000000-0000000000000000",
+            two_slot_stage_prefix(&config)
+        ));
+        root.create_child_directory_exclusive(&stage_name)
+            .expect("create stage requiring preservation");
+        let error = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect_err("saturated lost+found must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            lost.child_names().expect("lost+found remains full").len(),
+            16
+        );
+        assert_eq!(root_two_slot_stage_names(&root, &config), vec![stage_name]);
+        assert!(
+            root.open_directory(OsStr::new(&config.store_name)).is_err(),
+            "canonical must not be installed after failed preservation"
+        );
+    }
+
+    #[test]
+    fn two_slot_valid_canonical_survives_saturated_lost_found_and_exact_stage() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("available-canonical");
+        let canonical = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("initialize canonical");
+        let initial = canonical.load().expect("load initial canonical");
+        let advanced = canonical
+            .compare_and_swap(&initial, b"canonical")
+            .expect("advance canonical");
+        let lost = root
+            .open_or_create_directory(&two_slot_lost_found_name(&config))
+            .expect("create lost+found");
+        for index in 0..TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1 {
+            lost.create_child_directory_exclusive(OsStr::new(&format!("entry-v1-{index:04}")))
+                .expect("fill lost+found");
+        }
+        let exact_stage = initialize_test_stage(&root, &config, b"initial");
+        let stage_name = exact_stage.name.clone();
+        drop(exact_stage);
+        let reopened = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("valid canonical remains available");
+        assert_eq!(reopened.load().expect("load canonical"), advanced);
+        assert_eq!(root_two_slot_stage_names(&root, &config), vec![stage_name]);
+        assert_eq!(
+            lost.child_names().expect("lost+found stays bounded").len(),
+            16
+        );
+    }
+
+    #[test]
+    fn two_slot_uppercase_stage_suffix_is_rejected_and_preserved() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("lowercase-stage");
+        let name = OsString::from(format!(
+            "{}000000000000000A-0000000000000000",
+            two_slot_stage_prefix(&config)
+        ));
+        root.create_child_directory_exclusive(&name)
+            .expect("create uppercase lookalike stage");
+        let error = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect_err("uppercase stage namespace must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(temp.path().join(&name).is_dir());
+        assert!(
+            root.open_directory(OsStr::new(&config.store_name)).is_err(),
+            "canonical remains absent"
+        );
+    }
+
+    #[test]
+    fn two_slot_nonempty_lost_found_does_not_block_clean_initialization() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("nonempty-lost-found");
+        let lost = root
+            .open_or_create_directory(&two_slot_lost_found_name(&config))
+            .expect("create lost+found");
+        lost.create_child_directory_exclusive(OsStr::new("entry-v1-0000"))
+            .expect("create preserved entry");
+        let store = root
+            .open_or_create_two_slot_store_v1(config, b"initial")
+            .expect("nonempty lost+found is not a global stop");
+        assert_eq!(
+            store.load().expect("load clean store").payload(),
+            b"initial"
+        );
+    }
+
+    #[test]
+    fn two_slot_preoccupied_canonical_is_never_overwritten() {
+        let file_temp = tempdir().expect("tempdir");
+        let file_root = test_root(file_temp.path());
+        let file_config = two_slot_config("preoccupied-file");
+        let file_path = file_temp.path().join(&file_config.store_name);
+        fs::write(&file_path, b"sentinel").expect("preoccupy canonical file");
+        #[cfg(unix)]
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600))
+            .expect("make sentinel private");
+        assert!(
+            file_root
+                .open_or_create_two_slot_store_v1(file_config, b"initial")
+                .is_err()
+        );
+        assert_eq!(fs::read(&file_path).expect("sentinel remains"), b"sentinel");
+
+        let directory_temp = tempdir().expect("tempdir");
+        let directory_root = test_root(directory_temp.path());
+        let directory_config = two_slot_config("preoccupied-directory");
+        let directory_path = directory_temp.path().join(&directory_config.store_name);
+        fs::create_dir(&directory_path).expect("preoccupy canonical directory");
+        fs::write(directory_path.join("sentinel"), b"keep").expect("write sentinel child");
+        assert!(
+            directory_root
+                .open_or_create_two_slot_store_v1(directory_config, b"initial")
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(directory_path.join("sentinel")).expect("sentinel child remains"),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn two_slot_init_lock_substitution_and_hard_link_fail_closed() {
+        let hard_link_temp = tempdir().expect("tempdir");
+        let hard_link_root = test_root(hard_link_temp.path());
+        let hard_link_config = two_slot_config("linked-init-lock");
+        let hard_link_store = hard_link_root
+            .open_or_create_two_slot_store_v1(hard_link_config.clone(), b"initial")
+            .expect("initialize hard-link lock store");
+        let lock_path = hard_link_temp
+            .path()
+            .join(two_slot_init_lock_name(&hard_link_config));
+        let alias_path = hard_link_temp.path().join("init-lock-alias");
+        fs::hard_link(&lock_path, &alias_path).expect("hard-link init lock");
+        assert!(
+            hard_link_root
+                .open_or_create_two_slot_store_v1(hard_link_config, b"initial")
+                .is_err()
+        );
+        assert_eq!(
+            hard_link_store
+                .load()
+                .expect("already-open exact store remains readable")
+                .payload(),
+            b"initial"
+        );
+        assert!(lock_path.exists());
+        assert!(alias_path.exists());
+
+        let substitution_temp = tempdir().expect("tempdir");
+        let substitution_root = test_root(substitution_temp.path());
+        let substitution_config = two_slot_config("substituted-init-lock");
+        let substitution_store = substitution_root
+            .open_or_create_two_slot_store_v1(substitution_config.clone(), b"initial")
+            .expect("initialize substitution lock store");
+        let lock_path = substitution_temp
+            .path()
+            .join(two_slot_init_lock_name(&substitution_config));
+        let preserved_path = substitution_temp.path().join("preserved-init-lock");
+        fs::rename(&lock_path, &preserved_path).expect("preserve original init lock");
+        fs::File::create(&lock_path).expect("install replacement init lock");
+        #[cfg(unix)]
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
+            .expect("make replacement init lock private");
+        assert!(
+            substitution_root
+                .open_or_create_two_slot_store_v1(substitution_config, b"initial")
+                .is_err(),
+            "canonical headers bind the original init-lock identity"
+        );
+        assert_eq!(
+            substitution_store
+                .load()
+                .expect("already-open exact store remains readable")
+                .payload(),
+            b"initial"
+        );
+        assert!(lock_path.exists());
+        assert!(preserved_path.exists());
+    }
+
+    #[test]
+    fn two_slot_cas_detects_mid_commit_slot_substitution_and_hard_link() {
+        let substitution_temp = tempdir().expect("tempdir");
+        let substitution_root = test_root(substitution_temp.path());
+        let substitution_store = substitution_root
+            .open_or_create_two_slot_store_v1(two_slot_config("cas-substitution"), b"old")
+            .expect("initialize substitution CAS store");
+        let expected = substitution_store.load().expect("load predecessor");
+        let slot_path = substitution_store
+            .directory
+            .display_path
+            .join(TWO_SLOT_NAMES_V1[1]);
+        let preserved_path = substitution_store
+            .directory
+            .display_path
+            .join("preserved-inactive");
+        let mut substituted = false;
+        let result =
+            substitution_store.compare_and_swap_with_test_hook(&expected, b"new", |step| {
+                if step == "inactive-zero-trailer-written" && !substituted {
+                    fs::rename(&slot_path, &preserved_path).expect("preserve inactive slot");
+                    let replacement = fs::File::create(&slot_path).expect("replace inactive slot");
+                    replacement
+                        .set_len(substitution_store.layout.slot_file_bytes)
+                        .expect("size replacement slot");
+                    #[cfg(unix)]
+                    fs::set_permissions(&slot_path, fs::Permissions::from_mode(0o600))
+                        .expect("make replacement private");
+                    substituted = true;
+                }
+                Ok(())
+            });
+        assert!(result.is_err());
+        assert!(slot_path.exists());
+        assert!(preserved_path.exists());
+
+        let hard_link_temp = tempdir().expect("tempdir");
+        let hard_link_root = test_root(hard_link_temp.path());
+        let hard_link_store = hard_link_root
+            .open_or_create_two_slot_store_v1(two_slot_config("cas-hard-link"), b"old")
+            .expect("initialize hard-link CAS store");
+        let expected = hard_link_store.load().expect("load predecessor");
+        let slot_path = hard_link_store
+            .directory
+            .display_path
+            .join(TWO_SLOT_NAMES_V1[1]);
+        let alias_path = hard_link_store
+            .directory
+            .display_path
+            .join("inactive-alias");
+        let mut linked = false;
+        let result = hard_link_store.compare_and_swap_with_test_hook(&expected, b"new", |step| {
+            if step == "inactive-zero-trailer-written" && !linked {
+                fs::hard_link(&slot_path, &alias_path).expect("hard-link inactive slot");
+                linked = true;
+            }
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(slot_path.exists());
+        assert!(alias_path.exists());
+    }
+
+    #[test]
+    fn two_slot_stable_nonzero_partial_trailer_fails_closed() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let store = root
+            .open_or_create_two_slot_store_v1(two_slot_config("partial-record"), b"old")
+            .expect("initialize partial-record store");
+        let record_offset =
+            u64::try_from(store.layout.header_region_bytes).expect("record offset fits u64");
+        let active_record = read_exact_file_region(
+            &store.slots[0].handle,
+            record_offset,
+            store.layout.record_header_region_bytes,
+        )
+        .expect("read active record header");
+        write_exact_file_region(
+            &store.slots[1].handle,
+            record_offset,
+            &active_record[..active_record.len() / 2],
+        )
+        .expect("write partial record header");
+        let active_trailer = read_exact_file_region(
+            &store.slots[0].handle,
+            store.layout.trailer_offset,
+            store.layout.commit_trailer_region_bytes,
+        )
+        .expect("read active trailer");
+        write_exact_file_region(
+            &store.slots[1].handle,
+            store.layout.trailer_offset,
+            &active_trailer[..active_trailer.len() / 2],
+        )
+        .expect("write partial commit trailer");
+        store.slots[1].handle.sync_all().expect("sync torn bytes");
+        let error = store
+            .load()
+            .expect_err("stable nonzero torn trailer must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn two_slot_exact_zero_trailer_allows_interrupted_body_reuse() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let store = root
+            .open_or_create_two_slot_store_v1(two_slot_config("zero-trailer"), b"old")
+            .expect("initialize zero-trailer store");
+        let old = store.load().expect("load old record");
+        let record_offset =
+            u64::try_from(store.layout.header_region_bytes).expect("record offset fits u64");
+        let active_record = read_exact_file_region(
+            &store.slots[0].handle,
+            record_offset,
+            store.layout.record_header_region_bytes,
+        )
+        .expect("read active record header");
+        write_exact_file_region(
+            &store.slots[1].handle,
+            record_offset,
+            &active_record[..active_record.len() / 2],
+        )
+        .expect("write interrupted record body under zero trailer");
+        store.slots[1]
+            .handle
+            .sync_all()
+            .expect("sync interrupted body");
+        assert_eq!(store.load().expect("ignore exact-zero inactive slot"), old);
+        let recovered = store
+            .compare_and_swap(&old, b"new")
+            .expect("reuse exact-zero inactive slot");
+        assert_eq!(recovered.generation(), 2);
+        assert_eq!(recovered.payload(), b"new");
+    }
+
+    #[test]
+    fn two_slot_newest_committed_corruption_never_falls_back() {
+        for case in [
+            "trailer-decode",
+            "trailer-field",
+            "record-digest",
+            "header-decode",
+            "payload",
+            "oversized-length",
+        ] {
+            let temp = tempdir().expect("tempdir");
+            let root = test_root(temp.path());
+            let store = root
+                .open_or_create_two_slot_store_v1(two_slot_config(case), b"old")
+                .expect("initialize corruption case");
+            let old = store.load().expect("load predecessor");
+            let newest = store
+                .compare_and_swap(&old, b"newest")
+                .expect("commit newest record");
+            assert_eq!(newest.generation(), 2);
+            let slot = &store.slots[1];
+            let record_offset =
+                u64::try_from(store.layout.header_region_bytes).expect("record offset fits u64");
+
+            match case {
+                "trailer-decode" => {
+                    write_exact_file_region(
+                        &slot.handle,
+                        store.layout.trailer_offset,
+                        &vec![0xff; store.layout.commit_trailer_region_bytes],
+                    )
+                    .expect("corrupt trailer encoding");
+                }
+                "trailer-field" | "record-digest" => {
+                    let bytes = read_exact_file_region(
+                        &slot.handle,
+                        store.layout.trailer_offset,
+                        store.layout.commit_trailer_region_bytes,
+                    )
+                    .expect("read committed trailer");
+                    let mut region: super::TwoSlotCommitTrailerRegionV1 =
+                        decode_two_slot_value(&bytes, "test commit trailer")
+                            .expect("decode committed trailer");
+                    if case == "trailer-field" {
+                        region.trailer.commit_marker[0] ^= 1;
+                    } else {
+                        region.trailer.record_digest[0] ^= 1;
+                    }
+                    let bytes = encode_two_slot_value(&region, "test commit trailer")
+                        .expect("encode corrupted trailer");
+                    write_exact_file_region(&slot.handle, store.layout.trailer_offset, &bytes)
+                        .expect("write corrupted trailer");
+                }
+                "header-decode" => {
+                    write_exact_file_region(
+                        &slot.handle,
+                        record_offset,
+                        &vec![0xff; store.layout.record_header_region_bytes],
+                    )
+                    .expect("corrupt record header encoding");
+                }
+                "payload" => {
+                    write_exact_file_region(&slot.handle, store.layout.payload_offset, b"X")
+                        .expect("corrupt committed payload");
+                }
+                "oversized-length" => {
+                    let bytes = read_exact_file_region(
+                        &slot.handle,
+                        record_offset,
+                        store.layout.record_header_region_bytes,
+                    )
+                    .expect("read committed header");
+                    let mut region: super::TwoSlotRecordHeaderRegionV1 =
+                        decode_two_slot_value(&bytes, "test record header")
+                            .expect("decode committed header");
+                    region.header.payload_len = u64::try_from(store.config.max_payload_bytes)
+                        .expect("bound fits u64")
+                        .checked_add(1)
+                        .expect("test bound has a successor");
+                    let bytes = encode_two_slot_value(&region, "test record header")
+                        .expect("encode oversized header");
+                    write_exact_file_region(&slot.handle, record_offset, &bytes)
+                        .expect("write oversized header");
+                }
+                _ => unreachable!(),
+            }
+            slot.handle.sync_all().expect("sync corruption");
+            let error = store
+                .load()
+                .expect_err("newest committed corruption must not fall back");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "case {case}");
+        }
+    }
+
+    #[test]
+    fn two_slot_process_mutex_and_init_file_lock_recover_after_panics() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("poison-recovery");
+        let store = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"initial")
+            .expect("initialize poison test store");
+        let process_panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _: io::Result<()> = store.with_exclusive_lock(|_| panic!("poison process lock"));
+        }));
+        assert!(process_panic.is_err());
+        assert_eq!(
+            store.load().expect("recover process lock").payload(),
+            b"initial"
+        );
+        assert!(store.process_lock.is_poisoned());
+
+        let init_temp = tempdir().expect("tempdir");
+        let init_root = test_root(init_temp.path());
+        let init_config = two_slot_config("init-poison-recovery");
+        let init_panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _ = init_root.open_or_create_two_slot_store_v1_with_init_hook(
+                init_config.clone(),
+                b"initial",
+                |step| {
+                    if step == "stage-directory-created" {
+                        panic!("poison init lock");
+                    }
+                    Ok(())
+                },
+            );
+        }));
+        assert!(init_panic.is_err());
+        let recovered = init_root
+            .open_or_create_two_slot_store_v1(init_config, b"initial")
+            .expect("recover init lock and partial stage");
+        assert_eq!(
+            recovered.load().expect("load recovered init").payload(),
+            b"initial"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -3515,6 +7775,17 @@ mod tests {
         assert!(source.contains("handle.as_raw_handle(),"));
         let pathname_api = ["GetNamed", "SecurityInfo"].concat();
         assert!(!source.contains(&pathname_api));
+    }
+
+    #[test]
+    fn windows_atomic_replacement_source_contract_is_non_destructive() {
+        let source = include_str!("governance_rooted_fs.rs");
+        assert!(source.contains("(*info).replace_or_flags = 0;"));
+        assert!(source.contains("without replacement: {error}"));
+        assert!(source.contains("Windows governance existing-target replacement is disabled"));
+        assert!(source.contains("metadata.number_of_links() != Some(1)"));
+        let destructive_match = ["matches!(&expected, ExpectedFile::", "Identity(_))"].concat();
+        assert!(!source.contains(&destructive_match));
     }
 
     #[test]
@@ -3684,6 +7955,32 @@ mod tests {
     }
 
     #[test]
+    fn rooted_atomic_exact_bytes_are_storage_idempotent() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"unchanged").expect("seed exact state");
+        let snapshot = root
+            .read_file(OsStr::new("state"), 32)
+            .expect("bind exact state");
+
+        root.atomic_write(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-9"),
+            b"unchanged",
+            ExpectedFile::Identity(snapshot.binding()),
+        )
+        .expect("exact-byte retry is a verified no-op");
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read exact state"),
+            b"unchanged"
+        );
+        assert!(!temp.path().join(".state.tmp-1-9").exists());
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        assert!(!temp.path().join(".state.retained-v1-0000").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
     fn rooted_atomic_write_replaces_the_exact_existing_destination() {
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());
@@ -3703,6 +8000,211 @@ mod tests {
             b"successor"
         );
         assert!(!temp.path().join(".state.tmp-1-10").exists());
+        assert_eq!(
+            fs::read(temp.path().join(".state.retained-v1-0000"))
+                .expect("read exact retained predecessor"),
+            b"predecessor"
+        );
+        let successor = root
+            .read_file(OsStr::new("state"), 32)
+            .expect("retain first successor");
+        root.atomic_write(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-11"),
+            b"second-successor",
+            ExpectedFile::Identity(successor.binding()),
+        )
+        .expect("use the next bounded retained-generation slot");
+        assert_eq!(
+            fs::read(temp.path().join(".state.retained-v1-0001"))
+                .expect("read second retained predecessor"),
+            b"successor"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rooted_atomic_write_fails_closed_for_changed_windows_target() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 32)
+            .expect("bind Windows predecessor");
+
+        let error = root
+            .atomic_write(
+                OsStr::new("state"),
+                OsStr::new(".state.tmp-1-10"),
+                b"successor",
+                ExpectedFile::Identity(predecessor.binding()),
+            )
+            .expect_err("Windows changed-target replacement must fail before mutation");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read untouched predecessor"),
+            b"predecessor"
+        );
+        assert!(!temp.path().join(".state.tmp-1-10").exists());
+        assert!(!temp.path().join(".state.retained-v1-0000").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_exchange_preserves_a_substituted_target_and_predecessor() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("state");
+        let detached = temp.path().join("detached-predecessor");
+        let temporary = temp.path().join(".state.tmp-1-20");
+        fs::write(&target, b"expected-predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        let error = root
+            .atomic_write_with_test_hooks(
+                OsStr::new("state"),
+                OsStr::new(".state.tmp-1-20"),
+                b"prepared-successor",
+                ExpectedFile::Identity(predecessor.binding()),
+                || {
+                    fs::rename(&target, &detached).expect("detach expected predecessor");
+                    fs::write(&target, b"racing-replacement").expect("install replacement");
+                    Ok(())
+                },
+                |file| file.sync_all(),
+                |directory| directory.sync_all(),
+            )
+            .expect_err("exchange must detect the substituted predecessor");
+        assert!(error.to_string().contains("substituted during exchange"));
+        assert_eq!(
+            fs::read(&target).expect("read target"),
+            b"prepared-successor"
+        );
+        assert_eq!(
+            fs::read(&temporary).expect("read preserved replacement"),
+            b"racing-replacement"
+        );
+        assert_eq!(
+            fs::read(&detached).expect("read detached predecessor"),
+            b"expected-predecessor"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_exchange_preserves_a_substituted_prepared_object() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("state");
+        let temporary = temp.path().join(".state.tmp-1-21");
+        let detached_prepared = temp.path().join("detached-prepared");
+        fs::write(&target, b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        root.atomic_write_with_test_hooks(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-21"),
+            b"prepared-successor",
+            ExpectedFile::Identity(predecessor.binding()),
+            || {
+                fs::rename(&temporary, &detached_prepared).expect("detach prepared object");
+                fs::write(&temporary, b"racing-replacement").expect("replace prepared name");
+                Ok(())
+            },
+            |file| file.sync_all(),
+            |directory| directory.sync_all(),
+        )
+        .expect_err("promoted identity substitution must fail closed");
+        assert_eq!(
+            fs::read(&target).expect("read target"),
+            b"racing-replacement"
+        );
+        assert_eq!(
+            fs::read(&temporary).expect("read preserved predecessor"),
+            b"predecessor"
+        );
+        assert_eq!(
+            fs::read(&detached_prepared).expect("read detached prepared bytes"),
+            b"prepared-successor"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_retention_never_overwrites_a_prepopulated_slot() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("state");
+        let retained = temp.path().join(".state.retained-v1-0000");
+        let temporary = temp.path().join(".state.tmp-1-22");
+        fs::write(&target, b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        root.atomic_write_with_test_hooks(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-22"),
+            b"successor",
+            ExpectedFile::Identity(predecessor.binding()),
+            || {
+                fs::write(&retained, b"prepopulated-slot").expect("race retention slot");
+                Ok(())
+            },
+            |file| file.sync_all(),
+            |directory| directory.sync_all(),
+        )
+        .expect_err("exclusive retention must reject a populated destination");
+        assert_eq!(fs::read(&target).expect("read target"), b"successor");
+        assert_eq!(
+            fs::read(&temporary).expect("read preserved predecessor"),
+            b"predecessor"
+        );
+        assert_eq!(
+            fs::read(&retained).expect("read prepopulated slot"),
+            b"prepopulated-slot"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_retention_does_not_mutate_a_racing_hardlink() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("state");
+        let external = temp.path().join("external-predecessor-link");
+        let temporary = temp.path().join(".state.tmp-1-23");
+        fs::write(&target, b"predecessor-bytes").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        root.atomic_write_with_test_hooks(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-23"),
+            b"successor-bytes",
+            ExpectedFile::Identity(predecessor.binding()),
+            || {
+                fs::hard_link(&target, &external).expect("race an external hard link");
+                Ok(())
+            },
+            |file| file.sync_all(),
+            |directory| directory.sync_all(),
+        )
+        .expect_err("post-check hard link must stop retention");
+        assert_eq!(fs::read(&target).expect("read target"), b"successor-bytes");
+        assert_eq!(
+            fs::read(&temporary).expect("read exchanged predecessor"),
+            b"predecessor-bytes"
+        );
+        assert_eq!(
+            fs::read(&external).expect("read external predecessor link"),
+            b"predecessor-bytes"
+        );
     }
 
     #[test]
@@ -3761,6 +8263,206 @@ mod tests {
                 .to_string()
                 .contains("injected directory sync failure")
         );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_replacement_preserves_both_generations_when_exchange_sync_fails() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+        let sync_calls = Cell::new(0_usize);
+
+        root.atomic_write_with_test_sync(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-30"),
+            b"successor",
+            ExpectedFile::Identity(predecessor.binding()),
+            |file| file.sync_all(),
+            |_directory| {
+                let call = sync_calls.get() + 1;
+                sync_calls.set(call);
+                if call == 1 {
+                    Err(io::Error::other("injected exchange sync failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect_err("exchange directory sync failure must propagate");
+        assert_eq!(sync_calls.get(), 1);
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read successor"),
+            b"successor"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(".state.tmp-1-30"))
+                .expect("read preserved predecessor temporary"),
+            b"predecessor"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_replacement_preserves_retained_generation_when_retention_sync_fails() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+        let sync_calls = Cell::new(0_usize);
+
+        root.atomic_write_with_test_sync(
+            OsStr::new("state"),
+            OsStr::new(".state.tmp-1-31"),
+            b"successor",
+            ExpectedFile::Identity(predecessor.binding()),
+            |file| file.sync_all(),
+            |_directory| {
+                let call = sync_calls.get() + 1;
+                sync_calls.set(call);
+                if call == 2 {
+                    Err(io::Error::other("injected retention sync failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect_err("retention directory sync failure must propagate");
+        assert_eq!(sync_calls.get(), 2);
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read successor"),
+            b"successor"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(".state.retained-v1-0000"))
+                .expect("read retained predecessor"),
+            b"predecessor"
+        );
+        assert!(!temp.path().join(".state.tmp-1-31").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_replacement_fails_closed_when_retention_slots_are_saturated() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        for slot in 0..super::ATOMIC_RETAINED_SLOT_COUNT_V1 {
+            fs::write(
+                temp.path().join(format!(".state.retained-v1-{slot:04}")),
+                b"retained",
+            )
+            .expect("fill retained-generation slot");
+        }
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        let error = root
+            .atomic_write(
+                OsStr::new("state"),
+                OsStr::new(".state.tmp-1-32"),
+                b"must-not-land",
+                ExpectedFile::Identity(predecessor.binding()),
+            )
+            .expect_err("saturated retention must fail before creating a successor");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(error.to_string().contains("offline"));
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read unchanged predecessor"),
+            b"predecessor"
+        );
+        assert!(!temp.path().join(".state.tmp-1-32").exists());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_replacement_enforces_retention_aggregate_byte_bound() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
+        let mut retained = fs::File::create(temp.path().join(".other.retained-v1-0000"))
+            .expect("seed sparse retained generation");
+        retained
+            .seek(SeekFrom::Start(
+                super::ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1 - 1,
+            ))
+            .expect("seek sparse retained generation");
+        retained
+            .write_all(&[0])
+            .expect("extend sparse retained generation");
+        let predecessor = root
+            .read_file(OsStr::new("state"), 64)
+            .expect("retain predecessor");
+
+        let error = root
+            .atomic_write(
+                OsStr::new("state"),
+                OsStr::new(".state.tmp-1-33"),
+                b"must-not-land",
+                ExpectedFile::Identity(predecessor.binding()),
+            )
+            .expect_err("aggregate retention bound must fail before exchange");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(error.to_string().contains("aggregate bound"));
+        assert_eq!(
+            fs::read(temp.path().join("state")).expect("read unchanged predecessor"),
+            b"predecessor"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_atomic_write_preserves_a_pre_rename_temporary_after_failure() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let temporary_name = OsStr::new(".state.tmp-1-4");
+        let error = root
+            .atomic_write_with_test_sync(
+                OsStr::new("state"),
+                temporary_name,
+                b"preserved-for-recovery",
+                ExpectedFile::Missing,
+                |_file| Err(io::Error::other("injected file sync failure")),
+                |_directory| Ok(()),
+            )
+            .expect_err("file sync failure must stop before rename");
+        assert!(error.to_string().contains("injected file sync failure"));
+        assert!(!temp.path().join("state").exists());
+        assert_eq!(
+            fs::read(temp.path().join(temporary_name))
+                .expect("failed transaction temporary remains recoverable"),
+            b"preserved-for-recovery"
+        );
+    }
+
+    #[test]
+    fn atomic_temp_candidate_classifier_is_target_exact_and_fail_closed() {
+        assert!(super::is_atomic_temp_candidate_for(
+            ".state.tmp-42000-1",
+            "state"
+        ));
+        assert!(super::is_atomic_temp_candidate_for(
+            ".state.tmp-malformed",
+            "state"
+        ));
+        assert!(!super::is_atomic_temp_candidate_for(
+            ".other.tmp-42000-1",
+            "state"
+        ));
+        assert!(!super::is_atomic_temp_candidate_for(
+            ".stateful.tmp-42000-1",
+            "state"
+        ));
+        assert!(!super::is_atomic_temp_candidate_for(
+            "state.tmp-42000-1",
+            "state"
+        ));
     }
 
     #[test]
@@ -3828,20 +8530,373 @@ mod tests {
     }
 
     #[test]
-    fn rooted_empty_directory_removal_is_identity_bound_and_idempotent() {
+    fn rooted_empty_directory_binding_removes_empty_child() {
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());
         fs::create_dir(temp.path().join("orphan")).expect("seed empty orphan directory");
+        let retained = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain empty orphan directory");
 
-        assert!(
-            root.remove_empty_directory_if_exists(OsStr::new("orphan"))
-                .expect("remove exact empty orphan")
+        root.remove_empty_directory_binding(retained)
+            .expect("remove exact empty orphan");
+        assert!(!temp.path().join("orphan").exists());
+    }
+
+    #[test]
+    fn rooted_exact_file_removal_preserves_a_name_substitution() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("orphan");
+        let original = temp.path().join("original");
+        fs::write(&target, b"planned-orphan").expect("seed planned orphan");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain planned orphan")
+            .expect("planned orphan exists");
+        fs::rename(&target, &original).expect("detach planned orphan");
+        fs::write(&target, b"replacement").expect("install replacement");
+
+        root.remove_file_binding(binding)
+            .expect_err("exact removal must reject a substituted name");
+        assert_eq!(
+            fs::read(&target).expect("replacement remains"),
+            b"replacement"
         );
+        assert_eq!(
+            fs::read(&original).expect("planned orphan remains detached"),
+            b"planned-orphan"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_private_removal_binding_enforces_private_file_policy() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("private-orphan");
+        fs::write(&target, b"private recovery state").expect("seed private orphan");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+            .expect("secure private orphan mode");
+
+        let binding = root
+            .private_removal_file_binding(OsStr::new("private-orphan"), 64)
+            .expect("retain private orphan")
+            .expect("private orphan exists");
+        root.remove_file_binding(binding)
+            .expect("remove exact private orphan");
+        assert!(!target.exists());
+
+        fs::write(&target, b"exposed recovery state").expect("seed exposed orphan");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644))
+            .expect("set exposed orphan mode");
+        let error = root
+            .private_removal_file_binding(OsStr::new("private-orphan"), 64)
+            .expect_err("non-private recovery state must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn rooted_exact_directory_removal_preserves_a_name_substitution() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let target = temp.path().join("orphan");
+        let original = temp.path().join("original");
+        fs::create_dir(&target).expect("seed planned directory");
+        let retained = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain planned directory");
+        fs::rename(&target, &original).expect("detach planned directory");
+        fs::create_dir(&target).expect("install replacement directory");
+
+        root.remove_empty_directory_binding(retained)
+            .expect_err("exact removal must reject a substituted directory name");
+        assert!(target.is_dir(), "replacement directory must remain");
+        assert!(original.is_dir(), "planned directory must remain detached");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_file_isolation_preserves_a_replacement_installed_at_the_destructive_gap() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create retained quarantine");
+        let target = temp.path().join("orphan");
+        let detached = temp.path().join("detached");
+        fs::write(&target, b"planned-orphan").expect("seed planned orphan");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain planned orphan")
+            .expect("planned orphan exists");
+
+        root.isolate_file_binding_with(binding, &quarantine, OsStr::new("file-slot"), || {
+            fs::rename(&target, &detached).expect("detach checked inode in race hook");
+            fs::write(&target, b"replacement").expect("install racing replacement");
+            Ok(())
+        })
+        .expect_err("post-check name substitution must fail after preserving both files");
+        assert_eq!(
+            fs::read(&detached).expect("checked inode remains detached"),
+            b"planned-orphan"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(".quarantine").join("file-slot"))
+                .expect("replacement remains quarantined"),
+            b"replacement"
+        );
+        assert!(
+            !target.exists(),
+            "the raced name was isolated, not unlinked"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_file_isolation_never_overwrites_a_prepopulated_destination() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::write(temp.path().join("orphan"), b"planned-orphan").expect("seed source");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain source")
+            .expect("source exists");
+
+        root.isolate_file_binding_with(binding, &quarantine, OsStr::new("file-slot"), || {
+            fs::write(
+                temp.path().join(".quarantine").join("file-slot"),
+                b"prepopulated",
+            )
+            .expect("prepopulate destination slot");
+            Ok(())
+        })
+        .expect_err("exclusive isolation must reject a populated destination");
+        assert_eq!(
+            fs::read(temp.path().join("orphan")).expect("read unchanged source"),
+            b"planned-orphan"
+        );
+        assert_eq!(
+            fs::read(temp.path().join(".quarantine").join("file-slot")).expect("read destination"),
+            b"prepopulated"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_file_isolation_attempts_both_parent_syncs_when_source_sync_fails() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::write(temp.path().join("orphan"), b"planned-orphan").expect("seed source");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain source")
+            .expect("source exists");
+        let source_syncs = Cell::new(0_usize);
+        let quarantine_syncs = Cell::new(0_usize);
+
+        let error = root
+            .isolate_file_binding_with_sync(
+                binding,
+                &quarantine,
+                OsStr::new("file-slot"),
+                || Ok(()),
+                |_directory| {
+                    source_syncs.set(source_syncs.get() + 1);
+                    Err(io::Error::other("injected source-parent sync failure"))
+                },
+                |_directory| {
+                    quarantine_syncs.set(quarantine_syncs.get() + 1);
+                    Ok(())
+                },
+            )
+            .expect_err("source-parent sync failure must propagate");
+        assert!(error.to_string().contains("source-parent sync failure"));
+        assert_eq!(source_syncs.get(), 1);
+        assert_eq!(quarantine_syncs.get(), 1);
+        assert!(!temp.path().join("orphan").exists());
+        assert_eq!(
+            fs::read(temp.path().join(".quarantine").join("file-slot"))
+                .expect("read preserved quarantined source"),
+            b"planned-orphan"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_file_isolation_propagates_quarantine_parent_sync_failure() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::write(temp.path().join("orphan"), b"planned-orphan").expect("seed source");
+        let binding = root
+            .removal_file_binding(OsStr::new("orphan"), 64)
+            .expect("retain source")
+            .expect("source exists");
+        let source_syncs = Cell::new(0_usize);
+        let quarantine_syncs = Cell::new(0_usize);
+
+        let error = root
+            .isolate_file_binding_with_sync(
+                binding,
+                &quarantine,
+                OsStr::new("file-slot"),
+                || Ok(()),
+                |_directory| {
+                    source_syncs.set(source_syncs.get() + 1);
+                    Ok(())
+                },
+                |_directory| {
+                    quarantine_syncs.set(quarantine_syncs.get() + 1);
+                    Err(io::Error::other("injected quarantine-parent sync failure"))
+                },
+            )
+            .expect_err("quarantine-parent sync failure must propagate");
+        assert!(error.to_string().contains("quarantine-parent sync failure"));
+        assert_eq!(source_syncs.get(), 1);
+        assert_eq!(quarantine_syncs.get(), 1);
+        assert!(!temp.path().join("orphan").exists());
+        assert_eq!(
+            fs::read(temp.path().join(".quarantine").join("file-slot"))
+                .expect("read preserved quarantined source"),
+            b"planned-orphan"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_directory_isolation_preserves_a_replacement_installed_at_the_destructive_gap() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create retained quarantine");
+        let target = temp.path().join("orphan");
+        let detached = temp.path().join("detached");
+        fs::create_dir(&target).expect("seed planned directory");
+        let retained = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain planned directory");
+
+        root.isolate_empty_directory_binding_with(
+            retained,
+            &quarantine,
+            OsStr::new("directory-slot"),
+            || {
+                fs::rename(&target, &detached).expect("detach checked directory in race hook");
+                fs::create_dir(&target).expect("install racing replacement directory");
+                Ok(())
+            },
+        )
+        .expect_err("post-check directory substitution must preserve both directories");
+        assert!(detached.is_dir(), "checked directory remains detached");
+        assert!(
+            temp.path()
+                .join(".quarantine")
+                .join("directory-slot")
+                .is_dir(),
+            "replacement directory remains quarantined"
+        );
+        assert!(!target.exists(), "the raced directory was never unlinked");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_directory_isolation_attempts_both_parent_syncs_when_source_sync_fails() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::create_dir(temp.path().join("orphan")).expect("seed source directory");
+        let child = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain source directory");
+        let source_syncs = Cell::new(0_usize);
+        let quarantine_syncs = Cell::new(0_usize);
+
+        let error = root
+            .isolate_empty_directory_binding_with_sync(
+                child,
+                &quarantine,
+                OsStr::new("directory-slot"),
+                || Ok(()),
+                |_directory| {
+                    source_syncs.set(source_syncs.get() + 1);
+                    Err(io::Error::other("injected directory-source sync failure"))
+                },
+                |_directory| {
+                    quarantine_syncs.set(quarantine_syncs.get() + 1);
+                    Ok(())
+                },
+            )
+            .expect_err("directory source-parent sync failure must propagate");
+        assert!(error.to_string().contains("directory-source sync failure"));
+        assert_eq!(source_syncs.get(), 1);
+        assert_eq!(quarantine_syncs.get(), 1);
         assert!(!temp.path().join("orphan").exists());
         assert!(
-            !root
-                .remove_empty_directory_if_exists(OsStr::new("orphan"))
-                .expect("missing orphan removal is idempotent")
+            temp.path()
+                .join(".quarantine")
+                .join("directory-slot")
+                .is_dir()
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn rooted_directory_isolation_propagates_quarantine_parent_sync_failure() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let quarantine = root
+            .open_or_create_directory(OsStr::new(".quarantine"))
+            .expect("create quarantine");
+        fs::create_dir(temp.path().join("orphan")).expect("seed source directory");
+        let child = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain source directory");
+        let source_syncs = Cell::new(0_usize);
+        let quarantine_syncs = Cell::new(0_usize);
+
+        let error = root
+            .isolate_empty_directory_binding_with_sync(
+                child,
+                &quarantine,
+                OsStr::new("directory-slot"),
+                || Ok(()),
+                |_directory| {
+                    source_syncs.set(source_syncs.get() + 1);
+                    Ok(())
+                },
+                |_directory| {
+                    quarantine_syncs.set(quarantine_syncs.get() + 1);
+                    Err(io::Error::other(
+                        "injected directory-quarantine sync failure",
+                    ))
+                },
+            )
+            .expect_err("directory quarantine-parent sync failure must propagate");
+        assert!(
+            error
+                .to_string()
+                .contains("directory-quarantine sync failure")
+        );
+        assert_eq!(source_syncs.get(), 1);
+        assert_eq!(quarantine_syncs.get(), 1);
+        assert!(!temp.path().join("orphan").exists());
+        assert!(
+            temp.path()
+                .join(".quarantine")
+                .join("directory-slot")
+                .is_dir()
         );
     }
 
@@ -3852,8 +8907,11 @@ mod tests {
         let retained = temp.path().join("retained");
         fs::create_dir(&retained).expect("seed retained directory");
         fs::write(retained.join("state"), b"retained").expect("seed retained child");
+        let retained_binding = root
+            .open_directory(OsStr::new("retained"))
+            .expect("retain nonempty directory");
 
-        root.remove_empty_directory_if_exists(OsStr::new("retained"))
+        root.remove_empty_directory_binding(retained_binding)
             .expect_err("nonempty retained directory must not be removed");
         assert_eq!(
             fs::read(retained.join("state")).expect("read retained child"),
@@ -3875,6 +8933,22 @@ mod tests {
             .read_file(OsStr::new("state"), 4)
             .expect_err("oversized state must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rooted_read_rejects_windows_hardlinks() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let state = temp.path().join("state");
+        fs::write(&state, b"linked-state").expect("seed Windows state");
+        fs::hard_link(&state, temp.path().join("state-link"))
+            .expect("create Windows governance hardlink");
+
+        let error = root
+            .read_file(OsStr::new("state"), 32)
+            .expect_err("Windows governance files with multiple links must fail closed");
+        assert!(error.to_string().contains("exactly one hard link"));
     }
 
     #[test]

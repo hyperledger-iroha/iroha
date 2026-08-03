@@ -44,9 +44,11 @@ The old `name: Type` declaration form is invalid. The source type names `i64`,
 `1i64`, `1u128`, `1amt`, and `1qty`, are invalid. Diagnostics MUST identify the
 retired surface and show the type-first replacement.
 
-Those spellings are reserved only when declaring or referring to a type. They
-remain ordinary value-namespace identifiers, so declarations such as
-`fn amount(quantity amount) -> quantity` are valid and unambiguous.
+Exact `Amount` is forbidden in every source identifier position. The other
+retired spellings are reserved only when declaring or referring to a type and
+remain ordinary value-namespace identifiers; lowercase `amount` therefore
+remains valid, so `fn amount(quantity amount) -> quantity` is valid and
+unambiguous.
 
 V1 exposes three numeric types:
 

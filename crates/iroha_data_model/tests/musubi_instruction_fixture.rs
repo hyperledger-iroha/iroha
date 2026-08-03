@@ -17,8 +17,8 @@ use iroha_data_model::{
             AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1,
             AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
             RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
-            RegisterMusubiNamespaceBindingV1, RemoveMusubiPackageMaintainerV1,
-            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+            RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
+            RemoveMusubiPackageMaintainerV1, RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
             RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
             SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
@@ -44,7 +44,7 @@ use iroha_data_model::{
         MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
         MusubiSeedIngressReceiptV1, MusubiSetRegistryPolicyActionV1,
         MusubiTakedownArtifactActionV1, MusubiVerificationLockV1, MusubiVerificationNodeV1,
-        MusubiVersionReqV1, MusubiVersionV1,
+        MusubiVersionReqV1, MusubiVersionV1, musubi_provider_bundle_attestation_set_digest_v1,
     },
     name::Name,
     nexus::DataSpaceId,
@@ -367,7 +367,7 @@ fn shared_musubi_instruction_fixture_locks_every_wire_layer() {
         .get("cases")
         .and_then(Value::as_array)
         .expect("instruction cases");
-    assert_eq!(cases.len(), 18);
+    assert_eq!(cases.len(), 19);
     assert_eq!(
         cases
             .iter()
@@ -388,6 +388,7 @@ fn shared_musubi_instruction_fixture_locks_every_wire_layer() {
             "retarget-one-character-alias-high-revision",
             "takedown-max-major-prerelease",
             "register-archive-max-bounds-signed-receipt",
+            "register-provider-bundle-attestation",
             "add-location-three-signed-providers",
             "publish-delegated-domain-release",
             "replace-domain-metadata-high-revision",
@@ -811,12 +812,26 @@ fn shared_musubi_instruction_fixture_locks_every_wire_layer() {
         },
     )
     .collect::<Vec<_>>();
+    let provider_attestation_references = provider_attestations
+        .iter()
+        .map(MusubiProviderBundleVerificationAttestationV1::reference)
+        .collect::<Vec<_>>();
+    let register_provider_attestation = RegisterMusubiProviderBundleAttestationV1::new(
+        provider_attestations[0].clone(),
+        u64::MAX - 31,
+    );
+    let provider_attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+        commitment.archive_id(),
+        replication_order,
+        &provider_attestation_references,
+    )
+    .expect("fixture provider attestation set is canonical");
     let add_location = AddMusubiArchiveLocationV1 {
         archive_id: commitment.archive_id(),
         location_id: MusubiArchiveLocationIdV1::new([0xC3; 32]),
         pin_manifest: ManifestDigest::new([0xC1; 32]),
         replication_order,
-        provider_attestations,
+        provider_attestation_set_digest,
         renew_after_epoch: 1_000,
         expires_at_epoch: 2_000,
         expected_location_revision: u64::MAX - 31,
@@ -1057,16 +1072,35 @@ fn shared_musubi_instruction_fixture_locks_every_wire_layer() {
         publish.publication.manifest.semantic_digest()
     );
     assert_eq!(register_archive.expected_policy_revision, u64::MAX - 30);
-    assert_eq!(add_location.provider_attestations.len(), 3);
+    assert_eq!(provider_attestations.len(), 3);
     assert!(
-        add_location
-            .provider_attestations
+        provider_attestations
             .windows(2)
             .all(|pair| pair[0].payload.binding.provider_id < pair[1].payload.binding.provider_id)
     );
     assert!(add_location.renew_after_epoch < add_location.expires_at_epoch);
     assert_eq!(add_location.expected_location_revision, u64::MAX - 31);
-    for attestation in &add_location.provider_attestations {
+    register_provider_attestation
+        .validate()
+        .expect("fixture registered provider attestation remains valid");
+    assert_eq!(
+        register_provider_attestation.expected_location_revision,
+        add_location.expected_location_revision
+    );
+    assert_eq!(
+        register_provider_attestation.attestation.reference(),
+        provider_attestation_references[0]
+    );
+    assert_eq!(
+        add_location.provider_attestation_set_digest,
+        musubi_provider_bundle_attestation_set_digest_v1(
+            add_location.archive_id,
+            add_location.replication_order,
+            &provider_attestation_references,
+        )
+        .expect("fixture provider attestation references remain canonical")
+    );
+    for attestation in &provider_attestations {
         let binding = &attestation.payload.binding;
         attestation
             .verify(binding)
@@ -1208,6 +1242,11 @@ fn shared_musubi_instruction_fixture_locks_every_wire_layer() {
         case(&root, "register-archive-max-bounds-signed-receipt"),
         register_archive,
         RegisterMusubiArchiveV1::WIRE_ID,
+    );
+    assert_case(
+        case(&root, "register-provider-bundle-attestation"),
+        register_provider_attestation,
+        RegisterMusubiProviderBundleAttestationV1::WIRE_ID,
     );
     assert_case(
         case(&root, "add-location-three-signed-providers"),

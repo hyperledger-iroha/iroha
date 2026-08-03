@@ -3148,6 +3148,19 @@ pub mod isi {
         updated_archive: Vec<u8>,
     }
 
+    enum KagemushaAuthenticatedHardwareAssertionV1 {
+        AndroidKeyMint,
+        IosAppAttest { sign_count: u32 },
+    }
+
+    struct KagemushaAuthenticatedDeviceV1 {
+        state_key: StatePath,
+        previous_archive: Vec<u8>,
+        state: KagemushaOnlineRegistrationStateV3,
+        consumption: KagemushaOnlineHardwareAssertionConsumptionV1,
+        assertion: KagemushaAuthenticatedHardwareAssertionV1,
+    }
+
     fn kagemusha_online_registration_state_key(
         registration_hash: &[u8; 32],
     ) -> Result<StatePath, Error> {
@@ -3671,11 +3684,11 @@ pub mod isi {
         })
     }
 
-    fn ensure_registered_kagemusha_v2_device(
+    fn authenticate_registered_kagemusha_v2_device(
         authorization: &KagemushaRequestAuthorizationV2,
         asset: &AssetDefinitionId,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<KagemushaOnlineHardwareAssertionCommitPlan, Error> {
+    ) -> Result<KagemushaAuthenticatedDeviceV1, Error> {
         if &authorization.asset_definition_id != asset {
             return Err(labeled_invariant(
                 "invalid_authorization",
@@ -3695,8 +3708,8 @@ pub mod isi {
                     "Kagemusha hardware authorization references an unknown registration hash",
                 )
             })?;
-        let mut state: KagemushaOnlineRegistrationStateV3 =
-            norito::decode_canonical(&previous_archive).map_err(|err| {
+        let state: KagemushaOnlineRegistrationStateV3 = norito::decode_canonical(&previous_archive)
+            .map_err(|err| {
                 labeled_invariant(
                     "invalid_attestation",
                     format!("failed to decode persisted Kagemusha registration: {err}"),
@@ -3739,37 +3752,22 @@ pub mod isi {
             )
             .into());
         }
-        let consumption = assertion_consumption(authorization)?;
-        match (&authorization.hardware_assertion, &state.lifecycle) {
+        let assertion = match (&authorization.hardware_assertion, &state.lifecycle) {
             (
                 KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(_),
-                KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused,
+                KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused
+                | KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintConsumed(_),
             ) if registration.platform == OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
                 let (package_name, signing_digest) = android_attestation_metadata(registration)?;
                 ensure_android_app_allowed_by_policy(&policy, &package_name, &signing_digest)?;
                 authorization
                     .verify_hardware_signature(&registration.assertion_public_key)
                     .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
-                state.lifecycle =
-                    KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintConsumed(
-                        consumption,
-                    );
-            }
-            (
-                KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(_),
-                KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintConsumed(_),
-            ) if registration.platform == OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
-                return Err(labeled_invariant(
-                    "hardware_assertion_consumed",
-                    "Android KeyMint registration has already authorized an operation",
-                )
-                .into());
+                KagemushaAuthenticatedHardwareAssertionV1::AndroidKeyMint
             }
             (
                 KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion),
-                KagemushaOnlineHardwareAssertionLifecycleV1::IosAppAttest {
-                    last_sign_count, ..
-                },
+                KagemushaOnlineHardwareAssertionLifecycleV1::IosAppAttest { .. },
             ) if registration.platform == OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
                 let (team_id, bundle_id, environment) = ios_attestation_metadata(registration)?;
                 let app_policy =
@@ -3781,18 +3779,16 @@ pub mod isi {
                     authenticator_data.extensions.as_ref(),
                 )?;
                 let expected_rp_id_hash = sha256_bytes(format!("{team_id}.{bundle_id}").as_bytes());
-                validate_ios_app_attest_assertion_binding(
+                validate_ios_app_attest_assertion_identity(
                     &authenticator_data,
                     expected_rp_id_hash,
-                    *last_sign_count,
                 )?;
                 authorization
                     .verify_hardware_signature(&registration.assertion_public_key)
                     .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
-                state.lifecycle = KagemushaOnlineHardwareAssertionLifecycleV1::IosAppAttest {
-                    last_sign_count: authenticator_data.sign_count,
-                    last_consumption: Some(consumption),
-                };
+                KagemushaAuthenticatedHardwareAssertionV1::IosAppAttest {
+                    sign_count: authenticator_data.sign_count,
+                }
             }
             _ => {
                 return Err(labeled_invariant(
@@ -3801,18 +3797,88 @@ pub mod isi {
                 )
                 .into());
             }
-        }
-        let updated_archive = norito::encode_canonical(&state).map_err(|err| {
+        };
+        Ok(KagemushaAuthenticatedDeviceV1 {
+            state_key,
+            previous_archive,
+            state,
+            consumption: assertion_consumption(authorization)?,
+            assertion,
+        })
+    }
+
+    fn plan_kagemusha_online_hardware_assertion(
+        mut authenticated: KagemushaAuthenticatedDeviceV1,
+    ) -> Result<KagemushaOnlineHardwareAssertionCommitPlan, Error> {
+        let next_lifecycle = match (&authenticated.assertion, &authenticated.state.lifecycle) {
+            (
+                KagemushaAuthenticatedHardwareAssertionV1::AndroidKeyMint,
+                KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused,
+            ) => KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintConsumed(
+                authenticated.consumption.clone(),
+            ),
+            (
+                KagemushaAuthenticatedHardwareAssertionV1::AndroidKeyMint,
+                KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintConsumed(_),
+            ) => {
+                return Err(labeled_invariant(
+                    "hardware_assertion_consumed",
+                    "Android KeyMint registration has already authorized an operation",
+                )
+                .into());
+            }
+            (
+                KagemushaAuthenticatedHardwareAssertionV1::IosAppAttest { sign_count },
+                KagemushaOnlineHardwareAssertionLifecycleV1::IosAppAttest {
+                    last_sign_count, ..
+                },
+            ) if sign_count > last_sign_count => {
+                KagemushaOnlineHardwareAssertionLifecycleV1::IosAppAttest {
+                    last_sign_count: *sign_count,
+                    last_consumption: Some(authenticated.consumption.clone()),
+                }
+            }
+            (
+                KagemushaAuthenticatedHardwareAssertionV1::IosAppAttest { .. },
+                KagemushaOnlineHardwareAssertionLifecycleV1::IosAppAttest { .. },
+            ) => {
+                return Err(labeled_invariant(
+                    "invalid_authorization",
+                    "iOS App Attest assertion counter must advance strictly",
+                )
+                .into());
+            }
+            _ => {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "Kagemusha authorization platform does not match its persisted registration lifecycle",
+                )
+                .into());
+            }
+        };
+        authenticated.state.lifecycle = next_lifecycle;
+        let updated_archive = norito::encode_canonical(&authenticated.state).map_err(|err| {
             labeled_invariant(
                 "invalid_attestation",
                 format!("failed to encode updated Kagemusha registration state: {err}"),
             )
         })?;
         Ok(KagemushaOnlineHardwareAssertionCommitPlan {
-            state_key,
-            previous_archive,
+            state_key: authenticated.state_key,
+            previous_archive: authenticated.previous_archive,
             updated_archive,
         })
+    }
+
+    #[cfg(test)]
+    fn ensure_registered_kagemusha_v2_device(
+        authorization: &KagemushaRequestAuthorizationV2,
+        asset: &AssetDefinitionId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaOnlineHardwareAssertionCommitPlan, Error> {
+        let authenticated =
+            authenticate_registered_kagemusha_v2_device(authorization, asset, state_transaction)?;
+        plan_kagemusha_online_hardware_assertion(authenticated)
     }
 
     fn commit_kagemusha_online_hardware_assertion(
@@ -4872,6 +4938,39 @@ pub mod isi {
         }
     }
 
+    fn authenticate_kagemusha_v4_topup_submission_before_replay(
+        asset: &AssetId,
+        authority: &AccountId,
+        authorization: &KagemushaRequestAuthorizationV2,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(KagemushaAuthenticatedDeviceV1, KagemushaV4ReplayStatus), Error> {
+        // A committed marker is consensus state, not an authentication oracle. Authenticate the
+        // transaction submitter and the registered hardware assertion before consulting it.
+        ensure_can_submit_kagemusha_topup(asset, authority, state_transaction)?;
+        let authenticated = authenticate_registered_kagemusha_v2_device(
+            authorization,
+            asset.definition(),
+            state_transaction,
+        )?;
+        let replay = kagemusha_v4_replay_status(authorization, state_transaction)?;
+        Ok((authenticated, replay))
+    }
+
+    fn authenticate_kagemusha_v4_redeem_submission_before_replay(
+        recipient: &AccountId,
+        asset: &AssetDefinitionId,
+        authority: &AccountId,
+        authorization: &KagemushaRequestAuthorizationV2,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(KagemushaAuthenticatedDeviceV1, KagemushaV4ReplayStatus), Error> {
+        // Preserve the same auth-before-state boundary for redemption receipts and markers.
+        ensure_can_submit_kagemusha_for_account(recipient, authority, state_transaction)?;
+        let authenticated =
+            authenticate_registered_kagemusha_v2_device(authorization, asset, state_transaction)?;
+        let replay = kagemusha_v4_replay_status(authorization, state_transaction)?;
+        Ok((authenticated, replay))
+    }
+
     fn validate_offline_attestation_recent_block(
         registration: &OfflineDeviceAttestationRegistration,
         state_transaction: &StateTransaction<'_, '_>,
@@ -5570,18 +5669,31 @@ pub mod isi {
         })
     }
 
+    fn validate_ios_app_attest_assertion_identity(
+        auth_data: &IosAppAttestAssertionAuthData,
+        expected_rp_id_hash: [u8; 32],
+    ) -> Result<(), Error> {
+        if auth_data.rp_id_hash != expected_rp_id_hash || auth_data.sign_count == 0 {
+            return Err(labeled_invariant(
+                "invalid_authorization",
+                "iOS App Attest RP hash or assertion counter is invalid",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     fn validate_ios_app_attest_assertion_binding(
         auth_data: &IosAppAttestAssertionAuthData,
         expected_rp_id_hash: [u8; 32],
         last_sign_count: u32,
     ) -> Result<(), Error> {
-        if auth_data.rp_id_hash != expected_rp_id_hash
-            || auth_data.sign_count == 0
-            || auth_data.sign_count <= last_sign_count
-        {
+        validate_ios_app_attest_assertion_identity(auth_data, expected_rp_id_hash)?;
+        if auth_data.sign_count <= last_sign_count {
             return Err(labeled_invariant(
                 "invalid_authorization",
-                "iOS App Attest RP hash or strictly monotonic counter is invalid",
+                "iOS App Attest assertion counter must advance strictly",
             )
             .into());
         }
@@ -7620,29 +7732,6 @@ pub mod isi {
             request
                 .validate_public_binding()
                 .map_err(|err| labeled_invariant("invalid_recursive_topup", err.to_string()))?;
-            let replay_markers =
-                match kagemusha_v4_replay_status(&request.authorization, state_transaction)? {
-                    KagemushaV4ReplayStatus::Committed => {
-                        let anchor = load_kagemusha_v4_topup_anchor(
-                            request.authorization.operation_id,
-                            state_transaction,
-                        )?;
-                        ensure_kagemusha_v4_anchor_matches_topup_request(&anchor, &request)?;
-                        let redeemed = load_kagemusha_v4_topup_drawdown(
-                            request.authorization.operation_id,
-                            state_transaction,
-                        )?;
-                        if redeemed > anchor.amount.atomic_units {
-                            return Err(labeled_invariant(
-                                "topup_drawdown_invalid",
-                                "Kagemusha V4 top-up drawdown exceeds its finalized anchor",
-                            )
-                            .into());
-                        }
-                        return Ok(());
-                    }
-                    KagemushaV4ReplayStatus::Fresh(markers) => markers,
-                };
             request
                 .validate_authorization_at(state_transaction.block_unix_timestamp_ms())
                 .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
@@ -7653,12 +7742,37 @@ pub mod isi {
                 )
                 .into());
             }
-            ensure_can_submit_kagemusha_topup(&request.asset, authority, state_transaction)?;
-            let hardware_assertion_commit = ensure_registered_kagemusha_v2_device(
-                &request.authorization,
-                request.asset.definition(),
-                state_transaction,
-            )?;
+            let (authenticated_device, replay_status) =
+                authenticate_kagemusha_v4_topup_submission_before_replay(
+                    &request.asset,
+                    authority,
+                    &request.authorization,
+                    state_transaction,
+                )?;
+            let replay_markers = match replay_status {
+                KagemushaV4ReplayStatus::Committed => {
+                    let anchor = load_kagemusha_v4_topup_anchor(
+                        request.authorization.operation_id,
+                        state_transaction,
+                    )?;
+                    ensure_kagemusha_v4_anchor_matches_topup_request(&anchor, &request)?;
+                    let redeemed = load_kagemusha_v4_topup_drawdown(
+                        request.authorization.operation_id,
+                        state_transaction,
+                    )?;
+                    if redeemed > anchor.amount.atomic_units {
+                        return Err(labeled_invariant(
+                            "topup_drawdown_invalid",
+                            "Kagemusha V4 top-up drawdown exceeds its finalized anchor",
+                        )
+                        .into());
+                    }
+                    return Ok(());
+                }
+                KagemushaV4ReplayStatus::Fresh(markers) => markers,
+            };
+            let hardware_assertion_commit =
+                plan_kagemusha_online_hardware_assertion(authenticated_device)?;
             if request.current_note.chain_id != *state_transaction.chain_id() {
                 return Err(labeled_invariant(
                     "wrong_chain",
@@ -7730,7 +7844,7 @@ pub mod isi {
                 .into());
             }
             zk_state
-                .validate_tree_integrity()
+                .validate_tree_metadata()
                 .map_err(|err| labeled_invariant("topup_anchor_invalid", err))?;
             let authoritative_initial_root = zk_state
                 .current_root()
@@ -7867,33 +7981,32 @@ pub mod isi {
             let payload_digest = request
                 .unsigned_payload_digest()
                 .map_err(|err| labeled_invariant("invalid_recursive_redeem", err.to_string()))?;
-            let replay_markers =
-                match kagemusha_v4_replay_status(&request.authorization, state_transaction)? {
-                    KagemushaV4ReplayStatus::Committed => {
-                        ensure_kagemusha_v4_redemption_receipt_matches(
-                            request.operation_id,
-                            payload_digest,
-                            state_transaction,
-                        )?;
-                        return Ok(());
-                    }
-                    KagemushaV4ReplayStatus::Fresh(markers) => markers,
-                };
             request
                 .validate_authorization_at(state_transaction.block_unix_timestamp_ms())
                 .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
 
             let statement = &request.bundle.statement;
-            ensure_can_submit_kagemusha_for_account(
-                &request.recipient,
-                authority,
-                state_transaction,
-            )?;
-            let hardware_assertion_commit = ensure_registered_kagemusha_v2_device(
-                &request.authorization,
-                &statement.asset,
-                state_transaction,
-            )?;
+            let (authenticated_device, replay_status) =
+                authenticate_kagemusha_v4_redeem_submission_before_replay(
+                    &request.recipient,
+                    &statement.asset,
+                    authority,
+                    &request.authorization,
+                    state_transaction,
+                )?;
+            let replay_markers = match replay_status {
+                KagemushaV4ReplayStatus::Committed => {
+                    ensure_kagemusha_v4_redemption_receipt_matches(
+                        request.operation_id,
+                        payload_digest,
+                        state_transaction,
+                    )?;
+                    return Ok(());
+                }
+                KagemushaV4ReplayStatus::Fresh(markers) => markers,
+            };
+            let hardware_assertion_commit =
+                plan_kagemusha_online_hardware_assertion(authenticated_device)?;
 
             let spec = state_transaction.numeric_spec_for(&statement.asset)?;
             let live_scale = spec.scale().ok_or_else(|| {
@@ -8199,14 +8312,51 @@ pub mod isi {
             let state = offline_test_state();
             let mut block = state.block(offline_test_header());
             let mut transaction = block.transaction();
-            let anchor_archive = b"validated-anchor-archive".to_vec();
-            persist_kagemusha_v4_topup_anchor_archive(
-                operation_id,
-                [0x46; 32],
-                anchor_archive.clone(),
-                &mut transaction,
-            )
-            .expect("paired anchor/drawdown initialization");
+            let asset = offline_test_asset(&ALICE_ID);
+            let amount = iroha_data_model::offline::KagemushaScaledAmountV2::new(100, 0)
+                .expect("positive anchor amount");
+            let note = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2 {
+                chain_id: transaction.chain_id().clone(),
+                asset: asset.definition().clone(),
+                note_commitment: [0x48; 32],
+                spend_nullifier: [0x49; 32],
+                amount,
+            };
+            let anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
+                version:
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
+                chain_id: transaction.chain_id().clone(),
+                payer: ALICE_ID.clone(),
+                asset,
+                asset_scale: 0,
+                amount,
+                initial_root: [0x4A; 32],
+                finalized_root: [0x4B; 32],
+                shield_leaf_index: 0,
+                current_note: note,
+                topup_operation_id: operation_id,
+                shield_verifier_id: iroha_data_model::proof::VerifyingKeyId::new(
+                    "halo2/ipa",
+                    "drawdown-state-test",
+                ),
+                shield_verifier_commitment: [0x4C; 32],
+                artifact_binding:
+                    iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+                        version:
+                            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+                        generation: "drawdown-state-test".to_owned(),
+                        manifest_sha256: [0x4D; 32],
+                    },
+                finalized_height: transaction.block_height(),
+                finalized_tx_hash: [0x4E; 32],
+                anchor_digest: [0; 32],
+            }
+            .finalize_digest()
+            .expect("canonical top-up anchor");
+            let anchor_ref = anchor.compact_ref().expect("canonical anchor reference");
+            let anchor_archive = norito::encode_canonical(&anchor).expect("canonical anchor bytes");
+            persist_kagemusha_v4_topup_anchor(&anchor, &mut transaction)
+                .expect("paired canonical anchor/drawdown initialization");
 
             let anchor_key =
                 kagemusha_v4_topup_anchor_state_key(operation_id).expect("anchor state key");
@@ -8222,8 +8372,14 @@ pub mod isi {
                 "paired initialization must persist an exact zero u128",
             );
 
-            let first = plan_kagemusha_v4_anchor_drawdown_capacities(
-                &[(operation_id, 100)],
+            assert_eq!(
+                load_kagemusha_v4_topup_anchor(operation_id, &transaction)
+                    .expect("persisted canonical anchor"),
+                anchor,
+            );
+
+            let first = plan_kagemusha_v4_anchor_drawdown(
+                core::slice::from_ref(&anchor_ref),
                 40,
                 &transaction,
             )
@@ -8235,8 +8391,8 @@ pub mod isi {
                 40,
             );
 
-            let second = plan_kagemusha_v4_anchor_drawdown_capacities(
-                &[(operation_id, 100)],
+            let second = plan_kagemusha_v4_anchor_drawdown(
+                core::slice::from_ref(&anchor_ref),
                 60,
                 &transaction,
             )
@@ -8278,8 +8434,8 @@ pub mod isi {
                 .cloned();
             let events_before = transaction.world.internal_event_buf.len();
 
-            let overdraw = plan_kagemusha_v4_anchor_drawdown_capacities(
-                &[(operation_id, 100)],
+            let overdraw = plan_kagemusha_v4_anchor_drawdown(
+                core::slice::from_ref(&anchor_ref),
                 1,
                 &transaction,
             )
@@ -8335,8 +8491,8 @@ pub mod isi {
                 .smart_contract_state
                 .remove(drawdown_key.clone());
             assert!(
-                plan_kagemusha_v4_anchor_drawdown_capacities(
-                    &[(operation_id, 100)],
+                plan_kagemusha_v4_anchor_drawdown(
+                    core::slice::from_ref(&anchor_ref),
                     1,
                     &transaction,
                 )
@@ -8349,8 +8505,8 @@ pub mod isi {
                 .smart_contract_state
                 .insert(drawdown_key, vec![0; 15]);
             assert!(
-                plan_kagemusha_v4_anchor_drawdown_capacities(
-                    &[(operation_id, 100)],
+                plan_kagemusha_v4_anchor_drawdown(
+                    core::slice::from_ref(&anchor_ref),
                     1,
                     &transaction,
                 )
@@ -8491,6 +8647,80 @@ pub mod isi {
             assert!(
                 redeem.contains("verify_bundle_operation_v4"),
                 "partial redemption must separately verify its operation-bound change bundle",
+            );
+        }
+
+        #[test]
+        fn kagemusha_v4_execute_replay_boundary_is_auth_before_committed_state() {
+            let source = include_str!("offline.rs");
+            let assert_ordered = |label: &str, body: &str, needles: &[&str]| {
+                let mut cursor = 0;
+                for needle in needles {
+                    let offset = body[cursor..].find(needle).unwrap_or_else(|| {
+                        panic!("{label} is missing required boundary step `{needle}`")
+                    });
+                    cursor += offset + needle.len();
+                }
+            };
+
+            let topup_helper_start = source
+                .find("fn authenticate_kagemusha_v4_topup_submission_before_replay")
+                .expect("top-up pre-replay boundary");
+            let redeem_helper_start = source
+                .find("fn authenticate_kagemusha_v4_redeem_submission_before_replay")
+                .expect("redemption pre-replay boundary");
+            let helper_end = source[redeem_helper_start..]
+                .find("fn validate_offline_attestation_recent_block")
+                .map(|offset| redeem_helper_start + offset)
+                .expect("end of redemption pre-replay boundary");
+            assert_ordered(
+                "top-up pre-replay boundary",
+                &source[topup_helper_start..redeem_helper_start],
+                &[
+                    "ensure_can_submit_kagemusha_topup",
+                    "authenticate_registered_kagemusha_v2_device",
+                    "kagemusha_v4_replay_status",
+                ],
+            );
+            assert_ordered(
+                "redemption pre-replay boundary",
+                &source[redeem_helper_start..helper_end],
+                &[
+                    "ensure_can_submit_kagemusha_for_account",
+                    "authenticate_registered_kagemusha_v2_device",
+                    "kagemusha_v4_replay_status",
+                ],
+            );
+
+            let topup_execute_start = source
+                .find("impl Execute for TopUpKagemushaRecursiveV4")
+                .expect("top-up executor");
+            let redeem_execute_start = source
+                .find("impl Execute for RedeemKagemushaRecursiveV4")
+                .expect("redemption executor");
+            let tests_start = redeem_execute_start
+                + source[redeem_execute_start..]
+                    .find("#[cfg(test)]")
+                    .expect("offline executor test module");
+            assert_ordered(
+                "top-up executor",
+                &source[topup_execute_start..redeem_execute_start],
+                &[
+                    "validate_authorization_at",
+                    "authenticate_kagemusha_v4_topup_submission_before_replay",
+                    "match replay_status",
+                    "load_kagemusha_v4_topup_anchor",
+                ],
+            );
+            assert_ordered(
+                "redemption executor",
+                &source[redeem_execute_start..tests_start],
+                &[
+                    "validate_authorization_at",
+                    "authenticate_kagemusha_v4_redeem_submission_before_replay",
+                    "match replay_status",
+                    "ensure_kagemusha_v4_redemption_receipt_matches",
+                ],
             );
         }
 
@@ -9240,6 +9470,152 @@ pub mod isi {
                 norito::to_bytes(&state).expect("canonical online registration state"),
             );
             state_key
+        }
+
+        fn committed_android_replay_fixture(
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> (
+            AssetId,
+            KagemushaRequestAuthorizationV2,
+            KagemushaRequestAuthorizationV2,
+            StatePath,
+        ) {
+            let asset = offline_test_asset(&ALICE_ID);
+            let assertion_key = online_assertion_signing_key(0x71);
+            let wrong_key = online_assertion_signing_key(0x72);
+            let registration = android_online_registration(
+                &ALICE_ID,
+                asset.definition(),
+                &assertion_key,
+                POLICY_TEST_TIME_MS + 60_000,
+            );
+            let authorization = android_online_authorization(&registration, &assertion_key);
+            let wrong_signature = android_online_authorization(&registration, &wrong_key);
+            wrong_signature
+                .validate_for_payload_at(wrong_signature.payload_digest, POLICY_TEST_TIME_MS)
+                .expect("the substituted signature remains structurally well formed");
+            let state_key = install_android_online_registration(state_transaction, registration);
+            let replay_markers = match kagemusha_v4_replay_status(&authorization, state_transaction)
+                .expect("fresh replay fixture")
+            {
+                KagemushaV4ReplayStatus::Fresh(markers) => markers,
+                KagemushaV4ReplayStatus::Committed => panic!("fixture unexpectedly committed"),
+            };
+            let consumption = ensure_registered_kagemusha_v2_device(
+                &authorization,
+                asset.definition(),
+                state_transaction,
+            )
+            .expect("valid hardware assertion consumption plan");
+            commit_kagemusha_online_hardware_assertion(consumption, state_transaction)
+                .expect("consume fixture hardware assertion");
+            commit_kagemusha_v4_replay_markers(replay_markers, state_transaction);
+            (asset, authorization, wrong_signature, state_key)
+        }
+
+        #[test]
+        fn topup_committed_replay_authenticates_submitter_and_hardware_before_lookup() {
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            let (asset, authorization, wrong_signature, state_key) =
+                committed_android_replay_fixture(&mut state_transaction);
+
+            let unauthorized = authenticate_kagemusha_v4_topup_submission_before_replay(
+                &asset,
+                &BOB_ID,
+                &authorization,
+                &state_transaction,
+            );
+            let Err(error) = unauthorized else {
+                panic!("an unrelated submitter must not observe a committed top-up retry")
+            };
+            assert!(error.to_string().contains("unauthorized_controller"));
+
+            let malformed = authenticate_kagemusha_v4_topup_submission_before_replay(
+                &asset,
+                &ALICE_ID,
+                &wrong_signature,
+                &state_transaction,
+            );
+            let Err(error) = malformed else {
+                panic!("a wrong hardware signature must not observe a committed top-up retry")
+            };
+            assert!(error.to_string().contains("invalid_authorization"));
+
+            let registration_before = state_transaction
+                .world
+                .smart_contract_state
+                .get(&state_key)
+                .cloned()
+                .expect("committed registration lifecycle");
+            let (_, replay) = authenticate_kagemusha_v4_topup_submission_before_replay(
+                &asset,
+                &ALICE_ID,
+                &authorization,
+                &state_transaction,
+            )
+            .expect("authorized exact retry");
+            assert!(matches!(replay, KagemushaV4ReplayStatus::Committed));
+            assert_eq!(
+                state_transaction.world.smart_contract_state.get(&state_key),
+                Some(&registration_before),
+                "idempotent retry authentication must not consume the lifecycle again",
+            );
+        }
+
+        #[test]
+        fn redeem_committed_replay_authenticates_submitter_and_hardware_before_receipt() {
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            let (asset, authorization, wrong_signature, state_key) =
+                committed_android_replay_fixture(&mut state_transaction);
+
+            let unauthorized = authenticate_kagemusha_v4_redeem_submission_before_replay(
+                &ALICE_ID,
+                asset.definition(),
+                &BOB_ID,
+                &authorization,
+                &state_transaction,
+            );
+            let Err(error) = unauthorized else {
+                panic!("an unrelated submitter must not observe a committed redemption receipt")
+            };
+            assert!(error.to_string().contains("unauthorized_controller"));
+
+            let malformed = authenticate_kagemusha_v4_redeem_submission_before_replay(
+                &ALICE_ID,
+                asset.definition(),
+                &ALICE_ID,
+                &wrong_signature,
+                &state_transaction,
+            );
+            let Err(error) = malformed else {
+                panic!("a wrong hardware signature must not observe a committed redemption receipt")
+            };
+            assert!(error.to_string().contains("invalid_authorization"));
+
+            let registration_before = state_transaction
+                .world
+                .smart_contract_state
+                .get(&state_key)
+                .cloned()
+                .expect("committed registration lifecycle");
+            let (_, replay) = authenticate_kagemusha_v4_redeem_submission_before_replay(
+                &ALICE_ID,
+                asset.definition(),
+                &ALICE_ID,
+                &authorization,
+                &state_transaction,
+            )
+            .expect("authorized exact retry");
+            assert!(matches!(replay, KagemushaV4ReplayStatus::Committed));
+            assert_eq!(
+                state_transaction.world.smart_contract_state.get(&state_key),
+                Some(&registration_before),
+                "idempotent retry authentication must not consume the lifecycle again",
+            );
         }
 
         #[test]

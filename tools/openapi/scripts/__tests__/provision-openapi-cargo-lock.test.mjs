@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {
   access,
   chmod,
@@ -25,8 +26,11 @@ import {fileURLToPath} from 'node:url';
 import {
   OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
   OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
+  OPENAPI_CARGO_LOCK_PIN_OWNER_SCHEMA,
   OPENAPI_CARGO_LOCK_PIN_PATH,
   OPENAPI_CARGO_LOCK_PIN_SCHEMA,
+  encodeOpenApiCargoLockPin,
+  generateOpenApiCargoLockPin,
   generateOpenApiCargoLockCandidate,
   parseArgs,
   parseOpenApiCargoLockPin,
@@ -39,58 +43,82 @@ const execFileAsync = promisify(execFile);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '..', '..', '..', '..');
 const pinPath = path.join(repoRoot, OPENAPI_CARGO_LOCK_PIN_PATH);
-const fixturePath = path.join(repoRoot, 'Cargo.lock');
 
 let canonicalTempRoot;
+let fixtureDirectory;
+let fixturePath;
 let pinBytes;
 let fixtureBytes;
+let pin;
 
 test.before(async () => {
   canonicalTempRoot = await realpath(tmpdir());
-  [pinBytes, fixtureBytes] = await Promise.all([
-    readFile(pinPath),
-    readFile(fixturePath),
-  ]);
+  const trackedPinBytes = await readFile(pinPath);
+  const trackedPin = parseOpenApiCargoLockPin(trackedPinBytes);
+  assert.equal(OPENAPI_CARGO_LOCK_EXPECTED_BYTES, trackedPin.bytes);
+  assert.equal(
+    OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
+    trackedPin.sha256Hex,
+  );
+  fixtureBytes = Buffer.from(
+    '# synthetic OpenAPI Cargo.lock fixture\nversion = 4\n',
+    'utf8',
+  );
+  pinBytes = encodeOpenApiCargoLockPin(fixtureBytes);
+  pin = parseOpenApiCargoLockPin(pinBytes);
+  fixtureDirectory = await makeTempDirectory('openapi-lock-canonical-');
+  fixturePath = path.join(fixtureDirectory, 'Cargo.lock');
+  await writeFile(fixturePath, fixtureBytes, {mode: 0o644});
+});
+
+test.after(async () => {
+  if (fixtureDirectory) {
+    await rm(fixtureDirectory, {recursive: true, force: true});
+  }
 });
 
 test('V1 pin and CLI are exact and canonical', async () => {
-  const pin = parseOpenApiCargoLockPin(pinBytes);
   assert.deepEqual(pin, {
     schema: OPENAPI_CARGO_LOCK_PIN_SCHEMA,
-    bytes: OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
-    sha256Hex: OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
+    bytes: fixtureBytes.length,
+    sha256Hex: createHash('sha256').update(fixtureBytes).digest('hex'),
   });
-  assert.equal(fixtureBytes.length, OPENAPI_CARGO_LOCK_EXPECTED_BYTES);
   assert.equal(
     validateOpenApiCargoLockBytes(fixtureBytes, pin),
     fixtureBytes,
   );
-  assert.deepEqual(parseArgs([]), {sourcePath: undefined});
-  assert.deepEqual(parseArgs(['/dev/null'].map((source) => `--source=${source}`)), {
+  assert.deepEqual(parseArgs(['provision']), {
+    command: 'provision',
+    sourcePath: undefined,
+  });
+  assert.deepEqual(parseArgs(['provision', '--source=/dev/null']), {
+    command: 'provision',
     sourcePath: '/dev/null',
   });
+  assert.throws(() => parseArgs([]), /requires a provision or pin command/i);
   assert.throws(
-    () => parseArgs(['--source=relative/Cargo.lock']),
+    () => parseArgs(['provision', '--source=relative/Cargo.lock']),
     /absolute canonical path/i,
   );
   assert.throws(
-    () => parseArgs(['--source=/a', '--source=/b']),
+    () => parseArgs(['provision', '--source=/a', '--source=/b']),
     /only once/i,
   );
-  assert.throws(() => parseArgs(['--target=/tmp/Cargo.lock']), /unknown/i);
+  assert.throws(
+    () => parseArgs(['provision', '--target=/tmp/Cargo.lock']),
+    /unknown/i,
+  );
+  assert.throws(() => parseArgs(['--source=/dev/null']), /unknown.*command/i);
 
   for (const invalid of [
     pinBytes.subarray(0, pinBytes.length - 1),
     Buffer.from(
-      pinBytes.toString('utf8').replace('bytes=315213', 'bytes=315214'),
+      pinBytes.toString('utf8').replace(`bytes=${pin.bytes}`, 'bytes=0'),
     ),
     Buffer.from(
       pinBytes
         .toString('utf8')
-        .replace(
-          OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
-          '0'.repeat(64),
-        ),
+        .replace(pin.sha256Hex, '0'.repeat(64)),
     ),
     Buffer.from(
       pinBytes
@@ -103,6 +131,142 @@ test('V1 pin and CLI are exact and canonical', async () => {
       /pin|schema|size|SHA-256|LF/i,
     );
   }
+});
+
+test('pin-owner CLI requires one absolute source and one explicit mode', () => {
+  const root = path.parse(process.cwd()).root;
+  const sourcePath = path.join(root, 'source', 'Cargo.lock');
+  const outputPath = path.join(root, 'stage', 'pin.txt');
+  const checkPath = path.join(root, 'repo', 'pin.txt');
+  assert.deepEqual(
+    parseArgs(['pin', `--source=${sourcePath}`, `--output=${outputPath}`]),
+    {command: 'pin', sourcePath, outputPath, checkPath: undefined},
+  );
+  assert.deepEqual(
+    parseArgs(['pin', `--source=${sourcePath}`, `--check=${checkPath}`]),
+    {command: 'pin', sourcePath, outputPath: undefined, checkPath},
+  );
+  assert.throws(() => parseArgs(['pin']), /requires explicit --source/i);
+  assert.throws(
+    () => parseArgs(['pin', '--source=relative/Cargo.lock', `--output=${outputPath}`]),
+    /absolute normalized/i,
+  );
+  assert.throws(
+    () => parseArgs(['pin', `--source=${sourcePath}`, '--output=relative/pin.txt']),
+    /absolute normalized/i,
+  );
+  assert.throws(
+    () =>
+      parseArgs([
+        'pin',
+        `--source=${sourcePath}`,
+        `--output=${outputPath}`,
+        `--check=${checkPath}`,
+      ]),
+    /exactly one/i,
+  );
+  assert.throws(
+    () => parseArgs(['pin', `--source=${sourcePath}`, `--output=${sourcePath}`]),
+    /must not alias/i,
+  );
+  assert.throws(
+    () => parseArgs(['pin', `--source=${sourcePath}`, '--output-root=/tmp/pin']),
+    /unknown/i,
+  );
+});
+
+test('pin owner stages canonical bytes idempotently and verifies them', async (context) => {
+  const root = await makeTempDirectory('openapi-pin-owner-');
+  context.after(() => rm(root, {recursive: true, force: true}));
+  const sourcePath = path.join(root, 'Cargo.lock');
+  const outputPath = path.join(root, 'openapi-cargo-lock-v1.txt');
+  const sourceBytes = Buffer.from('# deterministic lock fixture\nversion = 4\n');
+  await writeFile(sourcePath, sourceBytes, {mode: 0o644});
+  const trackedBefore = await readFile(pinPath);
+
+  const first = await generateOpenApiCargoLockPin({sourcePath, outputPath});
+  const firstBytes = await readFile(outputPath);
+  assert.deepEqual(firstBytes, encodeOpenApiCargoLockPin(sourceBytes));
+  assert.equal(first.schema, OPENAPI_CARGO_LOCK_PIN_OWNER_SCHEMA);
+  assert.equal(first.status, 'staged');
+  assert.equal(first.source, sourcePath);
+  assert.equal(first.path, outputPath);
+
+  const second = await generateOpenApiCargoLockPin({sourcePath, outputPath});
+  assert.equal(second.status, 'staged');
+  assert.deepEqual(await readFile(outputPath), firstBytes);
+
+  const verified = await generateOpenApiCargoLockPin({
+    sourcePath,
+    checkPath: outputPath,
+  });
+  assert.equal(verified.status, 'verified');
+  assert.deepEqual(await readFile(pinPath), trackedBefore);
+});
+
+test(
+  'pin owner rejects stale checks, linked sources, and executable sources',
+  {skip: process.platform === 'win32'},
+  async (context) => {
+    const root = await makeTempDirectory('openapi-pin-owner-invalid-');
+    context.after(() => rm(root, {recursive: true, force: true}));
+    const sourcePath = path.join(root, 'Cargo.lock');
+    const checkPath = path.join(root, 'pin.txt');
+    await writeFile(sourcePath, 'source lock\n', {mode: 0o644});
+    await writeFile(checkPath, encodeOpenApiCargoLockPin(Buffer.from('other lock\n')));
+    await assert.rejects(
+      () => generateOpenApiCargoLockPin({sourcePath, checkPath}),
+      /is stale/i,
+    );
+
+    const symbolicPath = path.join(root, 'symbolic.lock');
+    await symlink(sourcePath, symbolicPath);
+    await assert.rejects(
+      () => generateOpenApiCargoLockPin({sourcePath: symbolicPath, checkPath}),
+      /must be canonical|symbolic link/i,
+    );
+
+    const hardLinkPath = path.join(root, 'hard-link.lock');
+    await link(sourcePath, hardLinkPath);
+    await assert.rejects(
+      () => generateOpenApiCargoLockPin({sourcePath, checkPath}),
+      /exactly one hard link/i,
+    );
+    await rm(hardLinkPath);
+
+    await chmod(sourcePath, 0o755);
+    await assert.rejects(
+      () => generateOpenApiCargoLockPin({sourcePath, checkPath}),
+      /must not be executable/i,
+    );
+  },
+);
+
+test('pin owner detects source races and refuses repository outputs', async (context) => {
+  const root = await makeTempDirectory('openapi-pin-owner-race-');
+  context.after(() => rm(root, {recursive: true, force: true}));
+  const sourcePath = path.join(root, 'Cargo.lock');
+  const outputPath = path.join(root, 'pin.txt');
+  await writeFile(sourcePath, 'before\n', {mode: 0o644});
+
+  await assert.rejects(
+    () =>
+      generateOpenApiCargoLockPin({
+        sourcePath,
+        outputPath,
+        beforePublish: () => writeFile(sourcePath, 'after!\n'),
+      }),
+    /replaced or mutated after read/i,
+  );
+  await assert.rejects(() => access(outputPath), {code: 'ENOENT'});
+
+  await writeFile(sourcePath, 'stable\n', {mode: 0o644});
+  const repositoryOutput = path.join(repoRoot, 'release', 'pin-owner-must-not-write.txt');
+  await assert.rejects(
+    () => generateOpenApiCargoLockPin({sourcePath, outputPath: repositoryOutput}),
+    /outside the repository/i,
+  );
+  await assert.rejects(() => access(repositoryOutput), {code: 'ENOENT'});
 });
 
 test(
@@ -179,8 +343,8 @@ test('operator source installs atomically and exact root locks are reused', asyn
     status: 'installed',
     source: 'operator',
     path: 'Cargo.lock',
-    bytes: OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
-    sha256_hex: OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
+    bytes: pin.bytes,
+    sha256_hex: pin.sha256Hex,
   });
   assert.deepEqual(await readFile(path.join(root, 'Cargo.lock')), fixtureBytes);
   if (process.platform !== 'win32') {
@@ -351,7 +515,7 @@ test('staged Cargo.lock pin substitution is rejected', async (context) => {
   await writeFile(
     repositoryPinPath,
     pinBytes.toString('utf8').replace(
-      OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
+      pin.sha256Hex,
       '0'.repeat(64),
     ),
   );
@@ -371,6 +535,27 @@ test('staged Cargo.lock pin substitution is rejected', async (context) => {
         },
       }),
     /pin index and HEAD entries must reference the same blob/i,
+  );
+});
+
+test('unstaged Cargo.lock pin substitution is rejected', async (context) => {
+  const root = await makeRepository({ignoreRootLock: true});
+  context.after(() => rm(root, {recursive: true, force: true}));
+  const repositoryPinPath = path.join(root, OPENAPI_CARGO_LOCK_PIN_PATH);
+  await writeFile(
+    repositoryPinPath,
+    encodeOpenApiCargoLockPin(Buffer.from('different lock bytes\n')),
+  );
+
+  await assert.rejects(
+    () =>
+      provisionOpenApiCargoLock({
+        repoRoot: root,
+        generateCandidate: async () => {
+          throw new Error('generation must not run for a substituted pin');
+        },
+      }),
+    /working file must exactly match its HEAD blob/i,
   );
 });
 

@@ -3,8 +3,8 @@
 //! These utilities construct Norito TLV envelopes expected by the pointer‑ABI
 //! and place them into the VM INPUT region using the internal bump allocator
 //! (`IVM::alloc_input_tlv`). In addition, Kotodama provides language‑level
-//! intrinsics (e.g., `zk_verify_transfer`, `zk_vote_verify_ballot`, and the
-//! vendor bridge wrappers) that lower to SCALLs with Norito TLVs. These helpers
+//! intrinsics (for example, ballot verification and the vendor bridge wrappers)
+//! that lower to SCALLs with Norito TLVs. These helpers
 //! remain useful for tests and for building TLVs from host code.
 
 use crate::{
@@ -67,16 +67,6 @@ pub fn zk_verify_with_env(
     vm.execute_metered_syscall_with_host(host, number)
         .expect("syscall ok");
     vm.register(10)
-}
-
-/// Convenience wrapper specifically for ZK_VERIFY_TRANSFER.
-pub fn zk_verify_transfer(host: &mut dyn IVMHost, vm: &mut IVM, env_bytes: &[u8]) -> u64 {
-    zk_verify_with_env(host, vm, env_bytes, syscalls::SYSCALL_ZK_VERIFY_TRANSFER)
-}
-
-/// Convenience wrapper specifically for ZK_VERIFY_UNSHIELD.
-pub fn zk_verify_unshield(host: &mut dyn IVMHost, vm: &mut IVM, env_bytes: &[u8]) -> u64 {
-    zk_verify_with_env(host, vm, env_bytes, syscalls::SYSCALL_ZK_VERIFY_UNSHIELD)
 }
 
 /// Vendor bridge: enqueue a built-in instruction by passing a Norito-encoded

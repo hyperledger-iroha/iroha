@@ -264,27 +264,6 @@ fn load_tlv<'a>(
     Ok(tlv)
 }
 
-fn load_getter_tlv<'a>(
-    vm: &'a IVM,
-    address: u64,
-    expected: PointerType,
-    direct: bool,
-    resolver: AddressResolver,
-) -> Result<pointer_abi::Tlv<'a>, VMError> {
-    let address = if direct {
-        resolver(vm, address)
-    } else {
-        address
-    };
-    let tlv = vm.validate_tlv(address)?;
-    if tlv.type_id != expected
-        || !pointer_abi::is_type_allowed_for_policy(vm.syscall_policy(), tlv.type_id)
-    {
-        return Err(VMError::NoritoInvalid);
-    }
-    Ok(tlv)
-}
-
 fn decode_canonical<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: norito::codec::Decode + norito::codec::Encode,
@@ -973,13 +952,11 @@ pub fn typed_getter(
     number: u32,
     resolver: AddressResolver,
 ) -> Result<JsonGetterCost, VMError> {
-    let canonical = syscalls::canonical_helper_syscall(number);
-    if !syscalls::is_json_getter_syscall(canonical) {
+    if !syscalls::is_json_getter_syscall(number) {
         return Err(VMError::UnknownSyscall(number));
     }
-    let direct = number != canonical;
-    let json_tlv = load_getter_tlv(vm, vm.register(10), PointerType::Json, direct, resolver)?;
-    let key_tlv = load_getter_tlv(vm, vm.register(11), PointerType::Name, direct, resolver)?;
+    let json_tlv = load_tlv(vm, vm.register(10), PointerType::Json, resolver)?;
+    let key_tlv = load_tlv(vm, vm.register(11), PointerType::Name, resolver)?;
     let json: Json = decode_canonical(json_tlv.payload)?;
     let key: Name = decode_canonical(key_tlv.payload)?;
     let value = StackSafeJsonValue::new(
@@ -990,7 +967,7 @@ pub fn typed_getter(
         .value()
         .as_object()
         .and_then(|object| object.get(key.as_ref()))
-        .and_then(|field| getter_value(canonical, field));
+        .and_then(|field| getter_value(number, field));
     drop(value);
     let input_bytes = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
     let layout = crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;

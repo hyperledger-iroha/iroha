@@ -57,16 +57,15 @@ import {
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
-  buildShieldInstruction,
-  buildZkTransferInstruction,
-  buildUnshieldInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,
   encodeInstruction,
 } from "../src/instructionBuilders.js";
+import * as instructionBuilderExports from "../src/instructionBuilders.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { analyzeEntrypointValueTypeV1 } from "../src/entrypointSchema.js";
+import { isCanonicalGovernanceSelectorV1 } from "../src/governanceSelector.js";
 import {
   PROOF_BOX_MAX_ENCODED_BYTES,
   proofBoxEncodedLength,
@@ -92,6 +91,43 @@ const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const SORA_I105_DISCRIMINANT = 0x2f1;
 const CANCEL_ASSET_LOCK_ESCROW_ID =
   "hash:996264C84790C64086AAB0EF693A1D33EC18FC0B1C1229774C461A00939A6687#F2BD";
+
+baseTest("governance V1 selectors share the exact bounded unreserved grammar", () => {
+  assert.equal(isCanonicalGovernanceSelectorV1("referendum-1"), true);
+  assert.equal(
+    isCanonicalGovernanceSelectorV1(`a${".".repeat(126)}z`),
+    true,
+  );
+  for (const invalid of [
+    "",
+    ".",
+    "..",
+    ".hidden",
+    "a/b",
+    "a%2Fb",
+    "has space",
+    "a\n",
+    "a\0",
+    "a\u007f",
+    "投票",
+    "a".repeat(129),
+  ]) {
+    assert.equal(isCanonicalGovernanceSelectorV1(invalid), false, invalid);
+  }
+});
+
+baseTest("all governance instruction builders reject selector aliases", () => {
+  const cases = [
+    () => buildCastZkBallotInstruction({ electionId: "a/b", proof: "AA==" }),
+    () => buildCastPlainBallotInstruction({ referendumId: ".hidden" }),
+    () => buildCreateElectionInstruction({ electionId: "a%2Fb" }),
+    () => buildSubmitBallotInstruction({ electionId: "a".repeat(129) }),
+    () => buildFinalizeElectionInstruction({ electionId: "..", tally: [0] }),
+  ];
+  for (const build of cases) {
+    assert.throws(build, /must be 1-128 RFC 3986 unreserved ASCII/);
+  }
+});
 
 function loadInstructionFixture(name) {
   const fixturePath = path.join(repoRoot, "fixtures", "norito_instructions", name);
@@ -2699,31 +2735,163 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
   assert.equal(withoutReason.RemoveSmartContractBytes.reason, undefined);
 });
 
-test("buildProposeDeployContractInstruction normalizes hashes and window", () => {
+baseTest("buildProposeDeployContractInstruction normalizes exact hashes and full-u64 window", () => {
   const instruction = buildProposeDeployContractInstruction({
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-    codeHash: "AA".repeat(32),
-    abiHash: Buffer.alloc(32, 0xbb),
+    codeHash: `blake2b32:0x${"AA".repeat(32)}`,
+    abiHash: `0X${"BB".repeat(32)}`,
     abiVersion: "1",
-    window: { lower: 10, upper: 20 },
+    window: { lower: 10, upper: 0xffff_ffff_ffff_ffffn },
     votingMode: "Plain",
   });
   const expected = {
     ProposeDeployContract: {
       contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       code_hash_hex: "aa".repeat(32),
-      abi_hash_hex: Buffer.alloc(32, 0xbb).toString("hex"),
+      abi_hash_hex: "bb".repeat(32),
       abi_version: "1",
-      window: { lower: "10", upper: "20" },
+      window: { lower: "10", upper: "18446744073709551615" },
       mode: "Plain",
     },
   };
   assert.deepEqual(instruction, expected);
-  const decoded = encodeAndDecode(instruction);
+  const decoded = withPureJsInstructionCodec(() => encodeAndDecode(instruction));
   assert.deepEqual(decoded, expected);
 });
 
-test("buildProposeDeployContractInstruction rejects non-canonical voting modes", () => {
+baseTest("buildProposeDeployContractInstruction encodes manifest provenance as field seven", () => {
+  const instruction = buildProposeDeployContractInstruction({
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+    manifestProvenance: {
+      signer: `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
+      signature: `ed25519:${"22".repeat(64)}`,
+    },
+  });
+  assert.deepEqual(instruction.ProposeDeployContract.manifest_provenance, {
+    signer: `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
+    signature: "22".repeat(64).toUpperCase(),
+  });
+  assert.equal(Object.hasOwn(instruction.ProposeDeployContract, "limits"), false);
+
+  const decoded = withPureJsInstructionCodec(() => encodeAndDecode(instruction));
+  assert.deepEqual(
+    decoded.ProposeDeployContract.manifest_provenance,
+    instruction.ProposeDeployContract.manifest_provenance,
+  );
+  assert.equal(Object.hasOwn(decoded.ProposeDeployContract, "limits"), false);
+});
+
+baseTest("buildProposeDeployContractInstruction has a closed canonical local target", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const field of [
+    "contractAlias",
+    "contract_address",
+    "code_hash",
+    "mode",
+    "limits",
+    "manifest_provenance",
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, [field]: "retired" }),
+      new RegExp(field, "u"),
+    );
+  }
+  for (const contractAddress of [
+    base.contractAddress.toUpperCase(),
+    ` ${base.contractAddress}`,
+    `${base.contractAddress.slice(0, -1)}p`,
+    "merchant@paynet",
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, contractAddress }),
+      /contractAddress|contract address|Bech32/u,
+    );
+  }
+});
+
+baseTest("buildProposeDeployContractInstruction rejects non-V1 ABI and unordered windows", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const abiVersion of ["01", "1 ", "2", 1]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, abiVersion }),
+      /exactly '1'/u,
+    );
+  }
+  for (const window of [
+    { lower: 2, upper: 1 },
+    { lower: "01", upper: "2" },
+    { lower: 0, upper: 0x1_0000_0000_0000_0000n },
+    { lower: 0, upper: 1, from: 0 },
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, window }),
+      /window/u,
+    );
+  }
+});
+
+baseTest("buildProposeDeployContractInstruction enforces the governance hash grammar", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const codeHash of [
+    ` ${"aa".repeat(32)}`,
+    `${"aa".repeat(32)} `,
+    `sha256:${"aa".repeat(32)}`,
+    `blake2b32:${"aa".repeat(31)}`,
+    `blake2b32:0x${"gg".repeat(32)}`,
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction({ ...base, codeHash }),
+      /codeHash/u,
+    );
+  }
+});
+
+baseTest("governance proposal builder rejects every private-key alias recursively", () => {
+  const base = {
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    codeHash: "aa".repeat(32),
+    abiHash: "bb".repeat(32),
+  };
+  for (const alias of [
+    "private_key",
+    "privateKey",
+    "private_key_hex",
+    "privateKeyHex",
+    "private_key_bytes",
+    "privateKeyBytes",
+    "private_key_seed",
+    "privateKeySeed",
+    "private_key_multihash",
+    "privateKeyMultihash",
+    "private_key_algorithm",
+    "privateKeyAlgorithm",
+  ]) {
+    assert.throws(
+      () =>
+        buildProposeDeployContractInstruction({
+          ...base,
+          window: { lower: 0, upper: 1, nested: [{ [alias]: "secret" }] },
+        }),
+      new RegExp(alias, "u"),
+    );
+  }
+});
+
+baseTest("buildProposeDeployContractInstruction rejects non-canonical voting modes", () => {
   const base = {
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
@@ -2764,8 +2932,8 @@ test("buildProposeDeployContractInstruction rejects non-canonical voting modes",
   }
 });
 
-test("buildCastZkBallotInstruction encodes proof and JSON inputs", () => {
-  const publicInputs = { tally: "aye" };
+baseTest("buildCastZkBallotInstruction encodes proof and closed public inputs", () => {
+  const publicInputs = { direction: "Aye" };
   const instruction = buildCastZkBallotInstruction({
     electionId: "ref-1",
     proof: Buffer.from([0x01, 0x02]),
@@ -2783,7 +2951,7 @@ test("buildCastZkBallotInstruction encodes proof and JSON inputs", () => {
   assert.deepEqual(decoded, expected);
 });
 
-test("buildCastZkBallotInstruction defaults public inputs to empty object", () => {
+baseTest("buildCastZkBallotInstruction defaults public inputs to empty object", () => {
   const instruction = buildCastZkBallotInstruction({
     electionId: "ref-2",
     proof: Buffer.from([0x03]),
@@ -2793,7 +2961,7 @@ test("buildCastZkBallotInstruction defaults public inputs to empty object", () =
   assert.deepEqual(decoded, instruction);
 });
 
-test("buildCastZkBallotInstruction rejects unsupported public input keys", () => {
+baseTest("buildCastZkBallotInstruction rejects unsupported public input keys", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
@@ -2813,40 +2981,68 @@ test("buildCastZkBallotInstruction rejects unsupported public input keys", () =>
   );
 });
 
-test("buildCastZkBallotInstruction canonicalizes hex hint values", () => {
+baseTest("buildCastZkBallotInstruction has a closed camel-case request shape", () => {
+  const base = {
+    electionId: "ref-closed",
+    proof: Buffer.from([0x04]),
+  };
+  for (const field of [
+    "election_id",
+    "proofB64",
+    "proof_b64",
+    "publicInputsJson",
+    "public_inputs_json",
+  ]) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({ ...base, [field]: "retired" }),
+      new RegExp(field, "u"),
+    );
+  }
+});
+
+baseTest("buildCastZkBallotInstruction canonicalizes all six scalar inputs losslessly", () => {
   const instruction = buildCastZkBallotInstruction({
     electionId: "ref-3",
     proof: Buffer.from([0x04]),
     publicInputs: {
       owner: SAMPLE_ACCOUNT_I105_LITERAL,
-      amount: "250",
-      duration_blocks: 12,
+      amount: "18446744073709551616.25",
+      duration_blocks: 0xffff_ffff_ffff_ffffn,
+      direction: "Nay",
       root_hint: `0x${"Aa".repeat(32)}`,
       nullifier: `blake2b32:${"BB".repeat(32)}`,
     },
   });
-  const parsed = JSON.parse(instruction.CastZkBallot.public_inputs_json);
-  assert.equal(parsed.root_hint, "aa".repeat(32));
-  assert.equal(parsed.nullifier, "bb".repeat(32));
-});
-
-test("buildCastZkBallotInstruction canonicalizes public input ordering", () => {
-  const instruction = buildCastZkBallotInstruction({
-    electionId: "ref-4",
-    proof: Buffer.from([0x05]),
-    publicInputs: {
-      tally: "aye",
-      meta: { z: 1, a: 2 },
-      badge: "voter",
-    },
-  });
   assert.equal(
     instruction.CastZkBallot.public_inputs_json,
-    '{"badge":"voter","meta":{"a":2,"z":1},"tally":"aye"}',
+    `{"root_hint":"${"aa".repeat(32)}","owner":"${SAMPLE_ACCOUNT_I105_LITERAL}","amount":"18446744073709551616.25","duration_blocks":18446744073709551615,"direction":"Nay","nullifier":"${"bb".repeat(32)}"}`,
+  );
+  const decoded = withPureJsInstructionCodec(() => encodeAndDecode(instruction));
+  assert.equal(
+    decoded.CastZkBallot.public_inputs_json,
+    instruction.CastZkBallot.public_inputs_json,
   );
 });
 
-test("buildCastZkBallotInstruction rejects non-object public inputs", () => {
+baseTest("buildCastZkBallotInstruction rejects formerly accepted meta and badge fields", () => {
+  for (const publicInputs of [
+    { meta: { z: 1, a: 2 } },
+    { badge: "voter" },
+    { direction: "Aye", tally: "aye" },
+  ]) {
+    assert.throws(
+      () =>
+        buildCastZkBallotInstruction({
+          electionId: "ref-4",
+          proof: Buffer.from([0x05]),
+          publicInputs,
+        }),
+      /not supported/u,
+    );
+  }
+});
+
+baseTest("buildCastZkBallotInstruction rejects non-object public inputs", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
@@ -2862,7 +3058,7 @@ test("buildCastZkBallotInstruction rejects non-object public inputs", () => {
   );
 });
 
-test("buildCastZkBallotInstruction requires complete lock hints", () => {
+baseTest("buildCastZkBallotInstruction requires complete lock hints", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
@@ -2878,7 +3074,7 @@ test("buildCastZkBallotInstruction requires complete lock hints", () => {
   );
 });
 
-test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
+baseTest("buildCastZkBallotInstruction rejects noncanonical owner", () => {
   const malformedOwner = ACCOUNT_ID.replace(/^sora/u, "ｓｏｒａ");
   assert.throws(
     () =>
@@ -2899,13 +3095,173 @@ test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
   );
 });
 
-test("buildCastZkBallotInstruction rejects empty proof bytes", () => {
+baseTest("buildCastZkBallotInstruction rejects noncanonical direction and Quantity", () => {
+  const base = {
+    electionId: "ref-6",
+    proof: Buffer.from([0x07]),
+  };
+  for (const direction of ["aye", "NAY", "Abstain ", 0]) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({
+        ...base,
+        publicInputs: { direction },
+      }),
+      /exactly Aye, Nay, or Abstain/u,
+    );
+  }
+  for (const amount of [250, "01", "-1", "1.", " 1"] ) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({
+        ...base,
+        publicInputs: {
+          owner: SAMPLE_ACCOUNT_I105_LITERAL,
+          amount,
+          duration_blocks: 1,
+        },
+      }),
+      /Quantity|quantity|numeric/u,
+    );
+  }
+});
+
+baseTest("buildCastZkBallotInstruction rejects lossy or out-of-range durations", () => {
+  const base = {
+    electionId: "ref-duration",
+    proof: Buffer.from([0x07]),
+  };
+  for (const duration_blocks of [
+    -1,
+    Number.MAX_SAFE_INTEGER + 1,
+    "01",
+    "1 ",
+    0x1_0000_0000_0000_0000n,
+  ]) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({
+        ...base,
+        publicInputs: {
+          owner: SAMPLE_ACCOUNT_I105_LITERAL,
+          amount: "1",
+          duration_blocks,
+        },
+      }),
+      /duration_blocks/u,
+    );
+  }
+});
+
+baseTest("governance ZK ballot rejects every private-key alias recursively", () => {
+  for (const alias of [
+    "private_key",
+    "privateKey",
+    "private_key_hex",
+    "privateKeyHex",
+    "private_key_bytes",
+    "privateKeyBytes",
+    "private_key_seed",
+    "privateKeySeed",
+    "private_key_multihash",
+    "privateKeyMultihash",
+    "private_key_algorithm",
+    "privateKeyAlgorithm",
+  ]) {
+    assert.throws(
+      () => buildCastZkBallotInstruction({
+        electionId: "ref-secret",
+        proof: Buffer.from([0x08]),
+        publicInputs: { meta: [{ [alias]: "secret" }] },
+      }),
+      new RegExp(alias, "u"),
+    );
+  }
+});
+
+baseTest("direct governance Norito validation runs before native dispatch", () => {
+  const prior = globalThis.__IROHA_NORITO_BINDING__;
+  let nativeCalls = 0;
+  globalThis.__IROHA_NORITO_BINDING__ = {
+    noritoEncodeInstruction() {
+      nativeCalls += 1;
+      return Buffer.from([0]);
+    },
+  };
+  try {
+    assert.throws(
+      () => noritoEncodeInstruction({
+        ProposeDeployContract: {
+          contract_address:
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+          code_hash_hex: "aa".repeat(32),
+          abi_hash_hex: "bb".repeat(32),
+          abi_version: "1",
+          limits: {},
+        },
+      }),
+      /unknown field limits/u,
+    );
+    assert.throws(
+      () => noritoEncodeInstruction({
+        CastZkBallot: {
+          election_id: "ref-direct",
+          proof_b64: "AQ==",
+          public_inputs_json: '{"meta":{"privateKey":"secret"}}',
+        },
+      }),
+      /privateKey/u,
+    );
+    assert.equal(nativeCalls, 0);
+  } finally {
+    if (prior === undefined) {
+      delete globalThis.__IROHA_NORITO_BINDING__;
+    } else {
+      globalThis.__IROHA_NORITO_BINDING__ = prior;
+    }
+  }
+});
+
+baseTest("direct pure-JS CastZkBallot preserves a raw max-u64 JSON token", () => {
+  const instructionJson = JSON.stringify({
+    CastZkBallot: {
+      election_id: "ref-direct",
+      proof_b64: "AQ==",
+      public_inputs_json:
+        '{"duration_blocks":18446744073709551615,"owner":"' +
+        SAMPLE_ACCOUNT_I105_LITERAL +
+        '","amount":"1","direction":"Abstain"}',
+    },
+  });
+  const decoded = withPureJsInstructionCodec(() =>
+    noritoDecodeInstruction(noritoEncodeInstruction(instructionJson)));
+  assert.equal(
+    decoded.CastZkBallot.public_inputs_json,
+    `{"owner":"${SAMPLE_ACCOUNT_I105_LITERAL}","amount":"1","duration_blocks":18446744073709551615,"direction":"Abstain"}`,
+  );
+});
+
+baseTest("direct pure-JS deploy proposal preserves raw max-u64 window tokens", () => {
+  const instructionJson =
+    '{"ProposeDeployContract":{' +
+    '"contract_address":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",' +
+    `"code_hash_hex":"blake2b32:0x${"AA".repeat(32)}",` +
+    `"abi_hash_hex":"${"BB".repeat(32)}",` +
+    '"abi_version":"1","window":{"lower":0,"upper":18446744073709551615}}}';
+  const decoded = withPureJsInstructionCodec(() =>
+    noritoDecodeInstruction(noritoEncodeInstruction(instructionJson)));
+  assert.deepEqual(decoded.ProposeDeployContract.window, {
+    lower: "0",
+    upper: "18446744073709551615",
+  });
+  assert.equal(decoded.ProposeDeployContract.code_hash_hex, "aa".repeat(32));
+  assert.equal(decoded.ProposeDeployContract.abi_hash_hex, "bb".repeat(32));
+});
+
+baseTest("buildCastZkBallotInstruction rejects empty proof bytes", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
         electionId: "ref-1",
         proof: Buffer.alloc(0),
-        publicInputs: { tally: "aye" },
+        publicInputs: {},
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
@@ -3072,19 +3428,56 @@ test("buildEnactReferendumInstruction normalizes hashes and window defaults", ()
   assert.deepEqual(encodeAndDecode(instruction), expected);
 });
 
-test("buildFinalizeReferendumInstruction encodes proposal id", () => {
+test("buildFinalizeReferendumInstruction encodes one exact proposal digest", () => {
+  const proposalId = "ab".repeat(32);
   const instruction = buildFinalizeReferendumInstruction({
-    referendumId: "ref-3",
-    proposalId: Buffer.alloc(32, 0x66),
+    referendumId: proposalId,
+    proposalId: Buffer.alloc(32, 0xab),
   });
   const expected = {
     FinalizeReferendum: {
-      referendum_id: "ref-3",
-      proposal_id: toByteArray(Buffer.alloc(32, 0x66)),
+      referendum_id: proposalId,
+      proposal_id: toByteArray(Buffer.alloc(32, 0xab)),
     },
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
+});
+
+baseTest("buildFinalizeReferendumInstruction rejects aliases and mismatch", () => {
+  const proposalId = "ab".repeat(32);
+  for (const [invalid, expectedError] of [
+    [{ referendumId: "ref-3", proposalId }, /64 lowercase hexadecimal characters/],
+    [
+      { referendumId: proposalId.toUpperCase(), proposalId },
+      /64 lowercase hexadecimal characters/,
+    ],
+    [
+      { referendumId: proposalId, proposalId: `0x${proposalId}` },
+      /64 lowercase hexadecimal characters/,
+    ],
+    [
+      { referendumId: proposalId, proposalId: proposalId.toUpperCase() },
+      /64 lowercase hexadecimal characters/,
+    ],
+    [
+      { referendumId: proposalId, proposalId: ` ${proposalId}` },
+      /surrounding whitespace/,
+    ],
+  ]) {
+    assert.throws(
+      () => buildFinalizeReferendumInstruction(invalid),
+      expectedError,
+    );
+  }
+  assert.throws(
+    () =>
+      buildFinalizeReferendumInstruction({
+        referendumId: proposalId,
+        proposalId: Buffer.alloc(32, 0x67),
+      }),
+    /referendumId must equal proposalId/,
+  );
 });
 
 test("buildPersistCouncilForEpochInstruction validates members", () => {
@@ -3218,14 +3611,28 @@ test("buildCancelTwitterEscrowInstruction wraps keyed hash", () => {
 test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   const instruction = buildRegisterZkAssetInstruction({
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    mode: "zk-native",
-    transferVerifyingKey: "halo2/ipa:vk_transfer",
+    mode: "Hybrid",
     unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
   });
   const payload = encodeAndDecode(instruction).zk.RegisterZkAsset;
-  assert.equal(payload.mode, "ZkNative");
-  assert.deepEqual(payload.vk_transfer, { backend: "halo2/ipa", name: "vk_transfer" });
+  assert.equal(payload.mode, "Hybrid");
   assert.deepEqual(payload.vk_unshield, { backend: "halo2/ipa", name: "vk_unshield" });
+});
+
+test("buildRegisterZkAssetInstruction rejects retired native mode and transfer verifier", () => {
+  const base = { assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" };
+  assert.throws(
+    () => buildRegisterZkAssetInstruction({ ...base, mode: "ZkNative" }),
+    /must be 'Hybrid'/,
+  );
+  assert.throws(
+    () =>
+      buildRegisterZkAssetInstruction({
+        ...base,
+        transferVerifyingKey: "halo2\/ipa:vk_transfer",
+      }),
+    /is no longer supported/,
+  );
 });
 
 test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition metadata", () => {
@@ -3255,693 +3662,29 @@ test("buildCancelConfidentialPolicyTransitionInstruction wraps hash literal", ()
   assert.equal(payload.transition_id, normalizedHashHex(transitionId));
 });
 
-test("buildShieldInstruction encodes encrypted payload fields", () => {
-  const instruction = buildShieldInstruction({
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    fromAccountId: ACCOUNT_ID_INPUT,
-    amount: "340282366920938463463374607431768211456.25",
-    noteCommitment: Buffer.alloc(32, 0x01),
-    encryptedPayload: {
-      version: 1,
-      ephemeralPublicKey: Buffer.alloc(32, 0x02),
-      nonce: Buffer.alloc(24, 0x03),
-      ciphertext: Buffer.from("ciphertext"),
-    },
-  });
-  const payload = encodeAndDecode(instruction).zk.Shield;
-  assert.equal(payload.amount, "340282366920938463463374607431768211456.25");
-  assert.equal(payload.enc_payload.version, 1);
-  assert.equal(payload.enc_payload.ciphertext, Buffer.from("ciphertext").toString("base64"));
-});
-
-descriptorTest("buildShieldInstruction enforces strict canonical Quantity inputs", () => {
-  const wide = "340282366920938463463374607431768211456.25";
-  assert.equal(
-    buildShieldInstruction({
-      assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-      fromAccountId: ACCOUNT_ID_INPUT,
-      amount: wide,
-      noteCommitment: Buffer.alloc(32, 0x01),
-      encryptedPayload: {
-        version: 1,
-        ephemeralPublicKey: Buffer.alloc(32, 0x02),
-        nonce: Buffer.alloc(24, 0x03),
-        ciphertext: Buffer.from("ciphertext"),
-      },
-    }).zk.Shield.amount,
-    wide,
+descriptorTest("retired generic confidential instructions stay absent from builders and codec discriminants", () => {
+  const noritoSource = fs.readFileSync(
+    path.join(repoRoot, "javascript", "iroha_js", "src", "norito.js"),
+    "utf8",
   );
-  for (const amount of [Number.MAX_SAFE_INTEGER + 1, "01", "1.0", "-1"]) {
+  const retiredVariants = [
+    ["Shi", "eld"],
+    ["Zk", "Transfer"],
+    ["Un", "shield"],
+  ].map((parts) => parts.join(""));
+
+  for (const variant of retiredVariants) {
+    const builder = ["build", variant, "Instruction"].join("");
+    const wireId = ["iroha_data_model::isi::zk::", variant].join("");
+    assert.equal(instructionBuilderExports[builder], undefined, builder);
     assert.throws(
-      () => buildShieldInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        fromAccountId: ACCOUNT_ID_INPUT,
-        amount,
-        noteCommitment: Buffer.alloc(32, 0x01),
-        encryptedPayload: {
-          version: 1,
-          ephemeralPublicKey: Buffer.alloc(32, 0x02),
-          nonce: Buffer.alloc(24, 0x03),
-          ciphertext: Buffer.from("ciphertext"),
-        },
-      }),
-      (error) => {
-        assert.equal(error?.code, ValidationErrorCode.INVALID_NUMERIC);
-        assert.match(String(error?.message), /canonical|quantity|string|bigint|numbers are not/i);
-        return true;
-      },
+      () => encodeInstruction({ zk: { [variant]: {} } }),
+      /retired|does not support|unsupported/u,
+      variant,
     );
+    assert.equal(noritoSource.includes(wireId), false, wireId);
   }
 });
-
-function canonicalProofAttachmentInput(overrides = {}) {
-  return {
-    backend: "halo2/ipa",
-    proof: Buffer.from("proof"),
-    verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-    ...overrides,
-  };
-}
-
-test("buildZkTransferInstruction normalizes proof attachments", () => {
-  const instruction = buildZkTransferInstruction({
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    inputs: [Buffer.alloc(32, 0x11)],
-    outputs: [Buffer.alloc(32, 0x22)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-    },
-  });
-  const payload = encodeAndDecode(instruction).zk.ZkTransfer;
-  assert.equal(payload.proof.backend, "halo2/ipa");
-  assert.equal(payload.proof.vk_ref.name, "vk_transfer");
-  assert.equal(payload.inputs.length, 1);
-});
-
-baseTest("proof attachment verifier ids use the exact Rust portable grammar", () => {
-  const validName = "halo2/ipa::transfer_v1";
-  const instruction = buildZkTransferInstruction({
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    inputs: [Buffer.alloc(32, 0x11)],
-    outputs: [Buffer.alloc(32, 0x22)],
-    proof: canonicalProofAttachmentInput({
-      verifyingKeyRef: { backend: "halo2/ipa", name: validName },
-    }),
-  });
-  assert.equal(instruction.zk.ZkTransfer.proof.vk_ref.name, validName);
-
-  for (const name of [
-    "",
-    "Uppercase",
-    " leading",
-    "trailing ",
-    "_leading",
-    "trailing_",
-    "a..b",
-    "a//b",
-    "a:::b",
-    "a/:b",
-    "a:/b",
-    "a/.b",
-    "a./b",
-    "a:.b",
-    "a.:b",
-    "é",
-    "a".repeat(257),
-  ]) {
-    assert.throws(
-      () =>
-        buildZkTransferInstruction({
-          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          inputs: [Buffer.alloc(32, 0x11)],
-          outputs: [Buffer.alloc(32, 0x22)],
-          proof: canonicalProofAttachmentInput({
-            verifyingKeyRef: { backend: "halo2/ipa", name },
-          }),
-        }),
-      /portable verifier-key registry grammar/,
-      name,
-    );
-  }
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: canonicalProofAttachmentInput({
-          verifyingKeyRef: "halo2/ipa:vk_transfer",
-        }),
-      }),
-    /must be a plain object/,
-  );
-});
-
-baseTest("proof attachment enforces the complete ProofBox budget by arithmetic", () => {
-  const backend = "halo2/ipa";
-  const maxProofBytes = proofBoxMaxProofBytes(backend);
-  assert.equal(maxProofBytes, PROOF_BOX_MAX_ENCODED_BYTES - 23);
-  assert.equal(
-    proofBoxEncodedLength(backend, maxProofBytes),
-    PROOF_BOX_MAX_ENCODED_BYTES,
-  );
-  assert.equal(
-    proofBoxEncodedLength(backend, maxProofBytes + 1),
-    PROOF_BOX_MAX_ENCODED_BYTES + 1,
-  );
-
-  const oversizedSparseProof = new Array(maxProofBytes + 1);
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: canonicalProofAttachmentInput({ proof: oversizedSparseProof }),
-      }),
-    /complete 67108864-byte ProofBox limit/,
-  );
-});
-
-baseTest("ProofBox accounting follows canonical compact-length transitions", () => {
-  assert.equal(proofBoxEncodedLength("a".repeat(126), 0), 137);
-  assert.equal(proofBoxEncodedLength("a".repeat(127), 0), 139);
-  assert.equal(proofBoxEncodedLength("a".repeat(128), 0), 141);
-  assert.equal(proofBoxEncodedLength("a", 119), 131);
-  assert.equal(proofBoxEncodedLength("a", 120), 133);
-  assert.equal(proofBoxEncodedLength("a", 16_375), 16_388);
-  assert.equal(proofBoxEncodedLength("a", 16_376), 16_390);
-});
-
-baseTest("proof attachment accepts only exact canonical base64 proof text", () => {
-  const valid = buildZkTransferInstruction({
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    inputs: [Buffer.alloc(32, 0x11)],
-    outputs: [Buffer.alloc(32, 0x22)],
-    proof: canonicalProofAttachmentInput({ proof: "cHJvb2Y=" }),
-  });
-  assert.deepEqual(valid.zk.ZkTransfer.proof.proof.bytes, Array.from(Buffer.from("proof")));
-  for (const proof of ["", "cHJvb2Y=\n", "AB==", "cHJvb2Y"] ) {
-    assert.throws(
-      () =>
-        buildZkTransferInstruction({
-          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          inputs: [Buffer.alloc(32, 0x11)],
-          outputs: [Buffer.alloc(32, 0x22)],
-          proof: canonicalProofAttachmentInput({ proof }),
-        }),
-      /canonical standard base64/,
-    );
-  }
-});
-
-baseTest("proof attachment commitments and envelope hashes fail closed", () => {
-  const proofBytes = Buffer.from([1, 2, 3]);
-  const envelopeHash = Array.from(blake2b256(proofBytes));
-  envelopeHash[31] |= 1;
-  const valid = buildZkTransferInstruction({
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    inputs: [Buffer.alloc(32, 0x11)],
-    outputs: [Buffer.alloc(32, 0x22)],
-    proof: canonicalProofAttachmentInput({
-      proof: proofBytes,
-      verifyingKeyCommitment: Buffer.alloc(32, 0x11),
-      envelopeHash,
-    }),
-  });
-  assert.deepEqual(valid.zk.ZkTransfer.proof.envelope_hash, envelopeHash);
-
-  for (const overrides of [
-    { verifyingKeyCommitment: Buffer.alloc(32) },
-    { envelopeHash: Buffer.alloc(32) },
-    { envelopeHash: Buffer.alloc(32, 0x77) },
-  ]) {
-    assert.throws(
-      () =>
-        buildZkTransferInstruction({
-          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          inputs: [Buffer.alloc(32, 0x11)],
-          outputs: [Buffer.alloc(32, 0x22)],
-          proof: canonicalProofAttachmentInput({ proof: proofBytes, ...overrides }),
-        }),
-      /must be non-zero|must match the proof bytes/,
-    );
-  }
-});
-
-test("buildZkTransferInstruction rejects legacy inline verifying key fields", () => {
-  for (const field of [
-    "vk_inline",
-    "vkInline",
-    "verifyingKeyInline",
-    "verifying_key_inline",
-  ]) {
-    assert.throws(
-      () =>
-        buildZkTransferInstruction({
-          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          inputs: [Buffer.alloc(32, 0x11)],
-          outputs: [Buffer.alloc(32, 0x22)],
-          proof: {
-            backend: "halo2/ipa",
-            proof: Buffer.from("proof"),
-            verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-            [field]: { backend: "halo2/ipa", bytes: Buffer.from("legacy-vk") },
-          },
-        }),
-      (error) => {
-        assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-        assert.match(String(error?.message), /not supported by the canonical ProofAttachment/i);
-        return true;
-      },
-    );
-  }
-});
-
-test("buildZkTransferInstruction rejects proof backend mismatch", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proofBytes: {
-            backend: "stark/fri",
-            bytes: Buffer.from("proof"),
-          },
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /proofBytes.*not supported/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects verifying key backend mismatch", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          verifyingKeyRef: { backend: "stark/fri", name: "vk_transfer" },
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /verifyingKeyRef\.backend must match/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects legacy vk_reference alias", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          vk_reference: "halo2/ipa:vk_transfer",
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /vk_reference is not supported/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects vk_reference shadow field", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-          vk_reference: "halo2/ipa:shadow",
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /vk_reference is not supported/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects nested verifyingKeyRef shadow fields", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          verifyingKeyRef: {
-            backend: "halo2/ipa",
-            name: "vk_transfer",
-            vk_reference: "shadow",
-          },
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /verifyingKeyRef must contain exactly backend, name/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects structured proof shadow fields", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proofBytes: {
-            backend: "halo2/ipa",
-            bytes: Buffer.from("proof"),
-            vk_inline: { backend: "halo2/ipa", bytes: Buffer.from("legacy") },
-          },
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /proofBytes.*not supported/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects verifying key reference alias collisions", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-          vk_ref: { backend: "halo2/ipa", name: "shadow" },
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /vk_ref.*not supported/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects nested verifying key id alias collisions", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          verifyingKeyRef: {
-            backend: "halo2/ipa",
-            backendId: "stark/fri",
-            name: "vk_transfer",
-          },
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /must contain exactly backend, name/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects blank verifying key id fields", () => {
-  for (const verifyingKeyRef of [
-    { backend: "halo2/ipa", name: "   " },
-    { backend: "   ", name: "vk_transfer" },
-  ]) {
-    assert.throws(
-      () =>
-        buildZkTransferInstruction({
-          assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          inputs: [Buffer.alloc(32, 0x11)],
-          outputs: [Buffer.alloc(32, 0x22)],
-          proof: {
-            backend: "halo2/ipa",
-            proof: Buffer.from("proof"),
-            verifyingKeyRef,
-          },
-        }),
-      (error) => {
-        assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
-        assert.match(String(error?.message), /portable verifier-key registry grammar/i);
-        return true;
-      },
-    );
-  }
-});
-
-test("buildZkTransferInstruction rejects proof byte alias collisions", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          proof_b64: Buffer.from("shadow").toString("base64"),
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /proof_b64.*not supported/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects commitment alias collisions", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-          verifyingKeyCommitment: Buffer.alloc(32, 0xaa),
-          vk_commitment: Buffer.alloc(32, 0xbb),
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /vk_commitment.*not supported/i);
-      return true;
-    },
-  );
-});
-
-test("buildZkTransferInstruction rejects envelope hash alias collisions", () => {
-  assert.throws(
-    () =>
-      buildZkTransferInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        inputs: [Buffer.alloc(32, 0x11)],
-        outputs: [Buffer.alloc(32, 0x22)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-          envelopeHash: Buffer.alloc(32, 0xaa),
-          proofEnvelopeHash: Buffer.alloc(32, 0xbb),
-        },
-      }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /proofEnvelopeHash.*not supported/i);
-      return true;
-    },
-  );
-});
-
-test("buildUnshieldInstruction honours optional root hints", () => {
-  const instruction = buildUnshieldInstruction({
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    destinationAccountId: ACCOUNT_ID_INPUT,
-    publicAmount: "18446744073709551616.25",
-    inputs: [Buffer.alloc(32, 0x55)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-    },
-    rootHint: Buffer.alloc(32, 0x66),
-  });
-  const payload = encodeAndDecode(instruction).zk.Unshield;
-  assert.equal(payload.public_amount, "18446744073709551616.25");
-  assert.deepEqual(payload.root_hint, toByteArray(Buffer.alloc(32, 0x66)));
-  assert.deepEqual(Object.keys(payload).sort(), [
-    "asset",
-    "inputs",
-    "proof",
-    "public_amount",
-    "root_hint",
-    "to",
-  ]);
-});
-
-descriptorTest("Unshield builders and the pure codec reject the retired outputs field", () => {
-  const options = {
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    destinationAccountId: ACCOUNT_ID_INPUT,
-    publicAmount: "1",
-    inputs: [Buffer.alloc(32, 0x55)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-    },
-  };
-  assert.throws(
-    () => buildUnshieldInstruction({ ...options, outputs: [Buffer.alloc(32, 0x77)] }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /unshield\.outputs.*not supported/i);
-      return true;
-    },
-  );
-
-  const canonical = canonicalizeClone(buildUnshieldInstruction(options));
-  const encoded = withPureJsInstructionCodec(() => noritoEncodeInstruction(canonical));
-  const decoded = withPureJsInstructionCodec(() => noritoDecodeInstruction(encoded));
-  assert.deepEqual(decoded, canonical);
-  assert.deepEqual(Object.keys(decoded.zk.Unshield).sort(), [
-    "asset",
-    "inputs",
-    "proof",
-    "public_amount",
-    "root_hint",
-    "to",
-  ]);
-
-  const stale = canonicalizeClone(canonical);
-  stale.zk.Unshield.outputs = [Array(32).fill(0x77)];
-  assert.throws(
-    () => withPureJsInstructionCodec(() => noritoEncodeInstruction(stale)),
-    /zk\.Unshield contains unknown field outputs/i,
-  );
-
-  assert.throws(
-    () =>
-      withPureJsInstructionCodec(() =>
-        noritoDecodeInstruction(
-          Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
-        ),
-      ),
-    /trailing bytes/i,
-  );
-});
-
-test("native Unshield codec rejects the retired output-bearing shape", () => {
-  const instruction = canonicalizeClone(
-    buildUnshieldInstruction({
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      destinationAccountId: ACCOUNT_ID_INPUT,
-      publicAmount: "1",
-      inputs: [Buffer.alloc(32, 0x55)],
-      proof: {
-        backend: "halo2/ipa",
-        proof: Buffer.from("proof"),
-        verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-      },
-    }),
-  );
-  instruction.zk.Unshield.outputs = [Array(32).fill(0x77)];
-  assert.throws(
-    () => nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
-    /outputs|unknown field/i,
-  );
-  assert.throws(
-    () =>
-      nativeBinding.noritoDecodeInstruction(
-        Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
-      ),
-    /decode|canonical|trailing|field/i,
-  );
-});
-
-descriptorTest("buildUnshieldInstruction enforces strict canonical Quantity inputs", () => {
-  const wide = "18446744073709551616.25";
-  assert.equal(
-    buildUnshieldInstruction({
-      assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-      destinationAccountId: ACCOUNT_ID_INPUT,
-      publicAmount: wide,
-      inputs: [Buffer.alloc(32, 0x55)],
-      proof: {
-        backend: "halo2/ipa",
-        proof: Buffer.from("proof"),
-        verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-      },
-    }).zk.Unshield.public_amount,
-    wide,
-  );
-  for (const publicAmount of [5, "05", "5.0", "-5"]) {
-    assert.throws(
-      () => buildUnshieldInstruction({
-        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        destinationAccountId: ACCOUNT_ID_INPUT,
-        publicAmount,
-        inputs: [Buffer.alloc(32, 0x55)],
-        proof: {
-          backend: "halo2/ipa",
-          proof: Buffer.from("proof"),
-          verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-        },
-      }),
-      (error) => {
-        assert.equal(error?.code, ValidationErrorCode.INVALID_NUMERIC);
-        return true;
-      },
-    );
-  }
-});
-
 test("buildCreateElectionInstruction normalizes verifying keys", () => {
   const instruction = buildCreateElectionInstruction({
     electionId: "election-1",

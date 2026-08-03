@@ -1665,7 +1665,7 @@ impl IrohaRuntimeDeps {
         self
     }
 
-    /// Attach the production Kubo/IPFS/IPNS request authenticator for the
+    /// Attach the production Kubo/IPFS request authenticator for the
     /// supervised Governance DAG service.
     #[must_use]
     pub fn with_sorafs_governance_dag_ipfs_authenticator(
@@ -9042,8 +9042,8 @@ impl Iroha {
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
         mut runtime_deps: IrohaRuntimeDeps,
-        musubi_publication_deployment: Option<
-            musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+        musubi_publication_factory: Option<
+            Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
         >,
     ) -> ReportResult<
         (
@@ -9920,6 +9920,10 @@ impl Iroha {
             require_sm_handshake_match: config.network.require_sm_handshake_match,
             require_sm_openssl_preview_match: config.network.require_sm_openssl_preview_match,
         };
+        let configured_validator_dial_roster: BTreeSet<_> =
+            filter_validators_from_trusted(config.common.trusted_peers.value())
+                .into_iter()
+                .collect();
         let initial_trusted_sources = config
             .common
             .trusted_peers
@@ -9928,14 +9932,21 @@ impl Iroha {
             .iter()
             .map(|peer| peer.id().clone())
             .collect();
-        let (network, child) = IrohaNetwork::start_with_crypto_and_initial_trusted_sources(
+        let p2p_identity_keys = iroha_p2p::P2pIdentityKeys::new(
             config.common.key_pair.clone(),
+            config.common.soranet_transport_key_pair.clone(),
+        )
+        .attach_with(|| config.network.address.clone().into_attachment())
+        .change_context(StartError::StartP2p)?;
+        let (network, child) = IrohaNetwork::start_with_crypto_and_initial_authorities(
+            p2p_identity_keys,
             config.network.clone(),
             config.common.chain.clone(),
             Some(consensus_caps.clone()),
             Some(confidential_caps),
             Some(crypto_caps),
             initial_trusted_sources,
+            configured_validator_dial_roster.iter().cloned().collect(),
             supervisor.shutdown_signal(),
         )
         .await
@@ -10355,6 +10366,7 @@ impl Iroha {
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
             config.common.trusted_peers.value().clone(),
+            configured_validator_dial_roster,
             config.common.key_pair.clone(),
             config.network.peer_gossip_period,
             config.network.peer_gossip_max_period,
@@ -10911,7 +10923,7 @@ impl Iroha {
             } else {
                 sorafs_runtime_deps
             };
-        let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
+        let mut sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
             sorafs_storage_config,
             sorafs_repair_config,
             sorafs_gc_config,
@@ -10928,6 +10940,13 @@ impl Iroha {
                 .map_err(|error| {
                     Report::new(StartError::StartTorii).attach(format!(
                         "failed to prepare the supervised Governance DAG service: {error}"
+                    ))
+                })?;
+            sorafs_node
+                .install_governance_dag_mirror_read_handle(runner.mirror_read_handle())
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to install the supervised Governance DAG mirror reader: {error}"
                     ))
                 })?;
             let service_shutdown = supervisor.shutdown_signal();
@@ -11371,6 +11390,14 @@ impl Iroha {
         } else {
             None
         };
+        let musubi_publication_context =
+            musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(
+                config.common.chain.clone(),
+                *config.genesis.expected_hash.as_ref(),
+                Arc::clone(&state),
+                Arc::clone(&queue),
+                sorafs_node.clone(),
+            );
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
@@ -11621,11 +11648,17 @@ impl Iroha {
             .setup_shutdown_on_os_signals()
             .change_context(StartError::ListenOsSignal)?;
 
-        let (_availability, publication_child) =
-            musubi_publication_service::start_injected_musubi_publication_private_service_v1(
-                musubi_publication_deployment,
+        let (_availability, publication_child) = musubi_publication_service::
+            build_and_start_injected_musubi_publication_private_service_v1(
+                musubi_publication_factory,
+                musubi_publication_context,
                 supervisor.shutdown_signal(),
-            );
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to assemble private Musubi publication service: {error}"
+                ))
+            })?;
         if let Some(child) = publication_child {
             supervisor.monitor(child);
         }
@@ -18041,12 +18074,39 @@ mod tests {
         let supervisor = compact_source
             .find("sorafs_node::prepare_governance_dag_service_from_view(view,providers)")
             .expect("launcher prepares the Governance DAG service");
+        let install = compact_source
+            .find("sorafs_node.install_governance_dag_mirror_read_handle(runner.mirror_read_handle())")
+            .expect("launcher installs the service-owned Governance DAG mirror reader");
+        let service_spawn = compact_source[install..]
+            .find("tokio::spawn(asyncmove")
+            .map(|offset| install + offset)
+            .expect("launcher spawns the prepared Governance DAG service");
+        let node_construction = compact_source
+            .find(
+                "letmutsorafs_node=sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(",
+            )
+            .expect("launcher constructs the embedded SoraFS node");
+        let first_node_clone = compact_source[node_construction..]
+            .find("sorafs_node.clone()")
+            .map(|offset| node_construction + offset)
+            .expect("launcher eventually shares the embedded SoraFS node");
         let state_open = compact_source
             .find("Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(")
             .expect("launcher contains the persistent-state startup corridor");
         assert!(
-            qualification < state_open && state_open < supervisor,
-            "provider and publisher qualification must precede state access, while service preparation remains a startup-fatal step"
+            qualification < state_open
+                && state_open < supervisor
+                && supervisor < install
+                && install < service_spawn
+                && install < first_node_clone,
+            "provider qualification, state opening, service preparation, mirror-reader installation, service spawn, and first node sharing must retain their startup-fatal order"
+        );
+        assert_eq!(
+            compact_source[node_construction..first_node_clone]
+                .matches("install_governance_dag_mirror_read_handle(")
+                .count(),
+            1,
+            "the service-owned mirror reader must be installed exactly once"
         );
         assert!(
             compact_source
@@ -21268,6 +21328,14 @@ mod tests {
                 // Use `ExposedPrivateKey`'s Display impl to emit the actual hex instead of
                 // the redacted placeholder provided by `PrivateKey::Display`.
                 .write("private_key", ExposedPrivateKey(privkey).to_string())
+                .write(
+                    "soranet_transport_public_key",
+                    "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B",
+                )
+                .write(
+                    "soranet_transport_private_key",
+                    "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89",
+                )
                 .write(
                     ["network", "address"],
                     socket_addr!(127.0.0.1:1337).to_literal(),

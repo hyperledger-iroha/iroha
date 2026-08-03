@@ -21,7 +21,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         )
 
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 18)
+        XCTAssertEqual(cases.count, 19)
         XCTAssertEqual(
             try cases.map { try XCTUnwrap($0["id"] as? String) },
             [
@@ -39,6 +39,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
                 "retarget-one-character-alias-high-revision",
                 "takedown-max-major-prerelease",
                 "register-archive-max-bounds-signed-receipt",
+                "register-provider-bundle-attestation",
                 "add-location-three-signed-providers",
                 "publish-delegated-domain-release",
                 "replace-domain-metadata-high-revision",
@@ -116,7 +117,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
     func testTypedInstructionsEmbedExactFixturePairsInSignedBatch() throws {
         let fixture = try loadFixture()
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 18)
+        XCTAssertEqual(cases.count, 19)
         let instructions = try cases.map { try instruction(for: $0) }
         let frames = try instructions.map { try $0.transactionInstructionFrame() }
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
@@ -322,6 +323,18 @@ final class MusubiInstructionsV1Tests: XCTestCase {
             )
         )
 
+        let attestationRegistration = try XCTUnwrap(
+            try instruction(
+                for: fixtureCase("register-provider-bundle-attestation")
+            ) as? RegisterMusubiProviderBundleAttestationV1
+        )
+        XCTAssertThrowsError(
+            try RegisterMusubiProviderBundleAttestationV1(
+                attestation: attestationRegistration.attestation,
+                expectedLocationRevision: 0
+            )
+        )
+
         let location = try XCTUnwrap(
             try instruction(
                 for: fixtureCase("add-location-three-signed-providers")
@@ -333,10 +346,24 @@ final class MusubiInstructionsV1Tests: XCTestCase {
                 locationID: location.locationID,
                 pinManifest: location.pinManifest,
                 replicationOrder: location.replicationOrder,
-                providerAttestations: location.providerAttestations,
+                providerAttestationSetDigest: location.providerAttestationSetDigest,
                 renewAfterEpoch: location.renewAfterEpoch,
                 expiresAtEpoch: location.expiresAtEpoch,
                 expectedLocationRevision: 0
+            )
+        )
+        XCTAssertThrowsError(
+            try AddMusubiArchiveLocationV1(
+                archiveID: location.archiveID,
+                locationID: location.locationID,
+                pinManifest: location.pinManifest,
+                replicationOrder: location.replicationOrder,
+                providerAttestationSetDigest: MusubiProviderBundleAttestationSetDigestV1(
+                    bytes: [UInt8](repeating: 0, count: 32)
+                ),
+                renewAfterEpoch: location.renewAfterEpoch,
+                expiresAtEpoch: location.expiresAtEpoch,
+                expectedLocationRevision: location.expectedLocationRevision
             )
         )
 
@@ -805,12 +832,23 @@ final class MusubiInstructionsV1Tests: XCTestCase {
                     semantic, "expected_policy_revision"
                 )
             )
+        case "register-provider-bundle-attestation":
+            try requireKeys(
+                semantic,
+                ["attestation", "expected_location_revision"]
+            )
+            return try RegisterMusubiProviderBundleAttestationV1(
+                attestation: providerAttestation(XCTUnwrap(semantic["attestation"])),
+                expectedLocationRevision: fixtureUInt64(
+                    semantic, "expected_location_revision"
+                )
+            )
         case "add-location-three-signed-providers":
             try requireKeys(
                 semantic,
                 [
                     "archive_id", "location_id", "pin_manifest", "replication_order",
-                    "provider_attestations", "renew_after_epoch", "expires_at_epoch",
+                    "provider_attestation_set_digest", "renew_after_epoch", "expires_at_epoch",
                     "expected_location_revision",
                 ]
             )
@@ -819,8 +857,9 @@ final class MusubiInstructionsV1Tests: XCTestCase {
                 locationID: digest32(semantic["location_id"]),
                 pinManifest: digest32(semantic["pin_manifest"]),
                 replicationOrder: digest32(semantic["replication_order"]),
-                providerAttestations: fixtureArray(semantic["provider_attestations"])
-                    .map(providerAttestation),
+                providerAttestationSetDigest: MusubiProviderBundleAttestationSetDigestV1(
+                    bytes: digest32(semantic["provider_attestation_set_digest"]).bytes
+                ),
                 renewAfterEpoch: fixtureUInt64(semantic, "renew_after_epoch"),
                 expiresAtEpoch: fixtureUInt64(semantic, "expires_at_epoch"),
                 expectedLocationRevision: fixtureUInt64(

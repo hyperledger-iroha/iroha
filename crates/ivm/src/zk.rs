@@ -554,7 +554,7 @@ pub fn verify_trace(
                 .collect();
             let proof = MerkleProof::from_audit_path(leaf_index, siblings);
             let commitment = MerkleTreeCommitment::new(
-                root.clone(),
+                *root,
                 NonZeroU64::new(256).expect("register tree leaf count is non-zero"),
             );
             if proof.verify_sha256(&leaf, &commitment) {

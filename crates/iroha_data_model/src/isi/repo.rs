@@ -165,6 +165,10 @@ impl crate::seal::Instruction for RepoMarginCallIsi {}
 
 isi_box! {
     /// Grouping enum for repo-related instructions.
+    #[expect(
+        clippy::large_enum_variant,
+        reason = "repo instructions retain their canonical first-release Norito payloads inline"
+    )]
     pub enum RepoInstructionBox {
         /// Initiate or roll a repo agreement.
         Initiate(RepoIsi),

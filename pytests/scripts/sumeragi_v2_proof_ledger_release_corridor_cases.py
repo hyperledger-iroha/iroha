@@ -483,7 +483,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ):
         assert runner_platform_gate < run_inner.index(side_effect)
     lane_constructor_start = lane_work_source.index(
-        "    pub(crate) fn new_with_output_guard_and_transport("
+        "    fn new_with_output_guard_and_transport_inner("
     )
     lane_constructor = lane_work_source[lane_constructor_start:]
     lane_platform_gate = lane_constructor.index(

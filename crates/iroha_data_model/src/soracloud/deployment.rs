@@ -268,6 +268,10 @@ impl SoraServiceDeploymentStateV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when version, sequence, or rollout
     /// invariants are violated.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "deployment validation keeps the ordered cross-field checks and stable first-error precedence together"
+    )]
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service deployment state",

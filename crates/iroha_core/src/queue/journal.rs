@@ -245,9 +245,7 @@ impl QueuePlanJournalRecordV4 {
         let signed_transaction_hash = match &entrypoint {
             TransactionEntrypoint::External(signed) => Some(signed.hash()),
             TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         };
         Self {
             version: QUEUE_PLAN_JOURNAL_VERSION,
@@ -2450,9 +2448,9 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                 TransactionEntrypoint::SealedReveal(reveal) => {
                     Some(reveal.signed_transaction().hash())
                 }
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => None,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    None
+                }
             };
             if record.signed_transaction_hash != expected_signed_hash {
                 return Err(invalid_data(

@@ -119,12 +119,7 @@ impl V2ChunkSession {
     /// RS16 reconstruction needs any `data_shards` chunks per stripe. Missing
     /// parity chunks are not materialized unless needed to recover data.
     pub(crate) fn reconstruct(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
-        let payload = match self.manifest.layout.encoding {
-            wire::PayloadEncoding::Plain => {
-                return Err(wire::ValidationError::InvalidDataAvailabilityLayout.into());
-            }
-            wire::PayloadEncoding::ReedSolomon16 => self.reconstruct_rs16()?,
-        };
+        let payload = self.reconstruct_rs16()?;
         let Some(payload) = payload else {
             return Ok(None);
         };
@@ -144,13 +139,7 @@ impl V2ChunkSession {
             .ok_or(V2ChunkError::ChunkIndexOutOfRange)?;
         let chunk_size = usize::try_from(self.manifest.layout.chunk_size_bytes)
             .map_err(|_| V2ChunkError::InvalidChunkLength)?;
-        let expected_len = match self.manifest.layout.encoding {
-            wire::PayloadEncoding::Plain => {
-                return Err(wire::ValidationError::InvalidDataAvailabilityLayout.into());
-            }
-            wire::PayloadEncoding::ReedSolomon16 => chunk_size,
-        };
-        if bytes.len() != expected_len || bytes.is_empty() {
+        if bytes.len() != chunk_size || bytes.is_empty() {
             return Err(V2ChunkError::InvalidChunkLength);
         }
         if Hash::new(bytes) != *expected_hash {
@@ -234,69 +223,9 @@ pub(crate) fn encode_payload(
     if payload.is_empty() || payload_len > context.da_layout.max_payload_size_bytes {
         return Err(V2ChunkError::PayloadTooLarge);
     }
-    let chunks = match context.da_layout.encoding {
-        wire::PayloadEncoding::Plain => {
-            return Err(wire::ValidationError::InvalidDataAvailabilityLayout.into());
-        }
-        wire::PayloadEncoding::ReedSolomon16 => encode_rs16(payload, context.da_layout)?,
-    };
+    let chunks = wire::encode_payload_chunks(context.da_layout, payload)?;
     let manifest = wire::PayloadManifest::derive(context, round, subject, payload_len, &chunks)?;
     Ok(EncodedV2Payload { manifest, chunks })
-}
-
-fn encode_rs16(
-    payload: &[u8],
-    layout: wire::DataAvailabilityLayout,
-) -> Result<Vec<Vec<u8>>, V2ChunkError> {
-    let chunk_size =
-        usize::try_from(layout.chunk_size_bytes).map_err(|_| V2ChunkError::InvalidChunkLength)?;
-    let data_shards = usize::from(layout.data_shards);
-    let parity_shards = usize::from(layout.parity_shards);
-    if chunk_size == 0 || !chunk_size.is_multiple_of(2) || data_shards == 0 || parity_shards == 0 {
-        return Err(V2ChunkError::InvalidErasureLayout);
-    }
-    let data_chunk_count = payload.len().div_ceil(chunk_size);
-    let stripe_count = data_chunk_count.div_ceil(data_shards);
-    let stripe_width = data_shards
-        .checked_add(parity_shards)
-        .ok_or(V2ChunkError::InvalidErasureLayout)?;
-    let mut encoded = Vec::with_capacity(
-        stripe_count
-            .checked_mul(stripe_width)
-            .ok_or(V2ChunkError::PayloadTooLarge)?,
-    );
-    let symbol_count = chunk_size / 2;
-
-    for stripe in 0..stripe_count {
-        let mut data = Vec::with_capacity(data_shards);
-        let mut symbols = Vec::with_capacity(data_shards);
-        for within in 0..data_shards {
-            let data_index = stripe
-                .checked_mul(data_shards)
-                .and_then(|base| base.checked_add(within))
-                .ok_or(V2ChunkError::PayloadTooLarge)?;
-            let offset = data_index
-                .checked_mul(chunk_size)
-                .ok_or(V2ChunkError::PayloadTooLarge)?;
-            let mut chunk = vec![0_u8; chunk_size];
-            if offset < payload.len() {
-                let end = offset.saturating_add(chunk_size).min(payload.len());
-                chunk[..end - offset].copy_from_slice(&payload[offset..end]);
-            }
-            symbols.push(rs16::symbols_from_chunk(symbol_count, &chunk));
-            data.push(chunk);
-        }
-        let parity = rs16::encode_parity(&symbols, parity_shards)
-            .map_err(|_| V2ChunkError::ReconstructionFailed)?;
-        encoded.extend(data);
-        for shard in parity {
-            encoded.push(
-                rs16::chunk_from_symbols(&shard, chunk_size)
-                    .map_err(|_| V2ChunkError::ReconstructionFailed)?,
-            );
-        }
-    }
-    Ok(encoded)
 }
 
 /// Deterministic chunk encoding, buffering, or reconstruction failure.
@@ -341,7 +270,7 @@ mod tests {
 
     use super::*;
 
-    fn context(encoding: wire::PayloadEncoding) -> wire::HeightContext {
+    fn context() -> wire::HeightContext {
         let mut roster = (1_u8..=4)
             .map(|seed| {
                 let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -368,10 +297,10 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 8,
-                data_shards: u16::from(encoding == wire::PayloadEncoding::ReedSolomon16) * 3,
-                parity_shards: u16::from(encoding == wire::PayloadEncoding::ReedSolomon16) * 2,
+                data_shards: 3,
+                parity_shards: 2,
                 max_payload_size_bytes: 1024,
                 max_chunk_count: 256,
             },
@@ -433,11 +362,8 @@ mod tests {
         }
     }
 
-    fn encode_fixture(
-        encoding: wire::PayloadEncoding,
-        payload: &[u8],
-    ) -> (wire::HeightContext, EncodedV2Payload) {
-        let context = context(encoding);
+    fn encode_fixture(payload: &[u8]) -> (wire::HeightContext, EncodedV2Payload) {
+        let context = context();
         let subject = wire::BlockSubject {
             parent_block_hash: context
                 .parent_commit_qc
@@ -456,34 +382,38 @@ mod tests {
     }
 
     #[test]
-    fn plain_payload_is_rejected_by_protocol_v4() {
-        let payload = b"plain payload";
-        let context = context(wire::PayloadEncoding::Plain);
-        let subject = wire::BlockSubject {
-            parent_block_hash: context
-                .parent_commit_qc
-                .as_ref()
-                .map(|qc| qc.subject.block_hash),
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block")),
-            payload_hash: Hash::new(payload),
-        };
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 4,
-        };
-        assert!(matches!(
-            encode_payload(&context, round, subject, payload),
-            Err(V2ChunkError::Wire(
-                wire::ValidationError::InvalidDataAvailabilityLayout
-            ))
-        ));
+    fn rs16_zero_data_or_parity_shards_are_rejected() {
+        let payload = b"invalid RS16 layout";
+        for (data_shards, parity_shards) in [(0, 2), (3, 0)] {
+            let mut context = context();
+            context.da_layout.data_shards = data_shards;
+            context.da_layout.parity_shards = parity_shards;
+            let subject = wire::BlockSubject {
+                parent_block_hash: context
+                    .parent_commit_qc
+                    .as_ref()
+                    .map(|qc| qc.subject.block_hash),
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block")),
+                payload_hash: Hash::new(payload),
+            };
+            let round = wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 4,
+            };
+            assert!(matches!(
+                encode_payload(&context, round, subject, payload),
+                Err(V2ChunkError::Wire(
+                    wire::ValidationError::InvalidDataAvailabilityLayout
+                ))
+            ));
+        }
     }
 
     #[test]
     fn rs16_reconstructs_directly_from_complete_data_stripes() {
         let payload = b"RS16 data-only fast path spanning deterministic stripes";
-        let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let (context, encoded) = encode_fixture(payload);
         let data_shards = usize::from(context.da_layout.data_shards);
         let width = usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
         let root = tempfile::tempdir().expect("tempdir");
@@ -514,7 +444,7 @@ mod tests {
     #[test]
     fn rs16_recovers_missing_data_from_parity() {
         let payload = b"RS16 parity recovery spanning deterministic stripes";
-        let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let (context, encoded) = encode_fixture(payload);
         let width = usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
         let root = tempfile::tempdir().expect("tempdir");
         let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
@@ -538,7 +468,7 @@ mod tests {
     #[test]
     fn rs16_recovers_missing_data_from_any_quorum_per_stripe() {
         let payload = b"RS16 payload spanning more than one deterministic stripe";
-        let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let (context, encoded) = encode_fixture(payload);
         let width = usize::from(context.da_layout.data_shards + context.da_layout.parity_shards);
         for first_missing in 0..width {
             for second_missing in first_missing + 1..width {
@@ -567,7 +497,7 @@ mod tests {
     #[test]
     fn corruption_duplicates_and_insufficient_shards_are_rejected_or_pending() {
         let payload = b"adversarial chunk payload";
-        let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let (context, encoded) = encode_fixture(payload);
         let root = tempfile::tempdir().expect("tempdir");
         let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
             .expect("open session");
@@ -595,7 +525,7 @@ mod tests {
     #[test]
     fn partial_chunks_are_volatile_and_create_no_files() {
         let payload = b"volatile bounded chunk acquisition";
-        let (context, encoded) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let (context, encoded) = encode_fixture(payload);
         let temp = tempfile::tempdir().expect("tempdir");
         let acquisition_root = temp.path().join("v2-chunks");
         assert!(!acquisition_root.exists());
@@ -625,7 +555,7 @@ mod tests {
     #[test]
     fn encoding_is_deterministic_and_subject_bound() {
         let payload = b"same payload";
-        let (context, first) = encode_fixture(wire::PayloadEncoding::ReedSolomon16, payload);
+        let (context, first) = encode_fixture(payload);
         let second = encode_payload(
             &context,
             first.manifest.round,

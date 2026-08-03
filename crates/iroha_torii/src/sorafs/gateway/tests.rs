@@ -25,7 +25,7 @@ fn policy_allows_when_envelope_not_required() {
         rate_limit: GatewayRateLimitConfig::disabled(),
     };
 
-    let rate_limiter = GatewayRateLimiter::new(config.rate_limit.clone());
+    let rate_limiter = GatewayRateLimiter::new(config.rate_limit);
     let policy = GatewayPolicy::new(config, None, rate_limiter);
 
     let fingerprint = sample_fingerprint();
@@ -58,7 +58,7 @@ fn policy_fails_closed_without_admission_registry() {
         rate_limit: GatewayRateLimitConfig::disabled(),
     };
 
-    let rate_limiter = GatewayRateLimiter::new(config.rate_limit.clone());
+    let rate_limiter = GatewayRateLimiter::new(config.rate_limit);
     let policy = GatewayPolicy::new(config, None, rate_limiter);
 
     let fingerprint = sample_fingerprint();

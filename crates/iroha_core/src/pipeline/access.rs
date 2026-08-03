@@ -1943,16 +1943,6 @@ where
         set.add_write(format!("zk:election:{}:tally", instr.election_id()));
         return set;
     }
-    if let Some(instr) = any.downcast_ref::<zk::Unshield>() {
-        let asset_id = AssetId::of(instr.asset().clone(), instr.to().clone());
-        add_asset_rw(&mut set, &asset_id, state_ro);
-        add_zk_asset_rw(&mut set, instr.asset());
-        let Ok(key) = "zk.unshield.last".parse::<Name>() else {
-            return AccessSet::global();
-        };
-        add_asset_def_detail_rw(&mut set, instr.asset(), &key, state_ro);
-        return set;
-    }
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
         match ub {
             UnregisterBox::Domain(_) => set = AccessSet::global(),

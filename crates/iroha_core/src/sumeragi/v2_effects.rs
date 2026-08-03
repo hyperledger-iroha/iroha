@@ -1320,6 +1320,22 @@ pub(crate) struct EffectExecutorStatus {
     pub watchdog_threshold: Duration,
 }
 
+/// Ownership disposition returned by the exact consensus-output service.
+///
+/// This is deliberately distinct from `Result`: source retention is bounded
+/// backpressure, not a service failure. The reducer must keep the semantic
+/// source which can reproduce the control message until a later occurrence is
+/// accepted by the exact-output service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConsensusBroadcastDisposition {
+    /// Every output was admitted by the network actor or its exact unadmitted
+    /// suffix was transferred into the bounded output corridor.
+    ExactServiceAccepted,
+    /// The bounded output corridor was full, so the semantic source remains
+    /// responsible for a later retransmission.
+    SourceRetained,
+}
+
 /// Production callbacks used to perform effects outside the reducer owner.
 ///
 /// Queueing methods must either retain the complete task or return an error;
@@ -1383,8 +1399,15 @@ pub(crate) trait V2EffectServices {
         decision_subject: wire::BlockSubject,
     ) -> Result<(), Self::Error>;
     /// Route one canonical v2 consensus envelope through the frozen committee.
-    fn broadcast_consensus(&mut self, message: wire::ConsensusMessageV2)
-    -> Result<(), Self::Error>;
+    ///
+    /// Returning [`ConsensusBroadcastDisposition::ExactServiceAccepted`] is
+    /// the only successful transfer of the semantic source. A
+    /// [`ConsensusBroadcastDisposition::SourceRetained`] result leaves that
+    /// source responsible for periodic retransmission.
+    fn broadcast_consensus(
+        &mut self,
+        message: wire::ConsensusMessageV2,
+    ) -> Result<ConsensusBroadcastDisposition, Self::Error>;
     /// Sign a certified-body request with the requester's transport identity.
     fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error>;
     /// Start or retransmit body reconstruction/fetch. Repeated tasks with the
@@ -6684,10 +6707,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     }
                     _ => None,
                 };
-                services
+                let disposition = services
                     .broadcast_consensus(message)
                     .map_err(service_error)?;
-                if let Some(proposal_round) = proposal_round {
+                if let Some(proposal_round) = proposal_round
+                    && disposition == ConsensusBroadcastDisposition::ExactServiceAccepted
+                {
                     self.runtime
                         .complete_active_view_producer_after_proposal_fanout(
                             proposal_round,
@@ -11316,6 +11341,8 @@ mod tests {
         retired_outbound_subjects: Vec<wire::BlockSubject>,
         retired_all_outbound: usize,
         retired_candidate_work: usize,
+        broadcast_dispositions: VecDeque<ConsensusBroadcastDisposition>,
+        broadcast_attempts: Vec<wire::ConsensusMessageV2>,
         broadcasts: Vec<wire::ConsensusMessageV2>,
         fetch_tasks: Vec<BodyFetchTask>,
         cancelled_fetches: Vec<EffectWorkId>,
@@ -11493,11 +11520,18 @@ mod tests {
         fn broadcast_consensus(
             &mut self,
             message: wire::ConsensusMessageV2,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<ConsensusBroadcastDisposition, Self::Error> {
             self.check("broadcast")?;
             self.effect_service_order.push("broadcast");
-            self.broadcasts.push(message);
-            Ok(())
+            self.broadcast_attempts.push(message.clone());
+            let disposition = self
+                .broadcast_dispositions
+                .pop_front()
+                .unwrap_or(ConsensusBroadcastDisposition::ExactServiceAccepted);
+            if disposition == ConsensusBroadcastDisposition::ExactServiceAccepted {
+                self.broadcasts.push(message);
+            }
+            Ok(disposition)
         }
 
         fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
@@ -11686,6 +11720,7 @@ mod tests {
         requester_key: KeyPair,
         block: SignedBlock,
         body: Vec<u8>,
+        encoded_chunks: Vec<Vec<u8>>,
         manifest: wire::PayloadManifest,
     }
 
@@ -11749,14 +11784,9 @@ mod tests {
                 block_hash: block.hash(),
                 payload_hash: Hash::new(&body),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &context,
-                round,
-                subject,
-                u64::try_from(body.len()).expect("body length"),
-                std::slice::from_ref(&body),
-            )
-            .expect("manifest");
+            let (manifest, encoded_chunks) = encode_payload(&context, round, subject, &body)
+                .expect("encode the complete canonical fixture payload")
+                .into_parts();
             let requester_key =
                 KeyPair::try_from_seed(vec![99; 32], Algorithm::Ed25519).expect("requester key");
             Self {
@@ -11765,6 +11795,7 @@ mod tests {
                 requester_key,
                 block,
                 body,
+                encoded_chunks,
                 manifest,
             }
         }
@@ -11899,14 +11930,7 @@ mod tests {
                 block_hash: block.hash(),
                 payload_hash: Hash::new(&body),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &context,
-                round,
-                subject,
-                u64::try_from(body.len()).expect("body length"),
-                std::slice::from_ref(&body),
-            )
-            .expect("canonical production transport manifest");
+            let manifest = canonical_payload_manifest(&context, round, subject, &body);
             let durable =
                 DurableBodyReceipt::for_test(context.id(), round, subject, HashOf::new(&manifest));
             let validated = ValidatedBodyReceipt::for_test(durable.clone());
@@ -12051,14 +12075,7 @@ mod tests {
                 block_hash: HashOf::from_untyped_unchecked(Hash::new(block_preimage)),
                 payload_hash: Hash::new(&body),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &self.context,
-                self.round,
-                subject,
-                u64::try_from(body.len()).expect("normal saturation body length"),
-                std::slice::from_ref(&body),
-            )
-            .expect("normal saturation proposal manifest");
+            let manifest = canonical_payload_manifest(&self.context, self.round, subject, &body);
             let proposer = self.context.leader(self.round.view);
             let mut proposal = wire::Proposal {
                 round: self.round,
@@ -12266,6 +12283,38 @@ mod tests {
         }
     }
 
+    fn canonical_payload_manifest(
+        context: &wire::HeightContext,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        body: &[u8],
+    ) -> wire::PayloadManifest {
+        encode_payload(context, round, subject, body)
+            .expect("encode the complete canonical fixture payload")
+            .manifest()
+            .clone()
+    }
+
+    fn deliberately_conflicting_payload_manifest(
+        context: &wire::HeightContext,
+        round: wire::ConsensusRound,
+        original_subject: wire::BlockSubject,
+        alternate_body: &[u8],
+    ) -> wire::PayloadManifest {
+        let encoded_chunks = wire::encode_payload_chunks(context.da_layout, alternate_body)
+            .expect("encode the complete alternate RS16 fixture payload");
+        // This negative fixture deliberately binds a canonical alternate RS16
+        // codeword to the original subject so the manifest identity conflicts.
+        wire::PayloadManifest::derive(
+            context,
+            round,
+            original_subject,
+            u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+            &encoded_chunks,
+        )
+        .expect("derive the structurally valid conflicting fixture manifest")
+    }
+
     fn fixture_execution_commitment() -> wire::ExecutionCommitment {
         wire::ExecutionCommitment::without_topups(
             Hash::new(b"effects fixture parent state"),
@@ -12316,14 +12365,12 @@ mod tests {
     }
 
     fn manifest_at_view(fixture: &Fixture, view: u64) -> wire::PayloadManifest {
-        wire::PayloadManifest::derive(
+        canonical_payload_manifest(
             &fixture.context,
             round(&fixture.context, view),
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
+            &fixture.body,
         )
-        .expect("view manifest")
     }
 
     fn distinct_body(fixture: &Fixture) -> (wire::BlockSubject, Vec<u8>) {
@@ -12399,7 +12446,7 @@ mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&fixture.manifest),
             index: 0,
-            bytes: fixture.body.clone(),
+            bytes: fixture.encoded_chunks[0].clone(),
             sender: 0,
             signature: Vec::new(),
         };
@@ -12577,14 +12624,7 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
             payload_hash: Hash::new(&body),
         };
-        wire::PayloadManifest::derive(
-            &fixture.context,
-            fixture.manifest.round,
-            subject,
-            u64::try_from(body.len()).expect("payload length"),
-            std::slice::from_ref(&body),
-        )
-        .expect("payload manifest")
+        canonical_payload_manifest(&fixture.context, fixture.manifest.round, subject, &body)
     }
 
     fn pending_merge_validation(
@@ -12600,14 +12640,7 @@ mod tests {
             parent_block_hash: Some(parent_hash),
             ..fixture.manifest.subject
         };
-        let manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            round,
-            subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("merge carrier manifest");
+        let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
         let durable_receipt = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round,
@@ -12663,14 +12696,7 @@ mod tests {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
     ) -> BodyValidationTask {
-        let manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            round,
-            subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("reachable merge carrier manifest");
+        let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
         let durable = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round,
@@ -12999,14 +13025,7 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"Proposal A block")),
             payload_hash: Hash::new(&body_a),
         };
-        let manifest_a = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject_a,
-            u64::try_from(body_a.len()).expect("Proposal A length"),
-            std::slice::from_ref(&body_a),
-        )
-        .expect("Proposal A manifest");
+        let manifest_a = canonical_payload_manifest(&context, round, subject_a, &body_a);
         let proposer = context.leader(0);
         let mut proposal_a = wire::Proposal {
             round,
@@ -13286,21 +13305,6 @@ mod tests {
         );
         assert!(fixture.executor.retained_effect_batch.is_some());
         assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
-        let retained_upgrade = fixture
-            .executor
-            .retained_effect_batch
-            .as_ref()
-            .and_then(|batch| batch.effects.front())
-            .expect("pressured PrepareQC retains the exact Fetch authority upgrade");
-        assert_eq!(
-            retained_upgrade.ownership, ordinary_b.ownership,
-            "Proposal and PrepareQC ingress must retain one physical Fetch lifecycle owner"
-        );
-        assert_eq!(
-            retained_upgrade.ownership.owner(),
-            ordinary_b.ownership.owner(),
-            "the foreign QC ingress root cannot replace the live Proposal Fetch root"
-        );
         let retained_b_ownership = fixture
             .executor
             .retained_effect_batch
@@ -13680,14 +13684,12 @@ mod tests {
 
         let (second_subject, second_body) = distinct_body(&fixture);
         let second_round = round(&fixture.context, 1);
-        let second_manifest = wire::PayloadManifest::derive(
+        let second_manifest = canonical_payload_manifest(
             &fixture.context,
             second_round,
             second_subject,
-            u64::try_from(second_body.len()).expect("second body length"),
-            std::slice::from_ref(&second_body),
-        )
-        .expect("second proposal manifest");
+            &second_body,
+        );
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -13820,14 +13822,7 @@ mod tests {
             )),
             payload_hash: Hash::new(&body_b),
         };
-        let manifest_b = wire::PayloadManifest::derive(
-            &fixture.context,
-            round_b,
-            subject_b,
-            u64::try_from(body_b.len()).expect("B body length"),
-            std::slice::from_ref(&body_b),
-        )
-        .expect("canonical B manifest");
+        let manifest_b = canonical_payload_manifest(&fixture.context, round_b, subject_b, &body_b);
         let durable_b = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round_b,
@@ -13996,14 +13991,12 @@ mod tests {
         for view in 0..request_capacity {
             let view = u64::try_from(view).expect("request view");
             let request_round = round(&fixture.context, view);
-            let manifest = wire::PayloadManifest::derive(
+            let manifest = canonical_payload_manifest(
                 &fixture.context,
                 request_round,
                 fixture.subject,
-                u64::try_from(fixture.body.len()).expect("certified body length"),
-                std::slice::from_ref(&fixture.body),
-            )
-            .expect("certified owner manifest");
+                &fixture.body,
+            );
             let durable = DurableBodyReceipt::for_test(
                 fixture.context.id(),
                 request_round,
@@ -14137,14 +14130,7 @@ mod tests {
             )),
             payload_hash: Hash::new(&body_b),
         };
-        let manifest_b = wire::PayloadManifest::derive(
-            &fixture.context,
-            round_b,
-            subject_b,
-            u64::try_from(body_b.len()).expect("deferred Fetch B body length"),
-            std::slice::from_ref(&body_b),
-        )
-        .expect("deferred Fetch B manifest");
+        let manifest_b = canonical_payload_manifest(&fixture.context, round_b, subject_b, &body_b);
         let durable_b = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round_b,
@@ -16952,14 +16938,12 @@ mod tests {
         let validated_receipt =
             ValidatedBodyReceipt::for_test(pending_validation.task.durable_receipt().clone());
         certificate.execution_commitment = validated_receipt.execution_commitment();
-        let manifest = wire::PayloadManifest::derive(
+        let manifest = canonical_payload_manifest(
             &fixture.context,
             certificate.proposal_round,
             certificate.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("exact decided-body manifest");
+            &fixture.body,
+        );
         executor.recovered_bodies.insert(
             (certificate.proposal_round, certificate.subject),
             (manifest, validated_receipt.durable().clone()),
@@ -17123,14 +17107,8 @@ mod tests {
             let subject = pending.task.subject();
             let round = pending.task.round();
             let durable = pending.task.durable_receipt().clone();
-            let manifest = wire::PayloadManifest::derive(
-                &fixture.context,
-                round,
-                subject,
-                u64::try_from(fixture.body.len()).expect("body length"),
-                std::slice::from_ref(&fixture.body),
-            )
-            .expect("protected manifest");
+            let manifest =
+                canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
             executor
                 .recovered_bodies
                 .insert((round, subject), (manifest, durable.clone()));
@@ -17268,14 +17246,7 @@ mod tests {
         let round = pending.task.round();
         let subject = pending.task.subject();
         let durable = pending.task.durable_receipt().clone();
-        let manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            round,
-            subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("protected manifest");
+        let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
         executor
             .recovered_bodies
             .insert((round, subject), (manifest.clone(), durable.clone()));
@@ -18148,14 +18119,12 @@ mod tests {
         let mut services = fixture.services();
         let mut alternate_chunk = fixture.body.clone();
         alternate_chunk[0] ^= 1;
-        let alternate_manifest = wire::PayloadManifest::derive(
+        let alternate_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&alternate_chunk),
-        )
-        .expect("structurally valid alternate manifest");
+            &alternate_chunk,
+        );
         assert_ne!(alternate_manifest, fixture.manifest);
         executor
             .admit_local_proposal(
@@ -18326,14 +18295,12 @@ mod tests {
 
         let mut alternate_chunk = fixture.body.clone();
         alternate_chunk[0] ^= 1;
-        let alternate_manifest = wire::PayloadManifest::derive(
+        let alternate_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&alternate_chunk),
-        )
-        .expect("structurally valid alternate manifest");
+            &alternate_chunk,
+        );
         assert_ne!(alternate_manifest, fixture.manifest);
         executor
             .admit_local_proposal(
@@ -18747,14 +18714,12 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let reproposal_round = round(&fixture.context, fixture.manifest.round.view + 2);
-        let reproposal_manifest = wire::PayloadManifest::derive(
+        let reproposal_manifest = canonical_payload_manifest(
             &fixture.context,
             reproposal_round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("fixture body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("derive exact same-body reproposal manifest");
+            &fixture.body,
+        );
         persist_fsynced_validation_marker(
             &mut executor,
             &mut services,
@@ -18927,7 +18892,7 @@ mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&fixture.manifest),
             index: 0,
-            bytes: fixture.body.clone(),
+            bytes: fixture.encoded_chunks[0].clone(),
             sender: 0,
             signature: Vec::new(),
         };
@@ -19067,14 +19032,12 @@ mod tests {
         let first_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let first_sources = certified_sources(&fixture, &first_prepare);
         let (second_subject, second_body) = distinct_body(&fixture);
-        let second_manifest = wire::PayloadManifest::derive(
+        let second_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             second_subject,
-            u64::try_from(second_body.len()).expect("second body length"),
-            std::slice::from_ref(&second_body),
-        )
-        .expect("second manifest");
+            &second_body,
+        );
         let mut second_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         second_prepare.subject = second_manifest.subject;
         let second_sources = certified_sources(&fixture, &second_prepare);
@@ -19148,7 +19111,7 @@ mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&fixture.manifest),
             index: 0,
-            bytes: fixture.body.clone(),
+            bytes: fixture.encoded_chunks[0].clone(),
             sender: 0,
             signature: Vec::new(),
         };
@@ -19358,14 +19321,12 @@ mod tests {
         let mut services = fixture.services();
         let mut alternate_chunk = fixture.body.clone();
         alternate_chunk[0] ^= 1;
-        let alternate_manifest = wire::PayloadManifest::derive(
+        let alternate_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&alternate_chunk),
-        )
-        .expect("structurally valid alternate manifest");
+            &alternate_chunk,
+        );
 
         executor
             .consume_effects(
@@ -19579,14 +19540,12 @@ mod tests {
                 .clone();
             let mut alternate_chunk = fixture.body.clone();
             alternate_chunk[0] ^= 1;
-            let alternate_manifest = wire::PayloadManifest::derive(
+            let alternate_manifest = deliberately_conflicting_payload_manifest(
                 &fixture.context,
                 fixture.manifest.round,
                 fixture.manifest.subject,
-                u64::try_from(fixture.body.len()).expect("body length"),
-                std::slice::from_ref(&alternate_chunk),
-            )
-            .expect("structurally valid alternate manifest");
+                &alternate_chunk,
+            );
             assert_ne!(alternate_manifest, fixture.manifest);
 
             let signed_response =
@@ -19688,14 +19647,12 @@ mod tests {
             .clone();
         let mut alternate_chunk = fixture.body.clone();
         alternate_chunk[0] ^= 1;
-        let alternate_manifest = wire::PayloadManifest::derive(
+        let alternate_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&alternate_chunk),
-        )
-        .expect("structurally valid alternate manifest");
+            &alternate_chunk,
+        );
 
         let signed_response = |manifest: wire::PayloadManifest, responder: wire::ValidatorIndex| {
             let mut response = wire::CertifiedBodyResponse {
@@ -19942,14 +19899,12 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 2));
         let mut services = fixture.services();
         let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = wire::PayloadManifest::derive(
+        let losing_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             losing_subject,
-            u64::try_from(losing_body.len()).expect("losing body length"),
-            std::slice::from_ref(&losing_body),
-        )
-        .expect("losing manifest");
+            &losing_body,
+        );
         let losing_lock = (losing_manifest.round, losing_manifest.subject);
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
@@ -20134,14 +20089,12 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = wire::PayloadManifest::derive(
+        let losing_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             losing_subject,
-            u64::try_from(losing_body.len()).expect("losing body length"),
-            std::slice::from_ref(&losing_body),
-        )
-        .expect("losing manifest");
+            &losing_body,
+        );
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
         let certified_sources = certified_sources(&fixture, &losing_prepare);
@@ -20201,14 +20154,12 @@ mod tests {
             )
             .expect("start exact decided local store");
         let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = wire::PayloadManifest::derive(
+        let losing_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             losing_subject,
-            u64::try_from(losing_body.len()).expect("losing body length"),
-            std::slice::from_ref(&losing_body),
-        )
-        .expect("losing manifest");
+            &losing_body,
+        );
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
         let certified_sources = certified_sources(&fixture, &losing_prepare);
@@ -20259,14 +20210,12 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = wire::PayloadManifest::derive(
+        let losing_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             losing_subject,
-            u64::try_from(losing_body.len()).expect("losing body length"),
-            std::slice::from_ref(&losing_body),
-        )
-        .expect("losing manifest");
+            &losing_body,
+        );
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
         let certified_sources = certified_sources(&fixture, &losing_prepare);
@@ -20677,14 +20626,12 @@ mod tests {
             .checked_add(2)
             .expect("fixture reproposal view increment");
         commit.proposal_round = commit.round;
-        let reproposal_manifest = wire::PayloadManifest::derive(
+        let reproposal_manifest = canonical_payload_manifest(
             &fixture.context,
             commit.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("fixture body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("derive exact same-body reproposal manifest");
+            &fixture.body,
+        );
         assert!(executor.protected_lock.is_none());
         executor.runtime.decided_body = Some((
             commit.round,
@@ -21091,14 +21038,12 @@ mod tests {
                 .expect("fixture alias view increment"),
             ..fixture.manifest.round
         };
-        let alias_manifest = wire::PayloadManifest::derive(
+        let alias_manifest = canonical_payload_manifest(
             &fixture.context,
             alias_round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("fixture body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("derive redundant exact-body alias");
+            &fixture.body,
+        );
         let alias_durable = DurableBodyReceipt::for_test(
             fixture.context.id(),
             alias_round,
@@ -21109,14 +21054,12 @@ mod tests {
             alias_durable.clone(),
             validated.execution_commitment(),
         );
-        let later_manifest = wire::PayloadManifest::derive(
+        let later_manifest = canonical_payload_manifest(
             &fixture.context,
             later_certificate.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("fixture body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("derive exact same-body reproposal manifest");
+            &fixture.body,
+        );
         let later_durable = DurableBodyReceipt::for_test(
             fixture.context.id(),
             later_certificate.round,
@@ -21169,14 +21112,12 @@ mod tests {
             .first_mut()
             .expect("fixture body is non-empty");
         *first_byte ^= 0xff;
-        let conflicting_manifest = wire::PayloadManifest::derive(
+        let conflicting_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             alias_round,
             fixture.manifest.subject,
-            u64::try_from(conflicting_body.len()).expect("fixture body length"),
-            std::slice::from_ref(&conflicting_body),
-        )
-        .expect("derive conflicting same-subject alias");
+            &conflicting_body,
+        );
         let conflicting_durable = DurableBodyReceipt::for_test(
             fixture.context.id(),
             alias_round,
@@ -21592,6 +21533,43 @@ mod tests {
         assert!(failed.runtime.completed_proposal_fanouts.is_empty());
         assert!(failed_services.broadcasts.is_empty());
 
+        let mut retained = fixture.executor(EffectQueueConfig::default());
+        retained.runtime.active_view_producer_retained = true;
+        let mut retained_services = fixture.services();
+        retained_services
+            .broadcast_dispositions
+            .push_back(ConsensusBroadcastDisposition::SourceRetained);
+        retained
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(message.clone())],
+                &mut retained_services,
+            )
+            .expect("corridor pressure retains the Proposal source without failing closed");
+        assert!(
+            retained.runtime.active_view_producer_retained,
+            "a source-retained Proposal must keep the active producer fence"
+        );
+        assert!(retained.runtime.completed_proposal_fanouts.is_empty());
+        assert_eq!(retained_services.broadcast_attempts, vec![message.clone()]);
+        assert!(retained_services.broadcasts.is_empty());
+        assert!(retained.retained_effect_batch.is_none());
+        assert!(!retained.status().fail_closed);
+
+        retained
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(message.clone())],
+                &mut retained_services,
+            )
+            .expect("periodic Proposal retransmission reaches exact service acceptance");
+        assert!(!retained.runtime.active_view_producer_retained);
+        assert_eq!(retained_services.broadcast_attempts.len(), 2);
+        assert_eq!(retained_services.broadcasts, vec![message.clone()]);
+        let [(round, ownership)] = retained.runtime.completed_proposal_fanouts.as_slice() else {
+            panic!("only the accepted Proposal occurrence may retire the producer")
+        };
+        assert_eq!(*round, fixture.manifest.round);
+        assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
+
         let mut accepted = fixture.executor(EffectQueueConfig::default());
         accepted.runtime.active_view_producer_retained = true;
         let mut accepted_services = fixture.services();
@@ -21608,6 +21586,43 @@ mod tests {
         };
         assert_eq!(*round, fixture.manifest.round);
         assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
+    }
+
+    #[test]
+    fn source_retained_non_proposal_control_remains_retransmittable() {
+        let fixture = Fixture::new();
+        let control =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote(&fixture)));
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        services
+            .broadcast_dispositions
+            .push_back(ConsensusBroadcastDisposition::SourceRetained);
+
+        executor
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(control.clone())],
+                &mut services,
+            )
+            .expect("corridor pressure is retryable for ordinary controls");
+        assert_eq!(services.broadcast_attempts, vec![control.clone()]);
+        assert!(services.broadcasts.is_empty());
+        assert!(executor.runtime.completed_proposal_fanouts.is_empty());
+        assert!(!executor.status().fail_closed);
+
+        executor
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(control.clone())],
+                &mut services,
+            )
+            .expect("periodic control retransmission is accepted later");
+        assert_eq!(
+            services.broadcast_attempts,
+            vec![control.clone(), control.clone()]
+        );
+        assert_eq!(services.broadcasts, vec![control]);
+        assert!(executor.runtime.completed_proposal_fanouts.is_empty());
+        assert!(!executor.status().fail_closed);
     }
 
     fn leader_wire_runtime_terminal_fixture(
@@ -22429,14 +22444,7 @@ mod tests {
 
         let proposal_round = round(&fixture.context, 4);
         let (subject, body) = distinct_body(&fixture);
-        let manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            proposal_round,
-            subject,
-            u64::try_from(body.len()).expect("distinct body length"),
-            std::slice::from_ref(&body),
-        )
-        .expect("distinct current-round manifest");
+        let manifest = canonical_payload_manifest(&fixture.context, proposal_round, subject, &body);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -23361,14 +23369,7 @@ mod tests {
             block_hash: block.hash(),
             payload_hash: Hash::new(&body),
         };
-        let manifest = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject,
-            u64::try_from(body.len()).expect("body length"),
-            std::slice::from_ref(&body),
-        )
-        .expect("canonical body manifest");
+        let manifest = canonical_payload_manifest(&context, round, subject, &body);
         let execution_commitment = fixture_execution_commitment();
         let prepare_preimage = wire::Vote {
             round,

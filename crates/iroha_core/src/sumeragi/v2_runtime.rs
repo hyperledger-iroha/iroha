@@ -13100,6 +13100,7 @@ mod tests {
             AdapterFingerprints, DeferredBodyPipelineStageForTest, SignRequest,
             VerifiedHeightContext,
         },
+        v2_chunks::encode_payload,
     };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13500,20 +13501,16 @@ mod tests {
             height: context.height,
             view: 0,
         };
+        let body = vec![marker; 4];
         let subject = wire::BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 1])),
-            payload_hash: Hash::new([marker, 2]),
+            payload_hash: Hash::new(&body),
         };
-        let body = vec![marker; 4];
-        let manifest = wire::PayloadManifest::derive(
-            context,
-            round,
-            subject,
-            u64::try_from(body.len()).expect("small runtime fixture body"),
-            &[body],
-        )
-        .expect("valid runtime fixture manifest");
+        let manifest = encode_payload(context, round, subject, &body)
+            .expect("encode valid runtime fixture payload")
+            .manifest()
+            .clone();
         let proposer = context.leader(round.view);
         let mut proposal = wire::Proposal {
             round,
@@ -13710,20 +13707,16 @@ mod tests {
             height: context.height,
             view: 0,
         };
+        let body = vec![marker; 4];
         let subject = wire::BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 3])),
-            payload_hash: Hash::new([marker, 4]),
+            payload_hash: Hash::new(&body),
         };
-        let body = vec![marker; 4];
-        wire::PayloadManifest::derive(
-            context,
-            round,
-            subject,
-            u64::try_from(body.len()).expect("small runtime manifest body"),
-            &[body],
-        )
-        .expect("valid runtime manifest")
+        encode_payload(context, round, subject, &body)
+            .expect("encode valid runtime manifest payload")
+            .manifest()
+            .clone()
     }
 
     #[test]
@@ -23307,6 +23300,7 @@ mod tests {
             vec![RuntimeEffectOwnership::fresh_for_test(
                 tag,
                 next_ordinal
+                    .expect("live validation flow retains an unused lifecycle ordinal")
                     .checked_add(100)
                     .expect("test lifecycle ordinal remains finite"),
             )],
@@ -24189,12 +24183,18 @@ mod tests {
             "the reconstructed body retains the frozen predecessor lifecycle"
         );
         let canonical_body = b"canonical body superseding Busy proposal".to_vec();
+        let canonical_chunks =
+            wire::encode_payload_chunks(dispatch_context.da_layout, &canonical_body)
+                .expect("canonically encode the conflicting Busy body");
+        // Deliberate negative data: the alternate body has canonical RS16
+        // geometry, while the manifest remains bound to the original proposal
+        // subject so BodyAvailable exercises exact conflict retirement.
         let canonical_manifest = wire::PayloadManifest::derive(
             &dispatch_context,
             busy_proposal.round,
             busy_proposal.subject,
             u64::try_from(canonical_body.len()).expect("small canonical body length fits u64"),
-            &[canonical_body],
+            &canonical_chunks,
         )
         .expect("derive a structurally valid conflicting canonical manifest");
         assert_ne!(canonical_manifest, busy_proposal.manifest);
@@ -24303,13 +24303,19 @@ mod tests {
             "the body completion retains the older causal lifecycle"
         );
         let queued_canonical_body = b"canonical body superseding queued proposal".to_vec();
+        let queued_canonical_chunks =
+            wire::encode_payload_chunks(queued_context.da_layout, &queued_canonical_body)
+                .expect("canonically encode the conflicting queued body");
+        // Deliberate negative data: retain the queued proposal's original
+        // subject while deriving over the alternate body's complete RS16
+        // sequence so this remains a semantic conflict, not malformed chunks.
         let queued_canonical_manifest = wire::PayloadManifest::derive(
             &queued_context,
             queued_proposal.round,
             queued_proposal.subject,
             u64::try_from(queued_canonical_body.len())
                 .expect("small queued canonical body length fits u64"),
-            &[queued_canonical_body],
+            &queued_canonical_chunks,
         )
         .expect("derive a conflicting canonical manifest for the queued proposal");
         assert_ne!(queued_canonical_manifest, queued_proposal.manifest);

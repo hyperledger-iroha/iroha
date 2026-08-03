@@ -85,9 +85,17 @@ def test_sccp_bls_verification_is_mandatory_in_every_crate_build() -> None:
     assert re.search(r"(?m)^bls\s*=", feature_block) is None
     assert re.search(r"(?m)^default\s*=", feature_block) is None
     assert re.search(
-        r'(?m)^iroha_crypto\s*=\s*\{[^\n]*features\s*=\s*\["bls"\][^\n]*\}$',
+        r'(?m)^iroha_crypto\s*=\s*\{[^\n]*features\s*=\s*\["node-crypto"\][^\n]*\}$',
         manifest,
     )
+    crypto_manifest = (ROOT / "crates" / "iroha_crypto" / "Cargo.toml").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(
+        r'(?m)^node-crypto\s*=\s*\["application",\s*"consensus"\]$',
+        crypto_manifest,
+    )
+    assert re.search(r'(?m)^consensus\s*=\s*\[[^\n]*"bls"[^\n]*\]$', crypto_manifest)
 
     for relative in (
         "crates/iroha_sccp/src/bsc_native.rs",
@@ -212,6 +220,8 @@ def test_sdk_phases_use_only_exact_first_release_v1_suites() -> None:
     trace = dry_run("js-sdk,swift-sdk,kotlin-sdk,java-android").stdout
     for expected in (
         "sccpExact.test.js",
+        "scripts/build_norito_xcframework.sh",
+        "--disable-automatic-resolution",
         "SccpV1Tests",
         "org.hyperledger.iroha.sdk.sccp.",
         "SccpClientExactTest",
@@ -221,6 +231,34 @@ def test_sdk_phases_use_only_exact_first_release_v1_suites() -> None:
         assert expected in trace
     for retired in ("SolanaSccp", "TonSccp", "sccpSolana", "sccpEthereumMainnet"):
         assert retired not in trace
+
+
+def test_swift_phase_always_builds_fresh_and_rejects_relative_cargo_target() -> None:
+    trace = dry_run("swift-sdk").stdout
+    assert "rustup target list --toolchain 1.93.1 --installed" in trace
+    assert "scripts/build_norito_xcframework.sh" in trace
+    assert "--disable-automatic-resolution" in trace
+
+    source = RUNNER.read_text(encoding="utf-8")
+    swift_builder = source.split("ensure_swift_bridge_artifact() {", 1)[1].split(
+        "\nresolve_java_home() {", 1
+    )[0]
+    for retired in ("bridge_zip", "unzip", "target add", "return 0\n  fi\n\n  if [[ -f"):
+        assert retired not in swift_builder
+
+    environment = os.environ.copy()
+    environment["CARGO_TARGET_DIR"] = "target/relative-is-forbidden"
+    result = subprocess.run(
+        ["bash", str(RUNNER), "--phase", "swift-sdk"],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode != 0
+    assert "requires CARGO_TARGET_DIR" in result.stderr
 
 
 def test_contract_phase_contains_only_direct_contract_smoke() -> None:
@@ -299,10 +337,35 @@ def test_workflow_exposes_every_phase_and_strict_aggregate() -> None:
 
 def test_evidence_workflow_installs_rust_and_runs_real_corridor() -> None:
     job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "evidence-scripts")
-    assert "actions/setup-python@v5" in job
-    assert "actions-rust-lang/setup-rust-toolchain@v1" in job
-    assert "Swatinem/rust-cache@v2" in job
+    assert "actions/setup-python@" in job
+    assert "actions-rust-lang/setup-rust-toolchain@" in job
+    assert "Swatinem/rust-cache@" in job
     assert "bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts" in job
+
+
+def test_swift_workflow_binds_the_exact_first_release_bridge_envelope() -> None:
+    job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "swift-sdk")
+    for required in (
+        "actions/setup-python@",
+        'python-version: "3.12"',
+        "dtolnay/rust-toolchain@",
+        "toolchain: 1.93.1",
+        "rustup target add --toolchain 1.93.1",
+        "cargo fetch --locked",
+        "CARGO_BUILD_JOBS=1",
+        "CARGO_INCREMENTAL=0",
+        "CARGO_NET_OFFLINE=true",
+        "CARGO_TARGET_DIR=$cargo_target",
+        "MOBILE_SDK_PYTHON_BINARY=$mobile_python",
+        "NORITO_BRIDGE_BUILD_DIR=$bridge_build",
+        "RUSTC=$rustc_path",
+        "RUSTC_BOOTSTRAP=1",
+        "RUSTDOC=$rustdoc_path",
+        "$RUNNER_TEMP/iroha-sccp-apple-cargo",
+        "bash scripts/check_sccp_production_corridor.sh --phase swift-sdk",
+    ):
+        assert required in job
+    assert "target/sccp-production-corridor" not in job
 
 
 @pytest.mark.parametrize(
@@ -342,12 +405,23 @@ def test_workflow_path_filters_cover_release_trust_and_fixture_inputs() -> None:
         '"crates/iroha_sccp/**"',
         '"crates/iroha_data_model/**"',
         '"crates/iroha_js_host/**"',
+        '"crates/connect_norito_bridge/**"',
         '"contracts/bsc/sccp/**"',
         '"contracts/ethereum/sccp/**"',
         '"fixtures/sccp/**"',
         '"integration_tests/**"',
         '"artifacts/openapi/**"',
         '"scripts/sccp_*"',
+        '"scripts/build_norito_xcframework.sh"',
+        '"scripts/archive_norito_xcframework.py"',
+        '"scripts/check_mobile_sdk_artifacts.sh"',
+        '"scripts/check_mobile_sdk_artifact_pin_commit.py"',
+        '"scripts/exec_with_file_lock.py"',
+        '"scripts/norito_bridge_source_seal.py"',
+        '"scripts/run_mobile_hermetic_command.py"',
+        '"scripts/update_norito_bridge_swift_pins.py"',
+        '"scripts/validate_norito_bridge_xcframework.py"',
+        '"scripts/ci/run_xcframework_smoke.sh"',
         '"scripts/contract_tooling/**"',
         '"scripts/tests/contract_artifact_corridor_test.py"',
         '"scripts/tests/contract_tvm_receipts_test.mjs"',

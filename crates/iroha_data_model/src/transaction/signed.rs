@@ -29,7 +29,6 @@ pub use self::model::*;
 use super::{
     error,
     executable::{Executable, ExecutableBatchItem, IvmBytecode},
-    private_kaigi::PrivateKaigiTransaction,
 };
 use crate::{
     ChainId,
@@ -381,8 +380,6 @@ mod model {
         SealedCommitment(SignedSealedTransactionCommitment),
         /// Reveal of a previously committed sealed transaction.
         SealedReveal(SealedTransactionReveal),
-        /// Authority-free private Kaigi request.
-        PrivateKaigi(PrivateKaigiTransaction),
         /// Scheduled time trigger that initiates a transaction.
         Time(TimeTriggerEntrypoint),
     }
@@ -1812,21 +1809,41 @@ impl iroha_version::Version for SignedTransaction {
     }
 }
 
-fn encode_default_layout_versioned<T>(version: u8, value: &T) -> Vec<u8>
+fn encode_default_layout_versioned<T>(
+    version: u8,
+    value: &T,
+) -> Result<Vec<u8>, norito::core::Error>
 where
     T: norito::NoritoSerialize,
 {
     let mut bytes = Vec::with_capacity(1 + value.encoded_len_hint().unwrap_or(0));
     bytes.push(version);
     let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    norito::core::serialize_to_buffer(value, &mut bytes)
-        .expect("versioned transaction encoding should not fail");
-    bytes
+    norito::core::serialize_to_buffer(value, &mut bytes)?;
+    Ok(bytes)
+}
+
+impl SignedTransaction {
+    /// Encode the complete canonical fixed-V1 transaction wire.
+    ///
+    /// These are the exact bytes emitted by [`iroha_version::codec::EncodeVersioned`], including
+    /// the primary signature and every multisignature authorization proof. They are therefore
+    /// suitable for exact replay and commitment checks where the payload-only transaction hash is
+    /// insufficient.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transaction cannot be serialized with the canonical V1 Norito
+    /// layout.
+    pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
+        encode_default_layout_versioned(self.version(), self)
+    }
 }
 
 impl iroha_version::codec::EncodeVersioned for SignedTransaction {
     fn encode_versioned(&self) -> Vec<u8> {
-        encode_default_layout_versioned(self.version(), self)
+        self.encode_wire_v1()
+            .expect("versioned transaction encoding should not fail")
     }
 }
 
@@ -1846,9 +1863,27 @@ impl iroha_version::Version for TransactionEntrypoint {
     }
 }
 
+impl TransactionEntrypoint {
+    /// Encode the complete canonical fixed-V1 transaction-entrypoint wire.
+    ///
+    /// These are the exact bytes emitted by [`iroha_version::codec::EncodeVersioned`]. In
+    /// particular, an external entrypoint retains its complete [`SignedTransaction`], including
+    /// every authorization proof, so callers can compare an observed committed entrypoint with the
+    /// exact transaction they submitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entrypoint cannot be serialized with the canonical V1 Norito
+    /// layout.
+    pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
+        encode_default_layout_versioned(self.version(), self)
+    }
+}
+
 impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
     fn encode_versioned(&self) -> Vec<u8> {
-        encode_default_layout_versioned(self.version(), self)
+        self.encode_wire_v1()
+            .expect("versioned transaction entrypoint encoding should not fail")
     }
 }
 
@@ -1921,11 +1956,6 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(reveal, out);
             }
-            TransactionEntrypoint::PrivateKaigi(tx) => {
-                norito::json::write_json_string("PrivateKaigi", out);
-                out.push(':');
-                norito::json::JsonSerialize::json_serialize(tx, out);
-            }
             TransactionEntrypoint::Time(trigger) => {
                 norito::json::write_json_string("Time", out);
                 out.push(':');
@@ -1956,10 +1986,6 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
             "SealedReveal" => {
                 let reveal = SealedTransactionReveal::json_deserialize(parser)?;
                 TransactionEntrypoint::SealedReveal(reveal)
-            }
-            "PrivateKaigi" => {
-                let tx = PrivateKaigiTransaction::json_deserialize(parser)?;
-                TransactionEntrypoint::PrivateKaigi(tx)
             }
             "Time" => {
                 let trigger = TimeTriggerEntrypoint::json_deserialize(parser)?;
@@ -2640,6 +2666,7 @@ mod tests {
                     source: authority.clone(),
                     destination: authority,
                     asset_definition_id: sample_fee_asset(),
+                    public_balance_scope: crate::asset::AssetBalanceScope::Global,
                     amount: 7,
                     authorization_epoch: 1,
                     replay_nullifier: PrivacyNullifierV1::new(privacy_test_bytes(0x74)),
@@ -2714,6 +2741,7 @@ mod tests {
             let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
                 context,
                 asset_definition_id: sample_fee_asset(),
+                public_balance_scope: crate::asset::AssetBalanceScope::Global,
                 pool_id: PrivacyPoolIdV1::new(privacy_test_bytes(0x91)),
                 program_id: PrivacyProgramIdV1::new(privacy_test_bytes(0x92)),
                 action_digest: PrivacyActionDigestV1::new([0; 32]),
@@ -4412,10 +4440,62 @@ mod tests {
     fn signed_transaction_versioned_roundtrip() {
         let signed_tx = sample_signed_transaction();
         let bytes = signed_tx.encode_versioned();
+        assert_eq!(
+            signed_tx
+                .encode_wire_v1()
+                .expect("fixed V1 transaction wire must encode"),
+            bytes,
+            "the inherent fixed-V1 encoder must remain byte-identical to EncodeVersioned"
+        );
         let decoded = SignedTransaction::decode_all_versioned(&bytes)
             .expect("versioned signed transaction must decode");
 
         assert_eq!(decoded, signed_tx);
+    }
+
+    #[test]
+    fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
+        let signer_a = checked_random_keypair();
+        let signer_b = checked_random_keypair();
+        let policy = MultisigPolicy::new(
+            1,
+            vec![
+                MultisigMember::new(signer_a.public_key().clone(), 1)
+                    .expect("first multisig member"),
+                MultisigMember::new(signer_b.public_key().clone(), 1)
+                    .expect("second multisig member"),
+            ],
+        )
+        .expect("one-of-two multisig policy");
+        let builder = TransactionBuilder::new(
+            "wire-proof-chain".parse().expect("chain id"),
+            AccountId::new_multisig(policy),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "authorization-sensitive wire".into())]);
+        let signed_a = builder.clone().sign_multisig([signer_a.private_key()]);
+        let signed_b = builder.sign_multisig([signer_b.private_key()]);
+
+        signed_a.verify_signature().expect("first proof is valid");
+        signed_b.verify_signature().expect("second proof is valid");
+        assert_eq!(
+            signed_a.hash(),
+            signed_b.hash(),
+            "the transaction identity intentionally hashes only the shared payload"
+        );
+
+        let wire_a = signed_a
+            .encode_wire_v1()
+            .expect("first fixed V1 wire must encode");
+        let wire_b = signed_b
+            .encode_wire_v1()
+            .expect("second fixed V1 wire must encode");
+        assert_eq!(wire_a, signed_a.encode_versioned());
+        assert_eq!(wire_b, signed_b.encode_versioned());
+        assert_ne!(
+            wire_a, wire_b,
+            "different valid authorization proofs must produce different complete wire bytes"
+        );
     }
 
     #[test]
@@ -4620,6 +4700,23 @@ mod tests {
             .expect_err("versioned transaction entrypoint decoder must reject trailing bytes");
 
         assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    }
+
+    #[test]
+    fn transaction_entrypoint_versioned_roundtrip_matches_fixed_v1_wire() {
+        let entrypoint = TransactionEntrypoint::from(sample_signed_transaction());
+        let versioned = entrypoint.encode_versioned();
+        assert_eq!(
+            entrypoint
+                .encode_wire_v1()
+                .expect("fixed V1 entrypoint wire must encode"),
+            versioned,
+            "the inherent fixed-V1 entrypoint encoder must match EncodeVersioned"
+        );
+
+        let decoded = TransactionEntrypoint::decode_all_versioned(&versioned)
+            .expect("versioned transaction entrypoint must decode");
+        assert_eq!(decoded, entrypoint);
     }
 
     #[test]
@@ -5583,17 +5680,12 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 Some(entrypoint.signed_transaction().authority())
             }
-            TransactionEntrypoint::PrivateKaigi(_) => None,
             TransactionEntrypoint::Time(entrypoint) => Some(&entrypoint.authority),
         }
     }
 
     /// Account authorized to initiate this transaction.
     ///
-    /// # Panics
-    ///
-    /// Panics for authority-free private Kaigi entrypoints. Call
-    /// [`Self::authority_opt`] when the entrypoint kind is not known in advance.
     #[inline]
     pub fn authority(&self) -> &AccountId {
         match self {
@@ -5601,9 +5693,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedCommitment(entrypoint) => entrypoint.authority(),
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 entrypoint.signed_transaction().authority()
-            }
-            TransactionEntrypoint::PrivateKaigi(_) => {
-                panic!("private kaigi entrypoints do not carry a public authority")
             }
             TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
         }
@@ -5619,7 +5708,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 u64::try_from(entrypoint.signed_transaction().creation_time().as_millis()).ok()
             }
-            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(entrypoint.creation_time_ms),
             TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
@@ -5632,7 +5720,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 Some(entrypoint.signed_transaction().metadata())
             }
-            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(&entrypoint.metadata),
             TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
@@ -5642,10 +5729,7 @@ impl TransactionEntrypoint {
     pub fn hash(&self) -> HashOf<Self> {
         match self {
             Self::External(transaction) => transaction.hash_as_entrypoint(),
-            Self::SealedCommitment(_)
-            | Self::SealedReveal(_)
-            | Self::PrivateKaigi(_)
-            | Self::Time(_) => HashOf::new(self),
+            Self::SealedCommitment(_) | Self::SealedReveal(_) | Self::Time(_) => HashOf::new(self),
         }
     }
 }

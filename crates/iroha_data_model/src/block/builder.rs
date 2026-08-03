@@ -17,12 +17,9 @@ use crate::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    transaction::{
-        PrivateKaigiTransaction,
-        signed::{
-            SealedTransactionReveal, SignedSealedTransactionCommitment, SignedTransaction,
-            TransactionEntrypoint, TransactionResult, TransactionResultInner,
-        },
+    transaction::signed::{
+        SealedTransactionReveal, SignedSealedTransactionCommitment, SignedTransaction,
+        TransactionEntrypoint, TransactionResult, TransactionResultInner,
     },
     trigger::TimeTriggerEntrypoint,
 };
@@ -97,16 +94,6 @@ impl BlockBuilder {
         let h: HashOf<TransactionEntrypoint> = entrypoint.hash();
         self.entry_merkle.add(h);
         self.external_entrypoints.push(entrypoint);
-        idx
-    }
-
-    /// Push an authority-free private Kaigi transaction and update the entrypoint Merkle tree.
-    pub fn push_private_kaigi_transaction(&mut self, tx: PrivateKaigiTransaction) -> usize {
-        let idx = self.external_entrypoints.len();
-        let h: HashOf<TransactionEntrypoint> = tx.hash_as_entrypoint();
-        self.entry_merkle.add(h);
-        self.external_entrypoints
-            .push(TransactionEntrypoint::PrivateKaigi(tx));
         idx
     }
 

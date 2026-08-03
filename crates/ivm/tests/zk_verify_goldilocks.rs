@@ -34,7 +34,7 @@ fn run_default_host(envelope: &OpenVerifyEnvelope, curve: Option<&str>) -> (u64,
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
     let gas = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
+        .syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
         .expect("syscall ok");
     let expected =
         ZkGasScheduleV1::default().actual_single_gas(payload.len(), envelope.public_inputs.len());
@@ -43,7 +43,7 @@ fn run_default_host(envelope: &OpenVerifyEnvelope, curve: Option<&str>) -> (u64,
 }
 
 #[test]
-fn zk_verify_transfer_goldilocks_requires_registered_backend() {
+fn zk_verify_ballot_goldilocks_requires_registered_backend() {
     let (verified, status, _) =
         run_default_host(&canonical_goldilocks_envelope(), Some("goldilocks"));
     assert_eq!(verified, 0);
@@ -51,7 +51,7 @@ fn zk_verify_transfer_goldilocks_requires_registered_backend() {
 }
 
 #[test]
-fn zk_verify_transfer_goldilocks_default_host_fails_closed() {
+fn zk_verify_ballot_goldilocks_default_host_fails_closed() {
     let (verified, status, _) = run_default_host(&canonical_goldilocks_envelope(), None);
     assert_eq!(verified, 0);
     assert_eq!(status, ivm::host::ERR_BACKEND);

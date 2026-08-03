@@ -15,7 +15,7 @@ use iroha_config::parameters::{
     defaults::pipeline as pipeline_defaults,
 };
 use iroha_data_model::{
-    escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord},
+    escrow::AssetEscrowRecord,
     prelude::*,
     query::{
         CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
@@ -76,7 +76,6 @@ fn ensure_query_registry_initialized() {
         dm_query::ErasedIterQuery<dm::oracle::TwitterBindingRecord>,
         dm_query::ErasedIterQuery<dm::oracle::DefiOracleAttestation>,
         dm_query::ErasedIterQuery<dm::escrow::AssetEscrowRecord>,
-        dm_query::ErasedIterQuery<dm::escrow::AnonymousAssetEscrowRecord>,
         dm_query::ErasedIterQuery<dm::nexus::FeeSponsorProgram>,
         dm_query::ErasedIterQuery<dm::nexus::FeeSponsorProgramId>,
     ]);
@@ -793,22 +792,6 @@ impl SortableQueryOutput for AssetEscrowRecord {
     }
 }
 
-impl SortableQueryOutput for AnonymousAssetEscrowRecord {
-    type TiebreakKey = iroha_data_model::escrow::EscrowId;
-
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
-        None
-    }
-
-    fn tiebreak_key(&self) -> Self::TiebreakKey {
-        self.id
-    }
-
-    fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
-        bounded_bare_encoded_len(&self.id, limit)
-    }
-}
-
 trait ExecuteSingularQuery {
     fn execute(self, state: &impl StateReadOnly) -> Result<SingularQueryOutputBox, Error>;
 }
@@ -915,11 +898,6 @@ fn preflight_singular_source_materialization(
         }
         SingularQueryBox::FindAssetEscrowById(query) => {
             if let Some(record) = world.asset_escrows().get(&query.escrow_id) {
-                charge(record, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindAnonymousAssetEscrowById(query) => {
-            if let Some(record) = world.anonymous_asset_escrows().get(&query.escrow_id) {
                 charge(record, &mut remaining)?;
             }
         }
@@ -1096,6 +1074,7 @@ fn preflight_singular_source_materialization(
         }
         SingularQueryBox::FindMusubiExactPackageV1(_)
         | SingularQueryBox::FindMusubiExactReleaseV1(_)
+        | SingularQueryBox::FindMusubiProviderBundleAttestationV1(_)
         | SingularQueryBox::FindMusubiResolverIndexV1(_)
         | SingularQueryBox::FindMusubiVersionsV1(_)
         | SingularQueryBox::FindMusubiMaintainersV1(_)
@@ -1155,9 +1134,6 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindAssetEscrowById(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAnonymousAssetEscrowById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindTriggerById(q) => {
@@ -1373,6 +1349,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindMusubiExactReleaseV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindMusubiProviderBundleAttestationV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindMusubiResolverIndexV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -1533,8 +1512,6 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
                 dm::query::oracle::prelude::FindDefiOracleAttestationsByKey,
             dm::query::CommittedTransaction => dm::query::transaction::prelude::FindTransactions,
             dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
-            dm::escrow::AnonymousAssetEscrowRecord =>
-                dm::query::escrow::prelude::FindAnonymousAssetEscrows,
             dm::nexus::FeeSponsorProgram =>
                 dm::query::nexus::prelude::FindFeeSponsorProgramsBySponsor,
             dm::nexus::FeeSponsorProgram => dm::query::nexus::prelude::FindFeeSponsorPrograms,
@@ -3519,6 +3496,8 @@ mod fetch_size_limit_tests {
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
   {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }},
 ]
@@ -3553,6 +3532,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
   {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }},
 ]
@@ -4327,12 +4308,6 @@ impl ValidQueryRequest {
                                 iroha_data_model::escrow::AssetEscrowRecord,
                                 iroha_data_model::query::escrow::prelude::FindAssetEscrows
                             ),
-                            QueryItemKind::AnonymousAssetEscrowRecord => {
-                                run_payload_or_default!(
-                                    iroha_data_model::escrow::AnonymousAssetEscrowRecord,
-                                    iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
-                                )
-                            }
                             QueryItemKind::OracleFeedConfig => run_payload_or_default!(
                                 iroha_data_model::oracle::FeedConfig,
                                 iroha_data_model::query::oracle::prelude::FindOracleFeeds
@@ -4503,10 +4478,6 @@ impl ValidQueryRequest {
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
                         ),
-                        QueryItemKind::AnonymousAssetEscrowRecord => run_unit!(
-                            iroha_data_model::escrow::AnonymousAssetEscrowRecord,
-                            iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
-                        ),
                         QueryItemKind::OracleFeedConfig => run_unit!(
                             iroha_data_model::oracle::FeedConfig,
                             iroha_data_model::query::oracle::prelude::FindOracleFeeds
@@ -4643,10 +4614,6 @@ impl ValidQueryRequest {
                         QueryItemKind::AssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
-                        ),
-                        QueryItemKind::AnonymousAssetEscrowRecord => run_unit!(
-                            iroha_data_model::escrow::AnonymousAssetEscrowRecord,
-                            iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                         ),
                         QueryItemKind::OracleFeedConfig => run_unit!(
                             iroha_data_model::oracle::FeedConfig,
@@ -4793,10 +4760,6 @@ impl ValidQueryRequest {
                         QueryItemKind::AssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
-                        ),
-                        QueryItemKind::AnonymousAssetEscrowRecord => run_unit!(
-                            iroha_data_model::escrow::AnonymousAssetEscrowRecord,
-                            iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                         ),
                         QueryItemKind::OracleFeedConfig => run_unit!(
                             iroha_data_model::oracle::FeedConfig,
@@ -5835,12 +5798,6 @@ impl ValidQueryRequest {
                                 iroha_data_model::escrow::AssetEscrowRecord,
                                 iroha_data_model::query::escrow::prelude::FindAssetEscrows
                             ),
-                            QueryItemKind::AnonymousAssetEscrowRecord => {
-                                run_payload_or_default!(
-                                    iroha_data_model::escrow::AnonymousAssetEscrowRecord,
-                                    iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
-                                )
-                            }
                             QueryItemKind::OracleFeedConfig => run_payload_or_default!(
                                 iroha_data_model::oracle::FeedConfig,
                                 iroha_data_model::query::oracle::prelude::FindOracleFeeds

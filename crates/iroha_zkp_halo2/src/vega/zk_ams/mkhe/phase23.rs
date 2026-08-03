@@ -141,6 +141,10 @@ pub fn zk_ams_phase23_equation_certificate_digest_v1() -> [u8; 32] {
 }
 
 /// Evaluate the exact Equation (6) cross term component-wise.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Equation (6) has four explicit accumulated and incoming operands"
+)]
 pub fn zk_ams_phase23_cross_term_v1(
     az_accumulated: &[Scalar],
     bz_accumulated: &[Scalar],

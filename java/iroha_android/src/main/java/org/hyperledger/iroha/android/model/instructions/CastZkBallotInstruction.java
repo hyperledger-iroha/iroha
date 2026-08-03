@@ -105,10 +105,8 @@ public final class CastZkBallotInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setElectionId(final String electionId) {
-      if (electionId == null || electionId.isBlank()) {
-        throw new IllegalArgumentException("electionId must not be blank");
-      }
-      this.electionId = electionId;
+      this.electionId =
+          GovernanceInstructionUtils.requireGovernanceSelectorV1(electionId, "electionId");
       return this;
     }
 

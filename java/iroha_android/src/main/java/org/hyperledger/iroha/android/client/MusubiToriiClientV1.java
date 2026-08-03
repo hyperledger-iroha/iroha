@@ -19,6 +19,7 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocationQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactPackageQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactReleaseSnapshot;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactReleaseQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.MaintainerDirectoryEntry;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixQuery;
@@ -26,7 +27,8 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackagePageQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Page;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseRecord;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationKey;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchPage;
@@ -35,10 +37,12 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.Version;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
-/** Read-only Torii client for the eleven typed first-release Musubi queries. */
+/** Read-only Torii client for the twelve typed first-release Musubi queries. */
 public final class MusubiToriiClientV1 {
   public static final String EXACT_PACKAGE_PATH = "/v1/musubi/queries/exact-package";
   public static final String EXACT_RELEASE_PATH = "/v1/musubi/queries/exact-release";
+  public static final String PROVIDER_BUNDLE_ATTESTATION_PATH =
+      "/v1/musubi/queries/provider-bundle-attestation";
   public static final String RESOLVER_INDEX_PATH = "/v1/musubi/queries/resolver-index";
   public static final String VERSIONS_PATH = "/v1/musubi/queries/versions";
   public static final String MAINTAINERS_PATH = "/v1/musubi/queries/maintainers";
@@ -50,7 +54,8 @@ public final class MusubiToriiClientV1 {
   public static final String SEARCH_PATH = "/v1/musubi/queries/search";
 
   private static final int REQUEST_MAX_BYTES = 64 * 1024;
-  private static final int RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+  // Exact-release JSON repeats the bounded dependency vector in both registry projections.
+  private static final int RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
@@ -82,14 +87,30 @@ public final class MusubiToriiClientV1 {
         });
   }
 
-  /** Fetches one exact immutable release and its mutable projections. */
-  public CompletableFuture<ReleaseRecord> findExactRelease(final ExactReleaseQuery request) {
+  /** Fetches paired home and universal projections for one exact release at finality. */
+  public CompletableFuture<ExactReleaseSnapshot> findExactRelease(
+      final ExactReleaseQuery request) {
     final ExactReleaseQuery checked = required(request);
     return executePost(
         EXACT_RELEASE_PATH,
         checked.toJsonBytes(),
         payload -> {
-          final ReleaseRecord record = MusubiJsonV1.parseExactRelease(payload);
+          final ExactReleaseSnapshot snapshot = MusubiJsonV1.parseExactRelease(payload);
+          snapshot.requireMatches(checked);
+          return snapshot;
+        });
+  }
+
+  /** Fetches one immutable provider proof by its archive/order/provider identity. */
+  public CompletableFuture<ProviderBundleAttestationRecord> findProviderBundleAttestation(
+      final ProviderBundleAttestationKey request) {
+    final ProviderBundleAttestationKey checked = required(request);
+    return executePost(
+        PROVIDER_BUNDLE_ATTESTATION_PATH,
+        checked.toJsonBytes(),
+        payload -> {
+          final ProviderBundleAttestationRecord record =
+              MusubiJsonV1.parseProviderBundleAttestation(payload);
           record.requireMatches(checked);
           return record;
         });

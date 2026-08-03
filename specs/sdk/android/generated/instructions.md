@@ -1673,23 +1673,6 @@ Alias binding payload approved alongside a manifest.
 | `vk_unshield` | `Option<VerifyingKeyId>` |
 | `vk_shield` | `Option<VerifyingKeyId>` |
 
-## `iroha_data_model::isi::zk::Shield`
-
-> Schema summary: struct fields: asset: AssetDefinitionId, from: AccountId, amount: Quantity, note_commitment: Array<u8, 32>, enc_payload: ConfidentialEncryptedPayload.
-
-- Rust type: `iroha_data_model::isi::zk::Shield`
-- Schema hash: `f6640dce7cdf2a695403dd2f3f71d93e`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `asset` | `AssetDefinitionId` |
-| `from` | `AccountId` |
-| `amount` | `Quantity` |
-| `note_commitment` | `Array<u8, 32>` |
-| `enc_payload` | `ConfidentialEncryptedPayload` |
-
 ## `iroha_data_model::isi::zk::SubmitBallot`
 
 > Schema summary: struct fields: election_id: String, ciphertext: Vec<u8>, ballot_proof: ProofAttachment, nullifier: Array<u8, 32>.
@@ -1706,24 +1689,6 @@ Alias binding payload approved alongside a manifest.
 | `ballot_proof` | `ProofAttachment` |
 | `nullifier` | `Array<u8, 32>` |
 
-## `iroha_data_model::isi::zk::Unshield`
-
-> Schema summary: struct fields: asset: AssetDefinitionId, to: AccountId, public_amount: Quantity, inputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
-
-- Rust type: `iroha_data_model::isi::zk::Unshield`
-- Schema hash: `1cb55ecc7fd92625b2bee33e491a4a0c`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `asset` | `AssetDefinitionId` |
-| `to` | `AccountId` |
-| `public_amount` | `Quantity` |
-| `inputs` | `Vec<Array<u8, 32>>` |
-| `proof` | `ProofAttachment` |
-| `root_hint` | `Option<Array<u8, 32>>` |
-
 ## `iroha_data_model::isi::zk::VerifyProof`
 
 > Schema summary: struct fields: attachment: ProofAttachment.
@@ -1736,23 +1701,6 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `attachment` | `ProofAttachment` |
-
-## `iroha_data_model::isi::zk::ZkTransfer`
-
-> Schema summary: struct fields: asset: AssetDefinitionId, inputs: Vec<Array<u8, 32>>, outputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
-
-- Rust type: `iroha_data_model::isi::zk::ZkTransfer`
-- Schema hash: `47144daf134fc01da511d50f913c7b80`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `asset` | `AssetDefinitionId` |
-| `inputs` | `Vec<Array<u8, 32>>` |
-| `outputs` | `Vec<Array<u8, 32>>` |
-| `proof` | `ProofAttachment` |
-| `root_hint` | `Option<Array<u8, 32>>` |
 
 ## `zk::CancelConfidentialPolicyTransition`
 

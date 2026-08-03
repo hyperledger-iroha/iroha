@@ -2,10 +2,10 @@
 //!
 //! Run `cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures`
 //! to refresh `fixtures/sumeragi_v2/wire_v2.tsv` and
-//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. The default mode writes;
-//! pass `--out-dir <path>` to target a cache staging directory and add `--check`
-//! to verify that destination against the current canonical Rust encodings and
-//! JSON models.
+//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. The default mode writes.
+//! Pass `--check` to verify a destination against the current canonical Rust
+//! encodings and JSON models, and use `--out-dir <path>` to target a cache
+//! staging directory.
 
 mod native_amx_grouped;
 
@@ -33,7 +33,7 @@ use iroha_data_model::{
         SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
         SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
         SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
-        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
+        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote, encode_payload_chunks,
     },
     peer::PeerId,
 };
@@ -41,6 +41,7 @@ use norito::codec::{DecodeAll, Encode};
 
 const FIXTURE_DIRECTORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/sumeragi_v2");
 const WIRE_FIXTURE_BASENAME: &str = "wire_v2.tsv";
+const CANONICAL_BODY: &[u8] = b"body";
 const HEADER: &str = "# Accept rows were generated from iroha_data_model::block::consensus_v2 using Encode::encode.\n\
 # Reject rows are Rust-encoded invalid values or deliberate corruptions of those payloads.\n\
 # Bare Norito v1 layout with COMPACT_LEN; do not regenerate from an SDK codec.\n\
@@ -154,6 +155,11 @@ fn context() -> HeightContext {
     }
 }
 
+fn canonical_body_chunks(context: &HeightContext) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    encode_payload_chunks(context.da_layout, CANONICAL_BODY)
+        .map_err(|error| format!("failed to encode canonical fixture body: {error}").into())
+}
+
 fn round(context: &HeightContext, view: u64) -> ConsensusRound {
     ConsensusRound {
         context_id: context.id(),
@@ -210,12 +216,13 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             aggregate_signature: vec![0x33; 48],
         }],
     };
+    let encoded_body_chunks = canonical_body_chunks(&context)?;
     let manifest = PayloadManifest::derive(
         &context,
         round(&context, 1),
         subject(9),
-        4,
-        &[b"body".to_vec()],
+        u64::try_from(CANONICAL_BODY.len()).expect("canonical body length fits u64"),
+        &encoded_body_chunks,
     )
     .map_err(|error| format!("fixture manifest is invalid: {error}"))?;
     let body_request = CertifiedBodyRequest {
@@ -332,7 +339,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                 PayloadChunk {
                     manifest_hash: HashOf::new(&manifest),
                     index: 0,
-                    bytes: b"body".to_vec(),
+                    bytes: encoded_body_chunks[0].clone(),
                     sender: 0,
                     signature: vec![0x66; 48],
                 },
@@ -350,7 +357,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                 CertifiedBodyResponse {
                     request_hash: HashOf::new(&body_request),
                     manifest: manifest.clone(),
-                    body: b"body".to_vec(),
+                    body: CANONICAL_BODY.to_vec(),
                     responder: 0,
                     signature: vec![3],
                 },
@@ -1117,6 +1124,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_body_chunks_cover_the_complete_rs16_stripe() {
+        let context = context();
+        let chunks = canonical_body_chunks(&context).expect("canonical encoded body chunks");
+        assert_eq!(chunks, vec![CANONICAL_BODY.to_vec(); 2]);
+
+        let manifest = PayloadManifest::derive(
+            &context,
+            round(&context, 1),
+            subject(9),
+            u64::try_from(CANONICAL_BODY.len()).expect("canonical body length fits u64"),
+            &chunks,
+        )
+        .expect("complete encoded stripe has a valid manifest");
+        assert_eq!(manifest.chunk_hashes.len(), 2);
+        assert_eq!(manifest.validate(&context), Ok(()));
+    }
 
     #[test]
     fn staged_output_directory_is_explicit() {

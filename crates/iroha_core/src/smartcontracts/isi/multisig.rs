@@ -7604,10 +7604,10 @@ seiyaku TriggerDispatch {
         let recovered_account = AccountId::new_multisig(replacement_policy.clone());
         let policy_change_instructions = vec![
             InstructionBox::from(MultisigInvalidateOutstanding::new(multisig_id.clone())),
-            InstructionBox::from(iroha_data_model::isi::ReplaceAccountController::new(
-                multisig_id.clone(),
-                AccountController::multisig(replacement_policy),
-            )),
+            InstructionBox::from(iroha_data_model::isi::ReplaceAccountController {
+                account: multisig_id.clone(),
+                new_controller: AccountController::multisig(replacement_policy),
+            }),
         ];
         let policy_change_hash = HashOf::new(&policy_change_instructions);
         Executor::Initial

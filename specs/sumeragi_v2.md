@@ -463,12 +463,13 @@ network ingress.
 The view projection partitions the bounded committee into Set A (`2f + 1`
 members, with the leader first and proxy tail last) and Set B (`f` members).
 Proposal control reaches the full committee, while the initial RS16 chunk
-fanout targets Set A. Prepare and Commit votes go to the proxy tail. If the
-fast path does not complete, retransmission expands chunks to Set B; any
-`2f + 1` equal votes form the QC. A faulty proxy tail is never replaced by a
-backup collector in the same view: committee-wide timeout votes form a TC and
-cyclically rotate all roles. Every voter must reconstruct, durably store, and
-deterministically validate the full exact body before Prepare.
+fanout targets Set A. Prepare and Commit votes reach the full committee, so any
+validator can aggregate and broadcast the QC without making one projected
+collector a liveness dependency. If the fast path does not complete,
+retransmission expands chunks to Set B; any `2f + 1` equal votes form the QC.
+Committee-wide timeout votes form a TC and cyclically rotate all roles. Every
+voter must reconstruct, durably store, and deterministically validate the full
+exact body before Prepare.
 
 The reducer may bind and durably reconstruct lane proposals after a PrepareQC
 locks one exact global body, but no current-height lane Prepare, Commit, QC, or

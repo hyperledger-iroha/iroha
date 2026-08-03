@@ -47,6 +47,18 @@ pub enum Error {
         /// Cryptographic verification error.
         reason: String,
     },
+    /// Prepared validator {index} has an invalid SoraNet transport identity: {reason}.
+    InvalidPreparedTransportIdentity {
+        /// Zero-based validator index.
+        index: usize,
+        /// Failed transport identity invariant.
+        reason: String,
+    },
+    /// Prepared validator {index} repeats another validator's SoraNet transport identity.
+    DuplicatePreparedTransportIdentity {
+        /// Zero-based validator index.
+        index: usize,
+    },
     /// Prepared validator {index} runtime file target `{target}` must be a normalized path below `/config/runtime`.
     InvalidPreparedRuntimeTarget {
         /// Zero-based validator index.
@@ -141,6 +153,8 @@ pub struct PreparedValidator {
     pub api_port: u16,
     /// Validator signing identity.
     pub key_pair: iroha_crypto::KeyPair,
+    /// Dedicated Ed25519 SoraNet transport public identity from the admitted runtime config.
+    pub soranet_transport_public_key: iroha_crypto::PublicKey,
     /// BLS proof of possession committed by the signed genesis topology.
     pub pop: Vec<u8>,
     /// Launch this validator with the explicit Sora/Nexus profile switch.
@@ -319,7 +333,8 @@ impl PeerSettings {
         network: &std::collections::BTreeMap<u16, peer::PeerInfo>,
     ) -> Result<(), Error> {
         let mut names = std::collections::BTreeSet::new();
-        for (index, (name, ..)) in network {
+        for (index, peer_info) in network {
+            let name = &peer_info.name;
             let valid = name
                 .bytes()
                 .next()
@@ -371,14 +386,24 @@ impl PeerSettings {
                                 "failed to generate BLS key pair for peer {name}: {error}"
                             ))
                         })?;
+                    let soranet_transport_key_pair = peer::generate_soranet_transport_key_pair(
+                        Some(seed),
+                        &extra_seed,
+                    )
+                    .map_err(|error| {
+                        Error::KeyGeneration(format!(
+                            "failed to generate SoraNet transport key pair for peer {name}: {error}"
+                        ))
+                    })?;
                     Ok((
                         nth,
-                        (
+                        peer::PeerInfo {
                             name,
-                            [override_.p2p_port, override_.api_port],
+                            ports: [override_.p2p_port, override_.api_port],
                             key_pair,
+                            soranet_transport_key_pair,
                             pop,
-                        ),
+                        },
                     ))
                 })
                 .collect::<Result<_, Error>>()?
@@ -418,12 +443,30 @@ impl PeerSettings {
         let mut network = std::collections::BTreeMap::new();
         let mut prepared_runtime = std::collections::BTreeMap::new();
         let mut host_ports = std::collections::BTreeSet::new();
+        let mut transport_public_keys = std::collections::BTreeSet::new();
         for (index, validator) in validators.into_iter().enumerate() {
             iroha_crypto::bls_normal_pop_verify(validator.key_pair.public_key(), &validator.pop)
                 .map_err(|error| Error::InvalidPreparedValidatorPop {
                     index,
                     reason: error.to_string(),
                 })?;
+            if validator.soranet_transport_public_key.algorithm()
+                != iroha_crypto::Algorithm::Ed25519
+            {
+                return Err(Error::InvalidPreparedTransportIdentity {
+                    index,
+                    reason: "transport key must use Ed25519".to_owned(),
+                });
+            }
+            if validator.soranet_transport_public_key == *validator.key_pair.public_key() {
+                return Err(Error::InvalidPreparedTransportIdentity {
+                    index,
+                    reason: "transport key reuses the validator signing identity".to_owned(),
+                });
+            }
+            if !transport_public_keys.insert(validator.soranet_transport_public_key.clone()) {
+                return Err(Error::DuplicatePreparedTransportIdentity { index });
+            }
             let id = u16::try_from(index).expect("prepared validator index fits u16");
             if validator.p2p_port == 0
                 || validator.api_port == 0
@@ -508,12 +551,13 @@ impl PeerSettings {
             drop(private_key);
             network.insert(
                 id,
-                (
-                    validator.name,
-                    [validator.p2p_port, validator.api_port],
-                    (public_key, None),
-                    validator.pop,
-                ),
+                peer::PeerInfo {
+                    name: validator.name,
+                    ports: [validator.p2p_port, validator.api_port],
+                    key_pair: (public_key, None),
+                    soranet_transport_key_pair: (validator.soranet_transport_public_key, None),
+                    pop: validator.pop,
+                },
             );
             prepared_runtime.insert(id, runtime);
         }
@@ -847,6 +891,11 @@ mod tests {
             &index.to_be_bytes(),
         )
         .expect("derive prepared validator");
+        let soranet_transport_key_pair = peer::generate_soranet_transport_key_pair(
+            Some(b"iroha-swarm-prepared-validator"),
+            &index.to_be_bytes(),
+        )
+        .expect("derive prepared validator SoraNet transport identity");
         PreparedValidator {
             name: format!("irohad{index}"),
             p2p_port: crate::BASE_PORT_P2P + index,
@@ -856,6 +905,7 @@ mod tests {
                 key_pair.1.expect("generated private key").0,
             )
             .expect("rebuild prepared validator key pair"),
+            soranet_transport_public_key: soranet_transport_key_pair.0,
             pop,
             requires_sora_profile: false,
             build_line: PreparedBuildLine::Iroha3,
@@ -1097,6 +1147,36 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_development_transport_keys_are_stable_unique_and_role_separated() {
+        let first = peer::network(4, Some(b"iroha-swarm-transport-test"))
+            .expect("derive deterministic network");
+        let replay = peer::network(4, Some(b"iroha-swarm-transport-test"))
+            .expect("rederive deterministic network");
+        let mut transport_keys = std::collections::BTreeSet::new();
+
+        for (index, peer_info) in &first {
+            let replay_peer = replay.get(index).expect("replayed peer");
+            let transport_private = peer_info
+                .soranet_transport_key_pair
+                .1
+                .as_ref()
+                .expect("development transport private key");
+            let transport = iroha_crypto::KeyPair::new(
+                peer_info.soranet_transport_key_pair.0.clone(),
+                transport_private.0.clone(),
+            )
+            .expect("transport key pair must match");
+            assert_eq!(transport.algorithm(), iroha_crypto::Algorithm::Ed25519);
+            assert_ne!(peer_info.soranet_transport_key_pair.0, peer_info.key_pair.0);
+            assert_eq!(
+                peer_info.soranet_transport_key_pair.0,
+                replay_peer.soranet_transport_key_pair.0
+            );
+            assert!(transport_keys.insert(peer_info.soranet_transport_key_pair.0.clone()));
+        }
+    }
+
+    #[test]
     fn prepared_mode_rejects_non_committee_validator_count() {
         let result = Swarm::from_prepared(
             peer::chain(),
@@ -1115,6 +1195,53 @@ mod tests {
         assert!(matches!(
             result,
             Err(crate::Error::InvalidPeerCount { actual: 2 })
+        ));
+    }
+
+    #[test]
+    fn prepared_mode_rejects_wrong_algorithm_and_duplicate_transport_identities() {
+        let mut wrong_algorithm = (0_u16..4).map(prepared_validator).collect::<Vec<_>>();
+        wrong_algorithm[0].soranet_transport_public_key =
+            wrong_algorithm[0].key_pair.public_key().clone();
+        let result = Swarm::from_prepared(
+            peer::chain(),
+            wrong_algorithm,
+            PreparedGenesisArtifacts {
+                signed_block: std::path::Path::new("genesis.signed.nrt"),
+                public_key: std::path::Path::new("genesis.public_key"),
+                expected_hash: std::path::Path::new("genesis.expected_hash"),
+            },
+            false,
+            IMAGE,
+            None,
+            false,
+            std::path::Path::new(TARGET_PATH),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::Error::InvalidPreparedTransportIdentity { index: 0, .. })
+        ));
+
+        let mut duplicate = (0_u16..4).map(prepared_validator).collect::<Vec<_>>();
+        duplicate[1].soranet_transport_public_key =
+            duplicate[0].soranet_transport_public_key.clone();
+        let result = Swarm::from_prepared(
+            peer::chain(),
+            duplicate,
+            PreparedGenesisArtifacts {
+                signed_block: std::path::Path::new("genesis.signed.nrt"),
+                public_key: std::path::Path::new("genesis.public_key"),
+                expected_hash: std::path::Path::new("genesis.expected_hash"),
+            },
+            false,
+            IMAGE,
+            None,
+            false,
+            std::path::Path::new(TARGET_PATH),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::Error::DuplicatePreparedTransportIdentity { index: 1 })
         ));
     }
 

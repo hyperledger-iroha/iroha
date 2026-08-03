@@ -388,6 +388,8 @@ def test_checked_in_taira_genesis_gas_parameters_are_structured_parameters() -> 
 BASE_CONFIG = """# baseline
 public_key = "peer-1-public"
 private_key = "peer-1-private"
+soranet_transport_public_key = "peer-1-soranet-public"
+soranet_transport_private_key = "peer-1-soranet-private"
 
 trusted_peers = [
   "peer-1-public@taira-validator-1.sora.org:1337",
@@ -493,7 +495,13 @@ def _write_roster(
             f'public_key = "peer-{index}-public"',
         ]
         if inline_private_keys:
-            entry.append(f'private_key = "peer-{index}-private"')
+            entry.extend(
+                [
+                    f'private_key = "peer-{index}-private"',
+                    f'soranet_transport_public_key = "peer-{index}-soranet-public"',
+                    f'soranet_transport_private_key = "peer-{index}-soranet-private"',
+                ]
+            )
         entry.extend(
             [
                 f'pop_hex = "peer-{index}-pop"',
@@ -541,6 +549,8 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
                 "[[validators]]",
                 f'slug = "taira-validator-{index}"',
                 f'private_key = "peer-{index}-private"',
+                f'soranet_transport_public_key = "peer-{index}-soranet-public"',
+                f'soranet_transport_private_key = "peer-{index}-soranet-private"',
                 "",
             ]
         )
@@ -566,6 +576,8 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     )
     assert 'public_key = "peer-3-public"' in config
     assert 'private_key = "peer-3-private"' in config
+    assert 'soranet_transport_public_key = "peer-3-soranet-public"' in config
+    assert 'soranet_transport_private_key = "peer-3-soranet-private"' in config
     assert 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' in config
     assert 'public_address = "addr:taira-validator-3.sora.org:1337#99FF"' in config
     assert 'address = "addr:0.0.0.0:1337#BF18"' in config
@@ -1224,6 +1236,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-1"',
                 'public_key = "peer-1-public"',
                 'private_key = "peer-1-private"',
+                'soranet_transport_public_key = "peer-1-soranet-public"',
+                'soranet_transport_private_key = "peer-1-soranet-private"',
                 'pop_hex = "peer-1-pop"',
                 'public_address = "taira-validator-1.sora.org:1337"',
                 "",
@@ -1232,6 +1246,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-2"',
                 'public_key = "peer-2-public"',
                 'private_key = "peer-2-private"',
+                'soranet_transport_public_key = "peer-2-soranet-public"',
+                'soranet_transport_private_key = "peer-2-soranet-private"',
                 'pop_hex = "peer-2-pop"',
                 'public_address = "taira-validator-2.sora.org:1337"',
                 "",
@@ -1240,6 +1256,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-3"',
                 'public_key = "peer-3-public"',
                 'private_key = "peer-3-private"',
+                'soranet_transport_public_key = "peer-3-soranet-public"',
+                'soranet_transport_private_key = "peer-3-soranet-private"',
                 'pop_hex = "peer-3-pop"',
                 'public_address = "taira-validator-3.sora.org:1337"',
                 "",
@@ -1248,6 +1266,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-4"',
                 'public_key = "peer-4-public"',
                 'private_key = "peer-4-private"',
+                'soranet_transport_public_key = "peer-4-soranet-public"',
+                'soranet_transport_private_key = "peer-4-soranet-private"',
                 'pop_hex = "peer-4-pop"',
                 'public_address = "taira-validator-4.sora.org:1337"',
                 "",
@@ -1497,6 +1517,58 @@ def test_load_roster_merges_private_keys_from_secrets(tmp_path: Path) -> None:
 
     assert validators[0].private_key == "peer-1-private"
     assert validators[-1].private_key == "peer-4-private"
+    assert validators[0].soranet_transport_public_key == "peer-1-soranet-public"
+    assert validators[-1].soranet_transport_private_key == "peer-4-soranet-private"
+
+
+def test_secret_material_requires_each_validator_transport_pair(tmp_path: Path) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            'soranet_transport_private_key = "peer-2-soranet-private"\n',
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="soranet_transport_private_key"):
+        MODULE.load_secret_material(secrets_path)
+
+
+def test_load_roster_rejects_duplicate_transport_public_keys(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    roster_path.write_text(
+        roster_path.read_text(encoding="utf-8").replace(
+            'soranet_transport_public_key = "peer-2-soranet-public"',
+            'soranet_transport_public_key = "peer-1-soranet-public"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="soranet_transport_public_key.*duplicated"):
+        MODULE.load_roster(roster_path)
+
+
+def test_load_roster_rejects_streaming_identity_reuse(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            'streaming_identity_public_key = "streaming-public-key"',
+            'streaming_identity_public_key = "peer-1-soranet-public"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must not reuse the shared streaming identity"):
+        MODULE.load_roster(roster_path, secrets_path=secrets_path)
 
 
 def test_render_bundle_rejects_unpopulated_template_placeholders(

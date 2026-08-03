@@ -37,7 +37,7 @@ use iroha::{
             Grant, InstructionBox, Log, Mint, Register, SetParameter,
             musubi::{
                 AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1,
-                RegisterMusubiNamespaceBindingV1,
+                RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
             },
             sorafs::{
                 CompleteReplicationOrder, IssueReplicationOrder, RegisterPinManifest,
@@ -62,6 +62,7 @@ use iroha::{
             MusubiResolverIndexQueryV1, MusubiSeedIngressReceiptApprovalV1,
             MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
             MusubiSeedIngressReceiptV1, MusubiStorageAvailabilityV1, MusubiVerificationLockV1,
+            musubi_provider_bundle_attestation_set_digest_v1,
         },
         nexus::{
             DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneRelayEnvelope,
@@ -1210,13 +1211,39 @@ async fn prepare_selectable_musubi_publication(
         replication_order,
         anchor,
     );
+    let provider_attestation_transaction = submitter.build_transaction(
+        provider_attestations.iter().cloned().map(|attestation| {
+            InstructionBox::from(RegisterMusubiProviderBundleAttestationV1::new(
+                attestation,
+                1,
+            ))
+        }),
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
+    submit_approved_and_wait_for_all_peers(
+        network,
+        submitter,
+        provider_attestation_transaction,
+        &format!("{context}: register three provider bundle attestations"),
+    )
+    .await?;
+    let provider_attestation_references = provider_attestations
+        .iter()
+        .map(MusubiProviderBundleVerificationAttestationV1::reference)
+        .collect::<Vec<_>>();
+    let provider_attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+        archive_id,
+        replication_order,
+        &provider_attestation_references,
+    )?;
     let location_transaction = submitter.build_transaction(
         [InstructionBox::from(AddMusubiArchiveLocationV1 {
             archive_id,
             location_id,
             pin_manifest: pin_manifest_digest,
             replication_order,
-            provider_attestations,
+            provider_attestation_set_digest,
             renew_after_epoch: MUSUBI_FAULT_RENEW_EPOCH,
             expires_at_epoch: MUSUBI_FAULT_RETENTION_EPOCH,
             expected_location_revision: 1,

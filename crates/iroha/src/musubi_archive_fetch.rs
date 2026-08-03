@@ -1,7 +1,7 @@
-//! Production authenticated SoraFS transport used by Musubi archive fetching.
+//! Production authenticated `SoraFS` transport used by Musubi archive fetching.
 //!
 //! Provider identities, origins, and API-token files come only from the explicit
-//! platform client configuration. The transport validates the canonical SoraFS
+//! platform client configuration. The transport validates the canonical `SoraFS`
 //! manifest and every page of the storage plan against the immutable Musubi
 //! archive commitment, mints a short-lived provider-bound stream token, and
 //! regenerates the canonical CAR through a bounded reader.
@@ -77,27 +77,27 @@ const TOKEN_BYTE_WINDOW_GUARD: Duration = Duration::from_millis(1_100);
 const BUNDLE_METADATA_FILE_COUNT: usize = 3;
 
 const MANIFEST_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
-    max_tokens: 4_096,
-    max_depth: 16,
-    max_single_string_bytes: 700 * 1024,
-    max_total_string_bytes: 1024 * 1024,
-    max_atom_bytes: 64,
+    tokens: 4_096,
+    depth: 16,
+    single_string_bytes: 700 * 1024,
+    total_string_bytes: 1024 * 1024,
+    atom_bytes: 64,
 };
 const PLAN_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
     // A full page may contain 500 files with 64 path components each, plus
     // chunk records, digest strings, object keys, and scalar fields.
-    max_tokens: 65_536,
-    max_depth: 16,
-    max_single_string_bytes: 4 * 1024,
-    max_total_string_bytes: 4 * 1024 * 1024,
-    max_atom_bytes: 64,
+    tokens: 65_536,
+    depth: 16,
+    single_string_bytes: 4 * 1024,
+    total_string_bytes: 4 * 1024 * 1024,
+    atom_bytes: 64,
 };
 const TOKEN_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
-    max_tokens: 128,
-    max_depth: 8,
-    max_single_string_bytes: STREAM_TOKEN_MAX_BASE64_BYTES_V1,
-    max_total_string_bytes: 16 * 1024,
-    max_atom_bytes: 64,
+    tokens: 128,
+    depth: 8,
+    single_string_bytes: STREAM_TOKEN_MAX_BASE64_BYTES_V1,
+    total_string_bytes: 16 * 1024,
+    atom_bytes: 64,
 };
 
 // TODO: Qualify the complete HTTP/TLS + JSON DOM + CAR/cache fetch process against the 64 MiB
@@ -189,6 +189,36 @@ struct ProviderRuntimeV1 {
     http: HttpClient,
 }
 
+#[derive(Clone)]
+struct PreparedProviderRuntimeV1 {
+    provider: ProviderId,
+    base_url: Url,
+    api_token_path: PathBuf,
+}
+
+/// Parsed, secret-free production archive-fetch configuration.
+///
+/// Provider identities, canonical origins, and token-file paths are validated and retained, but
+/// token files are not opened, DNS is not resolved, and HTTP clients are not built until
+/// [`Self::build_client`] is called after a cache miss. Debug output deliberately omits origins,
+/// client labels, and paths.
+#[derive(Clone)]
+pub struct PreparedMusubiArchiveFetchConfigV1 {
+    providers: Vec<PreparedProviderRuntimeV1>,
+    client_id: String,
+    request_timeout: Duration,
+}
+
+impl fmt::Debug for PreparedMusubiArchiveFetchConfigV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedMusubiArchiveFetchConfigV1")
+            .field("provider_count", &self.providers.len())
+            .field("request_timeout", &self.request_timeout)
+            .finish_non_exhaustive()
+    }
+}
+
 impl fmt::Debug for ProviderRuntimeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -228,7 +258,7 @@ struct GatewaySessionV1 {
     byte_window_used: u64,
 }
 
-/// Authenticated production SoraFS transport with bounded, pinned provider clients.
+/// Authenticated production `SoraFS` transport with bounded, pinned provider clients.
 pub struct AuthenticatedMusubiArchiveFetchClientV1 {
     providers: BTreeMap<ProviderId, ProviderRuntimeV1>,
     client_id: String,
@@ -248,39 +278,41 @@ impl fmt::Debug for AuthenticatedMusubiArchiveFetchClientV1 {
     }
 }
 
-impl AuthenticatedMusubiArchiveFetchClientV1 {
-    /// Load only `[musubi.fetch]` from one required platform `client.toml`.
+impl PreparedMusubiArchiveFetchConfigV1 {
+    /// Parse and validate the fetch subtree from one caller-owned bounded `client.toml` image.
     ///
-    /// Account identity, public/private keys, mutation credentials, basic auth,
-    /// and environment variables are deliberately not interpreted. This keeps
-    /// ordinary fetch/cache reads signer-free.
+    /// Relative token-file paths are resolved against `config_path`, but neither those files nor
+    /// any network service is accessed by this function.
     ///
     /// # Errors
-    /// Returns a stable error for an unsafe file or malformed fetch subtree.
-    pub fn load_platform_file(path: &Path) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
-        let (bytes, _) = read_bounded_regular(path, MAX_CLIENT_CONFIG_BYTES)
+    /// Returns a stable redacted error when the byte image or fetch subtree is invalid.
+    pub fn from_platform_config_bytes(
+        config_path: &Path,
+        bytes: &[u8],
+    ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
+        let config_path = anchor_config_path(config_path)?;
+        let length = u64::try_from(bytes.len())
             .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))?;
-        let text = std::str::from_utf8(&bytes)
+        if bytes.is_empty() || length > MAX_CLIENT_CONFIG_BYTES {
+            return Err(permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"));
+        }
+        let text = std::str::from_utf8(bytes)
             .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))?;
-        let document = text
-            .parse::<toml::Value>()
-            .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))?;
+        let document = parse_config_document(text)?;
         let config = parse_fetch_subtree(&document)?;
-        Self::from_platform_config(path, &config)
+        Self::from_platform_config(&config_path, &config)
     }
 
-    /// Build the production boundary from the typed platform-client fetch subtree.
-    ///
-    /// Relative token paths are resolved beside `client.toml`. Every gateway is
-    /// HTTPS-only, canonical, credential-free, standard-port, and pinned to an
-    /// exclusively public bounded DNS answer set before this function returns.
+    /// Validate one already-parsed fetch subtree without loading credentials or network state.
     ///
     /// # Errors
-    /// Returns a stable configuration error without exposing URLs, paths, or secrets.
+    /// Returns a stable redacted error when provider identities, origins, paths, or bounds are
+    /// invalid.
     pub fn from_platform_config(
         config_path: &Path,
         config: &MusubiFetchConfig,
     ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
+        let config_path = anchor_config_path(config_path)?;
         if config.provider_gateways.is_empty()
             || config.provider_gateways.len() > MAX_CONFIGURED_PROVIDERS
         {
@@ -297,36 +329,98 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
             return Err(permanent("MUSUBI_ARCHIVE_FETCH_TIMEOUT_INVALID"));
         }
         let request_timeout = Duration::from_millis(timeout_ms);
-        let mut providers = BTreeMap::new();
+        let mut providers = Vec::<PreparedProviderRuntimeV1>::new();
+        providers
+            .try_reserve_exact(config.provider_gateways.len())
+            .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))?;
         let mut origins = HashSet::new();
         for configured in &config.provider_gateways {
             let provider = parse_provider_id(&configured.provider_id)?;
             let base_url = parse_gateway_base_url(&configured.url)?;
             let origin = gateway_origin(&base_url)
                 .ok_or_else(|| permanent("MUSUBI_ARCHIVE_FETCH_GATEWAY_URL_INVALID"))?;
-            if providers.contains_key(&provider) || !origins.insert(origin) {
+            if providers
+                .iter()
+                .any(|prepared| prepared.provider == provider)
+                || !origins.insert(origin)
+            {
                 return Err(permanent("MUSUBI_ARCHIVE_FETCH_PROVIDER_DUPLICATE"));
             }
-            let token_path = resolve_config_path(config_path, &configured.api_token_file)?;
-            let api_token = read_api_token(&token_path)?;
-            let http = pinned_http_client(&base_url, request_timeout)?;
-            providers.insert(
+            providers.push(PreparedProviderRuntimeV1 {
                 provider,
-                ProviderRuntimeV1 {
-                    provider,
-                    base_url,
-                    api_token,
-                    http,
-                },
-            );
+                base_url,
+                api_token_path: resolve_config_path(&config_path, &configured.api_token_file)?,
+            });
         }
         Ok(Self {
             providers,
             client_id: client_id.to_owned(),
             request_timeout,
+        })
+    }
+
+    /// Load runtime-only tokens, pin DNS answers, and construct the authenticated client.
+    ///
+    /// # Errors
+    /// Returns a stable redacted error when a token file, DNS answer, or HTTP client is invalid.
+    pub fn build_client(
+        &self,
+    ) -> Result<AuthenticatedMusubiArchiveFetchClientV1, MusubiArchiveRuntimeErrorV1> {
+        let mut providers = BTreeMap::new();
+        for prepared in &self.providers {
+            let api_token = read_api_token(&prepared.api_token_path)?;
+            let http = pinned_http_client(&prepared.base_url, self.request_timeout)?;
+            providers.insert(
+                prepared.provider,
+                ProviderRuntimeV1 {
+                    provider: prepared.provider,
+                    base_url: prepared.base_url.clone(),
+                    api_token,
+                    http,
+                },
+            );
+        }
+        Ok(AuthenticatedMusubiArchiveFetchClientV1 {
+            providers,
+            client_id: self.client_id.clone(),
+            request_timeout: self.request_timeout,
             prepared: BTreeMap::new(),
             stream_failure: None,
         })
+    }
+}
+
+impl AuthenticatedMusubiArchiveFetchClientV1 {
+    /// Load only `[musubi.fetch]` from one required platform `client.toml`.
+    ///
+    /// Account identity, public/private keys, mutation credentials, basic auth,
+    /// and environment variables are deliberately not interpreted. This keeps
+    /// ordinary fetch/cache reads signer-free.
+    ///
+    /// # Errors
+    /// Returns a stable error for an unsafe file or malformed fetch subtree.
+    pub fn load_platform_file(path: &Path) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
+        let path = anchor_config_path(path)?;
+        let (bytes, _) = read_bounded_regular(&path, MAX_CLIENT_CONFIG_BYTES)
+            .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))?;
+        PreparedMusubiArchiveFetchConfigV1::from_platform_config_bytes(&path, &bytes)?
+            .build_client()
+    }
+
+    /// Build the production boundary from the typed platform-client fetch subtree.
+    ///
+    /// Relative token paths are resolved beside `client.toml`. Every gateway is
+    /// HTTPS-only, canonical, credential-free, standard-port, and pinned to an
+    /// exclusively public bounded DNS answer set before this function returns.
+    ///
+    /// # Errors
+    /// Returns a stable configuration error without exposing URLs, paths, or secrets.
+    pub fn from_platform_config(
+        config_path: &Path,
+        config: &MusubiFetchConfig,
+    ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
+        PreparedMusubiArchiveFetchConfigV1::from_platform_config(config_path, config)?
+            .build_client()
     }
 
     /// Fetch and validate the canonical manifest plus every storage-plan page.
@@ -427,12 +521,17 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
     #[must_use]
     pub fn take_stream_failure(&mut self) -> Option<MusubiArchiveRuntimeErrorV1> {
         let stream_failure = self.stream_failure.take()?;
-        let outcome = match stream_failure.lock() {
-            Ok(mut failure) => failure.take(),
-            Err(_) => Some(permanent("MUSUBI_ARCHIVE_STREAM_STATE_UNAVAILABLE")),
-        };
-        outcome
+        stream_failure.lock().map_or_else(
+            |_| Some(permanent("MUSUBI_ARCHIVE_STREAM_STATE_UNAVAILABLE")),
+            |mut failure| failure.take(),
+        )
     }
+}
+
+fn parse_config_document(text: &str) -> Result<toml::Value, MusubiArchiveRuntimeErrorV1> {
+    text.parse::<toml::Table>()
+        .map(toml::Value::Table)
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))
 }
 
 impl GatewaySessionFactoryV1 {
@@ -704,6 +803,10 @@ struct PlanPageV1 {
     files: Vec<FilePlan>,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the provider-owned plan is validated in one ordered fail-closed audit surface"
+)]
 fn parse_plan_page(
     expected_manifest_id_hex: &str,
     body: &[u8],
@@ -1084,9 +1187,11 @@ fn stream_canonical_car(
                 .unwrap_or_else(|| integrity("MUSUBI_ARCHIVE_PROVIDER_STREAM_INVALID")));
         }
     };
+    let actual_car_digest = stats.car_archive_digest.as_bytes();
+    let expected_car_digest = commitment.car_digest.as_bytes();
     if stats.car_size != commitment.car_size
         || stats.car_size > MUSUBI_MAX_CAR_BYTES_V1
-        || stats.car_archive_digest.as_bytes() != commitment.car_digest.as_bytes()
+        || actual_car_digest != expected_car_digest
         || stats.root_cids.as_slice() != [commitment.root_cid.as_bytes().to_vec()]
         || stats.chunk_count != usize::try_from(commitment.chunk_count).unwrap_or(usize::MAX)
         || stats.payload_bytes != commitment.content_length
@@ -1134,7 +1239,7 @@ impl Read for GatewayPayloadReaderV1 {
             let response = match fetched {
                 Ok(response) => response,
                 Err(error) => {
-                    return Err(self.fail(classify_gateway_fetch_error(error)));
+                    return Err(self.fail(classify_gateway_fetch_error(&error)));
                 }
             };
             self.session.requests_remaining = self.session.requests_remaining.saturating_sub(1);
@@ -1149,7 +1254,7 @@ impl Read for GatewayPayloadReaderV1 {
     }
 }
 
-fn classify_gateway_fetch_error(error: GatewayFetchError) -> MusubiArchiveRuntimeErrorV1 {
+fn classify_gateway_fetch_error(error: &GatewayFetchError) -> MusubiArchiveRuntimeErrorV1 {
     match error {
         GatewayFetchError::Request { .. } | GatewayFetchError::RequestBody { .. } => {
             retryable("MUSUBI_ARCHIVE_CHUNK_REQUEST_FAILED")
@@ -1164,30 +1269,25 @@ fn classify_gateway_fetch_error(error: GatewayFetchError) -> MusubiArchiveRuntim
         GatewayFetchError::PolicyBlocked { .. } => {
             unavailable("MUSUBI_ARCHIVE_CHUNK_GOVERNED_UNAVAILABLE")
         }
-        GatewayFetchError::UnexpectedStatus { status, .. }
-            if matches!(status, StatusCode::NOT_FOUND | StatusCode::GONE) =>
-        {
-            unavailable("MUSUBI_ARCHIVE_CHUNK_UNAVAILABLE")
-        }
-        GatewayFetchError::UnexpectedStatus { status, .. }
-            if matches!(
-                status,
+        GatewayFetchError::UnexpectedStatus {
+            status: StatusCode::NOT_FOUND | StatusCode::GONE,
+            ..
+        } => unavailable("MUSUBI_ARCHIVE_CHUNK_UNAVAILABLE"),
+        GatewayFetchError::UnexpectedStatus {
+            status:
                 StatusCode::REQUEST_TIMEOUT
-                    | StatusCode::TOO_EARLY
-                    | StatusCode::TOO_MANY_REQUESTS
-                    | StatusCode::INTERNAL_SERVER_ERROR
-                    | StatusCode::BAD_GATEWAY
-                    | StatusCode::SERVICE_UNAVAILABLE
-                    | StatusCode::GATEWAY_TIMEOUT
-            ) =>
-        {
-            retryable("MUSUBI_ARCHIVE_CHUNK_RETRYABLE")
-        }
-        GatewayFetchError::UnexpectedStatus { status, .. }
-            if status == StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS =>
-        {
-            unavailable("MUSUBI_ARCHIVE_CHUNK_GOVERNED_UNAVAILABLE")
-        }
+                | StatusCode::TOO_EARLY
+                | StatusCode::TOO_MANY_REQUESTS
+                | StatusCode::INTERNAL_SERVER_ERROR
+                | StatusCode::BAD_GATEWAY
+                | StatusCode::SERVICE_UNAVAILABLE
+                | StatusCode::GATEWAY_TIMEOUT,
+            ..
+        } => retryable("MUSUBI_ARCHIVE_CHUNK_RETRYABLE"),
+        GatewayFetchError::UnexpectedStatus {
+            status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+            ..
+        } => unavailable("MUSUBI_ARCHIVE_CHUNK_GOVERNED_UNAVAILABLE"),
         GatewayFetchError::UnknownProvider { .. }
         | GatewayFetchError::SystemClockBeforeUnixEpoch
         | GatewayFetchError::NonceExhausted { .. }
@@ -1447,6 +1547,15 @@ fn gateway_origin(url: &Url) -> Option<(String, String, u16)> {
     ))
 }
 
+fn anchor_config_path(path: &Path) -> Result<PathBuf, MusubiArchiveRuntimeErrorV1> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    std::env::current_dir()
+        .map(|current| current.join(path))
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))
+}
+
 fn resolve_config_path(
     config_path: &Path,
     configured: &str,
@@ -1462,7 +1571,14 @@ fn resolve_config_path(
     Ok(if path.is_absolute() {
         path.to_path_buf()
     } else {
-        config_path
+        let anchored_config = if config_path.is_absolute() {
+            config_path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_TOKEN_FILE_INVALID"))?
+                .join(config_path)
+        };
+        anchored_config
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(path)
@@ -1647,7 +1763,41 @@ const fn platform_no_follow_flag() -> i32 {
     0x100
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "mips",
+        target_arch = "mips32r6",
+        target_arch = "mips64",
+        target_arch = "mips64r6"
+    )
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x80
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "sparc", target_arch = "sparc64")
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x4000
+}
+
+#[cfg(any(
+    target_os = "android",
+    all(
+        target_os = "linux",
+        not(any(
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6",
+            target_arch = "sparc",
+            target_arch = "sparc64"
+        ))
+    )
+))]
 const fn platform_nonblocking_flag() -> i32 {
     0x800
 }
@@ -2076,7 +2226,8 @@ mod tests {
 
     #[test]
     fn signer_free_fetch_parser_ignores_account_key_material() {
-        let document = r#"
+        let document = parse_config_document(
+            r#"
 torii_url = "https://registry.example/"
 
 [account]
@@ -2091,14 +2242,57 @@ request_timeout_ms = 2500
 provider_id = "1111111111111111111111111111111111111111111111111111111111111111"
 url = "https://provider.example/"
 api_token_file = "provider.token"
-"#
-        .parse::<toml::Value>()
+"#,
+        )
         .expect("fixture TOML");
         let parsed = parse_fetch_subtree(&document).expect("public fetch subtree");
         assert_eq!(parsed.client_id.as_deref(), Some("musubi-ci"));
         assert_eq!(parsed.request_timeout_ms, Some(2_500));
         assert_eq!(parsed.provider_gateways.len(), 1);
         assert_eq!(parsed.provider_gateways[0].api_token_file, "provider.token");
+    }
+
+    #[test]
+    fn prepared_fetch_config_uses_one_image_and_defers_runtime_secrets_and_network() {
+        let bytes = br#"
+[account]
+private_key = "ignored-private-material"
+
+[musubi.fetch]
+client_id = "private-client-label"
+request_timeout_ms = 2500
+
+[[musubi.fetch.provider_gateways]]
+provider_id = "1111111111111111111111111111111111111111111111111111111111111111"
+url = "https://provider.example/"
+api_token_file = "tokens/provider.token"
+"#;
+        let platform_root = PathBuf::from("prepared-fetch-platform");
+        let config_path = platform_root.join("client.toml");
+        let prepared =
+            PreparedMusubiArchiveFetchConfigV1::from_platform_config_bytes(&config_path, bytes)
+                .expect("preparation must not open the absent token file or resolve provider DNS");
+
+        assert_eq!(prepared.providers.len(), 1);
+        assert_eq!(
+            prepared.providers[0].api_token_path,
+            std::env::current_dir()
+                .expect("current directory")
+                .join(platform_root)
+                .join("tokens/provider.token")
+        );
+        let debug = format!("{prepared:?}");
+        assert!(debug.contains("provider_count: 1"));
+        let platform_root_text = platform_root.to_string_lossy();
+        for redacted in [
+            "ignored-private-material",
+            "private-client-label",
+            "provider.example",
+            "provider.token",
+            platform_root_text.as_ref(),
+        ] {
+            assert!(!debug.contains(redacted));
+        }
     }
 
     #[cfg(unix)]
@@ -2156,7 +2350,7 @@ api_token_file = "provider.token"
 token = "must-not-be-inline"
 "#,
         ] {
-            let value = source.parse::<toml::Value>().expect("fixture TOML");
+            let value = parse_config_document(source).expect("fixture TOML");
             assert!(parse_fetch_subtree(&value).is_err());
         }
     }
@@ -2218,7 +2412,7 @@ token = "must-not-be-inline"
 
     #[test]
     fn gateway_stream_failures_keep_retry_and_integrity_classes() {
-        let retryable_error = classify_gateway_fetch_error(GatewayFetchError::UnexpectedStatus {
+        let retryable_error = classify_gateway_fetch_error(&GatewayFetchError::UnexpectedStatus {
             provider: "redacted-provider".to_owned(),
             status: StatusCode::TOO_MANY_REQUESTS,
             body: None,
@@ -2227,7 +2421,7 @@ token = "must-not-be-inline"
             retryable_error.class(),
             MusubiArchiveRuntimeFailureClassV1::Retryable
         );
-        let integrity_error = classify_gateway_fetch_error(GatewayFetchError::ResponseTooLarge {
+        let integrity_error = classify_gateway_fetch_error(&GatewayFetchError::ResponseTooLarge {
             provider: "redacted-provider".to_owned(),
             limit: 4 * 1024 * 1024,
         });

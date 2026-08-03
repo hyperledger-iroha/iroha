@@ -21,7 +21,7 @@ use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
-    account::{AccountController, AccountId},
+    account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
     error::ParseError,
     id::ChainId,
     name::Name,
@@ -56,10 +56,15 @@ pub const MUSUBI_MAX_VERSION_COMPARATORS_V1: usize = 16;
 pub const MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1: u64 = 64 * 1024 * 1024;
 /// Maximum CAR bytes committed by one archive.
 pub const MUSUBI_MAX_CAR_BYTES_V1: u64 = 96 * 1024 * 1024;
+/// Maximum concatenated bundle payload, including source and three mandatory metadata entries.
+pub const MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1: u64 = MUSUBI_MAX_CAR_BYTES_V1;
 /// Maximum regular files committed by one archive.
 pub const MUSUBI_MAX_FILES_V1: u32 = 4_096;
 /// Maximum chunks committed by one archive.
 pub const MUSUBI_MAX_CHUNKS_V1: u32 = 16_384;
+const MUSUBI_MAX_PORTABLE_PATH_COMPONENTS_V1: usize = 64;
+const MUSUBI_MAX_PORTABLE_PATH_COMPONENT_BYTES_V1: usize = 255;
+const MUSUBI_MAX_PORTABLE_PATH_BYTES_V1: usize = 4 * 1024;
 /// Maximum normal dependencies in a published release.
 pub const MUSUBI_MAX_DEPENDENCIES_V1: usize = 256;
 /// Maximum exported interface names in a published release.
@@ -76,10 +81,16 @@ pub const MUSUBI_MIN_HEALTHY_REPLICAS_V1: u16 = 3;
 pub const MUSUBI_MAX_LOCATION_PROVIDERS_V1: usize = 64;
 /// Maximum package owners.
 pub const MUSUBI_MAX_PACKAGE_OWNERS_V1: usize = 64;
+/// Maximum canonical Norito bytes for any account identity carried by Musubi V1.
+pub const MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1: usize = 8 * 1024;
 /// Maximum signatures carried by a namespace delegation approval set.
 pub const MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1: usize = 64;
 /// Maximum controller approvals on a publication staging receipt or provider attestation.
 pub const MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1: usize = 64;
+/// Maximum detached-signature payload bytes accepted in any Musubi V1 approval.
+pub const MUSUBI_MAX_APPROVAL_SIGNATURE_PAYLOAD_BYTES_V1: usize = 3_309;
+/// Maximum canonical Norito bytes for one complete provider bundle attestation.
+pub const MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1: usize = 1024 * 1024;
 /// Maximum lifetime of an authenticated seed-ingress receipt.
 pub const MUSUBI_MAX_SEED_INGRESS_RECEIPT_LIFETIME_MS_V1: u64 = 24 * 60 * 60 * 1_000;
 /// Maximum accepted maintainers.
@@ -95,18 +106,205 @@ pub const MUSUBI_MAX_KEYWORDS_V1: usize = 32;
 pub const MUSUBI_DEFAULT_PAGE_SIZE_V1: u32 = 50;
 /// Consensus maximum registry page size.
 pub const MUSUBI_MAX_PAGE_SIZE_V1: usize = 100;
+/// Maximum JSON bytes accepted for one public Musubi V1 query response.
+pub const MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1: usize = 32 * 1024 * 1024;
+/// Conservative JSON-array payload budget for resolver-index page items.
+///
+/// The remaining eight MiB covers the echoed request, deployment identity,
+/// finalized snapshot, continuation cursor, and JSON object framing.
+pub const MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1: usize = 24 * 1024 * 1024;
 /// Maximum exact archive identities in one authoritative cache-retention request.
 pub const MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1: usize = MUSUBI_MAX_PAGE_SIZE_V1;
 /// Maximum global alias length.
 pub const MUSUBI_MAX_ALIAS_BYTES_V1: usize = 32;
-/// Maximum query cursor key length.
-pub const MUSUBI_MAX_CURSOR_KEY_BYTES_V1: usize = 512;
+/// Maximum decimal digits in one unsigned 64-bit semantic-version component.
+pub const MUSUBI_MAX_U64_DECIMAL_DIGITS_V1: usize = 20;
+/// Maximum canonical text bytes in one structured semantic version.
+pub const MUSUBI_MAX_VERSION_CURSOR_KEY_BYTES_V1: usize = 3 * MUSUBI_MAX_U64_DECIMAL_DIGITS_V1
+    + 2
+    + 1
+    + MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1 * MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1
+    + (MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1 - 1);
+/// Maximum canonical text bytes in one ordered package selector or prefix.
+pub const MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1: usize =
+    MUSUBI_MAX_NAMESPACE_BYTES_V1 + 1 + MUSUBI_MAX_PACKAGE_NAME_BYTES_V1;
+/// Maximum text bytes in one archive-location cursor key.
+pub const MUSUBI_MAX_ARCHIVE_LOCATION_CURSOR_KEY_BYTES_V1: usize = 64 + 1 + 64;
+/// Maximum text bytes in one alias-history cursor key.
+pub const MUSUBI_MAX_ALIAS_HISTORY_CURSOR_KEY_BYTES_V1: usize =
+    MUSUBI_MAX_ALIAS_BYTES_V1 + 1 + MUSUBI_MAX_U64_DECIMAL_DIGITS_V1;
+/// Conservative text-byte ceiling for one maintainer-directory cursor key.
+///
+/// Maintainer keys hex-encode the bare canonical account payload and append
+/// either `accepted` or the longer `pending-` plus a 32-byte invite identity.
+/// The shared account bound includes Norito framing, so applying its full value
+/// to the bare payload deliberately leaves headroom rather than claiming an
+/// attainable maximum cursor length.
+pub const MUSUBI_MAX_MAINTAINER_CURSOR_KEY_BYTES_V1: usize =
+    2 * MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 + 1 + "pending-".len() + 2 * 32;
+/// Maximum UTF-8 byte length of any finalized query cursor key.
+///
+/// The maintainer-directory representation is the largest V1 producer. Tests
+/// keep every other structured cursor-key family below this shared ceiling.
+pub const MUSUBI_MAX_CURSOR_KEY_BYTES_V1: usize = MUSUBI_MAX_MAINTAINER_CURSOR_KEY_BYTES_V1;
 /// Maximum UTF-8 byte length accepted by rich package discovery.
 pub const MUSUBI_MAX_SEARCH_QUERY_BYTES_V1: usize = 256;
 /// Maximum distinct normalized terms accepted by rich package discovery.
 pub const MUSUBI_MAX_SEARCH_QUERY_TERMS_V1: usize = 16;
 /// Maximum UTF-8 byte length of one normalized discovery term.
 pub const MUSUBI_MAX_SEARCH_TERM_BYTES_V1: usize = 64;
+
+/// Validate a canonical Musubi source or complete bundle path set under the portable V1 policy.
+///
+/// The caller supplies path components rather than platform paths. Every component must already
+/// be in the exact NFC representation used by Iroha [`Name`] values. The policy also excludes
+/// traversal, portable reserved names and characters, bidirectional controls, file/directory
+/// prefix conflicts, and Unicode case-fold collisions which would alias on a supported
+/// case-insensitive filesystem. Ordering is deliberately not required: package commitments order
+/// joined path bytes, while canonical `SoraFS` plans order structural component vectors.
+/// The fixed count ceiling accommodates the 4,096 committed source files plus the three mandatory
+/// bundle metadata entries.
+///
+/// # Errors
+///
+/// Returns an error when the set is empty or oversized, or any path is noncanonical, unsafe,
+/// duplicated, prefix-conflicting, or case-fold-colliding.
+pub fn validate_musubi_portable_path_set_v1<'a, I>(paths: I) -> Result<(), ParseError>
+where
+    I: IntoIterator<Item = &'a [String]>,
+{
+    let maximum_paths = usize::try_from(MUSUBI_MAX_FILES_V1)
+        .unwrap_or(usize::MAX)
+        .saturating_add(3);
+    let mut canonical_paths = Vec::new();
+    for components in paths {
+        if components.is_empty()
+            || components.len() > MUSUBI_MAX_PORTABLE_PATH_COMPONENTS_V1
+            || canonical_paths.len() >= maximum_paths
+        {
+            return Err(musubi_portable_path_error());
+        }
+        let mut path_bytes = components.len().saturating_sub(1);
+        for component in components {
+            validate_musubi_portable_component_v1(component)?;
+            path_bytes = path_bytes
+                .checked_add(component.len())
+                .ok_or_else(musubi_portable_path_error)?;
+        }
+        if path_bytes > MUSUBI_MAX_PORTABLE_PATH_BYTES_V1 {
+            return Err(musubi_portable_path_error());
+        }
+        canonical_paths.push(components.join("/"));
+    }
+    if canonical_paths.is_empty() {
+        return Err(musubi_portable_path_error());
+    }
+
+    canonical_paths.sort();
+    if canonical_paths.windows(2).any(|pair| {
+        pair[0] == pair[1]
+            || (pair[1].starts_with(&pair[0])
+                && pair[1].as_bytes().get(pair[0].len()) == Some(&b'/'))
+    }) {
+        return Err(musubi_portable_path_error());
+    }
+
+    let mut folded_paths = canonical_paths
+        .iter()
+        .map(|path| musubi_portable_collision_key_v1(path))
+        .collect::<Vec<_>>();
+    folded_paths.sort();
+    if folded_paths.windows(2).any(|pair| {
+        pair[0] == pair[1]
+            || (pair[1].starts_with(&pair[0])
+                && pair[1].as_bytes().get(pair[0].len()) == Some(&b'/'))
+    }) {
+        return Err(musubi_portable_path_error());
+    }
+    Ok(())
+}
+
+fn validate_musubi_portable_component_v1(component: &str) -> Result<(), ParseError> {
+    if component.is_empty()
+        || component == "."
+        || component == ".."
+        || component.len() > MUSUBI_MAX_PORTABLE_PATH_COMPONENT_BYTES_V1
+        || component.contains(['/', '\\', ':'])
+        || component.chars().any(|character| {
+            character.is_control()
+                || musubi_path_is_bidi_control_v1(character)
+                || matches!(character, '<' | '>' | '"' | '|' | '?' | '*')
+        })
+        || component.ends_with(['.', ' '])
+        || musubi_path_is_reserved_component_v1(component)
+        || normalize_musubi_portable_component_v1(component)? != component
+    {
+        return Err(musubi_portable_path_error());
+    }
+    Ok(())
+}
+
+fn normalize_musubi_portable_component_v1(component: &str) -> Result<String, ParseError> {
+    let mut output = String::with_capacity(component.len());
+    let mut segment = String::new();
+    let flush = |segment: &mut String, output: &mut String| -> Result<(), ParseError> {
+        if segment.is_empty() {
+            return Ok(());
+        }
+        let normalized = Name::from_str(segment).map_err(|_| musubi_portable_path_error())?;
+        output.push_str(normalized.as_ref());
+        segment.clear();
+        Ok(())
+    };
+    for character in component.chars() {
+        if matches!(character, '@' | '#' | '$') || character.is_whitespace() {
+            flush(&mut segment, &mut output)?;
+            output.push(character);
+        } else {
+            segment.push(character);
+        }
+    }
+    flush(&mut segment, &mut output)?;
+    Ok(output)
+}
+
+fn musubi_portable_collision_key_v1(path: &str) -> String {
+    path.chars()
+        .flat_map(char::to_uppercase)
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn musubi_path_is_reserved_component_v1(component: &str) -> bool {
+    let basename = component.split('.').next().unwrap_or(component);
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
+        .iter()
+        .any(|reserved| basename.eq_ignore_ascii_case(reserved))
+    {
+        return true;
+    }
+    if let (Some(prefix), Some(suffix)) = (basename.get(..3), basename.get(3..)) {
+        let numbered = prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT");
+        let reserved_digit = suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9');
+        return numbered && (reserved_digit || matches!(suffix, "¹" | "²" | "³"));
+    }
+    false
+}
+
+const fn musubi_path_is_bidi_control_v1(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
+fn musubi_portable_path_error() -> ParseError {
+    ParseError::new("Musubi portable path set is invalid or noncanonical")
+}
 
 /// Domain used to derive an [`ArchiveId`] from canonical Norito bytes.
 pub const MUSUBI_ARCHIVE_ID_DOMAIN_V1: &[u8] = b"iroha.musubi.archive-id.v1";
@@ -122,12 +320,58 @@ pub const MUSUBI_NAMESPACE_BINDING_DIGEST_DOMAIN_V1: &[u8] = b"iroha.musubi.name
 /// Domain used to authorize one generation-bound namespace delegation.
 pub const MUSUBI_NAMESPACE_DELEGATION_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha.musubi.namespace-delegation.signature.v1";
-/// Domain used to sign an authenticated SoraFS seed-ingress receipt.
+/// Domain used to sign an authenticated `SoraFS` seed-ingress receipt.
 pub const MUSUBI_SEED_INGRESS_RECEIPT_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha.musubi.seed-ingress-receipt.signature.v1";
 /// Domain used when a provider attests that it parsed and verified a Musubi bundle.
 pub const MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha.musubi.provider-bundle-attestation.signature.v1";
+/// Domain used to identify one complete canonical provider bundle attestation.
+pub const MUSUBI_PROVIDER_BUNDLE_ATTESTATION_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha.musubi.provider-bundle-attestation.digest.v1";
+/// Domain used to commit one sorted provider/digest attestation set.
+pub const MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SET_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha.musubi.provider-bundle-attestation-set.digest.v1";
+
+fn validate_musubi_account_id_canonical_bytes_v1(encoded: &[u8]) -> Result<(), ParseError> {
+    if encoded.is_empty() || encoded.len() > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 {
+        return Err(ParseError::new(
+            "Musubi account identity exceeds its canonical byte bound",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the canonical Norito byte bound shared by all Musubi V1 account identities.
+///
+/// # Errors
+///
+/// Returns an error when canonical Norito encoding fails or exceeds the fixed V1 bound.
+pub fn validate_musubi_account_id_v1(account_id: &AccountId) -> Result<(), ParseError> {
+    let encoded = norito::to_bytes(account_id)
+        .map_err(|_| ParseError::new("Musubi account identity has no canonical Norito encoding"))?;
+    validate_musubi_account_id_canonical_bytes_v1(&encoded)
+}
+
+fn validate_musubi_approval_signature_v1<T>(
+    public_key: &PublicKey,
+    signature: &SignatureOf<T>,
+) -> Result<(), ParseError> {
+    let expected_payload_len = public_key
+        .try_algorithm()
+        .map_err(|_| ParseError::new("Musubi approval public key algorithm is invalid"))?
+        .signature_payload_len();
+    let actual_payload_len = signature.payload().len();
+    if expected_payload_len > MUSUBI_MAX_APPROVAL_SIGNATURE_PAYLOAD_BYTES_V1
+        || actual_payload_len > MUSUBI_MAX_APPROVAL_SIGNATURE_PAYLOAD_BYTES_V1
+        || actual_payload_len != expected_payload_len
+    {
+        return Err(ParseError::new(
+            "Musubi approval signature payload length is invalid",
+        ));
+    }
+    Ok(())
+}
 
 fn parse_clean(raw: &str, empty: &'static str, invalid: &'static str) -> Result<(), ParseError> {
     if raw.is_empty() {
@@ -213,6 +457,11 @@ pub struct MusubiNamespaceV1(String);
 
 impl MusubiNamespaceV1 {
     /// Parse a dataspace-root or domain-qualified namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `raw` is empty, noncanonical, overlong, or does not contain one or two
+    /// valid [`Name`] segments.
     pub fn new(raw: &str) -> Result<Self, ParseError> {
         raw.parse()
     }
@@ -224,6 +473,11 @@ impl MusubiNamespaceV1 {
     }
 
     /// Validate namespace text obtained through decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the decoded namespace is not in canonical dataspace-root or
+    /// domain-qualified form.
     pub fn validate(&self) -> Result<(), ParseError> {
         Self::from_str(&self.0).map(|_| ())
     }
@@ -313,6 +567,11 @@ pub struct MusubiNamespaceBindingV1 {
 
 impl MusubiNamespaceBindingV1 {
     /// Validate that namespace text and structural scope agree.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the namespace is invalid, the generation is zero, or the textual
+    /// namespace does not agree with its structural scope.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.namespace.validate()?;
         if self.generation == 0 {
@@ -334,6 +593,11 @@ impl MusubiNamespaceBindingV1 {
     /// Core calls this when registering the immutable binding. Later ownership changes do not
     /// rewrite the binding; package-claim authorization instead compares delegations against the
     /// then-current authoritative generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if this binding is invalid, the authoritative generation is zero, or the
+    /// two generations differ.
     pub fn validate_authority_generation(
         &self,
         authoritative_generation: u64,
@@ -364,6 +628,10 @@ pub struct MusubiPackageNameV1(String);
 
 impl MusubiPackageNameV1 {
     /// Parse a lowercase ASCII kebab package name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `raw` is empty, overlong, or not canonical lowercase ASCII kebab text.
     pub fn new(raw: &str) -> Result<Self, ParseError> {
         raw.parse()
     }
@@ -375,6 +643,10 @@ impl MusubiPackageNameV1 {
     }
 
     /// Validate package-name text obtained through decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the decoded name is not canonical lowercase ASCII kebab text.
     pub fn validate(&self) -> Result<(), ParseError> {
         Self::from_str(&self.0).map(|_| ())
     }
@@ -428,6 +700,10 @@ impl MusubiPackageIdV1 {
     }
 
     /// Validate the structural package identity recursively.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package-name component is not canonical.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.name.validate()
     }
@@ -460,6 +736,10 @@ pub struct MusubiPackageSelectorV1 {
 
 impl MusubiPackageSelectorV1 {
     /// Validate both canonical selector components.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either the namespace or package-name component is not canonical.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.namespace.validate()?;
         self.name.validate()
@@ -491,7 +771,7 @@ impl fmt::Display for MusubiPackageSelectorV1 {
     }
 }
 
-/// One canonical SemVer prerelease identifier.
+/// One canonical `SemVer` prerelease identifier.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
@@ -527,6 +807,11 @@ impl MusubiPrereleaseIdentifierV1 {
     }
 
     /// Validate a decoded prerelease identifier recursively.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an alphanumeric identifier is empty, overlong, numeric-only, or
+    /// contains a character outside the `SemVer` prerelease alphabet.
     pub fn validate(&self) -> Result<(), ParseError> {
         match self {
             Self::Numeric(_) => Ok(()),
@@ -592,6 +877,11 @@ pub struct MusubiVersionV1 {
 
 impl MusubiVersionV1 {
     /// Construct and validate a structured version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the prerelease list exceeds the V1 bound or contains a noncanonical
+    /// identifier.
     pub fn new(
         major: u64,
         minor: u64,
@@ -609,6 +899,11 @@ impl MusubiVersionV1 {
     }
 
     /// Validate consensus bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the prerelease list exceeds the V1 bound or contains a noncanonical
+    /// identifier.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.prerelease.len() > MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1 {
             return Err(ParseError::new(
@@ -766,11 +1061,21 @@ pub enum MusubiVersionReqV1 {
 
 impl MusubiVersionReqV1 {
     /// Parse and canonicalize a requirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `raw` is empty, noncanonical, or contains an invalid version,
+    /// comparator, or wildcard requirement.
     pub fn new(raw: &str) -> Result<Self, ParseError> {
         raw.parse()
     }
 
     /// Validate AST bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a nested version is invalid or the comparator set is empty,
+    /// oversized, unsorted, duplicated, or contains contradictory exact versions.
     pub fn validate(&self) -> Result<(), ParseError> {
         match self {
             Self::Caret(version) | Self::Tilde(version) | Self::Exact(version) => {
@@ -1065,6 +1370,14 @@ digest_type!(
     "Stable identity of an archive location record."
 );
 digest_type!(
+    MusubiProviderBundleAttestationDigestV1,
+    "Domain-separated digest of one complete provider bundle attestation."
+);
+digest_type!(
+    MusubiProviderBundleAttestationSetDigestV1,
+    "Domain-separated digest of one sorted provider bundle-attestation set."
+);
+digest_type!(
     MusubiInviteIdV1,
     "Stable identity of a package governance invitation."
 );
@@ -1078,15 +1391,15 @@ digest_type!(MusubiQueryHashV1, "Digest of canonical query parameters.");
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiArchiveCommitmentV1 {
-    /// Canonical SoraFS root CID.
+    /// Canonical `SoraFS` root `CID`.
     pub root_cid: ManifestRootCid,
-    /// Registered SoraFS chunker profile.
+    /// Registered `SoraFS` chunker profile.
     pub chunker: ChunkerProfileHandle,
     /// Digest of the canonical ordered chunk plan.
     pub chunk_plan_digest: MusubiContentDigestV1,
     /// Proof-of-retrievability commitment root.
     pub por_root: MusubiContentDigestV1,
-    /// Uncompressed source payload length.
+    /// Uncompressed canonical bundle payload length, including mandatory metadata entries.
     pub content_length: u64,
     /// Digest of canonical CAR bytes.
     pub car_digest: MusubiContentDigestV1,
@@ -1106,10 +1419,15 @@ pub struct MusubiArchiveCommitmentV1 {
 
 impl MusubiArchiveCommitmentV1 {
     /// Validate first-release archive bounds and non-inert commitments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an archive size or count is outside its V1 bound, the chunker handle
+    /// is overlong, or a required commitment digest is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
-        if self.content_length == 0 || self.content_length > MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1 {
+        if self.content_length == 0 || self.content_length > MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1 {
             return Err(ParseError::new(
-                "Musubi archive source length is out of bounds",
+                "Musubi archive bundle payload length is out of bounds",
             ));
         }
         if self.car_size == 0 || self.car_size > MUSUBI_MAX_CAR_BYTES_V1 {
@@ -1146,7 +1464,7 @@ impl MusubiArchiveCommitmentV1 {
         Ok(())
     }
 
-    /// Compute the domain-separated ArchiveId from canonical Norito bytes.
+    /// Compute the domain-separated `ArchiveId` from canonical Norito bytes.
     #[must_use]
     pub fn archive_id(&self) -> ArchiveId {
         ArchiveId(domain_hash(MUSUBI_ARCHIVE_ID_DOMAIN_V1, &self.encode()))
@@ -1173,6 +1491,11 @@ pub struct MusubiArtifactDescriptorV1 {
 
 impl MusubiArtifactDescriptorV1 {
     /// Construct and validate a first-release artifact descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a required digest is zero or the selected source size or file count is
+    /// outside its V1 bound.
     pub fn new(
         semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
         source_tree_digest: MusubiContentDigestV1,
@@ -1193,6 +1516,11 @@ impl MusubiArtifactDescriptorV1 {
     }
 
     /// Validate descriptor version, digest bindings, and first-release source bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the descriptor version is unsupported, a required digest is zero, or
+    /// the selected source size or file count is outside its V1 bound.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.version != MUSUBI_ARTIFACT_DESCRIPTOR_VERSION_V1
             || self.semantic_release_manifest_digest.is_zero()
@@ -1235,6 +1563,11 @@ pub struct MusubiArchiveRegistrationProjectionV1 {
 
 impl MusubiArchiveRegistrationProjectionV1 {
     /// Validate the immutable archive identity and its exact ingress binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the commitment, receipt, or registrant is invalid, or if the archive
+    /// identity, receipt fields, and nonzero registration height do not agree.
     pub fn validate(&self) -> Result<(), ParseError> {
         validate_archive_registration_fields(
             self.archive_id,
@@ -1255,6 +1588,7 @@ fn validate_archive_registration_fields(
 ) -> Result<(), ParseError> {
     commitment.validate()?;
     staging_receipt.validate()?;
+    validate_musubi_account_id_v1(registered_by)?;
     if archive_id != commitment.archive_id()
         || staging_receipt.payload.binding.archive_id != archive_id
         || staging_receipt.payload.binding.car_body_digest != commitment.car_digest
@@ -1304,6 +1638,11 @@ impl MusubiArchiveRecordV1 {
     }
 
     /// Validate the commitment and its derived identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if immutable registration fields are inconsistent, the location revision
+    /// is zero, or location identifiers are oversized, zero, unsorted, or duplicated.
     pub fn validate(&self) -> Result<(), ParseError> {
         validate_archive_registration_fields(
             self.archive_id,
@@ -1328,7 +1667,7 @@ impl MusubiArchiveRecordV1 {
     }
 }
 
-/// Lifecycle of one renewable SoraFS archive location.
+/// Lifecycle of one renewable `SoraFS` archive location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
@@ -1364,7 +1703,7 @@ impl MusubiArchiveLocationKeyV1 {
     }
 }
 
-/// Fixed-size reverse-index value from one SoraFS pin manifest to one Musubi location.
+/// Fixed-size reverse-index value from one `SoraFS` pin manifest to one Musubi location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -1379,6 +1718,11 @@ pub struct MusubiPinLocationReferenceV1 {
 
 impl MusubiPinLocationReferenceV1 {
     /// Validate non-inert pin and location identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pin-manifest digest, archive identity, or location identity is
+    /// zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if digest_is_zero(self.pin_manifest.as_bytes())
             || self.location.archive_id.is_zero()
@@ -1392,7 +1736,7 @@ impl MusubiPinLocationReferenceV1 {
     }
 }
 
-/// Fixed-size reverse-index value from one SoraFS replication order to one Musubi location.
+/// Fixed-size reverse-index value from one `SoraFS` replication order to one Musubi location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -1407,6 +1751,11 @@ pub struct MusubiReplicationOrderLocationReferenceV1 {
 
 impl MusubiReplicationOrderLocationReferenceV1 {
     /// Validate non-inert order and location identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the replication-order digest, archive identity, or location identity
+    /// is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if digest_is_zero(self.replication_order.as_bytes())
             || self.location.archive_id.is_zero()
@@ -1454,6 +1803,10 @@ impl MusubiProviderLocationKeyV1 {
     }
 
     /// Validate non-inert provider and location identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider, archive, or location identity is the all-zero sentinel.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.provider_id.as_bytes().iter().all(|byte| *byte == 0)
             || self.location.archive_id.is_zero()
@@ -1467,7 +1820,7 @@ impl MusubiProviderLocationKeyV1 {
     }
 }
 
-/// Renewable SoraFS pin and replication-order binding for an archive.
+/// Renewable `SoraFS` pin and replication-order binding for an archive.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -1478,12 +1831,12 @@ pub struct MusubiArchiveLocationV1 {
     pub archive_id: ArchiveId,
     /// Registry-grade pin manifest.
     pub pin_manifest: ManifestDigest,
-    /// SoraFS replication order.
+    /// `SoraFS` replication order.
     pub replication_order: ReplicationOrderId,
     /// Distinct providers whose completions were finalized.
     pub providers: Vec<ProviderId>,
-    /// Provider-signed evidence that each finalized completion parsed and verified the bundle.
-    pub provider_attestations: Vec<MusubiProviderBundleVerificationAttestationV1>,
+    /// Digest of the sorted immutable provider-attestation set proving this location.
+    pub provider_attestation_set_digest: MusubiProviderBundleAttestationSetDigestV1,
     /// Earliest epoch at which the location should be renewed.
     pub renew_after_epoch: u64,
     /// Epoch after which this location is no longer valid.
@@ -1504,13 +1857,18 @@ impl MusubiArchiveLocationV1 {
     }
 
     /// Validate provider, renewal, and revision bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an identity or commitment is zero, providers are empty, oversized,
+    /// unsorted, or duplicated, renewal does not precede expiry, or a revision height is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.location_id.is_zero()
             || self.archive_id.is_zero()
             || digest_is_zero(self.pin_manifest.as_bytes())
             || self.providers.is_empty()
             || self.providers.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
-            || self.provider_attestations.len() != self.providers.len()
+            || self.provider_attestation_set_digest.is_zero()
             || self.renew_after_epoch >= self.expires_at_epoch
             || self.finalized_height == 0
             || self.revision == 0
@@ -1520,43 +1878,6 @@ impl MusubiArchiveLocationV1 {
         if self.providers.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(ParseError::new(
                 "Musubi archive location providers must be sorted and distinct",
-            ));
-        }
-        for (provider, attestation) in self.providers.iter().zip(&self.provider_attestations) {
-            attestation.validate()?;
-            let binding = &attestation.payload.binding;
-            if &binding.provider_id != provider
-                || binding.archive_id != self.archive_id
-                || binding.replication_order != self.replication_order
-            {
-                return Err(ParseError::new(
-                    "Musubi archive location attestation does not match its provider or order",
-                ));
-            }
-        }
-        if self
-            .provider_attestations
-            .windows(2)
-            .any(|pair| pair[0].payload.binding.provider_id >= pair[1].payload.binding.provider_id)
-        {
-            return Err(ParseError::new(
-                "Musubi archive location attestations must be sorted by distinct provider",
-            ));
-        }
-        if self.provider_attestations.windows(2).any(|pair| {
-            let left = &pair[0].payload.binding;
-            let right = &pair[1].payload.binding;
-            left.chain_id != right.chain_id
-                || left.genesis_block_hash != right.genesis_block_hash
-                || left.archive_id != right.archive_id
-                || left.bundle_digest != right.bundle_digest
-                || left.descriptor_digest != right.descriptor_digest
-                || left.semantic_release_manifest_digest != right.semantic_release_manifest_digest
-                || left.verification_lock_digest != right.verification_lock_digest
-                || left.source_tree_digest != right.source_tree_digest
-        }) {
-            return Err(ParseError::new(
-                "Musubi archive location attestations disagree on bundle commitments",
             ));
         }
         Ok(())
@@ -1603,6 +1924,11 @@ pub struct MusubiArchiveAvailabilityV1 {
 
 impl MusubiArchiveAvailabilityV1 {
     /// Validate aggregate consistency and first-release bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive or finalized anchor is inert, replica counts exceed their
+    /// V1 capacity, or the availability class does not agree with those counts.
     pub fn validate(&self) -> Result<(), ParseError> {
         let healthy_capacity = usize::from(self.active_locations)
             .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
@@ -1646,6 +1972,11 @@ pub struct MusubiArchiveReverseReferencesV1 {
 
 impl MusubiArchiveReverseReferencesV1 {
     /// Validate identity, cardinality, and canonical exact-release order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive identity is zero, the release list is oversized,
+    /// unsorted, or duplicated, or a release identifier is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.archive_id.is_zero()
             || self.releases.len() > MUSUBI_MAX_RESOLUTION_NODES_V1
@@ -1680,6 +2011,10 @@ impl MusubiReleaseIdV1 {
     }
 
     /// Validate package identity and structured version recursively.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package identity or structured version is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
         self.version.validate()
@@ -1714,6 +2049,10 @@ pub struct MusubiAbiBindingV1 {
 
 impl MusubiAbiBindingV1 {
     /// Construct the only first-release ABI binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `abi_hash` is the all-zero sentinel.
     pub fn new(abi_hash: [u8; 32]) -> Result<Self, ParseError> {
         if digest_is_zero(&abi_hash) {
             return Err(ParseError::new("Musubi ABI hash must not be zero"));
@@ -1725,6 +2064,10 @@ impl MusubiAbiBindingV1 {
     }
 
     /// Validate the fixed ABI version and non-inert hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ABI version is not V1 or the ABI hash is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.abi_version != MUSUBI_IVM_ABI_VERSION_V1 || digest_is_zero(&self.abi_hash) {
             return Err(ParseError::new(
@@ -1743,12 +2086,16 @@ pub struct MusubiDependencyReqV1 {
     pub alias: Name,
     /// Stable dependency package identity.
     pub package: MusubiPackageIdV1,
-    /// Published SemVer range.
+    /// Published `SemVer` range.
     pub requirement: MusubiVersionReqV1,
 }
 
 impl MusubiDependencyReqV1 {
     /// Validate structural identity and the canonical version requirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dependency package or version requirement is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
         self.requirement.validate()
@@ -1777,6 +2124,11 @@ macro_rules! bounded_text_type {
 
         impl $name {
             /// Parse canonical bounded text.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if `raw` is empty, contains surrounding whitespace or control
+            /// characters, or exceeds this text type's V1 byte bound.
             pub fn new(raw: &str) -> Result<Self, ParseError> {
                 parse_clean(raw, $error, $error)?;
                 if raw.len() > $maximum {
@@ -1792,6 +2144,10 @@ macro_rules! bounded_text_type {
             }
 
             /// Validate text obtained through decoding.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if the decoded text is empty, noncanonical, or overlong.
             pub fn validate(&self) -> Result<(), ParseError> {
                 Self::new(&self.0).map(|_| ())
             }
@@ -1839,6 +2195,10 @@ pub struct MusubiKeywordV1(String);
 
 impl MusubiKeywordV1 {
     /// Validate keyword text obtained through decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the keyword is empty, overlong, or not lowercase ASCII kebab text.
     pub fn validate(&self) -> Result<(), ParseError> {
         Self::from_str(&self.0).map(|_| ())
     }
@@ -1883,6 +2243,11 @@ impl MusubiReleaseMetadataV1 {
     }
 
     /// Validate keyword bounds and canonical ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a metadata string or keyword is invalid, or if keywords are oversized,
+    /// unsorted, or duplicated.
     pub fn validate(&self) -> Result<(), ParseError> {
         if let Some(description) = &self.description {
             description.validate()?;
@@ -1923,6 +2288,11 @@ pub struct MusubiRegistrySnapshotV1 {
 
 impl MusubiRegistrySnapshotV1 {
     /// Validate a non-inert finalized anchor and revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the finalized height or index revision is zero, or if the block hash
+    /// is the all-zero sentinel.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.finalized_height == 0
             || self.index_revision == 0
@@ -1952,6 +2322,11 @@ pub struct MusubiExactDependencyEdgeV1 {
 
 impl MusubiExactDependencyEdgeV1 {
     /// Validate structural identity and requirement satisfaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a nested identity or requirement is invalid, or if the exact selection
+    /// belongs to another package or does not satisfy the published requirement.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
         self.selected.validate()?;
@@ -1983,12 +2358,17 @@ pub struct MusubiVerificationNodeV1 {
     pub interface_digest: MusubiContentDigestV1,
     /// ABI binding.
     pub abi: MusubiAbiBindingV1,
-    /// Sorted parent-local exact edges.
+    /// Sorted parent-local exact edges with unique parent-local aliases.
     pub dependencies: Vec<MusubiExactDependencyEdgeV1>,
 }
 
 impl MusubiVerificationNodeV1 {
     /// Validate node commitments, dependency bounds, and edge order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a nested identity or ABI binding is invalid, a required commitment is
+    /// zero, or dependencies are non-normal, oversized, unsorted, duplicated, or invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.release.validate()?;
         self.abi.validate()?;
@@ -1998,6 +2378,14 @@ impl MusubiVerificationNodeV1 {
             || self.interface_digest.is_zero()
             || self.dependencies.len() > MUSUBI_MAX_DEPENDENCIES_V1
             || self.dependencies.windows(2).any(|pair| pair[0] >= pair[1])
+            || self
+                .dependencies
+                .windows(2)
+                .any(|pair| pair[0].alias >= pair[1].alias)
+            || self
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.kind != MusubiDependencyKindV1::Normal)
         {
             return Err(ParseError::new(
                 "Musubi verification node is invalid or noncanonical",
@@ -2019,7 +2407,8 @@ pub struct MusubiVerificationLockV1 {
     pub version: u8,
     /// Root release whose dependencies are proven.
     pub root: MusubiReleaseIdV1,
-    /// Sorted exact selections for every direct normal dependency of the root.
+    /// Sorted exact selections with unique parent-local aliases for every direct normal dependency
+    /// of the root.
     pub root_dependencies: Vec<MusubiExactDependencyEdgeV1>,
     /// Sorted exact dependency nodes; the root itself is not included.
     pub nodes: Vec<MusubiVerificationNodeV1>,
@@ -2043,7 +2432,13 @@ impl MusubiVerificationLockV1 {
             .dedup_by(|left, right| left.release == right.release);
     }
 
-    /// Validate schema, graph bounds, uniqueness, cycles, and depth.
+    /// Validate schema, graph bounds, uniqueness, reachability, cycles, and depth.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the schema or root is invalid, graph collections are oversized or
+    /// noncanonical, a root or node edge is not normal and exact, or the graph is incomplete,
+    /// unreachable, cyclic, or too deep.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.root.validate()?;
         if self.schema != Self::SCHEMA
@@ -2053,11 +2448,16 @@ impl MusubiVerificationLockV1 {
                 .root_dependencies
                 .windows(2)
                 .any(|pair| pair[0] >= pair[1])
+            || self
+                .root_dependencies
+                .windows(2)
+                .any(|pair| pair[0].alias >= pair[1].alias)
             || self.nodes.len() > MUSUBI_MAX_RESOLUTION_NODES_V1
             || self
                 .nodes
                 .windows(2)
                 .any(|pair| pair[0].release >= pair[1].release)
+            || self.nodes.iter().any(|node| node.release == self.root)
         {
             return Err(ParseError::new(
                 "Musubi verification lock is invalid or noncanonical",
@@ -2081,7 +2481,7 @@ impl MusubiVerificationLockV1 {
         for node in &self.nodes {
             node.validate()?;
         }
-        validate_exact_graph(&self.nodes)
+        validate_exact_graph(&self.root_dependencies, &self.nodes)
     }
 
     /// Compute the normalized lock digest.
@@ -2094,14 +2494,10 @@ impl MusubiVerificationLockV1 {
     }
 }
 
-fn validate_exact_graph(nodes: &[MusubiVerificationNodeV1]) -> Result<(), ParseError> {
-    let by_release = nodes
-        .iter()
-        .map(|node| (&node.release, node))
-        .collect::<BTreeMap<_, _>>();
-    let mut complete = BTreeSet::new();
-    let mut visiting = BTreeSet::new();
-
+fn validate_exact_graph(
+    root_dependencies: &[MusubiExactDependencyEdgeV1],
+    nodes: &[MusubiVerificationNodeV1],
+) -> Result<(), ParseError> {
     fn visit<'a>(
         release: &'a MusubiReleaseIdV1,
         depth: u16,
@@ -2126,23 +2522,39 @@ fn validate_exact_graph(nodes: &[MusubiVerificationNodeV1]) -> Result<(), ParseE
             ParseError::new("Musubi verification graph references a missing node")
         })?;
         for edge in &node.dependencies {
-            if edge.kind == MusubiDependencyKindV1::Normal {
-                visit(
-                    &edge.selected,
-                    depth.saturating_add(1),
-                    by_release,
-                    visiting,
-                    complete,
-                )?;
-            }
+            visit(
+                &edge.selected,
+                depth.saturating_add(1),
+                by_release,
+                visiting,
+                complete,
+            )?;
         }
         visiting.remove(release);
         complete.insert(release);
         Ok(())
     }
 
-    for release in by_release.keys().copied() {
-        visit(release, 1, &by_release, &mut visiting, &mut complete)?;
+    let by_release = nodes
+        .iter()
+        .map(|node| (&node.release, node))
+        .collect::<BTreeMap<_, _>>();
+    let mut complete = BTreeSet::new();
+    let mut visiting = BTreeSet::new();
+
+    for dependency in root_dependencies {
+        visit(
+            &dependency.selected,
+            1,
+            &by_release,
+            &mut visiting,
+            &mut complete,
+        )?;
+    }
+    if complete.len() != nodes.len() {
+        return Err(ParseError::new(
+            "Musubi verification graph contains unreachable exact nodes",
+        ));
     }
     Ok(())
 }
@@ -2159,6 +2571,10 @@ pub struct MusubiResolutionProofV1 {
 
 impl MusubiResolutionProofV1 {
     /// Validate the finalized anchor and exact graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the registry snapshot or verification lock is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.snapshot.validate()?;
         self.lock.validate()
@@ -2180,7 +2596,7 @@ pub struct MusubiSemanticReleaseManifestV1 {
     pub edition: MusubiKotodamaEditionV1,
     /// Exact IVM ABI V1 binding.
     pub abi: MusubiAbiBindingV1,
-    /// Sorted normal dependency ranges.
+    /// Sorted normal dependency ranges with unique parent-local aliases.
     pub dependencies: Vec<MusubiDependencyReqV1>,
     /// Sorted exported Kotodama interface names.
     pub exports: Vec<Name>,
@@ -2203,6 +2619,11 @@ impl MusubiSemanticReleaseManifestV1 {
     }
 
     /// Validate archive-independent release semantics and canonical ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a nested release field is invalid, collections exceed V1 bounds or are
+    /// noncanonical, a required digest is zero, or the release depends on its own package.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.release.validate()?;
         self.abi.validate()?;
@@ -2210,6 +2631,10 @@ impl MusubiSemanticReleaseManifestV1 {
         if self.dependencies.len() > MUSUBI_MAX_DEPENDENCIES_V1
             || self.exports.len() > MUSUBI_MAX_EXPORTS_V1
             || self.dependencies.windows(2).any(|pair| pair[0] >= pair[1])
+            || self
+                .dependencies
+                .windows(2)
+                .any(|pair| pair[0].alias >= pair[1].alias)
             || self.exports.windows(2).any(|pair| pair[0] >= pair[1])
             || self.interface_digest.is_zero()
             || self.verification_lock_digest.is_zero()
@@ -2223,6 +2648,53 @@ impl MusubiSemanticReleaseManifestV1 {
             if dependency.package == self.release.package {
                 return Err(ParseError::new(
                     "Musubi release cannot depend on its own package",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate this semantic release against its complete normalized verification lock.
+    ///
+    /// This is the shared bundle/publication boundary: both values must be independently valid,
+    /// the lock must select this exact root and digest, and every published direct dependency must
+    /// correspond one-for-one with a normal exact root edge carrying the same alias, package, and
+    /// requirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either value is invalid or their root, digest, direct-dependency count,
+    /// dependency kind, alias, package, or requirement binding differs.
+    pub fn validate_verification_lock(
+        &self,
+        verification_lock: &MusubiVerificationLockV1,
+    ) -> Result<(), ParseError> {
+        self.validate()?;
+        verification_lock.validate()?;
+        if verification_lock.root != self.release
+            || verification_lock.digest() != self.verification_lock_digest
+        {
+            return Err(ParseError::new(
+                "Musubi semantic release and verification lock do not bind the same root",
+            ));
+        }
+        if self.dependencies.len() != verification_lock.root_dependencies.len() {
+            return Err(ParseError::new(
+                "Musubi semantic release and verification lock dependency counts differ",
+            ));
+        }
+        for (requirement, exact) in self
+            .dependencies
+            .iter()
+            .zip(&verification_lock.root_dependencies)
+        {
+            if exact.kind != MusubiDependencyKindV1::Normal
+                || exact.alias != requirement.alias
+                || exact.package != requirement.package
+                || exact.requirement != requirement.requirement
+            {
+                return Err(ParseError::new(
+                    "Musubi semantic release does not exactly bind a verification-lock dependency",
                 ));
             }
         }
@@ -2250,7 +2722,7 @@ pub struct MusubiReleaseManifestV1 {
     pub edition: MusubiKotodamaEditionV1,
     /// Exact IVM ABI V1 binding.
     pub abi: MusubiAbiBindingV1,
-    /// Sorted normal dependency ranges.
+    /// Sorted normal dependency ranges with unique parent-local aliases.
     pub dependencies: Vec<MusubiDependencyReqV1>,
     /// Sorted exported Kotodama interface names.
     pub exports: Vec<Name>,
@@ -2302,6 +2774,10 @@ impl MusubiReleaseManifestV1 {
     }
 
     /// Validate first-release release-manifest invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the semantic manifest is invalid or the archive identity is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.semantic_manifest().validate()?;
         if self.archive_id.is_zero() {
@@ -2331,42 +2807,21 @@ pub struct MusubiPublicationV1 {
 
 impl MusubiPublicationV1 {
     /// Validate release, proof root, lock digest, and direct dependency selections.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the manifest or proof is invalid, the proof does not bind the release
+    /// and lock digest, or its exact direct dependencies differ from the manifest.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.manifest.validate()?;
         self.resolution.validate()?;
-        if self.resolution.lock.root != self.manifest.release
-            || self.resolution.lock.digest() != self.manifest.verification_lock_digest
-        {
-            return Err(ParseError::new(
-                "Musubi publication proof does not bind the release manifest",
-            ));
-        }
-        if self.manifest.dependencies.len() != self.resolution.lock.root_dependencies.len() {
-            return Err(ParseError::new(
-                "Musubi publication proof direct dependency count is inconsistent",
-            ));
-        }
-        for (manifest, exact) in self
-            .manifest
-            .dependencies
-            .iter()
-            .zip(&self.resolution.lock.root_dependencies)
-        {
-            if exact.kind != MusubiDependencyKindV1::Normal
-                || exact.alias != manifest.alias
-                || exact.package != manifest.package
-                || exact.requirement != manifest.requirement
-            {
-                return Err(ParseError::new(
-                    "Musubi publication proof does not exactly bind a direct dependency",
-                ));
-            }
-        }
-        Ok(())
+        self.manifest
+            .semantic_manifest()
+            .validate_verification_lock(&self.resolution.lock)
     }
 }
 
-/// Exact, replay-resistant request binding accepted by authenticated SoraFS seed ingress.
+/// Exact, replay-resistant request binding accepted by authenticated `SoraFS` seed ingress.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -2380,7 +2835,7 @@ pub struct MusubiSeedIngressReceiptBindingV1 {
     pub publisher: AccountId,
     /// Authenticated seed-ingress broker whose controller signs the receipt.
     pub ingress_broker: AccountId,
-    /// SoraFS provider selected by the ingress broker.
+    /// `SoraFS` provider selected by the ingress broker.
     pub seed_provider: ProviderId,
     /// Domain-separated digest of the semantic release manifest.
     pub semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
@@ -2397,7 +2852,14 @@ pub struct MusubiSeedIngressReceiptBindingV1 {
 
 impl MusubiSeedIngressReceiptBindingV1 {
     /// Validate every exact deployment, actor, commitment, and anti-replay binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an account identity is invalid, a required identity, digest, or nonce
+    /// is zero, or the CAR body length is outside its V1 bound.
     pub fn validate(&self) -> Result<(), ParseError> {
+        validate_musubi_account_id_v1(&self.publisher)?;
+        validate_musubi_account_id_v1(&self.ingress_broker)?;
         if digest_is_zero(&self.genesis_block_hash)
             || self.seed_provider.as_bytes().iter().all(|byte| *byte == 0)
             || self.semantic_release_manifest_digest.is_zero()
@@ -2415,7 +2877,7 @@ impl MusubiSeedIngressReceiptBindingV1 {
     }
 }
 
-/// Canonical expiring statement signed by an authenticated SoraFS seed-ingress broker.
+/// Canonical expiring statement signed by an authenticated `SoraFS` seed-ingress broker.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -2432,6 +2894,11 @@ pub struct MusubiSeedIngressReceiptPayloadV1 {
 
 impl MusubiSeedIngressReceiptPayloadV1 {
     /// Validate the closed schema, exact request binding, and bounded positive lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request binding is invalid, the schema version is unsupported, or
+    /// the issue and expiry times do not define a positive lifetime within the V1 bound.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.binding.validate()?;
         let lifetime = self
@@ -2468,7 +2935,7 @@ pub struct MusubiSeedIngressReceiptApprovalV1 {
     pub signature: SignatureOf<MusubiSeedIngressReceiptPayloadV1>,
 }
 
-/// Signed, expiring SoraFS seed-ingress receipt used by resumable publication.
+/// Signed, expiring `SoraFS` seed-ingress receipt used by resumable publication.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -2481,6 +2948,11 @@ pub struct MusubiSeedIngressReceiptV1 {
 
 impl MusubiSeedIngressReceiptV1 {
     /// Validate the payload and bounded, strictly ordered controller approval set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload is invalid, approvals are empty, oversized, unsorted, or
+    /// duplicated, or an approval signature has an invalid payload length.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.payload.validate()?;
         if self.approvals.is_empty()
@@ -2494,10 +2966,17 @@ impl MusubiSeedIngressReceiptV1 {
                 "Musubi seed-ingress receipt approvals must be bounded, sorted, and unique",
             ));
         }
-        Ok(())
+        self.approvals.iter().try_for_each(|approval| {
+            validate_musubi_approval_signature_v1(&approval.public_key, &approval.signature)
+        })
     }
 
     /// Verify the exact request binding, receipt validity window, and broker controller quorum.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation fails, the expected binding or validity window does not
+    /// match, an approval is not a broker key, a signature fails, or controller quorum is absent.
     pub fn verify(
         &self,
         expected_binding: &MusubiSeedIngressReceiptBindingV1,
@@ -2606,7 +3085,14 @@ pub struct MusubiProviderBundleVerificationBindingV1 {
 
 impl MusubiProviderBundleVerificationBindingV1 {
     /// Validate exact provider authority, finalized completion, and parsed bundle commitments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an account, provider authority, assignment, finalized anchor, archive,
+    /// replication order, or required bundle commitment is invalid or inert.
     pub fn validate(&self) -> Result<(), ParseError> {
+        validate_musubi_account_id_v1(&self.completed_by)?;
+        validate_musubi_account_id_v1(&self.completion_authority.provider_owner)?;
         if digest_is_zero(&self.genesis_block_hash)
             || self.provider_id.as_bytes().iter().all(|byte| *byte == 0)
             || self.completed_by != self.completion_authority.provider_owner
@@ -2647,6 +3133,11 @@ pub struct MusubiProviderBundleVerificationPayloadV1 {
 
 impl MusubiProviderBundleVerificationPayloadV1 {
     /// Validate the closed schema and every exact attestation binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the attestation version is unsupported or its exact provider binding
+    /// is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.version != MUSUBI_REGISTRY_VERSION_V1 {
             return Err(ParseError::new(
@@ -2687,7 +3178,22 @@ pub struct MusubiProviderBundleVerificationAttestationV1 {
 
 impl MusubiProviderBundleVerificationAttestationV1 {
     /// Validate the payload and bounded, strictly ordered controller approval set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if canonical encoding fails or is oversized, the payload is invalid,
+    /// approvals are empty or noncanonical, or an approval signature length is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
+        let canonical = norito::to_bytes(self).map_err(|_| {
+            ParseError::new("Musubi provider bundle attestation has no canonical Norito encoding")
+        })?;
+        if canonical.is_empty()
+            || canonical.len() > MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1
+        {
+            return Err(ParseError::new(
+                "Musubi provider bundle attestation exceeds its canonical byte bound",
+            ));
+        }
         self.payload.validate()?;
         if self.approvals.is_empty()
             || self.approvals.len() > MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1
@@ -2700,10 +3206,45 @@ impl MusubiProviderBundleVerificationAttestationV1 {
                 "Musubi provider bundle approvals must be bounded, sorted, and unique",
             ));
         }
-        Ok(())
+        self.approvals.iter().try_for_each(|approval| {
+            validate_musubi_approval_signature_v1(&approval.public_key, &approval.signature)
+        })
+    }
+
+    /// Return the deterministic immutable storage identity selected by the signed binding.
+    #[must_use]
+    pub const fn key(&self) -> MusubiProviderBundleAttestationKeyV1 {
+        MusubiProviderBundleAttestationKeyV1 {
+            archive_id: self.payload.binding.archive_id,
+            replication_order: self.payload.binding.replication_order,
+            provider_id: self.payload.binding.provider_id,
+        }
+    }
+
+    /// Compute the domain-separated digest of the complete canonical attestation.
+    #[must_use]
+    pub fn digest(&self) -> MusubiProviderBundleAttestationDigestV1 {
+        MusubiProviderBundleAttestationDigestV1(domain_hash(
+            MUSUBI_PROVIDER_BUNDLE_ATTESTATION_DIGEST_DOMAIN_V1,
+            &self.encode(),
+        ))
+    }
+
+    /// Return the compact provider/digest reference used by an archive-location set commitment.
+    #[must_use]
+    pub fn reference(&self) -> MusubiProviderBundleAttestationRefV1 {
+        MusubiProviderBundleAttestationRefV1 {
+            provider_id: self.payload.binding.provider_id,
+            digest: self.digest(),
+        }
     }
 
     /// Verify the exact finalized completion binding and provider-owner controller quorum.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation fails, the expected binding differs, an approval is not a
+    /// provider-owner key, a signature fails, or the provider-owner threshold is not met.
     pub fn verify(
         &self,
         expected_binding: &MusubiProviderBundleVerificationBindingV1,
@@ -2772,6 +3313,150 @@ impl MusubiProviderBundleVerificationAttestationV1 {
     }
 }
 
+/// Deterministic immutable identity of one provider's proof for an archive replication order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiProviderBundleAttestationKeyV1 {
+    /// Exact archive whose canonical bundle was verified.
+    pub archive_id: ArchiveId,
+    /// Exact replication order completed by the provider.
+    pub replication_order: ReplicationOrderId,
+    /// Provider that completed and attested to the verification.
+    pub provider_id: ProviderId,
+}
+
+impl MusubiProviderBundleAttestationKeyV1 {
+    /// Validate every immutable identity component.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive, replication order, or provider identity is zero.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.archive_id.is_zero()
+            || digest_is_zero(self.replication_order.as_bytes())
+            || self.provider_id.as_bytes().iter().all(|byte| *byte == 0)
+        {
+            return Err(ParseError::new(
+                "Musubi provider bundle attestation key is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Compact immutable provider-attestation reference used by an archive-location set commitment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiProviderBundleAttestationRefV1 {
+    /// Provider covered by the referenced proof.
+    pub provider_id: ProviderId,
+    /// Digest of the complete canonical provider attestation.
+    pub digest: MusubiProviderBundleAttestationDigestV1,
+}
+
+impl MusubiProviderBundleAttestationRefV1 {
+    /// Validate the compact provider and digest binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider identity or attestation digest is zero.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.provider_id.as_bytes().iter().all(|byte| *byte == 0) || self.digest.is_zero() {
+            return Err(ParseError::new(
+                "Musubi provider bundle attestation reference is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Encode)]
+struct MusubiProviderBundleAttestationSetPreimageV1 {
+    archive_id: ArchiveId,
+    replication_order: ReplicationOrderId,
+    references: Vec<MusubiProviderBundleAttestationRefV1>,
+}
+
+/// Derive the aggregate digest of an archive/order-bound, provider-sorted attestation set.
+///
+/// # Errors
+///
+/// Returns an error for invalid archive/order identities or an empty, oversized, duplicate,
+/// unsorted, or invalid reference set.
+pub fn musubi_provider_bundle_attestation_set_digest_v1(
+    archive_id: ArchiveId,
+    replication_order: ReplicationOrderId,
+    references: &[MusubiProviderBundleAttestationRefV1],
+) -> Result<MusubiProviderBundleAttestationSetDigestV1, ParseError> {
+    if archive_id.is_zero()
+        || digest_is_zero(replication_order.as_bytes())
+        || references.is_empty()
+        || references.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
+        || references
+            .windows(2)
+            .any(|pair| pair[0].provider_id >= pair[1].provider_id)
+    {
+        return Err(ParseError::new(
+            "Musubi provider bundle attestation set is invalid or noncanonical",
+        ));
+    }
+    references
+        .iter()
+        .try_for_each(MusubiProviderBundleAttestationRefV1::validate)?;
+    let preimage = MusubiProviderBundleAttestationSetPreimageV1 {
+        archive_id,
+        replication_order,
+        references: references.to_vec(),
+    };
+    Ok(MusubiProviderBundleAttestationSetDigestV1(domain_hash(
+        MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SET_DIGEST_DOMAIN_V1,
+        &preimage.encode(),
+    )))
+}
+
+/// Immutable full provider-attestation registry record addressed by its exact binding.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiProviderBundleAttestationRecordV1 {
+    /// Deterministic archive/order/provider identity.
+    pub key: MusubiProviderBundleAttestationKeyV1,
+    /// Domain-separated digest of `attestation`.
+    pub attestation_digest: MusubiProviderBundleAttestationDigestV1,
+    /// Complete signed provider proof.
+    pub attestation: MusubiProviderBundleVerificationAttestationV1,
+    /// Archive manager that registered the immutable proof.
+    pub registered_by: AccountId,
+    /// Finalized height at which the immutable proof was registered.
+    pub registered_at_height: u64,
+}
+
+impl MusubiProviderBundleAttestationRecordV1 {
+    /// Validate the full proof and every redundant immutable identity binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key, attestation, or registering account is invalid, or if the
+    /// stored key, digest, and nonzero registration height do not bind that attestation exactly.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.key.validate()?;
+        self.attestation.validate()?;
+        validate_musubi_account_id_v1(&self.registered_by)?;
+        if self.key != self.attestation.key()
+            || self.attestation_digest.is_zero()
+            || self.attestation_digest != self.attestation.digest()
+            || self.registered_at_height == 0
+        {
+            return Err(ParseError::new(
+                "Musubi provider bundle attestation record is inconsistent",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Canonical, domain-separated payload authorized by a namespace owner.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2792,7 +3477,14 @@ pub struct MusubiNamespaceDelegationPayloadV1 {
 
 impl MusubiNamespaceDelegationPayloadV1 {
     /// Validate the closed V1 payload shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an account identity is invalid, the version is unsupported, or the
+    /// namespace binding, owner generation, or expiry height is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
+        validate_musubi_account_id_v1(&self.owner)?;
+        validate_musubi_account_id_v1(&self.delegate)?;
         if self.version != MUSUBI_REGISTRY_VERSION_V1
             || self.namespace_binding.is_zero()
             || self.owner_generation == 0
@@ -2834,6 +3526,11 @@ pub struct MusubiNamespaceDelegationV1 {
 
 impl MusubiNamespaceDelegationV1 {
     /// Validate the payload and the bounded, strictly ordered approval set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload is invalid, approvals are empty, oversized, unsorted, or
+    /// duplicated, or an approval signature has an invalid payload length.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.payload.validate()?;
         if self.approvals.is_empty()
@@ -2847,7 +3544,9 @@ impl MusubiNamespaceDelegationV1 {
                 "Musubi namespace delegation approvals must be bounded, sorted, and unique",
             ));
         }
-        Ok(())
+        self.approvals.iter().try_for_each(|approval| {
+            validate_musubi_approval_signature_v1(&approval.public_key, &approval.signature)
+        })
     }
 
     /// Verify a delegation against current authoritative ownership and the claiming account.
@@ -2855,6 +3554,11 @@ impl MusubiNamespaceDelegationV1 {
     /// The authoritative owner and generation must come from the live SNS dataspace record or
     /// domain record selected by the immutable namespace binding. Single-key and weighted
     /// multisignature account controllers are both enforced exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation fails, current authority or expiry does not match, an
+    /// approval is not an owner key, a signature fails, or the owner threshold is not met.
     pub fn verify(
         &self,
         binding: &MusubiNamespaceBindingV1,
@@ -2942,6 +3646,10 @@ pub struct MusubiPackageRevisionsV1 {
 
 impl MusubiPackageRevisionsV1 {
     /// All first-release revisions begin at one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any package revision is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.governance == 0 || self.metadata == 0 || self.archive_locations == 0 {
             return Err(ParseError::new("Musubi package revisions must be non-zero"));
@@ -2972,6 +3680,11 @@ pub struct MusubiPackageRecordV1 {
 
 impl MusubiPackageRecordV1 {
     /// Validate the last-owner invariant, bounds, ordering, and revisions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if identity, namespace, binding, revisions, claim height, owner/member
+    /// bounds, ordering, membership, or account identities violate package invariants.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
         self.claimed_namespace.validate()?;
@@ -3003,13 +3716,20 @@ impl MusubiPackageRecordV1 {
                 "Musubi package record violates ownership invariants",
             ));
         }
-        Ok(())
+        self.owners
+            .iter()
+            .chain(&self.member_accounts)
+            .try_for_each(validate_musubi_account_id_v1)
     }
 }
 
 /// Independent permissions granted to an accepted package maintainer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "four independent permission bits are the canonical Musubi V1 wire shape"
+)]
 pub struct MusubiMaintainerPermissionsV1 {
     /// May publish a new immutable release.
     pub publish: bool,
@@ -3056,6 +3776,16 @@ impl MusubiPackageMemberKeyV1 {
     pub const fn new(package: MusubiPackageIdV1, account: AccountId) -> Self {
         Self { package, account }
     }
+
+    /// Validate the structural package and bounded account identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package or account identity is invalid.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        validate_musubi_account_id_v1(&self.account)
+    }
 }
 
 /// Accepted package member record.
@@ -3082,8 +3812,14 @@ impl MusubiPackageMemberV1 {
     }
 
     /// Validate role and revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package or account identity is invalid, an acceptance anchor is
+    /// zero, or a maintainer role grants no permissions.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
+        validate_musubi_account_id_v1(&self.account)?;
         if self.accepted_at_height == 0
             || self.governance_revision == 0
             || matches!(self.role, MusubiPackageRoleV1::Maintainer(role) if role.is_empty())
@@ -3136,8 +3872,15 @@ pub struct MusubiMaintainerInvitationV1 {
 
 impl MusubiMaintainerInvitationV1 {
     /// Validate identity, role, and compare-and-set bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a package or account identity is invalid, the invitation or revision
+    /// anchor is zero, or a maintainer role grants no permissions.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
+        validate_musubi_account_id_v1(&self.invited_by)?;
+        validate_musubi_account_id_v1(&self.invited_account)?;
         if self.invite_id.is_zero()
             || self.expected_governance_revision == 0
             || self.expires_at_height == 0
@@ -3201,13 +3944,23 @@ impl MusubiMaintainerDirectoryKeyV1 {
     }
 
     /// Validate the structural package and any invitation identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package is invalid, the account is absent or invalid, or a present
+    /// invitation identity is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
-        if self.account.is_none()
-            || self
-                .invitation
-                .as_ref()
-                .is_some_and(MusubiInviteIdV1::is_zero)
+        let Some(account) = &self.account else {
+            return Err(ParseError::new(
+                "Musubi maintainer directory invitation identity is invalid",
+            ));
+        };
+        validate_musubi_account_id_v1(account)?;
+        if self
+            .invitation
+            .as_ref()
+            .is_some_and(MusubiInviteIdV1::is_zero)
         {
             return Err(ParseError::new(
                 "Musubi maintainer directory invitation identity is invalid",
@@ -3253,28 +4006,15 @@ impl MusubiMaintainerDirectoryEntryV1 {
             .account
             .as_ref()
             .expect("persisted Musubi maintainer directory entries always carry an account");
-        let encoded_account = account.encode();
-        let mut account_label = String::with_capacity(encoded_account.len().saturating_mul(2));
-        for byte in encoded_account {
-            fmt::Write::write_fmt(&mut account_label, format_args!("{byte:02x}"))
-                .expect("writing into a String cannot fail");
-        }
-        let invitation = key.invitation.as_ref().map_or_else(
-            || "accepted".to_owned(),
-            |invite_id| {
-                let mut label = String::with_capacity("pending-".len() + 64);
-                label.push_str("pending-");
-                for byte in invite_id.as_bytes() {
-                    fmt::Write::write_fmt(&mut label, format_args!("{byte:02x}"))
-                        .expect("writing into a String cannot fail");
-                }
-                label
-            },
-        );
-        format!("{account_label}|{invitation}")
+        maintainer_cursor_key_label_v1(&account.encode(), key.invitation.as_ref())
     }
 
     /// Validate the record and require invitations to remain pending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the member or invitation is invalid, or if a directory invitation is
+    /// no longer pending.
     pub fn validate(&self) -> Result<(), ParseError> {
         match self {
             Self::Accepted(member) => member.validate(),
@@ -3289,6 +4029,95 @@ impl MusubiMaintainerDirectoryEntryV1 {
             }
         }
     }
+}
+
+fn maintainer_cursor_key_label_v1(
+    encoded_account: &[u8],
+    invitation: Option<&MusubiInviteIdV1>,
+) -> String {
+    let suffix_len = invitation.map_or("accepted".len(), |_| "pending-".len() + 64);
+    let mut label = String::with_capacity(
+        encoded_account
+            .len()
+            .saturating_mul(2)
+            .saturating_add(1 + suffix_len),
+    );
+    for byte in encoded_account {
+        fmt::Write::write_fmt(&mut label, format_args!("{byte:02x}"))
+            .expect("writing into a String cannot fail");
+    }
+    label.push('|');
+    match invitation {
+        None => label.push_str("accepted"),
+        Some(invite_id) => {
+            label.push_str("pending-");
+            for byte in invite_id.as_bytes() {
+                fmt::Write::write_fmt(&mut label, format_args!("{byte:02x}"))
+                    .expect("writing into a String cannot fail");
+            }
+        }
+    }
+    label
+}
+
+fn maintainer_cursor_key_is_canonical_v1(raw: &str) -> bool {
+    let Some((account, suffix)) = raw.split_once('|') else {
+        return false;
+    };
+    let is_lower_hex = |text: &str| {
+        !text.is_empty()
+            && text.len().is_multiple_of(2)
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    if account.len() > 2 * MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 || !is_lower_hex(account) {
+        return false;
+    }
+    let mut encoded_account = Vec::with_capacity(account.len() / 2);
+    for pair in account.as_bytes().chunks_exact(2) {
+        let nibble = |byte: u8| match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            _ => unreachable!("lowercase hexadecimal was checked above"),
+        };
+        encoded_account.push((nibble(pair[0]) << 4) | nibble(pair[1]));
+    }
+    let Ok(account_id) = norito::codec::decode_exact_from_slice::<AccountId>(&encoded_account)
+    else {
+        return false;
+    };
+    if let AccountController::Multisig(policy) = account_id.controller() {
+        let Ok(members) = policy
+            .members()
+            .iter()
+            .map(|member| MultisigMember::new(member.public_key().clone(), member.weight()))
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            return false;
+        };
+        let Ok(normalized) =
+            MultisigPolicy::from_serialized(policy.version(), policy.threshold(), members)
+        else {
+            return false;
+        };
+        if &normalized != policy {
+            return false;
+        }
+    }
+    if validate_musubi_account_id_v1(&account_id).is_err() || account_id.encode() != encoded_account
+    {
+        return false;
+    }
+    if suffix == "accepted" {
+        return true;
+    }
+    let Some(invitation) = suffix.strip_prefix("pending-") else {
+        return false;
+    };
+    invitation.len() == 64
+        && is_lower_hex(invitation)
+        && invitation.bytes().any(|byte| byte != b'0')
 }
 
 /// Mutable package metadata record, separate from immutable release metadata.
@@ -3309,9 +4138,15 @@ pub struct MusubiPackageMetadataRecordV1 {
 
 impl MusubiPackageMetadataRecordV1 {
     /// Validate metadata and revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package, metadata, or changing account is invalid, or if the
+    /// revision or finalized height is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
         self.metadata.validate()?;
+        validate_musubi_account_id_v1(&self.changed_by)?;
         if self.revision == 0 || self.changed_at_height == 0 {
             return Err(ParseError::new("Musubi package metadata record is invalid"));
         }
@@ -3340,9 +4175,15 @@ pub struct MusubiReleaseYankV1 {
 
 impl MusubiReleaseYankV1 {
     /// Validate transition anchor and revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the release, reason, or changing account is invalid, or if the
+    /// transition height or revision is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.release.validate()?;
         self.reason.validate()?;
+        validate_musubi_account_id_v1(&self.changed_by)?;
         if self.changed_at_height == 0 || self.revision == 0 {
             return Err(ParseError::new("Musubi release yank record is invalid"));
         }
@@ -3379,6 +4220,11 @@ pub enum MusubiArtifactGovernanceStateV1 {
 
 impl MusubiArtifactGovernanceStateV1 {
     /// Validate any governed takedown binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a takedown reason is invalid, its action digest is zero, or its applied
+    /// height is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if let Self::TakenDown(takedown) = self {
             takedown.reason.validate()?;
@@ -3415,6 +4261,10 @@ impl MusubiReleaseSelectionStateV1 {
     }
 
     /// Validate all independent state components.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the yank, storage-availability, or governance projection is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.yank.validate()?;
         self.storage.validate()?;
@@ -3435,6 +4285,10 @@ pub struct MusubiReleaseRevisionsV1 {
 
 impl MusubiReleaseRevisionsV1 {
     /// First-release revisions are always non-zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either mutable release revision is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.yank == 0 || self.artifact_governance == 0 {
             return Err(ParseError::new("Musubi release revisions must be non-zero"));
@@ -3466,11 +4320,17 @@ pub struct MusubiReleaseRecordV1 {
 
 impl MusubiReleaseRecordV1 {
     /// Validate immutable identity and all mutable projections recursively.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any nested projection or publisher is invalid, or if manifest,
+    /// digest, release, revision, and publication-height bindings are inconsistent.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.manifest.validate()?;
         self.yank.validate()?;
         self.artifact_governance.validate()?;
         self.revisions.validate()?;
+        validate_musubi_account_id_v1(&self.published_by)?;
         if self.release_digest != self.manifest.release_digest()
             || self.yank.release != self.manifest.release
             || self.yank.revision != self.revisions.yank
@@ -3497,6 +4357,10 @@ impl MusubiAliasNameV1 {
     }
 
     /// Validate alias text obtained through decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the alias is empty, overlong, or not lowercase ASCII kebab text.
     pub fn validate(&self) -> Result<(), ParseError> {
         Self::from_str(&self.0).map(|_| ())
     }
@@ -3564,6 +4428,10 @@ impl MusubiAliasPricingPolicyV1 {
     }
 
     /// Validate a prospective non-zero policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the policy revision or any alias price is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.revision == 0
             || [
@@ -3603,10 +4471,16 @@ pub struct MusubiAliasRecordV1 {
 
 impl MusubiAliasRecordV1 {
     /// Validate pricing/payment and immutable registration fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an identity or policy is invalid, paid pricing does not match the
+    /// policy, or the registration height or history revision is zero.
     pub fn validate(&self, policy: &MusubiAliasPricingPolicyV1) -> Result<(), ParseError> {
         self.alias.validate()?;
         self.target.validate()?;
         policy.validate()?;
+        validate_musubi_account_id_v1(&self.registered_by)?;
         if self.pricing_revision != policy.revision
             || self.paid_xor != policy.price_for(&self.alias)
             || self.registered_at_height == 0
@@ -3675,6 +4549,11 @@ impl MusubiAliasHistoryEntryV1 {
     }
 
     /// Validate revision and action-specific fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an alias or package target is invalid, action-specific history fields
+    /// are inconsistent, or the finalized height is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.alias.validate()?;
         self.target.validate()?;
@@ -3720,6 +4599,11 @@ pub struct MusubiGovernanceDecisionV1 {
 
 impl MusubiGovernanceDecisionV1 {
     /// Validate replay and delay anchors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a decision identity or action digest is zero, enactment is zero, or
+    /// execution is not delayed beyond enactment.
     pub fn validate(&self) -> Result<(), ParseError> {
         if digest_is_zero(&self.decision_id)
             || self.action_digest.is_zero()
@@ -3747,6 +4631,11 @@ pub struct MusubiGovernanceDecisionConsumptionV1 {
 
 impl MusubiGovernanceDecisionConsumptionV1 {
     /// Validate the nested decision and its server-observed execution boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the decision is invalid, delay addition overflows, the enacted delay
+    /// is shorter than required, or consumption precedes the execution boundary.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.decision.validate()?;
         let minimum_execution_height = self
@@ -3779,6 +4668,30 @@ pub struct MusubiRecoverPackageOwnersV1 {
     pub owners: Vec<AccountId>,
     /// Expected governance revision.
     pub expected_revision: u64,
+}
+
+impl MusubiRecoverPackageOwnersV1 {
+    /// Validate the replacement owner set and its compare-and-set revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package or an owner is invalid, owners are empty, oversized,
+    /// unsorted, or duplicated, or the expected revision is zero.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        if self.owners.is_empty()
+            || self.owners.len() > MUSUBI_MAX_PACKAGE_OWNERS_V1
+            || self.owners.windows(2).any(|pair| pair[0] >= pair[1])
+            || self.expected_revision == 0
+        {
+            return Err(ParseError::new(
+                "Musubi Parliament owner recovery is invalid",
+            ));
+        }
+        self.owners
+            .iter()
+            .try_for_each(validate_musubi_account_id_v1)
+    }
 }
 
 /// Payload for Parliament alias recovery.
@@ -3838,19 +4751,15 @@ pub enum MusubiParliamentActionV1 {
 
 impl MusubiParliamentActionV1 {
     /// Validate action-specific bounds and compare-and-set revisions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an action payload is invalid, a compare-and-set revision is zero or
+    /// inconsistent, or a policy replacement is not the expected successor.
     pub fn validate(&self) -> Result<(), ParseError> {
         match self {
             Self::RecoverPackageOwners(recovery) => {
-                recovery.package.validate()?;
-                if recovery.owners.is_empty()
-                    || recovery.owners.len() > MUSUBI_MAX_PACKAGE_OWNERS_V1
-                    || recovery.owners.windows(2).any(|pair| pair[0] >= pair[1])
-                    || recovery.expected_revision == 0
-                {
-                    return Err(ParseError::new(
-                        "Musubi Parliament owner recovery is invalid",
-                    ));
-                }
+                recovery.validate()?;
             }
             Self::RetargetAlias(recovery) => {
                 recovery.alias.validate()?;
@@ -3942,6 +4851,11 @@ impl Default for MusubiRegistryPolicyV1 {
 
 impl MusubiRegistryPolicyV1 {
     /// Validate version, bounds, ordering, and mode-specific allowlist use.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if pricing is invalid, the version or revision is invalid, the allowlist
+    /// is oversized or noncanonical, or a non-allowlisted mode carries entries.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.alias_pricing.validate()?;
         if self.version != MUSUBI_REGISTRY_VERSION_V1
@@ -3962,6 +4876,11 @@ impl MusubiRegistryPolicyV1 {
     }
 
     /// Validate a strict first-release transition from `current`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either policy is invalid, revision arithmetic overflows, the policy is
+    /// not the exact successor, or pricing changes do not use the required pricing revision.
     pub fn validate_successor(&self, current: &Self) -> Result<(), ParseError> {
         current.validate()?;
         self.validate()?;
@@ -4019,7 +4938,7 @@ pub struct MusubiResolverReleaseRowV1 {
     pub interface_digest: MusubiContentDigestV1,
     /// ABI binding.
     pub abi: MusubiAbiBindingV1,
-    /// Sorted normal dependency ranges.
+    /// Sorted normal dependency ranges with unique parent-local aliases.
     pub dependencies: Vec<MusubiDependencyReqV1>,
     /// Independent selection state.
     pub selection: MusubiReleaseSelectionStateV1,
@@ -4029,6 +4948,12 @@ pub struct MusubiResolverReleaseRowV1 {
 
 impl MusubiResolverReleaseRowV1 {
     /// Validate compact resolver commitments and canonical dependency order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a nested projection is invalid, commitments or revision are zero,
+    /// dependencies are oversized or noncanonical, selection identities do not match the row, or
+    /// the availability projection is newer than the resolver row.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.release.validate()?;
         self.abi.validate()?;
@@ -4040,8 +4965,13 @@ impl MusubiResolverReleaseRowV1 {
             || self.index_revision == 0
             || self.dependencies.len() > MUSUBI_MAX_DEPENDENCIES_V1
             || self.dependencies.windows(2).any(|pair| pair[0] >= pair[1])
+            || self
+                .dependencies
+                .windows(2)
+                .any(|pair| pair[0].alias >= pair[1].alias)
             || self.selection.yank.release != self.release
             || self.selection.storage.archive_id != self.archive_id
+            || self.selection.storage.index_revision > self.index_revision
         {
             return Err(ParseError::new(
                 "Musubi resolver row is invalid or noncanonical",
@@ -4050,6 +4980,96 @@ impl MusubiResolverReleaseRowV1 {
         self.dependencies
             .iter()
             .try_for_each(MusubiDependencyReqV1::validate)
+    }
+}
+
+/// Paired home-dataspace and universal-index view of one exact release at finality.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct MusubiExactReleaseSnapshotV1 {
+    /// Deployment-selected chain identity.
+    pub chain_id: ChainId,
+    /// Hash of the first finalized block for the selected chain.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub genesis_hash: [u8; 32],
+    /// Finalized universal registry snapshot shared by both projections.
+    pub snapshot: MusubiRegistrySnapshotV1,
+    /// Authoritative release record from the stable home dataspace.
+    pub home_release: MusubiReleaseRecordV1,
+    /// Exact resolver-grade release row from the universal dataspace.
+    pub universal_release: MusubiResolverReleaseRowV1,
+}
+
+impl MusubiExactReleaseSnapshotV1 {
+    /// Validate deployment identity, paired content/state, revisions, and finalized anchors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a nested projection or deployment identity is invalid, the home and
+    /// universal views disagree, or a revision, transition, or storage anchor is not finalized.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.snapshot.validate()?;
+        self.home_release.validate()?;
+        self.universal_release.validate()?;
+
+        let manifest = &self.home_release.manifest;
+        let universal = &self.universal_release;
+        let storage = &universal.selection.storage;
+        let takedown_height = match &self.home_release.artifact_governance {
+            MusubiArtifactGovernanceStateV1::Available => 0,
+            MusubiArtifactGovernanceStateV1::TakenDown(takedown) => takedown.applied_at_height,
+        };
+        if self.chain_id.as_str().is_empty()
+            || digest_is_zero(&self.genesis_hash)
+            || manifest.release != universal.release
+            || self.home_release.release_digest != universal.release_digest
+            || manifest.archive_id != universal.archive_id
+            || manifest.interface_digest != universal.interface_digest
+            || manifest.abi != universal.abi
+            || manifest.dependencies != universal.dependencies
+            || self.home_release.yank != universal.selection.yank
+            || self.home_release.artifact_governance != universal.selection.governance
+            || self.home_release.revisions.yank > self.snapshot.index_revision
+            || self.home_release.revisions.artifact_governance > self.snapshot.index_revision
+            || universal.index_revision > self.snapshot.index_revision
+            || storage.index_revision > universal.index_revision
+            || storage.index_revision > self.snapshot.index_revision
+            || self.home_release.published_at_height > self.snapshot.finalized_height
+            || self.home_release.yank.changed_at_height < self.home_release.published_at_height
+            || self.home_release.yank.changed_at_height > self.snapshot.finalized_height
+            || (takedown_height != 0 && takedown_height < self.home_release.published_at_height)
+            || takedown_height > self.snapshot.finalized_height
+            || storage.finalized_height > self.snapshot.finalized_height
+            || (self.snapshot.finalized_height == 1
+                && self.genesis_hash != self.snapshot.finalized_block_hash)
+            || (storage.finalized_height == self.snapshot.finalized_height
+                && storage.finalized_block_hash != self.snapshot.finalized_block_hash)
+        {
+            return Err(ParseError::new(
+                "Musubi exact release snapshot is inconsistent or not finalized",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate this paired result for one exact requested release.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query release or snapshot is invalid, or either paired projection
+    /// carries a different release.
+    pub fn validate_for(&self, query: &MusubiExactReleaseQueryV1) -> Result<(), ParseError> {
+        query.release.validate()?;
+        self.validate()?;
+        if self.home_release.manifest.release != query.release
+            || self.universal_release.release != query.release
+        {
+            return Err(ParseError::new(
+                "Musubi exact release snapshot carries a different release",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -4070,8 +5090,16 @@ pub struct MusubiFinalizedCursorV1 {
 
 impl MusubiFinalizedCursorV1 {
     /// Validate all cursor bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot or caller is invalid, the query hash is zero, or the last
+    /// key is empty, overlong, or contains control characters.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.snapshot.validate()?;
+        if let Some(caller) = &self.caller {
+            validate_musubi_account_id_v1(caller)?;
+        }
         if self.query_hash.is_zero()
             || self.last_key.is_empty()
             || self.last_key.len() > MUSUBI_MAX_CURSOR_KEY_BYTES_V1
@@ -4116,6 +5144,11 @@ macro_rules! musubi_page_type {
 
         impl $name {
             /// Validate page size, snapshot, and cursor.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if the snapshot or an item is invalid, items exceed the page
+            /// bound or are noncanonical, or the next cursor is invalid or changes snapshots.
             pub fn validate(&self) -> Result<(), ParseError> {
                 self.snapshot.validate()?;
                 if self.items.len() > MUSUBI_MAX_PAGE_SIZE_V1
@@ -4169,6 +5202,11 @@ pub struct MusubiVersionPageV1 {
 
 impl MusubiVersionPageV1 {
     /// Validate request identity, page bounds, strict order, and cursor binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query, snapshot, version, or cursor data is invalid, versions are not
+    /// strictly ordered, the page does not advance its cursor, or page bounds do not match.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.query.validate()?;
         self.snapshot.validate()?;
@@ -4200,12 +5238,16 @@ impl MusubiVersionPageV1 {
             self.items.len(),
             first_key.as_deref(),
             last_key.as_deref(),
-            &self.next_cursor,
+            self.next_cursor.as_ref(),
             self.snapshot,
         )
     }
 
     /// Validate the page and require its echoed context to equal `query` exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page is invalid or its embedded query differs from `query`.
     pub fn validate_for(&self, query: &MusubiPackagePageQueryV1) -> Result<(), ParseError> {
         self.validate()?;
         if &self.query != query {
@@ -4234,6 +5276,11 @@ pub struct MusubiMaintainerPageV1 {
 
 impl MusubiMaintainerPageV1 {
     /// Validate request identity, package membership, bounds, order, and cursor binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query, snapshot, entry, or cursor data is invalid, entries are not
+    /// strictly ordered or belong to another package, or page bounds do not match.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.query.validate()?;
         self.snapshot.validate()?;
@@ -4254,6 +5301,17 @@ impl MusubiMaintainerPageV1 {
                 ));
             }
         }
+        if let Some(cursor) = &self.query.page.cursor
+            && (!maintainer_cursor_key_is_canonical_v1(&cursor.last_key)
+                || self
+                    .items
+                    .iter()
+                    .any(|entry| entry.cursor_key() == cursor.last_key))
+        {
+            return Err(ParseError::new(
+                "Musubi maintainer page does not advance its exact cursor boundary",
+            ));
+        }
         let first_key = self
             .items
             .first()
@@ -4267,12 +5325,16 @@ impl MusubiMaintainerPageV1 {
             self.items.len(),
             first_key.as_deref(),
             last_key.as_deref(),
-            &self.next_cursor,
+            self.next_cursor.as_ref(),
             self.snapshot,
         )
     }
 
     /// Validate the page and require its echoed context to equal `query` exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page is invalid or its embedded query differs from `query`.
     pub fn validate_for(&self, query: &MusubiPackagePageQueryV1) -> Result<(), ParseError> {
         self.validate()?;
         if &self.query != query {
@@ -4364,6 +5426,11 @@ impl MusubiArchiveRetentionDecisionV1 {
     }
 
     /// Validate identity, bounded counts, storage binding, and disposition semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive is zero, release counts overflow or exceed V1 bounds, a
+    /// storage projection is invalid or mismatched, or the disposition contradicts the counts.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.archive_id.is_zero() {
             return Err(ParseError::new(
@@ -4431,6 +5498,11 @@ pub struct MusubiArchiveRetentionQueryV1 {
 
 impl MusubiArchiveRetentionQueryV1 {
     /// Validate the exact batch bound, order, identities, and optional snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if archive identities are empty, oversized, zero, unsorted, or duplicated,
+    /// or if the expected snapshot is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.archive_ids.is_empty()
             || self.archive_ids.len() > MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1
@@ -4470,6 +5542,11 @@ pub struct MusubiArchiveRetentionPageV1 {
 
 impl MusubiArchiveRetentionPageV1 {
     /// Validate deployment identity, bounded strict order, decisions, and snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deployment or snapshot data is invalid, decisions are empty,
+    /// oversized, noncanonical, or invalid, or storage anchors exceed the page snapshot.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.snapshot.validate()?;
         if self.chain_id.as_str().is_empty()
@@ -4501,6 +5578,11 @@ impl MusubiArchiveRetentionPageV1 {
 
 impl MusubiArchiveLocationPageV1 {
     /// Validate deployment identity, archive commitment, items, snapshot, and cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deployment, archive, snapshot, location, or cursor data is invalid,
+    /// locations are oversized or noncanonical, or an item is not current at the snapshot.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.archive.validate()?;
         self.snapshot.validate()?;
@@ -4570,6 +5652,11 @@ pub struct MusubiAliasHistoryPageV1 {
 
 impl MusubiAliasHistoryPageV1 {
     /// Validate request identity, alias membership, bounds, order, and cursor binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query, snapshot, entry, or cursor data is invalid, entries are not
+    /// strictly ordered or belong to another alias, or page bounds do not match.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.query.validate()?;
         self.snapshot.validate()?;
@@ -4622,12 +5709,16 @@ impl MusubiAliasHistoryPageV1 {
             self.items.len(),
             first_key.as_deref(),
             last_key.as_deref(),
-            &self.next_cursor,
+            self.next_cursor.as_ref(),
             self.snapshot,
         )
     }
 
     /// Validate the page and require its echoed context to equal `query` exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page is invalid or its embedded query differs from `query`.
     pub fn validate_for(&self, query: &MusubiAliasQueryV1) -> Result<(), ParseError> {
         self.validate()?;
         if &self.query != query {
@@ -4660,6 +5751,11 @@ pub struct MusubiResolverIndexPageV1 {
 
 impl MusubiResolverIndexPageV1 {
     /// Validate request identity, lock identity, page bounds, rows, and cursor binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deployment, query, snapshot, row, or cursor data is invalid, rows are
+    /// noncanonical or outside the requested package/range, or page bounds do not match.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.query.validate()?;
         if self.chain_id.as_str().is_empty()
@@ -4708,17 +5804,34 @@ impl MusubiResolverIndexPageV1 {
             .first()
             .map(|row| row.release.version.to_string());
         let last_key = self.items.last().map(|row| row.release.version.to_string());
-        validate_finalized_response_page(
+        validate_finalized_response_page_with_cursor_cardinality(
             &self.query.page,
             self.items.len(),
             first_key.as_deref(),
             last_key.as_deref(),
-            &self.next_cursor,
+            self.next_cursor.as_ref(),
             self.snapshot,
-        )
+            false,
+        )?;
+        #[cfg(feature = "json")]
+        {
+            let encoded = norito::json::to_json(self).map_err(|_| {
+                ParseError::new("Musubi resolver page cannot be encoded as canonical JSON")
+            })?;
+            if encoded.len() > MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1 {
+                return Err(ParseError::new(
+                    "Musubi resolver page exceeds the public JSON response ceiling",
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Validate the page and require its echoed context to equal `query` exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page is invalid or its embedded query differs from `query`.
     pub fn validate_for(&self, query: &MusubiResolverIndexQueryV1) -> Result<(), ParseError> {
         self.validate()?;
         if &self.query != query {
@@ -4748,6 +5861,11 @@ pub struct MusubiOrderedPackageEntryV1 {
 
 impl MusubiOrderedPackageEntryV1 {
     /// Validate non-zero revisions and any structured version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if selector, package, or optional version data is invalid, or if either
+    /// directory revision is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.selector.validate()?;
         self.package.validate()?;
@@ -4786,6 +5904,11 @@ pub struct MusubiOrderedPackagePageV1 {
 
 impl MusubiOrderedPackagePageV1 {
     /// Validate request identity, lock identity, rows, bounds, and cursor binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deployment, query, binding, snapshot, item, or cursor data is invalid,
+    /// items are noncanonical or inconsistent with the prefix/binding, or page bounds do not match.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.query.validate()?;
         self.namespace_binding.validate()?;
@@ -4843,12 +5966,16 @@ impl MusubiOrderedPackagePageV1 {
             self.items.len(),
             first_key.as_deref(),
             last_key.as_deref(),
-            &self.next_cursor,
+            self.next_cursor.as_ref(),
             self.snapshot,
         )
     }
 
     /// Validate the page and require its echoed context to equal `query` exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page is invalid or its embedded query differs from `query`.
     pub fn validate_for(&self, query: &MusubiOrderedPrefixQueryV1) -> Result<(), ParseError> {
         self.validate()?;
         if &self.query != query {
@@ -4885,13 +6012,18 @@ pub struct MusubiOrderedPrefixV1(String);
 
 impl MusubiOrderedPrefixV1 {
     /// Parse a canonical `namespace/package-prefix` directory prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `raw` is empty, noncanonical, overlong, lacks its separator, contains
+    /// an invalid namespace, or has a nonportable package-name prefix.
     pub fn new(raw: &str) -> Result<Self, ParseError> {
         parse_clean(
             raw,
             "Musubi ordered prefix must not be empty",
             "Musubi ordered prefix is invalid",
         )?;
-        if raw.len() > MUSUBI_MAX_CURSOR_KEY_BYTES_V1 {
+        if raw.len() > MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1 {
             return Err(ParseError::new("Musubi ordered prefix exceeds its bound"));
         }
         let prefix = Self(raw.to_owned());
@@ -4906,6 +6038,11 @@ impl MusubiOrderedPrefixV1 {
     }
 
     /// Return the structural namespace and portable package-name prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the prefix lacks its separator, contains an invalid namespace, or has
+    /// an overlong or nonportable package-name component.
     pub fn components(&self) -> Result<(MusubiNamespaceV1, &str), ParseError> {
         let (namespace, name_prefix) = self.0.split_once('/').ok_or_else(|| {
             ParseError::new("Musubi ordered prefix must use namespace/package-prefix")
@@ -4926,6 +6063,11 @@ impl MusubiOrderedPrefixV1 {
     }
 
     /// Validate prefix text obtained through decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the decoded prefix is empty, noncanonical, overlong, or structurally
+    /// invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         Self::new(&self.0).map(|_| ())
     }
@@ -4957,6 +6099,10 @@ impl MusubiPageRequestV1 {
     }
 
     /// Validate the requested bound and any supplied cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a nonzero limit exceeds the V1 page maximum or the cursor is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.limit != 0
             && usize::try_from(self.limit).map_or(true, |limit| limit > MUSUBI_MAX_PAGE_SIZE_V1)
@@ -4976,8 +6122,28 @@ fn validate_finalized_response_page(
     item_count: usize,
     first_key: Option<&str>,
     last_key: Option<&str>,
-    next_cursor: &Option<MusubiFinalizedCursorV1>,
+    next_cursor: Option<&MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
+) -> Result<(), ParseError> {
+    validate_finalized_response_page_with_cursor_cardinality(
+        request,
+        item_count,
+        first_key,
+        last_key,
+        next_cursor,
+        snapshot,
+        true,
+    )
+}
+
+fn validate_finalized_response_page_with_cursor_cardinality(
+    request: &MusubiPageRequestV1,
+    item_count: usize,
+    first_key: Option<&str>,
+    last_key: Option<&str>,
+    next_cursor: Option<&MusubiFinalizedCursorV1>,
+    snapshot: MusubiRegistrySnapshotV1,
+    next_cursor_requires_full_page: bool,
 ) -> Result<(), ParseError> {
     request.validate()?;
     if item_count > request.effective_limit()
@@ -4988,18 +6154,18 @@ fn validate_finalized_response_page(
             "Musubi response page exceeds its requested bound or has invalid keys",
         ));
     }
-    if let Some(cursor) = &request.cursor {
-        if cursor.snapshot != snapshot || cursor.caller.is_some() {
-            return Err(ParseError::new(
-                "Musubi response page does not continue its request cursor",
-            ));
-        }
+    if let Some(cursor) = &request.cursor
+        && (cursor.snapshot != snapshot || cursor.caller.is_some())
+    {
+        return Err(ParseError::new(
+            "Musubi response page does not continue its request cursor",
+        ));
     }
     if let Some(cursor) = next_cursor {
         cursor.validate()?;
         if cursor.snapshot != snapshot
             || cursor.caller.is_some()
-            || item_count != request.effective_limit()
+            || (next_cursor_requires_full_page && item_count != request.effective_limit())
             || Some(cursor.last_key.as_str()) != last_key
             || request
                 .cursor
@@ -5007,7 +6173,7 @@ fn validate_finalized_response_page(
                 .is_some_and(|previous| previous.query_hash != cursor.query_hash)
         {
             return Err(ParseError::new(
-                "Musubi response next cursor does not bind its exact full page",
+                "Musubi response next cursor does not bind its exact response page",
             ));
         }
     }
@@ -5021,7 +6187,7 @@ fn validate_finalized_response_page(
 pub struct MusubiResolverIndexQueryV1 {
     /// Stable package identity.
     pub package: MusubiPackageIdV1,
-    /// Optional SemVer filtering requirement.
+    /// Optional `SemVer` filtering requirement.
     pub requirement: Option<MusubiVersionReqV1>,
     /// Page controls and finalized cursor.
     pub page: MusubiPageRequestV1,
@@ -5029,6 +6195,10 @@ pub struct MusubiResolverIndexQueryV1 {
 
 impl MusubiResolverIndexQueryV1 {
     /// Validate structural package, optional requirement, and page controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package, optional version requirement, or page controls are invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
         self.requirement
@@ -5051,6 +6221,10 @@ pub struct MusubiPackagePageQueryV1 {
 
 impl MusubiPackagePageQueryV1 {
     /// Validate structural package identity and page controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the package identity or page controls are invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
         self.page.validate()
@@ -5081,6 +6255,10 @@ pub struct MusubiAliasQueryV1 {
 
 impl MusubiAliasQueryV1 {
     /// Validate permanent alias identity and page controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the alias or page controls are invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.alias.validate()?;
         self.page.validate()
@@ -5100,6 +6278,10 @@ pub struct MusubiOrderedPrefixQueryV1 {
 
 impl MusubiOrderedPrefixQueryV1 {
     /// Validate canonical structural prefix and page controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ordered prefix or page controls are invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.prefix.validate()?;
         self.page.validate()
@@ -5126,6 +6308,10 @@ pub struct MusubiSearchSnapshotV1 {
 
 impl MusubiSearchSnapshotV1 {
     /// Validate a non-inert finalized search anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the finalized height, block hash, or projection revision is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.finalized_height == 0
             || digest_is_zero(&self.finalized_block_hash)
@@ -5152,6 +6338,10 @@ pub struct MusubiSearchCursorV1 {
 
 impl MusubiSearchCursorV1 {
     /// Validate every cursor binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot or last package is invalid, or the query hash is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.snapshot.validate()?;
         self.last_package.validate()?;
@@ -5190,6 +6380,10 @@ impl MusubiSearchPageRequestV1 {
     }
 
     /// Validate the page bound and continuation cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a nonzero limit exceeds the V1 page maximum or the cursor is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
         if self.limit != 0
             && usize::try_from(self.limit).map_or(true, |limit| limit > MUSUBI_MAX_PAGE_SIZE_V1)
@@ -5221,6 +6415,11 @@ impl MusubiSearchQueryV1 {
     /// Hyphenated ASCII components contribute both their complete spelling and
     /// their alphanumeric words. No prefix, edit-distance, or fuzzy expansion is
     /// performed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is empty, noncanonical, or overlong, or if normalization
+    /// yields no terms, an overlong term, or more terms than the V1 bound.
     pub fn normalized_terms(&self) -> Result<Vec<String>, ParseError> {
         if self.query.is_empty()
             || self.query.len() > MUSUBI_MAX_SEARCH_QUERY_BYTES_V1
@@ -5270,6 +6469,10 @@ impl MusubiSearchQueryV1 {
     }
 
     /// Validate query normalization and page controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if term normalization or page-control validation fails.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.normalized_terms()?;
         self.page.validate()
@@ -5295,6 +6498,11 @@ pub struct MusubiSearchHitV1 {
 
 impl MusubiSearchHitV1 {
     /// Validate structural identity, namespace scope, metadata, and revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if package, namespace, or metadata is invalid, the namespace scope does
+    /// not match the package, or the metadata revision is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.package.validate()?;
         self.claimed_namespace.validate()?;
@@ -5334,6 +6542,11 @@ pub struct MusubiSearchPageV1 {
 
 impl MusubiSearchPageV1 {
     /// Validate request identity, page bounds, strict ordering, and cursor binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query, snapshot, hit, or cursor data is invalid, hits are oversized or
+    /// noncanonical, or a request/response cursor does not bind the page exactly.
     pub fn validate(&self) -> Result<(), ParseError> {
         self.query.validate()?;
         self.snapshot.validate()?;
@@ -5350,17 +6563,16 @@ impl MusubiSearchPageV1 {
         self.items
             .iter()
             .try_for_each(MusubiSearchHitV1::validate)?;
-        if let Some(cursor) = &self.query.page.cursor {
-            if cursor.snapshot != self.snapshot
+        if let Some(cursor) = &self.query.page.cursor
+            && (cursor.snapshot != self.snapshot
                 || self
                     .items
                     .first()
-                    .is_some_and(|item| item.package <= cursor.last_package)
-            {
-                return Err(ParseError::new(
-                    "Musubi search page does not continue its request cursor",
-                ));
-            }
+                    .is_some_and(|item| item.package <= cursor.last_package))
+        {
+            return Err(ParseError::new(
+                "Musubi search page does not continue its request cursor",
+            ));
         }
         if let Some(cursor) = &self.next_cursor {
             cursor.validate()?;
@@ -5383,6 +6595,10 @@ impl MusubiSearchPageV1 {
     }
 
     /// Validate the page and require its echoed context to equal `query` exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page is invalid or its embedded query differs from `query`.
     pub fn validate_for(&self, query: &MusubiSearchQueryV1) -> Result<(), ParseError> {
         self.validate()?;
         if &self.query != query {
@@ -5396,19 +6612,74 @@ impl MusubiSearchPageV1 {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
     use norito::codec::DecodeAll as _;
 
     use super::*;
-    use crate::{
-        account::{MultisigMember, MultisigPolicy},
-        sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1,
-    };
+    use crate::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1;
+
+    #[derive(Encode)]
+    struct UncheckedMultisigMemberWire {
+        public_key: PublicKey,
+        weight: u16,
+    }
+
+    #[derive(Encode)]
+    struct UncheckedMultisigPolicyWire {
+        version: u8,
+        threshold: u16,
+        members: Vec<UncheckedMultisigMemberWire>,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Encode)]
+    enum UncheckedAccountControllerWire {
+        Single(PublicKey),
+        Multisig(UncheckedMultisigPolicyWire),
+    }
 
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives a checked keypair");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    fn unchecked_multisig_cursor_key(
+        version: u8,
+        threshold: u16,
+        members: Vec<(PublicKey, u16)>,
+    ) -> String {
+        let controller = UncheckedAccountControllerWire::Multisig(UncheckedMultisigPolicyWire {
+            version,
+            threshold,
+            members: members
+                .into_iter()
+                .map(|(public_key, weight)| UncheckedMultisigMemberWire { public_key, weight })
+                .collect(),
+        });
+        maintainer_cursor_key_label_v1(&controller.encode(), None)
+    }
+
+    fn structurally_oversized_account() -> AccountId {
+        let members = (0_u16..256)
+            .map(|index| {
+                let mut seed = [0xA5; 32];
+                seed[..2].copy_from_slice(&index.to_le_bytes());
+                let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+                    .expect("oversized-account fixture seed derives a checked keypair");
+                MultisigMember::new(keypair.public_key().clone(), 1)
+                    .expect("oversized-account fixture member")
+            })
+            .collect();
+        let policy = MultisigPolicy::new(1, members).expect("oversized-account fixture policy");
+        let account = AccountId::new_multisig(policy);
+        assert!(
+            norito::to_bytes(&account)
+                .expect("oversized account has canonical Norito bytes")
+                .len()
+                > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1
+        );
+        account
     }
 
     fn package(name: &str) -> MusubiPackageIdV1 {
@@ -5417,6 +6688,65 @@ mod tests {
             MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
             name.parse().expect("package name"),
         )
+    }
+
+    #[test]
+    fn portable_path_set_accepts_canonical_bundle_paths_in_any_order() {
+        let paths = [
+            vec!["src".to_owned(), "caf\u{e9}.ko".to_owned()],
+            vec!["Musubi.toml".to_owned()],
+            vec![".musubi".to_owned(), "semantic-release.norito".to_owned()],
+        ];
+
+        validate_musubi_portable_path_set_v1(paths.iter().map(Vec::as_slice))
+            .expect("canonical unordered bundle paths must validate");
+    }
+
+    #[test]
+    fn portable_path_set_rejects_noncanonical_and_unsafe_components() {
+        for component in [
+            "cafe\u{301}.ko",
+            "CON.ko",
+            "trailing.",
+            "bidirectional\u{202e}name.ko",
+            "colon:name.ko",
+        ] {
+            let paths = [vec!["src".to_owned(), component.to_owned()]];
+            assert!(
+                validate_musubi_portable_path_set_v1(paths.iter().map(Vec::as_slice)).is_err(),
+                "unsafe component was accepted: {component:?}"
+            );
+        }
+
+        let oversized_component = "a".repeat(MUSUBI_MAX_PORTABLE_PATH_COMPONENT_BYTES_V1 + 1);
+        let paths = [vec![oversized_component]];
+        assert!(validate_musubi_portable_path_set_v1(paths.iter().map(Vec::as_slice)).is_err());
+
+        let overdeep = vec!["a".to_owned(); MUSUBI_MAX_PORTABLE_PATH_COMPONENTS_V1 + 1];
+        let paths = [overdeep];
+        assert!(validate_musubi_portable_path_set_v1(paths.iter().map(Vec::as_slice)).is_err());
+    }
+
+    #[test]
+    fn portable_path_set_rejects_exact_and_casefolded_aliases_and_prefixes() {
+        for paths in [
+            vec![vec!["a".to_owned()], vec!["a".to_owned()]],
+            vec![vec!["a".to_owned()], vec!["a".to_owned(), "z".to_owned()]],
+            vec![
+                vec!["src".to_owned(), "Foo.ko".to_owned()],
+                vec!["src".to_owned(), "foo.ko".to_owned()],
+            ],
+            vec![
+                vec!["src".to_owned(), "Stra\u{df}e.ko".to_owned()],
+                vec!["src".to_owned(), "STRASSE.ko".to_owned()],
+            ],
+            vec![
+                vec!["Foo".to_owned()],
+                vec!["foo".to_owned(), "z".to_owned()],
+            ],
+        ] {
+            assert!(validate_musubi_portable_path_set_v1(paths.iter().map(Vec::as_slice)).is_err());
+        }
     }
 
     fn release(name: &str, version: &str) -> MusubiReleaseIdV1 {
@@ -5531,6 +6861,52 @@ mod tests {
         }
     }
 
+    fn resolver_row(version: &str) -> MusubiResolverReleaseRowV1 {
+        let mut manifest = release_manifest();
+        manifest.release = release("swap-core", version);
+        let release_digest = manifest.release_digest();
+        let release = manifest.release.clone();
+        let archive_id = manifest.archive_id;
+        MusubiResolverReleaseRowV1 {
+            release: release.clone(),
+            release_digest,
+            archive_id,
+            source_digest: MusubiContentDigestV1::new([0x61; 32]),
+            interface_digest: manifest.interface_digest,
+            abi: manifest.abi,
+            dependencies: manifest.dependencies,
+            selection: MusubiReleaseSelectionStateV1 {
+                yank: MusubiReleaseYankV1 {
+                    release,
+                    yanked: false,
+                    reason: "initial publication".parse().expect("yank reason"),
+                    changed_by: account(17),
+                    changed_at_height: 42,
+                    revision: 1,
+                },
+                storage: MusubiArchiveAvailabilityV1 {
+                    archive_id,
+                    availability: MusubiStorageAvailabilityV1::Selectable,
+                    healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    active_locations: 1,
+                    finalized_height: 42,
+                    finalized_block_hash: [0x42; 32],
+                    index_revision: 3,
+                },
+                governance: MusubiArtifactGovernanceStateV1::Available,
+            },
+            index_revision: 3,
+        }
+    }
+
+    #[test]
+    fn resolver_row_rejects_availability_newer_than_its_row() {
+        let mut row = resolver_row("1.0.0");
+        row.selection.storage.index_revision = row.index_revision + 1;
+
+        assert!(row.validate().is_err());
+    }
+
     #[test]
     fn namespace_binding_uses_stable_dataspace_scope_and_generation() {
         let binding = MusubiNamespaceBindingV1 {
@@ -5552,6 +6928,145 @@ mod tests {
         let selector: MusubiPackageSelectorV1 =
             "dex.universal/swap-core".parse().expect("selector");
         assert_eq!(selector.to_string(), "dex.universal/swap-core");
+    }
+
+    #[test]
+    fn account_identity_bound_is_exact_and_recursive() {
+        assert!(
+            validate_musubi_account_id_canonical_bytes_v1(&vec![
+                0xA5;
+                MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1
+            ])
+            .is_ok()
+        );
+        assert!(
+            validate_musubi_account_id_canonical_bytes_v1(&vec![
+                0xA5;
+                MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1
+                    + 1
+            ])
+            .is_err()
+        );
+        validate_musubi_account_id_v1(&account(39)).expect("ordinary account fits the bound");
+
+        let oversized = structurally_oversized_account();
+        assert!(validate_musubi_account_id_v1(&oversized).is_err());
+
+        let package_record = MusubiPackageRecordV1 {
+            package: package("bounded-accounts"),
+            claimed_namespace: "dex.universal".parse().expect("namespace"),
+            claimed_namespace_binding: MusubiNamespaceBindingDigestV1::new([0xA6; 32]),
+            owners: vec![oversized.clone()],
+            member_accounts: vec![oversized.clone()],
+            claimed_at_height: 1,
+            revisions: MusubiPackageRevisionsV1 {
+                governance: 1,
+                metadata: 1,
+                archive_locations: 1,
+            },
+        };
+        assert!(
+            package_record.validate().is_err(),
+            "account vectors must enforce the shared canonical bound"
+        );
+
+        let cursor = MusubiFinalizedCursorV1 {
+            snapshot: snapshot(),
+            query_hash: MusubiQueryHashV1::new([0xA7; 32]),
+            last_key: "bounded-caller".to_owned(),
+            caller: Some(oversized.clone()),
+        };
+        assert!(
+            cursor.validate().is_err(),
+            "optional caller bindings must enforce the shared canonical bound"
+        );
+
+        let provider_binding = provider_bundle_binding(oversized);
+        assert!(
+            provider_binding.validate().is_err(),
+            "nested provider completion authorities must enforce the shared canonical bound"
+        );
+    }
+
+    #[test]
+    fn approval_sets_reject_wrong_signature_payload_lengths() {
+        const WRONG_SIGNATURE_BYTES: [u8; 63] = [0xA8; 63];
+        const LENGTH_ERROR: &str = "Musubi approval signature payload length is invalid";
+
+        let owner_keypair = KeyPair::try_from_seed(vec![44; 32], Algorithm::Ed25519)
+            .expect("namespace owner fixture keypair");
+        let owner = AccountId::new(owner_keypair.public_key().clone());
+        let delegation = MusubiNamespaceDelegationV1 {
+            payload: MusubiNamespaceDelegationPayloadV1 {
+                version: MUSUBI_REGISTRY_VERSION_V1,
+                namespace_binding: MusubiNamespaceBindingDigestV1::new([0xA9; 32]),
+                owner_generation: 1,
+                owner,
+                delegate: account(45),
+                expires_at_height: 10,
+            },
+            approvals: vec![MusubiNamespaceDelegationApprovalV1 {
+                public_key: owner_keypair.public_key().clone(),
+                signature: SignatureOf::from_signature(Signature::from_bytes(
+                    &WRONG_SIGNATURE_BYTES,
+                )),
+            }],
+        };
+        assert_eq!(
+            delegation
+                .validate()
+                .expect_err("short signature must fail")
+                .reason(),
+            LENGTH_ERROR
+        );
+
+        let broker_keypair = KeyPair::try_from_seed(vec![53; 32], Algorithm::Ed25519)
+            .expect("ingress broker fixture keypair");
+        let receipt = MusubiSeedIngressReceiptV1 {
+            payload: MusubiSeedIngressReceiptPayloadV1 {
+                version: MUSUBI_REGISTRY_VERSION_V1,
+                binding: seed_ingress_binding(AccountId::new(broker_keypair.public_key().clone())),
+                issued_at_ms: 1_000,
+                expires_at_ms: 2_000,
+            },
+            approvals: vec![MusubiSeedIngressReceiptApprovalV1 {
+                public_key: broker_keypair.public_key().clone(),
+                signature: SignatureOf::from_signature(Signature::from_bytes(
+                    &WRONG_SIGNATURE_BYTES,
+                )),
+            }],
+        };
+        assert_eq!(
+            receipt
+                .validate()
+                .expect_err("short signature must fail")
+                .reason(),
+            LENGTH_ERROR
+        );
+
+        let provider_keypair = KeyPair::try_from_seed(vec![63; 32], Algorithm::Ed25519)
+            .expect("provider owner fixture keypair");
+        let attestation = MusubiProviderBundleVerificationAttestationV1 {
+            payload: MusubiProviderBundleVerificationPayloadV1 {
+                version: MUSUBI_REGISTRY_VERSION_V1,
+                binding: provider_bundle_binding(AccountId::new(
+                    provider_keypair.public_key().clone(),
+                )),
+            },
+            approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+                public_key: provider_keypair.public_key().clone(),
+                signature: SignatureOf::from_signature(Signature::from_bytes(
+                    &WRONG_SIGNATURE_BYTES,
+                )),
+            }],
+        };
+        assert_eq!(
+            attestation
+                .validate()
+                .expect_err("short signature must fail")
+                .reason(),
+            LENGTH_ERROR
+        );
     }
 
     #[test]
@@ -5772,13 +7287,62 @@ mod tests {
         .expect("provider attestation Norito roundtrip");
         assert_eq!(decoded, attestation);
 
+        let reference = attestation.reference();
+        let attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+            binding.archive_id,
+            binding.replication_order,
+            &[reference],
+        )
+        .expect("archive/order-bound provider attestation set digest");
+        assert_ne!(
+            attestation_set_digest,
+            musubi_provider_bundle_attestation_set_digest_v1(
+                ArchiveId::new([0xFA; 32]),
+                binding.replication_order,
+                &[reference],
+            )
+            .expect("different archive remains a valid commitment")
+        );
+        assert_ne!(
+            attestation_set_digest,
+            musubi_provider_bundle_attestation_set_digest_v1(
+                binding.archive_id,
+                ReplicationOrderId::new([0xFB; 32]),
+                &[reference],
+            )
+            .expect("different order remains a valid commitment")
+        );
+        assert!(
+            musubi_provider_bundle_attestation_set_digest_v1(
+                ArchiveId::new([0; 32]),
+                binding.replication_order,
+                &[reference],
+            )
+            .is_err()
+        );
+
+        let record = MusubiProviderBundleAttestationRecordV1 {
+            key: attestation.key(),
+            attestation_digest: attestation.digest(),
+            attestation: attestation.clone(),
+            registered_by: binding.completed_by.clone(),
+            registered_at_height: 78,
+        };
+        record
+            .validate()
+            .expect("exact provider attestation record");
+        let mut mismatched_record = record.clone();
+        mismatched_record.attestation_digest =
+            MusubiProviderBundleAttestationDigestV1::new([0xFC; 32]);
+        assert!(mismatched_record.validate().is_err());
+
         let mut location = MusubiArchiveLocationV1 {
             location_id: MusubiArchiveLocationIdV1::new([0x31; 32]),
             archive_id: binding.archive_id,
             pin_manifest: ManifestDigest::new([0x32; 32]),
             replication_order: binding.replication_order,
             providers: vec![binding.provider_id],
-            provider_attestations: vec![attestation],
+            provider_attestation_set_digest: attestation_set_digest,
             renew_after_epoch: 10,
             expires_at_epoch: 20,
             finalized_height: 30,
@@ -5812,6 +7376,279 @@ mod tests {
             MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1 + 1
         ];
         assert!(MusubiVersionV1::new(1, 0, 0, too_many).is_err());
+    }
+
+    #[test]
+    fn finalized_cursor_ceiling_covers_every_structured_v1_key_family() {
+        let maximum_version = MusubiVersionV1::new(
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            vec![
+                MusubiPrereleaseIdentifierV1::AlphaNumeric(
+                    "a".repeat(MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1),
+                );
+                MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1
+            ],
+        )
+        .expect("maximum bounded semantic version");
+        let maximum_version_text = maximum_version.to_string();
+        assert_eq!(
+            maximum_version_text.len(),
+            MUSUBI_MAX_VERSION_CURSOR_KEY_BYTES_V1
+        );
+        assert_eq!(
+            maximum_version_text
+                .parse::<MusubiVersionV1>()
+                .expect("maximum semantic-version text reparses"),
+            maximum_version
+        );
+
+        assert_eq!(
+            MUSUBI_MAX_CURSOR_KEY_BYTES_V1,
+            2 * MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 + 1 + "pending-".len() + 64
+        );
+        assert_eq!(MUSUBI_MAX_MAINTAINER_CURSOR_KEY_BYTES_V1, 16_457);
+        // This synthetic bare payload exercises the deliberately conservative
+        // ceiling; it is not claimed to be an attainable AccountId encoding.
+        let ceiling_sized_bare_account = vec![0xA5; MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1];
+        let ceiling_pending_label = maintainer_cursor_key_label_v1(
+            &ceiling_sized_bare_account,
+            Some(&MusubiInviteIdV1::new([0x5A; 32])),
+        );
+        assert_eq!(
+            ceiling_pending_label.len(),
+            MUSUBI_MAX_MAINTAINER_CURSOR_KEY_BYTES_V1
+        );
+        assert!(ceiling_pending_label.ends_with(&format!("|pending-{}", "5a".repeat(32))));
+        assert_eq!(
+            maintainer_cursor_key_label_v1(&ceiling_sized_bare_account, None,).len(),
+            2 * MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 + 1 + "accepted".len()
+        );
+        let cursor_account = account(44);
+        let accepted = MusubiMaintainerDirectoryEntryV1::Accepted(MusubiPackageMemberV1 {
+            package: package("cursor-bound"),
+            account: cursor_account.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            accepted_at_height: 1,
+            governance_revision: 1,
+        });
+        let pending =
+            MusubiMaintainerDirectoryEntryV1::PendingInvitation(MusubiMaintainerInvitationV1 {
+                invite_id: MusubiInviteIdV1::new([0x5B; 32]),
+                package: package("cursor-bound"),
+                invited_by: account(45),
+                invited_account: cursor_account,
+                role: MusubiPackageRoleV1::Owner,
+                expected_governance_revision: 1,
+                expires_at_height: 2,
+                state: MusubiInvitationStateV1::Pending,
+            });
+        accepted.validate().expect("accepted cursor fixture");
+        pending.validate().expect("pending cursor fixture");
+        let accepted_key = accepted.cursor_key();
+        let pending_key = pending.cursor_key();
+        assert!(accepted_key.ends_with("|accepted"));
+        assert!(pending_key.ends_with(&format!("|pending-{}", "5b".repeat(32))));
+        assert_ne!(accepted_key, pending_key);
+        assert!(maintainer_cursor_key_is_canonical_v1(&accepted_key));
+        assert!(maintainer_cursor_key_is_canonical_v1(&pending_key));
+        assert!(!maintainer_cursor_key_is_canonical_v1(&format!(
+            "aa|pending-{}",
+            "00".repeat(32)
+        )));
+        assert!(!maintainer_cursor_key_is_canonical_v1("AA|accepted"));
+
+        let repeated_boundary = MusubiMaintainerPageV1 {
+            query: MusubiPackagePageQueryV1 {
+                package: package("cursor-bound"),
+                page: MusubiPageRequestV1 {
+                    limit: 1,
+                    cursor: Some(MusubiFinalizedCursorV1 {
+                        snapshot: snapshot(),
+                        query_hash: MusubiQueryHashV1::new([0x74; 32]),
+                        last_key: accepted_key,
+                        caller: None,
+                    }),
+                },
+            },
+            items: vec![accepted],
+            next_cursor: None,
+            snapshot: snapshot(),
+        };
+        assert!(
+            repeated_boundary.validate().is_err(),
+            "a maintainer response may not repeat its opaque request boundary"
+        );
+        for producer_bound in [
+            MUSUBI_MAX_VERSION_CURSOR_KEY_BYTES_V1,
+            MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1,
+            MUSUBI_MAX_ARCHIVE_LOCATION_CURSOR_KEY_BYTES_V1,
+            MUSUBI_MAX_ALIAS_HISTORY_CURSOR_KEY_BYTES_V1,
+            MUSUBI_MAX_MAINTAINER_CURSOR_KEY_BYTES_V1,
+        ] {
+            assert!(producer_bound <= MUSUBI_MAX_CURSOR_KEY_BYTES_V1);
+        }
+
+        MusubiFinalizedCursorV1 {
+            snapshot: snapshot(),
+            query_hash: MusubiQueryHashV1::new([0x71; 32]),
+            last_key: maximum_version_text,
+            caller: None,
+        }
+        .validate()
+        .expect("the longest canonical semantic version is a valid cursor tail");
+        MusubiFinalizedCursorV1 {
+            snapshot: snapshot(),
+            query_hash: MusubiQueryHashV1::new([0x72; 32]),
+            last_key: "x".repeat(MUSUBI_MAX_CURSOR_KEY_BYTES_V1),
+            caller: None,
+        }
+        .validate()
+        .expect("the exact generic cursor boundary is accepted");
+        assert!(
+            MusubiFinalizedCursorV1 {
+                snapshot: snapshot(),
+                query_hash: MusubiQueryHashV1::new([0x73; 32]),
+                last_key: "x".repeat(MUSUBI_MAX_CURSOR_KEY_BYTES_V1 + 1),
+                caller: None,
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn maintainer_cursor_requires_an_exact_canonical_account_payload() {
+        let entry = MusubiMaintainerDirectoryEntryV1::Accepted(MusubiPackageMemberV1 {
+            package: package("canonical-cursor"),
+            account: account(46),
+            role: MusubiPackageRoleV1::Owner,
+            accepted_at_height: 1,
+            governance_revision: 1,
+        });
+        let canonical = entry.cursor_key();
+        assert!(maintainer_cursor_key_is_canonical_v1(&canonical));
+        let (encoded_account, suffix) = canonical
+            .split_once('|')
+            .expect("producer cursor contains its suffix separator");
+
+        let truncated = format!(
+            "{}|{suffix}",
+            &encoded_account[..encoded_account.len().saturating_sub(2)]
+        );
+        let trailing_bytes = format!("{encoded_account}00|{suffix}");
+        for invalid in ["00|accepted".to_owned(), truncated, trailing_bytes] {
+            assert!(
+                !maintainer_cursor_key_is_canonical_v1(&invalid),
+                "malformed or noncanonical account payload survived: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn maintainer_cursor_rejects_noncanonical_multisig_wire() {
+        let first = account(49)
+            .controller()
+            .single_signatory()
+            .expect("single-key fixture")
+            .clone();
+        let second = account(50)
+            .controller()
+            .single_signatory()
+            .expect("single-key fixture")
+            .clone();
+        let policy = MultisigPolicy::new(
+            1,
+            vec![
+                MultisigMember::new(first.clone(), 1).expect("valid member"),
+                MultisigMember::new(second.clone(), 1).expect("valid member"),
+            ],
+        )
+        .expect("valid policy");
+        let canonical_members = policy
+            .members()
+            .iter()
+            .map(|member| (member.public_key().clone(), member.weight()))
+            .collect::<Vec<_>>();
+        assert!(maintainer_cursor_key_is_canonical_v1(
+            &unchecked_multisig_cursor_key(1, 1, canonical_members.clone())
+        ));
+
+        let mut reversed_members = canonical_members.clone();
+        reversed_members.reverse();
+        let invalid = [
+            (
+                "unsupported version",
+                unchecked_multisig_cursor_key(2, 1, vec![(first.clone(), 1)]),
+            ),
+            (
+                "zero threshold",
+                unchecked_multisig_cursor_key(1, 0, vec![(first.clone(), 1)]),
+            ),
+            (
+                "zero weight",
+                unchecked_multisig_cursor_key(1, 1, vec![(first.clone(), 0)]),
+            ),
+            (
+                "threshold overflow",
+                unchecked_multisig_cursor_key(1, 2, vec![(first.clone(), 1)]),
+            ),
+            (
+                "duplicate key",
+                unchecked_multisig_cursor_key(1, 1, vec![(first.clone(), 1), (first.clone(), 1)]),
+            ),
+            (
+                "reversed member order",
+                unchecked_multisig_cursor_key(1, 1, reversed_members),
+            ),
+        ];
+        for (case, cursor) in invalid {
+            assert!(
+                !maintainer_cursor_key_is_canonical_v1(&cursor),
+                "semantically noncanonical multisig wire survived: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn maintainer_page_rejects_opaque_boundary_repeated_after_first_item() {
+        let package_id = package("repeated-cursor");
+        let accepted = |seed| {
+            MusubiMaintainerDirectoryEntryV1::Accepted(MusubiPackageMemberV1 {
+                package: package_id.clone(),
+                account: account(seed),
+                role: MusubiPackageRoleV1::Owner,
+                accepted_at_height: 1,
+                governance_revision: 1,
+            })
+        };
+        let mut items = vec![accepted(47), accepted(48)];
+        items.sort_by_key(MusubiMaintainerDirectoryEntryV1::key);
+        let repeated_boundary = items[1].cursor_key();
+        assert_ne!(items[0].cursor_key(), repeated_boundary);
+
+        let page = MusubiMaintainerPageV1 {
+            query: MusubiPackagePageQueryV1 {
+                package: package_id,
+                page: MusubiPageRequestV1 {
+                    limit: 2,
+                    cursor: Some(MusubiFinalizedCursorV1 {
+                        snapshot: snapshot(),
+                        query_hash: MusubiQueryHashV1::new([0x75; 32]),
+                        last_key: repeated_boundary,
+                        caller: None,
+                    }),
+                },
+            },
+            items,
+            next_cursor: None,
+            snapshot: snapshot(),
+        };
+        assert!(
+            page.validate().is_err(),
+            "an opaque request boundary may not recur later in the response page"
+        );
     }
 
     #[test]
@@ -5973,8 +7810,14 @@ mod tests {
         assert_ne!(original, changed.archive_id());
 
         let mut oversized = archive;
-        oversized.content_length = MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1 + 1;
+        oversized.content_length = MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1 + 1;
         assert!(oversized.validate().is_err());
+
+        let mut source_boundary_plus_metadata = archive_commitment();
+        source_boundary_plus_metadata.content_length = MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1 + 1;
+        source_boundary_plus_metadata
+            .validate()
+            .expect("bundle metadata fits above the source-only payload ceiling");
     }
 
     #[test]
@@ -6049,6 +7892,11 @@ mod tests {
             package: dependency_package.clone(),
             requirement: "^1.0.0".parse().expect("requirement"),
         };
+        let parallel_dependency = MusubiDependencyReqV1 {
+            alias: "codec-next".parse().expect("parallel alias"),
+            package: dependency_package.clone(),
+            requirement: "^1.3.0".parse().expect("parallel requirement"),
+        };
         let exact = MusubiExactDependencyEdgeV1 {
             alias: dependency.alias.clone(),
             kind: MusubiDependencyKindV1::Normal,
@@ -6056,18 +7904,25 @@ mod tests {
             requirement: dependency.requirement.clone(),
             selected: selected.clone(),
         };
+        let parallel_exact = MusubiExactDependencyEdgeV1 {
+            alias: parallel_dependency.alias.clone(),
+            kind: MusubiDependencyKindV1::Normal,
+            package: parallel_dependency.package.clone(),
+            requirement: parallel_dependency.requirement.clone(),
+            selected: parallel.clone(),
+        };
         let mut lock = MusubiVerificationLockV1 {
             schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
             version: MUSUBI_REGISTRY_VERSION_V1,
             root: release("swap-core", "1.2.3"),
-            root_dependencies: vec![exact],
+            root_dependencies: vec![exact, parallel_exact],
             nodes: vec![node(parallel, 20), node(selected, 10)],
         };
         lock.canonicalize();
         lock.validate().expect("exact root selection validates");
 
         let mut manifest = release_manifest();
-        manifest.dependencies = vec![dependency];
+        manifest.dependencies = vec![dependency, parallel_dependency];
         manifest.verification_lock_digest = lock.digest();
         let mut publication = MusubiPublicationV1 {
             manifest,
@@ -6080,7 +7935,16 @@ mod tests {
             .validate()
             .expect("one exact direct selection is unambiguous");
 
-        publication.manifest.dependencies[0].alias = "renamed".parse().expect("alias");
+        publication.manifest.dependencies[0].requirement =
+            "^1.1.0".parse().expect("different compatible requirement");
+        publication
+            .manifest
+            .validate()
+            .expect("the changed manifest remains independently valid");
+        publication
+            .resolution
+            .validate()
+            .expect("the exact lock remains independently valid");
         assert!(publication.validate().is_err());
     }
 
@@ -6110,7 +7974,7 @@ mod tests {
             schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
             version: 1,
             root: release("root", "1.0.0"),
-            root_dependencies: Vec::new(),
+            root_dependencies: vec![edge("first", first.clone())],
             nodes: vec![
                 node(first.clone(), edge("second", second.clone())),
                 node(second, edge("first", first)),
@@ -6118,6 +7982,194 @@ mod tests {
         };
         lock.canonicalize();
         assert!(lock.validate().is_err());
+    }
+
+    #[test]
+    fn exact_graph_rejects_unreachable_nodes() {
+        let orphan = release("orphan", "1.0.0");
+        let lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: release("root", "1.0.0"),
+            root_dependencies: Vec::new(),
+            nodes: vec![MusubiVerificationNodeV1 {
+                release: orphan,
+                release_digest: MusubiReleaseDigestV1::new([1; 32]),
+                archive_id: ArchiveId::new([2; 32]),
+                source_digest: MusubiContentDigestV1::new([3; 32]),
+                interface_digest: MusubiContentDigestV1::new([4; 32]),
+                abi: MusubiAbiBindingV1::new([5; 32]).expect("ABI"),
+                dependencies: Vec::new(),
+            }],
+        };
+
+        let error = lock
+            .validate()
+            .expect_err("unreachable exact nodes must be rejected");
+        assert!(error.to_string().contains("unreachable exact nodes"));
+    }
+
+    #[test]
+    fn verification_lock_rejects_root_in_exact_nodes() {
+        let root = release("root", "1.0.0");
+        let mut lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: root.clone(),
+            root_dependencies: vec![MusubiExactDependencyEdgeV1 {
+                alias: "root".parse().expect("alias"),
+                kind: MusubiDependencyKindV1::Normal,
+                package: root.package.clone(),
+                requirement: "^1.0.0".parse().expect("requirement"),
+                selected: root.clone(),
+            }],
+            nodes: vec![MusubiVerificationNodeV1 {
+                release: root,
+                release_digest: MusubiReleaseDigestV1::new([1; 32]),
+                archive_id: ArchiveId::new([2; 32]),
+                source_digest: MusubiContentDigestV1::new([3; 32]),
+                interface_digest: MusubiContentDigestV1::new([4; 32]),
+                abi: MusubiAbiBindingV1::new([5; 32]).expect("ABI"),
+                dependencies: Vec::new(),
+            }],
+        };
+        lock.canonicalize();
+
+        let error = lock
+            .validate()
+            .expect_err("the verification root cannot also be an exact node");
+        assert!(error.to_string().contains("invalid or noncanonical"));
+    }
+
+    #[test]
+    fn verification_nodes_reject_development_dependencies() {
+        let parent = release("parent", "1.0.0");
+        let child = release("child", "1.0.0");
+        let edge = |alias: &str, kind: MusubiDependencyKindV1, selected: MusubiReleaseIdV1| {
+            MusubiExactDependencyEdgeV1 {
+                alias: alias.parse().expect("alias"),
+                kind,
+                package: selected.package.clone(),
+                requirement: "^1.0.0".parse().expect("requirement"),
+                selected,
+            }
+        };
+        let node = |release: MusubiReleaseIdV1,
+                    dependencies: Vec<MusubiExactDependencyEdgeV1>,
+                    fill: u8| MusubiVerificationNodeV1 {
+            release,
+            release_digest: MusubiReleaseDigestV1::new([fill; 32]),
+            archive_id: ArchiveId::new([fill.saturating_add(1); 32]),
+            source_digest: MusubiContentDigestV1::new([fill.saturating_add(2); 32]),
+            interface_digest: MusubiContentDigestV1::new([fill.saturating_add(3); 32]),
+            abi: MusubiAbiBindingV1::new([fill.saturating_add(4); 32]).expect("ABI"),
+            dependencies,
+        };
+        let mut lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: release("root", "1.0.0"),
+            root_dependencies: vec![edge(
+                "parent",
+                MusubiDependencyKindV1::Normal,
+                parent.clone(),
+            )],
+            nodes: vec![
+                node(
+                    parent,
+                    vec![edge(
+                        "child",
+                        MusubiDependencyKindV1::Development,
+                        child.clone(),
+                    )],
+                    10,
+                ),
+                node(child, Vec::new(), 20),
+            ],
+        };
+        lock.canonicalize();
+
+        let error = lock
+            .validate()
+            .expect_err("transitive development edges must be rejected");
+        assert!(error.to_string().contains("verification node"));
+    }
+
+    #[test]
+    fn parent_local_dependency_aliases_are_unique_across_wire_surfaces() {
+        let first_package = package("first-dependency");
+        let second_package = package("second-dependency");
+        let first_release = MusubiReleaseIdV1::new(
+            first_package.clone(),
+            "1.1.0".parse().expect("first dependency version"),
+        );
+        let second_release = MusubiReleaseIdV1::new(
+            second_package.clone(),
+            "1.2.0".parse().expect("second dependency version"),
+        );
+        let requirement: MusubiVersionReqV1 = "^1.0.0".parse().expect("dependency requirement");
+        let dependency = |package: MusubiPackageIdV1| MusubiDependencyReqV1 {
+            alias: "shared".parse().expect("shared dependency alias"),
+            package,
+            requirement: requirement.clone(),
+        };
+        let exact = |release: MusubiReleaseIdV1| MusubiExactDependencyEdgeV1 {
+            alias: "shared".parse().expect("shared dependency alias"),
+            kind: MusubiDependencyKindV1::Normal,
+            package: release.package.clone(),
+            requirement: requirement.clone(),
+            selected: release,
+        };
+        let node = |release: MusubiReleaseIdV1, fill: u8| MusubiVerificationNodeV1 {
+            release,
+            release_digest: MusubiReleaseDigestV1::new([fill; 32]),
+            archive_id: ArchiveId::new([fill.saturating_add(1); 32]),
+            source_digest: MusubiContentDigestV1::new([fill.saturating_add(2); 32]),
+            interface_digest: MusubiContentDigestV1::new([fill.saturating_add(3); 32]),
+            abi: MusubiAbiBindingV1::new([fill.saturating_add(4); 32]).expect("ABI"),
+            dependencies: Vec::new(),
+        };
+
+        let mut semantic = release_manifest().semantic_manifest();
+        semantic.dependencies = vec![
+            dependency(first_package.clone()),
+            dependency(second_package.clone()),
+        ];
+        semantic.dependencies.sort();
+        assert!(
+            semantic.validate().is_err(),
+            "semantic dependencies must not reuse a parent-local alias"
+        );
+
+        let mut parent_node = node(release("parent", "1.0.0"), 10);
+        parent_node.dependencies =
+            vec![exact(first_release.clone()), exact(second_release.clone())];
+        parent_node.dependencies.sort();
+        assert!(
+            parent_node.validate().is_err(),
+            "transitive exact edges must not reuse a parent-local alias"
+        );
+
+        let mut lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: release("root", "1.0.0"),
+            root_dependencies: vec![exact(first_release.clone()), exact(second_release.clone())],
+            nodes: vec![node(first_release, 20), node(second_release, 30)],
+        };
+        lock.canonicalize();
+        assert!(
+            lock.validate().is_err(),
+            "verification roots must not reuse a parent-local alias"
+        );
+
+        let mut row = resolver_row("2.0.0");
+        row.dependencies = vec![dependency(first_package), dependency(second_package)];
+        row.dependencies.sort();
+        assert!(
+            row.validate().is_err(),
+            "resolver rows must not retain an ambiguous dependency alias"
+        );
     }
 
     #[test]
@@ -6144,6 +8196,106 @@ mod tests {
             published_at_height: 42,
         };
         record.validate().expect("valid record");
+    }
+
+    #[test]
+    fn exact_release_snapshot_binds_home_and_universal_finalized_views() {
+        let manifest = release_manifest();
+        let release_id = manifest.release.clone();
+        let archive_id = manifest.archive_id;
+        let publisher = account(16);
+        let yank = MusubiReleaseYankV1 {
+            release: release_id.clone(),
+            yanked: false,
+            reason: "initial publication".parse().expect("reason"),
+            changed_by: publisher.clone(),
+            changed_at_height: 40,
+            revision: 1,
+        };
+        let home_release = MusubiReleaseRecordV1 {
+            release_digest: manifest.release_digest(),
+            yank: yank.clone(),
+            artifact_governance: MusubiArtifactGovernanceStateV1::Available,
+            revisions: MusubiReleaseRevisionsV1 {
+                yank: 1,
+                artifact_governance: 1,
+            },
+            manifest: manifest.clone(),
+            published_by: publisher,
+            published_at_height: 39,
+        };
+        let universal_release = MusubiResolverReleaseRowV1 {
+            release: release_id.clone(),
+            release_digest: manifest.release_digest(),
+            archive_id,
+            source_digest: MusubiContentDigestV1::new([0x71; 32]),
+            interface_digest: manifest.interface_digest,
+            abi: manifest.abi,
+            dependencies: manifest.dependencies,
+            selection: MusubiReleaseSelectionStateV1 {
+                yank,
+                storage: MusubiArchiveAvailabilityV1 {
+                    archive_id,
+                    availability: MusubiStorageAvailabilityV1::Selectable,
+                    healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    active_locations: 1,
+                    finalized_height: 42,
+                    finalized_block_hash: [0x42; 32],
+                    index_revision: 2,
+                },
+                governance: MusubiArtifactGovernanceStateV1::Available,
+            },
+            index_revision: 3,
+        };
+        let exact = MusubiExactReleaseSnapshotV1 {
+            chain_id: ChainId::from("musubi-publish-test"),
+            genesis_hash: [0x72; 32],
+            snapshot: snapshot(),
+            home_release,
+            universal_release,
+        };
+
+        exact
+            .validate()
+            .expect("independent storage and row revisions are finalized by the snapshot");
+        exact
+            .validate_for(&MusubiExactReleaseQueryV1 {
+                release: release_id,
+            })
+            .expect("exact response matches its query");
+
+        let mut mismatched_state = exact.clone();
+        mismatched_state.universal_release.selection.yank.yanked = true;
+        assert!(mismatched_state.validate().is_err());
+
+        let mut future_revision = exact.clone();
+        future_revision.home_release.revisions.artifact_governance = 4;
+        assert!(future_revision.validate().is_err());
+
+        let mut future_storage_projection = exact.clone();
+        future_storage_projection
+            .universal_release
+            .selection
+            .storage
+            .index_revision = 4;
+        assert!(future_storage_projection.validate().is_err());
+
+        let mut wrong_anchor = exact.clone();
+        wrong_anchor
+            .universal_release
+            .selection
+            .storage
+            .finalized_block_hash = [0x73; 32];
+        assert!(wrong_anchor.validate().is_err());
+
+        let other_release = release("other", "1.2.3");
+        assert!(
+            exact
+                .validate_for(&MusubiExactReleaseQueryV1 {
+                    release: other_release,
+                })
+                .is_err()
+        );
     }
 
     #[test]
@@ -7147,6 +9299,62 @@ mod tests {
     }
 
     #[test]
+    fn resolver_next_cursor_may_bind_a_nonempty_byte_budgeted_short_page() {
+        assert!(
+            MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1
+                < MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1
+        );
+        let snapshot = snapshot();
+        let row = resolver_row("1.0.0");
+        row.validate().expect("resolver row is canonical");
+        let cursor = MusubiFinalizedCursorV1 {
+            snapshot,
+            query_hash: MusubiQueryHashV1::new([0x51; 32]),
+            last_key: row.release.version.to_string(),
+            caller: None,
+        };
+        let query = MusubiResolverIndexQueryV1 {
+            package: row.release.package.clone(),
+            requirement: None,
+            page: MusubiPageRequestV1 {
+                limit: 2,
+                cursor: None,
+            },
+        };
+        let page = MusubiResolverIndexPageV1 {
+            query: query.clone(),
+            chain_id: ChainId::from("musubi-resolver-page-test"),
+            genesis_hash: [0x52; 32],
+            items: vec![row],
+            next_cursor: Some(cursor.clone()),
+            snapshot,
+        };
+        page.validate_for(&query)
+            .expect("resolver byte budgeting may truncate before the requested item limit");
+        #[cfg(feature = "json")]
+        assert!(
+            norito::json::to_json(&page)
+                .expect("resolver page JSON")
+                .len()
+                <= MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1
+        );
+
+        let version_page = MusubiVersionPageV1 {
+            query: MusubiPackagePageQueryV1 {
+                package: query.package,
+                page: query.page,
+            },
+            items: vec!["1.0.0".parse().expect("version")],
+            next_cursor: Some(cursor),
+            snapshot,
+        };
+        assert!(
+            version_page.validate().is_err(),
+            "non-resolver page types must retain the exact-full-page continuation invariant"
+        );
+    }
+
+    #[test]
     fn ordered_prefix_requires_canonical_namespace_and_package_prefix() {
         for invalid in ["sora", "sora/-math", "sora/math--", "sora/math/extra"] {
             assert!(
@@ -7154,10 +9362,28 @@ mod tests {
                 "invalid ordered prefix `{invalid}` must be rejected"
             );
         }
+        assert!(
+            MusubiOrderedPrefixV1::new(&format!(
+                "sora/{}",
+                "a".repeat(MUSUBI_MAX_PACKAGE_NAME_BYTES_V1 + 1)
+            ))
+            .is_err(),
+            "an ordered package prefix may not exceed the package-name bound"
+        );
         let prefix = MusubiOrderedPrefixV1::new("apps.sora/math-").expect("canonical prefix");
         let (namespace, package_prefix) = prefix.components().expect("prefix components");
         assert_eq!(namespace.as_str(), "apps.sora");
         assert_eq!(package_prefix, "math-");
+
+        let maximum = format!(
+            "{}/{}",
+            "a".repeat(MUSUBI_MAX_NAMESPACE_BYTES_V1),
+            "b".repeat(MUSUBI_MAX_PACKAGE_NAME_BYTES_V1)
+        );
+        assert_eq!(maximum.len(), MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1);
+        MusubiOrderedPrefixV1::new(&maximum)
+            .expect("the exact structural ordered-prefix boundary is accepted");
+        assert!(MusubiOrderedPrefixV1::new(&(maximum + "c")).is_err());
     }
 
     #[test]

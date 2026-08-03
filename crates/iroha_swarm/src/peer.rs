@@ -1,6 +1,5 @@
 //! Peer utils.
 
-pub type PeerInfo = (PeerName, P2pApiPorts, ExposedKeyPair, PeerPop);
 pub type PeerName = String;
 pub type P2pApiPorts = [u16; 2];
 pub type ExposedKeyPair = (
@@ -9,9 +8,19 @@ pub type ExposedKeyPair = (
 );
 pub type PeerPop = Vec<u8>;
 
+#[derive(Debug)]
+pub(crate) struct PeerInfo {
+    pub(crate) name: PeerName,
+    pub(crate) ports: P2pApiPorts,
+    pub(crate) key_pair: ExposedKeyPair,
+    pub(crate) soranet_transport_key_pair: ExposedKeyPair,
+    pub(crate) pop: PeerPop,
+}
+
 pub const SERVICE_NAME: &str = "irohad";
 
 type Result<T> = std::result::Result<T, iroha_crypto::Error>;
+const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:swarm:soranet-transport:v1|";
 
 /// Peer overrides supplied by higher-level tooling.
 #[derive(Clone, Debug)]
@@ -64,6 +73,28 @@ pub fn generate_bls_key_pair(
     ))
 }
 
+pub(crate) fn generate_soranet_transport_key_pair(
+    base_seed: Option<&[u8]>,
+    extra_seed: &[u8],
+) -> Result<ExposedKeyPair> {
+    let key_pair = match base_seed {
+        Some(seed) => iroha_crypto::KeyPair::try_from_seed(
+            seed.iter()
+                .chain(SORANET_TRANSPORT_SEED_DOMAIN)
+                .chain(extra_seed)
+                .copied()
+                .collect::<Vec<_>>(),
+            iroha_crypto::Algorithm::Ed25519,
+        )?,
+        None => iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)?,
+    };
+    let (public_key, private_key) = key_pair.into_parts();
+    Ok((
+        public_key,
+        Some(iroha_crypto::ExposedPrivateKey(private_key)),
+    ))
+}
+
 pub fn network(
     count: u16,
     key_seed: Option<&[u8]>,
@@ -73,7 +104,18 @@ pub fn network(
             let name = format!("{SERVICE_NAME}{nth}");
             let ports = [super::BASE_PORT_P2P + nth, super::BASE_PORT_API + nth];
             let (key_pair, pop) = generate_bls_key_pair(key_seed, &nth.to_be_bytes())?;
-            Ok((nth, (name, ports, key_pair, pop)))
+            let soranet_transport_key_pair =
+                generate_soranet_transport_key_pair(key_seed, &nth.to_be_bytes())?;
+            Ok((
+                nth,
+                PeerInfo {
+                    name,
+                    ports,
+                    key_pair,
+                    soranet_transport_key_pair,
+                    pop,
+                },
+            ))
         })
         .collect()
 }
@@ -102,8 +144,12 @@ pub fn topology<'a>(
     peers: impl Iterator<Item = &'a PeerInfo>,
 ) -> std::collections::BTreeSet<iroha_data_model::peer::Peer> {
     peers
-        .map(|(service_name, [port_p2p, _], (public_key, _), _)| {
-            peer(service_name, *port_p2p, public_key.clone())
+        .map(|peer_info| {
+            peer(
+                &peer_info.name,
+                peer_info.ports[0],
+                peer_info.key_pair.0.clone(),
+            )
         })
         .collect()
 }

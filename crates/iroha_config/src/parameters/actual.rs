@@ -631,12 +631,7 @@ impl Root {
         }
 
         self.apply_storage_memory_budget();
-        let Some(max_disk) = self
-            .nexus
-            .storage
-            .local_budget_bytes
-            .map(|budget| budget.get())
-        else {
+        let Some(max_disk) = self.nexus.storage.local_budget_bytes.map(Bytes::get) else {
             return;
         };
         debug_assert!(max_disk > 0, "parsed storage budgets are non-zero");
@@ -1083,6 +1078,8 @@ mod sora_profile_tests {
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
 ]
@@ -1096,7 +1093,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -1578,6 +1575,8 @@ pub struct Common {
     pub chain: ChainId,
     /// Key pair for signing transactions and blocks.
     pub key_pair: KeyPair,
+    /// Dedicated Ed25519 key pair for the SoraNet transport handshake.
+    pub soranet_transport_key_pair: KeyPair,
     /// Local peer description.
     pub peer: Peer,
     /// Trusted peers including self.
@@ -4146,10 +4145,7 @@ fn execution_policy_duration(value: Duration) -> (u64, u32) {
 fn execution_policy_canonical_set<'a, T: Encode + 'a>(
     values: impl IntoIterator<Item = &'a T>,
 ) -> Vec<Vec<u8>> {
-    let mut encoded = values
-        .into_iter()
-        .map(|value| value.encode())
-        .collect::<Vec<_>>();
+    let mut encoded = values.into_iter().map(Encode::encode).collect::<Vec<_>>();
     encoded.sort_unstable();
     encoded.dedup();
     encoded
@@ -4658,12 +4654,7 @@ pub fn execution_policy_digest_v1(
     let per_provider_submitters = sorafs_telemetry
         .per_provider_submitters
         .iter()
-        .map(|(provider, accounts)| {
-            (
-                provider.clone(),
-                execution_policy_canonical_set(accounts.iter()),
-            )
-        })
+        .map(|(provider, accounts)| (*provider, execution_policy_canonical_set(accounts.iter())))
         .collect::<Vec<_>>();
     policy.push(
         "governance.sorafs_telemetry.per_provider_submitters",
@@ -10210,14 +10201,8 @@ pub struct SorafsGovernanceDagService {
     pub state_dir: Option<PathBuf>,
     /// IPFS-compatible HTTP API base URL used to add, pin, verify, and retrieve objects.
     pub ipfs_api_url: Option<String>,
-    /// Public-head mode (`signed_http` or `ipns`).
-    pub head_mode: String,
-    /// Signed-head HTTP endpoint used by `signed_http` mode.
+    /// Signed-head HTTP endpoint providing strong-ETag compare-and-swap.
     pub signed_head_url: Option<String>,
-    /// IPNS name resolved by `ipns` mode.
-    pub ipns_name: Option<String>,
-    /// IPFS keystore alias passed to `name/publish` by `ipns` mode.
-    pub ipns_key_name: Option<String>,
     /// Opaque runtime authenticator handle for the IPFS/Kubo API.
     pub ipfs_authenticator_handle: Option<String>,
     /// Exact non-zero IPFS authenticator provider revision.
@@ -10258,12 +10243,6 @@ pub struct SorafsGovernanceDagService {
     pub max_response_bytes: Bytes<u64>,
     /// Maximum request payload bytes accepted from local feeds.
     pub max_request_bytes: Bytes<u64>,
-    /// Maximum entries retained in the deterministic IPLD mirror.
-    pub mirror_max_entries: usize,
-    /// Maximum canonical block bytes retained in the deterministic IPLD mirror.
-    pub mirror_max_bytes: Bytes<u64>,
-    /// Maximum age of the source signed head at publication time.
-    pub max_head_age_secs: u64,
     /// Maximum future clock skew accepted for source blocks and heads.
     pub max_future_skew_secs: u64,
     /// Permit plain HTTP endpoints (intended only for isolated test deployments).
@@ -11111,10 +11090,7 @@ impl Default for SorafsGovernanceDagService {
             enabled: service::ENABLED,
             state_dir: service::state_dir(),
             ipfs_api_url: None,
-            head_mode: service::HEAD_MODE.to_owned(),
             signed_head_url: None,
-            ipns_name: None,
-            ipns_key_name: None,
             ipfs_authenticator_handle: None,
             ipfs_authenticator_revision: None,
             ipfs_authenticator_policy_digest: None,
@@ -11136,9 +11112,6 @@ impl Default for SorafsGovernanceDagService {
             dns_timeout: Duration::from_millis(service::DNS_TIMEOUT_MS),
             max_response_bytes: service::MAX_RESPONSE_BYTES,
             max_request_bytes: service::MAX_REQUEST_BYTES,
-            mirror_max_entries: service::MIRROR_MAX_ENTRIES,
-            mirror_max_bytes: service::MIRROR_MAX_BYTES,
-            max_head_age_secs: service::MAX_HEAD_AGE_SECS,
             max_future_skew_secs: service::MAX_FUTURE_SKEW_SECS,
             allow_insecure_http: service::ALLOW_INSECURE_HTTP,
             allow_private_ipfs_endpoint: service::ALLOW_PRIVATE_IPFS_ENDPOINT,

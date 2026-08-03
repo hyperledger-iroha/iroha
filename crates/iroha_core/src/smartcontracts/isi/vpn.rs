@@ -870,6 +870,25 @@ mod tests {
         KeyPair::try_random().expect("VPN fixture key generation should succeed")
     }
 
+    fn vpn_test_state() -> crate::state::State {
+        crate::state::State::new_for_testing(
+            crate::state::World::new(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        )
+    }
+
+    fn vpn_test_block_header() -> iroha_data_model::block::BlockHeader {
+        iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("VPN test block height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
+    }
+
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -1182,10 +1201,9 @@ mod tests {
         };
         let (record, _, _) = settlement_record_and_voucher(body);
         let operator = record.operator_account_id.clone();
-        let world = crate::state::World::new();
-        let mut block = world.block();
-        let mut transaction =
-            block.transaction_without_telemetry(LaneConfig::default(), /* block height */ 1);
+        let state = vpn_test_state();
+        let mut block = state.block(vpn_test_block_header());
+        let mut transaction = block.transaction();
         let account = Account::new(operator.clone()).build(&operator);
         let (id, value) = account.into_key_value();
         transaction.world.accounts.insert(id, value);
@@ -1205,7 +1223,10 @@ mod tests {
                 .expect("direct issuer lookup")
         );
 
-        transaction.world.account_permissions.remove(&operator);
+        transaction
+            .world
+            .account_permissions
+            .remove(operator.clone());
         let role_id: RoleId = "soranet_vpn_quote_issuer".parse().expect("role id");
         let role = Role::new(role_id.clone(), operator.clone())
             .add_permission(required)
@@ -1272,11 +1293,11 @@ mod tests {
         terminal.refunded_at_ms = Some(11_000);
         terminal.refunded_fee = terminal.lease_fee.clone();
 
-        let world = crate::state::World::new();
-        let mut block = world.block();
-        let mut transaction =
-            block.transaction_without_telemetry(LaneConfig::default(), /* block height */ 1);
+        let state = vpn_test_state();
+        let mut block = state.block(vpn_test_block_header());
+        let mut transaction = block.transaction();
         transaction
+            .world
             .put_vpn_lease(active.clone())
             .expect("active lease is indexed");
         assert!(is_active_vpn_client(
@@ -1285,21 +1306,25 @@ mod tests {
         ));
         assert_eq!(
             transaction
+                .world
                 .vpn_active_lease_by_account
                 .get(&active.client_account_id),
             Some(&active.lease_id)
         );
         transaction
+            .world
             .put_vpn_lease(terminal)
             .expect("terminal transition releases active claims");
         assert!(
             transaction
+                .world
                 .vpn_active_lease_by_account
                 .get(&active.client_account_id)
                 .is_none()
         );
         assert!(
             transaction
+                .world
                 .vpn_active_lease_by_address_slot
                 .get(&active.address_slot)
                 .is_none()
@@ -1309,6 +1334,7 @@ mod tests {
             &active.client_account_id
         ));
         let error = transaction
+            .world
             .put_vpn_lease(active)
             .expect_err("terminal VPN lease must not be resurrected");
         assert!(error.contains("terminal status back to active"));

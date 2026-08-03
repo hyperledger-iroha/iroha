@@ -35,7 +35,7 @@ use crate::{
 const MAX_COLLECTED_RESOLVER_ROWS_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
 
 /// Read-only finalized registry surface needed by dependency resolution.
-pub(crate) trait ResolverRegistrySourceV1 {
+pub trait ResolverRegistrySourceV1 {
     /// Concrete source error returned by a network reader or cache replay.
     type Error: Error;
 
@@ -79,7 +79,7 @@ impl ResolverRegistrySourceV1 for RegistryReadClientV1 {
 
 /// Stable resolution-collection failure.
 #[derive(Debug)]
-pub(crate) enum GraphErrorV1 {
+pub enum GraphErrorV1 {
     /// Workspace path packages or their dependency graph are invalid.
     Workspace(WorkspaceError),
     /// A public registry query failed with a redacted stable code.
@@ -214,7 +214,7 @@ struct LocalDependencySpecV1 {
 
 /// User-facing targeted update before the selector is normalized structurally.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GraphUpdateV1 {
+pub struct GraphUpdateV1 {
     /// Canonical namespace/package selector from `-p`.
     pub package: MusubiPackageSelectorV1,
     /// Optional currently locked version from `PACKAGE@VERSION`.
@@ -223,20 +223,8 @@ pub(crate) struct GraphUpdateV1 {
     pub precise: Option<iroha_data_model::musubi::MusubiVersionV1>,
 }
 
-/// Resolve the selected workspace graph against one coherent finalized registry snapshot.
-pub(crate) fn resolve_workspace_online(
-    registry: &RegistryReadClientV1,
-    workspace: &Workspace,
-    selected: &[MusubiPackageSelectorV1],
-    previous: Option<LockfileV1>,
-    update: Option<GraphUpdateV1>,
-    mode: ResolveModeV1,
-) -> Result<ResolveOutcomeV1, GraphErrorV1> {
-    resolve_workspace_from_source(registry, workspace, selected, previous, update, mode)
-}
-
 /// Resolve online and atomically publish only the coherent validated pages consumed.
-pub(crate) fn resolve_workspace_online_cached(
+pub fn resolve_workspace_online_cached(
     registry: &RegistryReadClientV1,
     cache: &ResolverIndexCacheV1,
     workspace: &Workspace,
@@ -251,7 +239,7 @@ pub(crate) fn resolve_workspace_online_cached(
 }
 
 /// Resolve and cache a publication graph that contains only fresh-selectable releases.
-pub(crate) fn resolve_workspace_online_cached_fresh(
+pub fn resolve_workspace_online_cached_fresh(
     registry: &RegistryReadClientV1,
     cache: &ResolverIndexCacheV1,
     workspace: &Workspace,
@@ -265,6 +253,10 @@ pub(crate) fn resolve_workspace_online_cached_fresh(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the resolver boundary exposes the fixed V1 graph policy inputs explicitly"
+)]
 fn resolve_workspace_online_cached_with_policy(
     registry: &RegistryReadClientV1,
     cache: &ResolverIndexCacheV1,
@@ -289,7 +281,7 @@ fn resolve_workspace_online_cached_with_policy(
 }
 
 /// Successful offline resolution and the one coherent cached source it consumed.
-pub(crate) struct CachedResolveOutcomeV1 {
+pub struct CachedResolveOutcomeV1 {
     /// Exact lock outcome produced by the deterministic resolver.
     pub outcome: ResolveOutcomeV1,
     /// Snapshot source retained for local namespace binding during packaging.
@@ -302,7 +294,7 @@ pub(crate) struct CachedResolveOutcomeV1 {
 /// snapshot. Any semantic resolver result (including governed unavailability,
 /// yank-aware selection, or a dependency conflict) is final and is never
 /// weakened by falling back to older data.
-pub(crate) fn resolve_workspace_offline_cached(
+pub fn resolve_workspace_offline_cached(
     cache: &ResolverIndexCacheV1,
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
@@ -314,13 +306,21 @@ pub(crate) fn resolve_workspace_offline_cached(
         .sources(previous.as_ref())
         .map_err(|error| GraphErrorV1::OfflineMiss(error.to_string()))?;
     let mut last_miss = None;
-    for source in sources {
+    let mut sources = sources.into_iter().peekable();
+    let mut previous = previous;
+    let mut update = update;
+    while let Some(source) = sources.next() {
+        let (attempt_previous, attempt_update) = if sources.peek().is_none() {
+            (previous.take(), update.take())
+        } else {
+            (previous.clone(), update.clone())
+        };
         match resolve_workspace_from_source(
             &source,
             workspace,
             selected,
-            previous.clone(),
-            update.clone(),
+            attempt_previous,
+            attempt_update,
             mode,
         ) {
             Ok(outcome) => return Ok(CachedResolveOutcomeV1 { outcome, source }),
@@ -346,6 +346,10 @@ fn resolve_workspace_from_source<S: ResolverRegistrySourceV1>(
     )
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the resolver keeps one auditable path from authenticated pages to a request"
+)]
 fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
     source: &S,
     workspace: &Workspace,
@@ -437,7 +441,7 @@ fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
             continue;
         }
         let (package, requirement) = query_key;
-        let fetched = collect_requirement_rows(source, package, requirement, &mut anchor)?;
+        let fetched = collect_requirement_rows(source, &package, &requirement, &mut anchor)?;
         for row in fetched {
             for dependency in &row.dependencies {
                 requirements.insert((dependency.package.clone(), dependency.requirement.clone()));
@@ -532,7 +536,7 @@ fn collect_local_roots(
 }
 
 /// Collect selected workspace members and recursively reachable local path packages.
-pub(crate) fn collect_local_members(
+pub fn collect_local_members(
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
 ) -> Result<Vec<WorkspaceMember>, GraphErrorV1> {
@@ -610,8 +614,8 @@ fn local_requirement(
         ConcreteDependency::Registry {
             package,
             requirement,
-        } => (package.clone(), requirement.clone()),
-        ConcreteDependency::Path {
+        }
+        | ConcreteDependency::Path {
             package: Some(package),
             requirement: Some(requirement),
             ..
@@ -696,8 +700,8 @@ fn observe_namespace_anchor<S: ResolverRegistrySourceV1>(
 
 fn collect_requirement_rows<S: ResolverRegistrySourceV1>(
     source: &S,
-    package: MusubiPackageIdV1,
-    requirement: MusubiVersionReqV1,
+    package: &MusubiPackageIdV1,
+    requirement: &MusubiVersionReqV1,
     anchor: &mut Option<RegistryAnchorV1>,
 ) -> Result<Vec<MusubiResolverReleaseRowV1>, GraphErrorV1> {
     let mut cursor = None;
@@ -718,7 +722,7 @@ fn collect_requirement_rows<S: ResolverRegistrySourceV1>(
             .map_err(|error| GraphErrorV1::InvalidRegistryData(error.reason().to_owned()))?;
         RegistryAnchorV1::observe_resolver(anchor, &page)?;
         for row in page.items {
-            if row.release.package != package
+            if &row.release.package != package
                 || !requirement.matches(&row.release.version)
                 || row.index_revision != page.snapshot.index_revision
             {
@@ -1020,7 +1024,7 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
             genesis_hash: [7; 32],
             items: Vec::new(),
             next_cursor: Some(MusubiFinalizedCursorV1 {
-                snapshot: snapshot.clone(),
+                snapshot,
                 query_hash: MusubiQueryHashV1::new([6; 32]),
                 last_key: "same-cursor".to_owned(),
                 caller: None,
@@ -1029,8 +1033,8 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
         };
         let error = collect_requirement_rows(
             &LoopingResolverRegistry { page },
-            package,
-            MusubiVersionReqV1::Any,
+            &package,
+            &MusubiVersionReqV1::Any,
             &mut None,
         )
         .expect_err("a repeating cursor must not create an infinite query loop");

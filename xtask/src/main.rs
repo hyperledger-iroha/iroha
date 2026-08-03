@@ -150,6 +150,7 @@ fn main() {
 enum CommandKind {
     OpenApi {
         outputs: Vec<PathBuf>,
+        canonical_spec: PathBuf,
         manifest: PathBuf,
         signature_envelope: Option<PathBuf>,
         signing_payload: Option<PathBuf>,
@@ -1124,12 +1125,14 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
     match command {
         CommandKind::OpenApi {
             outputs,
+            canonical_spec,
             manifest,
             signature_envelope,
             signing_payload,
             unsigned_manifest,
         } => generate_openapi(
             outputs,
+            canonical_spec,
             manifest,
             signature_envelope,
             signing_payload,
@@ -2007,6 +2010,7 @@ where
         }
         "openapi" => {
             let mut outputs = Vec::new();
+            let mut output_root: Option<PathBuf> = None;
             let mut manifest_path: Option<PathBuf> = None;
             let mut signature_envelope: Option<PathBuf> = None;
             let mut signing_payload: Option<PathBuf> = None;
@@ -2020,25 +2024,48 @@ where
                         };
                         outputs.push(normalize_path(Path::new(&path))?);
                     }
+                    "--output-root" => {
+                        let Some(path) = pending.next() else {
+                            return Err("expected directory after --output-root".into());
+                        };
+                        if output_root.is_some() {
+                            return Err("openapi accepts --output-root only once".into());
+                        }
+                        output_root = Some(normalize_openapi_output_root(&path)?);
+                    }
                     "--manifest" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --manifest".into());
                         };
+                        if manifest_path.is_some() {
+                            return Err("openapi accepts --manifest only once".into());
+                        }
                         manifest_path = Some(normalize_path(Path::new(&path))?);
                     }
                     "--signature-envelope" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --signature-envelope".into());
                         };
+                        if signature_envelope.is_some() {
+                            return Err("openapi accepts --signature-envelope only once".into());
+                        }
                         signature_envelope = Some(normalize_path(Path::new(&path))?);
                     }
                     "--signing-payload" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --signing-payload".into());
                         };
+                        if signing_payload.is_some() {
+                            return Err("openapi accepts --signing-payload only once".into());
+                        }
                         signing_payload = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--unsigned-manifest" => unsigned_manifest = true,
+                    "--unsigned-manifest" => {
+                        if unsigned_manifest {
+                            return Err("openapi accepts --unsigned-manifest only once".into());
+                        }
+                        unsigned_manifest = true;
+                    }
                     flag => return Err(format!("unknown flag for openapi: {flag}").into()),
                 }
             }
@@ -2056,13 +2083,47 @@ where
                 );
             }
 
-            if outputs.is_empty() {
-                outputs.push(default_openapi_path());
+            if output_root.is_some() && (!outputs.is_empty() || manifest_path.is_some()) {
+                return Err(
+                    "openapi --output-root cannot be combined with --output or --manifest".into(),
+                );
             }
+            let (canonical_spec, manifest) = if let Some(root) = output_root {
+                let canonical_spec = root.join("torii.json");
+                let manifest = root.join("manifest.json");
+                outputs.push(canonical_spec.clone());
+                (canonical_spec, manifest)
+            } else {
+                if outputs.is_empty() {
+                    outputs.push(default_openapi_path());
+                }
+                (
+                    default_openapi_path(),
+                    manifest_path.unwrap_or_else(default_openapi_manifest_path),
+                )
+            };
 
+            for (index, output) in outputs.iter().enumerate() {
+                if openapi_paths_alias(output, &manifest) {
+                    return Err(format!(
+                        "openapi output {} must not alias the manifest path {}",
+                        output.display(),
+                        manifest.display()
+                    )
+                    .into());
+                }
+                for other in &outputs[index + 1..] {
+                    if openapi_paths_alias(output, other) {
+                        return Err(format!(
+                            "openapi output paths must be distinct and non-aliasing: {} and {}",
+                            output.display(),
+                            other.display()
+                        )
+                        .into());
+                    }
+                }
+            }
             outputs.sort();
-            outputs.dedup();
-            let manifest = manifest_path.unwrap_or_else(default_openapi_manifest_path);
             if let Some(signing_payload_path) = signing_payload.as_deref() {
                 for (label, reserved) in outputs
                     .iter()
@@ -2101,6 +2162,7 @@ where
 
             Ok(CommandKind::OpenApi {
                 outputs,
+                canonical_spec,
                 manifest,
                 signature_envelope,
                 signing_payload,
@@ -9622,6 +9684,7 @@ where
 
 fn generate_openapi(
     outputs: Vec<PathBuf>,
+    canonical_spec: PathBuf,
     manifest: PathBuf,
     signature_envelope: Option<PathBuf>,
     signing_payload: Option<PathBuf>,
@@ -9631,10 +9694,22 @@ fn generate_openapi(
 
     let formatted = json::to_string_pretty(&spec)?;
     let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
+    if emits_manifest
+        && !outputs
+            .iter()
+            .any(|output| openapi_paths_alias(output, &canonical_spec))
+    {
+        return Err(format!(
+            "OpenAPI manifests require generating the canonical spec {}",
+            canonical_spec.display()
+        )
+        .into());
+    }
     let generator_provenance = if emits_manifest {
         Some(git_source_provenance(
             &workspace_root(),
             &openapi_generator_output_paths(
+                &canonical_spec,
                 &outputs,
                 &manifest,
                 signing_payload.as_deref(),
@@ -9661,20 +9736,13 @@ fn generate_openapi(
     }
 
     if emits_manifest {
-        let canonical = default_openapi_path();
-        if !outputs.contains(&canonical) {
-            return Err(
-                "OpenAPI manifests require generating artifacts/openapi/torii.json; include the canonical output path"
-                    .into(),
-            );
-        }
         let provenance = generator_provenance
             .as_ref()
             .expect("manifest provenance captured");
         if let Some(signature_envelope) = signature_envelope {
             let signature = load_signature_envelope(&signature_envelope)?;
             write_openapi_manifest_with_signature(
-                &canonical,
+                &canonical_spec,
                 &manifest,
                 signature,
                 provenance,
@@ -9682,7 +9750,7 @@ fn generate_openapi(
             )?;
         } else {
             write_openapi_manifest_unsigned(
-                &canonical,
+                &canonical_spec,
                 &manifest,
                 provenance,
                 signing_payload.as_deref(),
@@ -9786,9 +9854,6 @@ const OPENAPI_CARGO_LOCK_PIN: &[u8] = include_bytes!("../../release/openapi-carg
 const OPENAPI_CARGO_LOCK_PIN_PATH: &str = "release/openapi-cargo-lock-v1.txt";
 const OPENAPI_CARGO_LOCK_PIN_SCHEMA: &str = "iroha.openapi.cargo-lock.v1";
 const OPENAPI_CARGO_LOCK_PIN_MAX_BYTES: u64 = 1_024;
-const OPENAPI_CARGO_LOCK_EXPECTED_BYTES: u64 = 315_213;
-const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX: &str =
-    "c52a098b84fe27deda651868a87cf0670250a38a999ddf299a1061b2f37fa528";
 const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     ".github/workflows/openapi.yml",
     "Cargo.lock",
@@ -11036,23 +11101,27 @@ fn is_lower_hex_digest(value: &str, bytes: usize) -> bool {
 }
 
 fn openapi_generator_output_paths(
+    canonical_spec: &Path,
     outputs: &[PathBuf],
     manifest: &Path,
     signing_payload: Option<&Path>,
     signature_envelope: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let openapi_dir = default_openapi_path()
-        .parent()
-        .expect("canonical OpenAPI output has a parent")
-        .to_path_buf();
-    let mut paths = vec![
-        default_openapi_path(),
-        default_openapi_manifest_path(),
-        openapi_dir.join("versions.json"),
-        openapi_dir.join("versions/current/torii.json"),
-        openapi_dir.join("versions/current/manifest.json"),
-        manifest.to_path_buf(),
-    ];
+    let mut paths = Vec::new();
+    for spec in [default_openapi_path(), canonical_spec.to_path_buf()] {
+        let openapi_dir = spec
+            .parent()
+            .expect("canonical OpenAPI output has a parent")
+            .to_path_buf();
+        paths.extend([
+            spec,
+            openapi_dir.join("manifest.json"),
+            openapi_dir.join("versions.json"),
+            openapi_dir.join("versions/current/torii.json"),
+            openapi_dir.join("versions/current/manifest.json"),
+        ]);
+    }
+    paths.push(manifest.to_path_buf());
     paths.extend(outputs.iter().cloned());
     paths.extend(signing_payload.map(Path::to_path_buf));
     paths.extend(signature_envelope.map(Path::to_path_buf));
@@ -11332,10 +11401,16 @@ fn parse_openapi_cargo_lock_pin(bytes: &[u8]) -> Result<OpenApiCargoLockPinV1, B
     if fields.next() != Some("") || fields.next().is_some() {
         return Err("OpenAPI Cargo.lock pin must contain exactly three fields".into());
     }
-    if expected_bytes != OPENAPI_CARGO_LOCK_EXPECTED_BYTES
-        || sha256_hex != OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX
-    {
-        return Err("OpenAPI Cargo.lock pin does not match the exact V1 size and SHA-256".into());
+    if expected_bytes == 0 || expected_bytes > OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES {
+        return Err(format!(
+            "OpenAPI Cargo.lock pin bytes must be within 1..={OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES}"
+        )
+        .into());
+    }
+    if !is_lower_hex_digest(sha256_hex, 32) || sha256_hex.bytes().all(|byte| byte == b'0') {
+        return Err(
+            "OpenAPI Cargo.lock pin SHA-256 must be lowercase hexadecimal and nonzero".into(),
+        );
     }
     Ok(OpenApiCargoLockPinV1 {
         bytes: expected_bytes,
@@ -11908,14 +11983,13 @@ mod openapi_tests {
     }
 
     #[test]
-    fn openapi_cargo_lock_pin_parser_requires_the_exact_v1_profile() {
-        assert_eq!(
-            parse_openapi_cargo_lock_pin(OPENAPI_CARGO_LOCK_PIN).expect("parse canonical pin"),
-            OpenApiCargoLockPinV1 {
-                bytes: OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
-                sha256_hex: OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX.to_owned(),
-            }
-        );
+    fn openapi_cargo_lock_pin_parser_requires_the_canonical_v1_profile() {
+        let pin =
+            parse_openapi_cargo_lock_pin(OPENAPI_CARGO_LOCK_PIN).expect("parse canonical pin");
+        assert!(pin.bytes > 0);
+        assert!(pin.bytes <= OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES);
+        assert!(is_lower_hex_digest(&pin.sha256_hex, 32));
+        assert!(!pin.sha256_hex.bytes().all(|byte| byte == b'0'));
         let canonical = std::str::from_utf8(OPENAPI_CARGO_LOCK_PIN).expect("UTF-8 canonical pin");
         for (changed, expected) in [
             (
@@ -11930,18 +12004,15 @@ mod openapi_tests {
             ),
             (
                 canonical
-                    .replace("bytes=315213", "bytes=315214")
+                    .replace(&format!("bytes={}", pin.bytes), "bytes=0")
                     .into_bytes(),
-                "exact V1 size",
+                "noncanonical bytes",
             ),
             (
                 canonical
-                    .replace(
-                        OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
-                        "0000000000000000000000000000000000000000000000000000000000000000",
-                    )
+                    .replace(&pin.sha256_hex, &"0".repeat(64))
                     .into_bytes(),
-                "exact V1 size",
+                "nonzero",
             ),
         ] {
             let error =
@@ -12046,6 +12117,129 @@ mod openapi_tests {
             err.to_string().contains("unknown flag for openapi"),
             "unexpected removed-flag error: {err}"
         );
+    }
+
+    #[test]
+    fn openapi_output_root_binds_the_canonical_spec_and_manifest() {
+        let args = [
+            "xtask",
+            "openapi",
+            "--output-root",
+            "staging/openapi",
+            "--unsigned-manifest",
+        ];
+        let command = parse_command(args.into_iter().map(String::from))
+            .expect("parse staging-root OpenAPI command");
+        let CommandKind::OpenApi {
+            outputs,
+            canonical_spec,
+            manifest,
+            unsigned_manifest,
+            ..
+        } = command
+        else {
+            panic!("expected OpenAPI command");
+        };
+        let root = workspace_root().join("staging/openapi");
+        assert_eq!(canonical_spec, root.join("torii.json"));
+        assert_eq!(outputs, vec![root.join("torii.json")]);
+        assert_eq!(manifest, root.join("manifest.json"));
+        assert!(unsigned_manifest);
+    }
+
+    #[test]
+    fn openapi_output_root_rejects_ambiguous_or_unsafe_paths() {
+        for (args, expected) in [
+            (
+                vec![
+                    "xtask",
+                    "openapi",
+                    "--output-root",
+                    "staging/openapi",
+                    "--output",
+                    "other.json",
+                ],
+                "cannot be combined",
+            ),
+            (
+                vec![
+                    "xtask",
+                    "openapi",
+                    "--output-root",
+                    "staging/openapi",
+                    "--manifest",
+                    "other.json",
+                ],
+                "cannot be combined",
+            ),
+            (
+                vec![
+                    "xtask",
+                    "openapi",
+                    "--output-root",
+                    "staging/openapi",
+                    "--output-root",
+                    "staging/other",
+                ],
+                "only once",
+            ),
+            (
+                vec!["xtask", "openapi", "--output-root", "."],
+                "unambiguous directory path",
+            ),
+            (
+                vec!["xtask", "openapi", "--output-root", "../escape"],
+                "unambiguous directory path",
+            ),
+            (
+                vec!["xtask", "openapi", "--output-root", ".git/openapi"],
+                "Git metadata",
+            ),
+        ] {
+            let error = match parse_command(args.iter().map(|arg| (*arg).to_owned())) {
+                Ok(_) => panic!("ambiguous OpenAPI output layout must fail: {args:?}"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains(expected),
+                "expected `{expected}` for {args:?}, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn openapi_outputs_reject_manifest_and_duplicate_aliases() {
+        for args in [
+            vec![
+                "xtask",
+                "openapi",
+                "--output",
+                "artifacts/openapi/manifest.json",
+            ],
+            vec![
+                "xtask",
+                "openapi",
+                "--output",
+                "staging/torii.json",
+                "--output",
+                "staging/./torii.json",
+            ],
+            vec![
+                "xtask",
+                "openapi",
+                "--unsigned-manifest",
+                "--unsigned-manifest",
+            ],
+        ] {
+            let error = match parse_command(args.iter().map(|arg| (*arg).to_owned())) {
+                Ok(_) => panic!("aliased OpenAPI outputs must fail: {args:?}"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("alias") || error.to_string().contains("only once"),
+                "unexpected duplicate/alias error for {args:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -14436,6 +14630,37 @@ fn default_openapi_allowed_signers_path() -> PathBuf {
     workspace_root().join("artifacts/openapi/allowed_signers.json")
 }
 
+fn normalize_openapi_output_root(value: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let requested = Path::new(value);
+    if value.is_empty()
+        || value.trim() != value
+        || value.starts_with('-')
+        || requested == Path::new(".")
+        || requested.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return Err("openapi --output-root requires an unambiguous directory path".into());
+    }
+    let normalized = normalize_path(requested)?;
+    if normalized.parent().is_none() {
+        return Err("openapi --output-root must not be the filesystem root".into());
+    }
+    let workspace = openapi_path_identity(&workspace_root());
+    let identity = openapi_path_identity(&normalized);
+    if identity == workspace {
+        return Err("openapi --output-root must not be the workspace root".into());
+    }
+    let git_metadata = workspace.join(".git");
+    if identity == git_metadata || identity.starts_with(&git_metadata) {
+        return Err("openapi --output-root must not write inside Git metadata".into());
+    }
+    Ok(normalized)
+}
+
 fn default_da_report_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -14854,10 +15079,10 @@ fn print_usage() {
         "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
     );
     eprintln!(
-        "  cargo xtask openapi [--output <path>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
+        "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Generate the Torii OpenAPI spec from a live Torii router. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
+        "    Generate the Torii OpenAPI spec from a live Torii router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"

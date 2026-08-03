@@ -44,7 +44,13 @@ class CastZkBallotInstruction private constructor(
         internal var proofBase64: String? = null
         internal var publicInputsJson: String? = null
 
-        fun setElectionId(electionId: String): Builder { require(electionId.isNotBlank()) { "electionId must not be blank" }; this.electionId = electionId; return this }
+        fun setElectionId(electionId: String): Builder {
+            this.electionId = GovernanceInstructionUtils.requireGovernanceSelectorV1(
+                electionId,
+                "electionId",
+            )
+            return this
+        }
         fun setProofBase64(proofBase64: String): Builder {
             require(proofBase64.isNotBlank()) { "proofBase64 must not be blank" }
             try { Base64.decode(proofBase64) } catch (ex: IllegalArgumentException) { throw IllegalArgumentException("proofBase64 must be valid base64", ex) }

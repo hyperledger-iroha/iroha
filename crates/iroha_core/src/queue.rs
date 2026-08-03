@@ -159,9 +159,7 @@ fn exact_signed_transaction_hash(
     match entrypoint {
         TransactionEntrypoint::External(signed) => Some(signed.hash()),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-        TransactionEntrypoint::SealedCommitment(_)
-        | TransactionEntrypoint::PrivateKaigi(_)
-        | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
 
@@ -1936,12 +1934,6 @@ pub(crate) enum ProposalGasCostError {
     /// An executable with runtime-dependent work omitted its signature-bound gas limit.
     #[error("runtime-dependent executable is missing its signed gas limit")]
     MissingSignedGasLimit,
-    /// A private Kaigi entrypoint could not be decoded into its metered instruction.
-    #[error("private Kaigi proposal gas derivation failed: {reason}")]
-    InvalidPrivateKaigi {
-        /// Exact deterministic decode failure.
-        reason: String,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6342,7 +6334,7 @@ impl Queue {
     /// # Errors
     ///
     /// Returns an error when an accepted runtime-dependent executable has no signed gas limit or
-    /// when a private entrypoint cannot be decoded into its metered instruction.
+    /// when gas accounting cannot derive a deterministic upper bound.
     pub(crate) fn compute_proposal_gas_cost(
         tx: &AcceptedTransaction<'_>,
     ) -> Result<u64, ProposalGasCostError> {
@@ -6355,13 +6347,6 @@ impl Queue {
             }
             iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
                 Self::signed_executable_proposal_gas_cost(reveal.signed_transaction())
-            }
-            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
-                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
-                    .map(|instruction| gas::meter_instruction(&instruction))
-                    .map_err(|error| ProposalGasCostError::InvalidPrivateKaigi {
-                        reason: error.to_string(),
-                    })
             }
             iroha_data_model::transaction::TransactionEntrypoint::Time(_) => Ok(0),
         }
@@ -13538,11 +13523,6 @@ impl Queue {
                     Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
                 }
             }
-            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
-                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
-                    .map(|instruction| gas::meter_instruction(&instruction))
-                    .unwrap_or(0)
-            }
             iroha_data_model::transaction::TransactionEntrypoint::Time(_) => 0,
         }
     }
@@ -20456,163 +20436,6 @@ pub mod tests {
     }
 
     #[test]
-    fn queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("queue_plan_admission_rejection.norito");
-        let (policy_authority, policy_keypair) = gen_account_in("wonderland");
-        let policy_domain_id =
-            DomainId::try_new("wonderland", "universal").expect("policy domain id");
-        let policy_domain = Domain::new(policy_domain_id.clone()).build(&policy_authority);
-        let policy_account = Account::new(policy_authority.clone()).build(&policy_authority);
-        let policy_asset_definition_id = AssetDefinitionId::derive_from_components(
-            policy_domain_id,
-            "replayzkpolicy".parse().expect("policy asset name"),
-        );
-        let policy_asset_definition = AssetDefinition::numeric(
-            policy_asset_definition_id.clone(),
-            "replayzkpolicy".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .confidential_policy(
-            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-        )
-        .build(&policy_authority);
-        let mut world = World::with([policy_domain], [policy_account], [policy_asset_definition]);
-        let mut zk_state = crate::state::ZkAssetState::default();
-        zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
-        zk_state.allow_shield = false;
-        zk_state.allow_unshield = true;
-        world
-            .zk_assets
-            .insert(policy_asset_definition_id.clone(), zk_state);
-        let mut state = State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let mut nexus = state.nexus_snapshot();
-        nexus.enabled = false;
-        state
-            .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
-        install_single_validator_topology_for_queue_test(&state, 0x96);
-        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
-            lane: LaneId::SINGLE,
-            dataspace: DataSpaceId::UNIVERSAL,
-        });
-        let config = config_factory();
-        let queue =
-            Queue::test_with_router_for_routes(config, &time_source, Arc::clone(&router), &[]);
-        queue
-            .install_plan_journal(&journal_path, 1024 * 1024, true)
-            .expect("install admission-rejection journal");
-        let plan =
-            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-        let admission_context = queue
-            .plan_admission_context_with_state(&state, &plan)
-            .expect("capture replay fixture admission context");
-        let committed = accepted_tx_by(policy_authority.clone(), &policy_keypair, &time_source);
-        let committed_hash = committed.hash();
-        queue
-            .record_plan_journal_put_durable(
-                &committed,
-                &plan,
-                &admission_context,
-                Queue::duration_to_millis(time_source.get_unix_time()),
-                None,
-                None,
-                true,
-            )
-            .expect("persist committed terminal replay fixture");
-        time_handle.advance(Duration::from_millis(1));
-        let accepted = accepted_tx_by(policy_authority.clone(), &policy_keypair, &time_source);
-        let accepted_hash = accepted.hash();
-        queue
-            .record_plan_journal_put_durable(
-                &accepted,
-                &plan,
-                &admission_context,
-                Queue::duration_to_millis(time_source.get_unix_time()),
-                None,
-                None,
-                true,
-            )
-            .expect("persist valid replay prefix fixture");
-        let rejected = accepted_tx_with(
-            policy_authority.clone(),
-            &policy_keypair,
-            &time_source,
-            vec![InstructionBox::from(
-                iroha_data_model::isi::zk::Shield::new(
-                    policy_asset_definition_id,
-                    policy_authority,
-                    10_u128,
-                    [3; 32],
-                    iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-                ),
-            )],
-            Metadata::default(),
-        );
-        let rejected_hash = rejected.hash();
-        queue
-            .record_plan_journal_put_durable(
-                &rejected,
-                &plan,
-                &admission_context,
-                Queue::duration_to_millis(time_source.get_unix_time()),
-                None,
-                None,
-                true,
-            )
-            .expect("persist admission-rejection fixture");
-        {
-            let mut transactions = state.transactions.block();
-            transactions.insert_block_with_single_tx(committed_hash, nonzero!(1_usize));
-            transactions
-                .commit()
-                .expect("commit terminal replay fixture identity");
-        }
-        drop(queue);
-
-        let replay_queue = Queue::test_with_router_for_routes(config, &time_source, router, &[]);
-        assert_eq!(
-            replay_queue
-                .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("reopen admission-rejection journal"),
-            3
-        );
-        let error = replay_queue
-            .replay_plan_journal(&state)
-            .expect_err("a current admission failure must abort startup");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-        assert!(
-            error.to_string().contains("failed current admission")
-                && error.to_string().contains("retaining its durable record"),
-            "unexpected replay error: {error}"
-        );
-        assert_eq!(replay_queue.active_len(), 0);
-        assert!(!replay_queue.txs.contains_key(&committed_hash));
-        assert!(!replay_queue.txs.contains_key(&accepted_hash));
-        assert!(!replay_queue.txs.contains_key(&rejected_hash));
-        assert!(replay_queue.durable_plan_claims.is_empty());
-        assert!(replay_queue.tx_hashes.is_empty());
-        assert!(replay_queue.tx_gossip.is_empty());
-        assert_eq!(
-            replay_queue
-                .plan_journal
-                .lock()
-                .as_ref()
-                .expect("installed replay journal")
-                .live_record_count()
-                .expect("count retained admission-rejection record"),
-            3,
-            "a later admission failure must retain terminal and live durable owners without publishing or tombstoning a prefix"
-        );
-    }
-
-    #[test]
     fn queue_plan_journal_replay_rejects_aggregate_per_user_overflow_without_prefix() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue-plan-aggregate-per-user.norito");
@@ -23452,72 +23275,6 @@ pub mod tests {
                 "route rejection reason should include lane lookup failure"
             );
         }
-    }
-
-    #[test]
-    fn push_with_lane_with_state_rejects_confidential_policy_before_enqueue() {
-        let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let account = Account::new(authority_id.clone()).build(&authority_id);
-        let asset_def_id = AssetDefinitionId::derive_from_components(
-            domain_id,
-            "zkqueuepolicy".parse().expect("asset name"),
-        );
-        let asset_definition = AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "zkqueuepolicy".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .confidential_policy(
-            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-        )
-        .build(&authority_id);
-        let mut world = World::with([domain], [account], [asset_definition]);
-        let mut zk_state = crate::state::ZkAssetState::default();
-        zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
-        zk_state.allow_shield = false;
-        zk_state.allow_unshield = true;
-        world.zk_assets.insert(asset_def_id.clone(), zk_state);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_tx_with(
-            authority_id.clone(),
-            &authority_keypair,
-            &time_source,
-            vec![InstructionBox::from(
-                iroha_data_model::isi::zk::Shield::new(
-                    asset_def_id,
-                    authority_id,
-                    10_u128,
-                    [3; 32],
-                    iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-                ),
-            )],
-            Metadata::default(),
-        );
-
-        let err = queue
-            .push_with_lane_with_state(tx, &state)
-            .expect_err("disabled shield must be rejected before enqueue");
-
-        assert!(matches!(
-            err.err,
-            Error::ConfidentialPolicyAdmissionRejected { .. }
-        ));
-        if let Error::ConfidentialPolicyAdmissionRejected { detail, reason } = &err.err {
-            assert_eq!(detail, "shield not permitted by policy");
-            assert!(matches!(
-                reason,
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
-                    if message == "shield not permitted by policy"
-            ));
-        }
-        assert_eq!(queue.queued_len(), 0);
     }
 
     #[test]

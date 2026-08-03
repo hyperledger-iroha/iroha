@@ -1963,8 +1963,6 @@ mod prefetch_tests {
     #[test]
     fn parse_account_key_variants() {
         let alice = (*ALICE_ID).clone();
-        let wonderland: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let world = World::new();
         let world_view = world.view();
         let detail_key = format!("account.detail:{alice}:quota");
@@ -2190,8 +2188,6 @@ mod prefetch_tests {
     #[test]
     fn parse_lane_settlement_buffer_config_resolves_account() {
         let alice = (*ALICE_ID).clone();
-        let wonderland: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let world = World::new();
         let world_view = world.view();
         let mut lane = LaneConfig::default();
@@ -3371,7 +3367,7 @@ fn default_test_execution_context(
         TransactionEntrypoint::External(tx) => Some(tx.chain()),
         TransactionEntrypoint::SealedCommitment(commitment) => Some(&commitment.payload().chain_id),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().chain()),
-        TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::Time(_) => None,
     });
     let Some(chain_id) = chain_id else {
         return BlockExecutionContextBundle::new(external);
@@ -9839,9 +9835,9 @@ pub(crate) mod valid {
             match entrypoint {
                 TransactionEntrypoint::External(tx) => Some(tx),
                 TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => None,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    None
+                }
             }
         }
 
@@ -10242,9 +10238,6 @@ pub(crate) mod valid {
                             if !seen_sealed_commitments.insert(*commitment.commitment()) {
                                 return Err(BlockValidationError::DuplicateTransactions);
                             }
-                            entrypoint_hashes.push(entrypoint.hash());
-                        }
-                        TransactionEntrypoint::PrivateKaigi(_) => {
                             entrypoint_hashes.push(entrypoint.hash());
                         }
                         TransactionEntrypoint::Time(_) => {
@@ -27895,7 +27888,6 @@ mod event {
                             reveal.signed_transaction().clone()
                         }
                         TransactionEntrypoint::SealedCommitment(_)
-                        | TransactionEntrypoint::PrivateKaigi(_)
                         | TransactionEntrypoint::Time(_) => return None,
                     };
                     let hash = tx.hash();

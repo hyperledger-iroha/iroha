@@ -827,10 +827,8 @@ pub fn derive_vpn_session_id_v1(
     hasher.update(&address_slot.index().to_be_bytes());
     let mut session_id = [0_u8; 16];
     session_id.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
-    let slot = address_slot.index();
-    session_id[0] = (slot >> 16) as u8;
-    session_id[1] = (slot >> 8) as u8;
-    session_id[2] = slot as u8;
+    let slot_bytes = address_slot.index().to_be_bytes();
+    session_id[..3].copy_from_slice(&slot_bytes[1..]);
     session_id
 }
 

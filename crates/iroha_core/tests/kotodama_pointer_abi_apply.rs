@@ -8,7 +8,7 @@ use iroha_core::{
     smartcontracts::ivm::host::{CoreHost, CoreHostImpl},
     state::{State, World, WorldReadOnly},
 };
-use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_data_model::prelude::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::{
     IVM, KotodamaCompiler, ProgramMetadata,
@@ -225,9 +225,10 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
 
 #[test]
 fn kotodama_state_loaded_pointers_drive_transfer_asset() {
+    let asset_domain_id = DomainId::try_new("wonder", "universal").unwrap();
     let asset_def: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonder", "universal").unwrap(),
+            asset_domain_id.clone(),
             "coin".parse().unwrap(),
         );
     let asset_literal = asset_def.canonical_address();
@@ -264,7 +265,23 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query_handle);
+    let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let account_domain = Domain::new(account_domain_id).build(&authority);
+    let asset_domain = Domain::new(asset_domain_id.clone()).build(&authority);
+    let authority_account = Account::new(authority.clone()).build(&authority);
+    let asset_definition = AssetDefinition::numeric(
+        asset_def.clone(),
+        "coin".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        Some(asset_domain_id),
+    )
+    .build(&authority);
+    let world = World::with(
+        [account_domain, asset_domain],
+        [authority_account],
+        [asset_definition],
+    );
+    let state = State::new_for_testing(world, kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -276,35 +293,15 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
 
-    let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let reg_account_domain =
-        RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
-    let reg_asset_domain =
-        RegisterBox::from(Register::domain(Domain::new(asset_domain_id.clone())));
-    let reg_authority = RegisterBox::from(Register::account(NewAccount::new(authority.clone())));
-    let reg_asset_def = RegisterBox::from(Register::asset_definition(AssetDefinition::numeric(
-        asset_def.clone(),
-        "coin".to_owned(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        Some(asset_domain_id),
-    )));
     let mint = MintBox::from(Mint::asset_quantity(
         1u32,
         AssetId::of(asset_def.clone(), authority.clone()),
     ));
 
     let executor = tx.world.executor().clone();
-    for instr in [
-        InstructionBox::from(reg_account_domain),
-        InstructionBox::from(reg_asset_domain),
-        InstructionBox::from(reg_authority),
-        InstructionBox::from(reg_asset_def),
-        InstructionBox::from(mint),
-    ] {
-        executor
-            .execute_instruction(&mut tx, &authority, instr)
-            .expect("setup should succeed");
-    }
+    executor
+        .execute_instruction(&mut tx, &authority, InstructionBox::from(mint))
+        .expect("setup mint should succeed");
 
     let queued = host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");

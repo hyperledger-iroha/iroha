@@ -7,7 +7,9 @@
 //! back to plaintext execution when an evaluated key or decryption share is
 //! absent.
 
-use core::{cmp::Ordering, fmt};
+#[cfg(test)]
+use core::cmp::Ordering;
+use core::fmt;
 
 use once_cell::sync::Lazy;
 use thiserror::Error;
@@ -27,20 +29,50 @@ mod active_exact_binding;
 mod cks;
 #[path = "mkhe/collective.rs"]
 mod collective;
+#[allow(
+    dead_code,
+    reason = "the fail-closed evaluated-key runtime remains private until its admission wiring is complete"
+)]
 #[path = "mkhe/collective_eval_keys.rs"]
 mod collective_eval_keys;
 #[path = "mkhe/collective_keys.rs"]
 mod collective_keys;
+// TODO: Remove all three CPK-membership dead-code allowances when the complete
+// streamed RNS relation and contribution-authentication verifier is connected.
+#[allow(
+    dead_code,
+    reason = "native CPK relation remains private and fail-closed until the complete streamed RNS/auth verifier is wired"
+)]
+#[path = "mkhe/cpk_relation.rs"]
+mod cpk_relation;
 #[path = "mkhe/decryption.rs"]
 mod decryption;
+#[allow(
+    dead_code,
+    reason = "the direct ceremony remains private and fail-closed until its proof adapter is complete"
+)]
 #[path = "mkhe/direct_collective_eval_ceremony.rs"]
 mod direct_collective_eval_ceremony;
+#[path = "mkhe/direct_object_transport.rs"]
+mod direct_object_transport;
+#[allow(
+    dead_code,
+    reason = "native CPK relation remains private and fail-closed until the complete streamed RNS/auth verifier is wired"
+)]
+#[path = "mkhe/exact_eight_chunk_membership.rs"]
+mod exact_eight_chunk_membership;
 #[path = "mkhe/manifest.rs"]
 mod manifest;
 #[path = "mkhe/noise.rs"]
 mod noise;
 #[path = "mkhe/packing.rs"]
 mod packing;
+#[allow(
+    dead_code,
+    reason = "native CPK relation remains private and fail-closed until the complete streamed RNS/auth verifier is wired"
+)]
+#[path = "mkhe/persistent_membership_evidence.rs"]
+mod persistent_membership_evidence;
 #[path = "mkhe/phase23.rs"]
 mod phase23;
 #[path = "mkhe/phase23_encrypted.rs"]
@@ -129,6 +161,15 @@ pub use direct_collective_eval_ceremony::{
     zk_ams_mkhe_direct_noise_certificate_v1, zk_ams_mkhe_direct_noise_integration_certificate_v1,
     zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1, zk_ams_mkhe_direct_proof_audit_v1,
     zk_ams_mkhe_direct_resource_certificate_v1,
+};
+pub use direct_object_transport::{
+    ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
+    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
+    ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheDirectObjectPublicationReceiptV1,
+    ZkAmsMkheDirectObjectPublicationTransactionV1, ZkAmsMkheDirectObjectPublishedBindingV1,
+    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectReadReceiptV1,
+    ZkAmsMkheDirectObjectSealTokenV1, ZkAmsMkheDirectObjectStagingTokenV1,
+    validate_zk_ams_mkhe_direct_object_v1,
 };
 pub(super) use manifest::require_release_ready_v1;
 pub use manifest::{
@@ -344,10 +385,12 @@ impl PartySet {
         Ok(Self { parties, digest })
     }
 
+    #[cfg(test)]
     fn singleton(party: ZkAmsMkhePartyIdV1) -> Self {
         Self::new(vec![party]).expect("one nonzero party is canonical")
     }
 
+    #[cfg(test)]
     fn union(&self, rhs: &Self) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut parties = Vec::with_capacity(self.parties.len() + rhs.parties.len());
         let mut left = self.parties.iter().copied().peekable();
@@ -648,8 +691,7 @@ impl BgvProfile {
             .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
         for (index, (&modulus, &root)) in self.moduli.iter().zip(self.negacyclic_roots).enumerate()
         {
-            if modulus >= (1_u64 << 62)
-                || modulus < 3
+            if !(3..(1_u64 << 62)).contains(&modulus)
                 || modulus % twice_degree != 1
                 || !is_prime_u64(modulus)
                 || root <= 1
@@ -1005,7 +1047,7 @@ impl RnsPolynomial {
             .ring_degree
             .checked_mul(2)
             .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-        if exponent == 0 || exponent >= twice_degree || exponent % 2 == 0 {
+        if exponent == 0 || exponent >= twice_degree || exponent.is_multiple_of(2) {
             return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
         }
         let mut output = Self::zero(profile);
@@ -1126,6 +1168,10 @@ impl SecretPolynomial {
         RnsPolynomial::from_signed(profile, &self.coefficients)
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed collective evaluated-key generator"
+    )]
     fn sub(&self, rhs: &Self) -> Result<Self, ZkAmsMkheErrorV1> {
         if self.coefficients.len() != rhs.coefficients.len() {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -1141,6 +1187,10 @@ impl SecretPolynomial {
         })
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed collective evaluated-key generator"
+    )]
     fn automorphism(
         &self,
         exponent: usize,
@@ -1153,7 +1203,7 @@ impl SecretPolynomial {
             .ring_degree
             .checked_mul(2)
             .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-        if exponent == 0 || exponent >= twice_degree || exponent % 2 == 0 {
+        if exponent == 0 || exponent >= twice_degree || exponent.is_multiple_of(2) {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
         let mut coefficients = vec![0_i64; profile.ring_degree];
@@ -1181,12 +1231,14 @@ impl fmt::Debug for SecretPolynomial {
     }
 }
 
+#[cfg(test)]
 struct IndependentSecretKey {
     party: ZkAmsMkhePartyIdV1,
     profile_digest: [u8; 32],
     secret: SecretPolynomial,
 }
 
+#[cfg(test)]
 impl fmt::Debug for IndependentSecretKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1198,6 +1250,7 @@ impl fmt::Debug for IndependentSecretKey {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IndependentPublicKey {
     version: u8,
@@ -1207,6 +1260,7 @@ struct IndependentPublicKey {
     b: RnsPolynomial,
 }
 
+#[cfg(test)]
 fn independent_keygen<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     party: ZkAmsMkhePartyIdV1,
@@ -1242,6 +1296,7 @@ fn independent_keygen<R: MaskedRelaxedRandomSourceV1>(
     ))
 }
 
+#[cfg(test)]
 fn validate_public_key(
     profile: &BgvProfile,
     public: &IndependentPublicKey,
@@ -1257,6 +1312,7 @@ fn validate_public_key(
     Ok(())
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinearCiphertext {
     version: u8,
@@ -1267,6 +1323,7 @@ struct LinearCiphertext {
     linear: Vec<RnsPolynomial>,
 }
 
+#[cfg(test)]
 impl LinearCiphertext {
     fn validate(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         if self.version != MKHE_VERSION_V1
@@ -1426,6 +1483,7 @@ impl LinearCiphertext {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QuadraticComponent {
     left: ZkAmsMkhePartyIdV1,
@@ -1433,6 +1491,7 @@ struct QuadraticComponent {
     value: RnsPolynomial,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QuadraticCiphertext {
     version: u8,
@@ -1444,6 +1503,7 @@ struct QuadraticCiphertext {
     quadratic: Vec<QuadraticComponent>,
 }
 
+#[cfg(test)]
 impl QuadraticCiphertext {
     fn validate(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         if self.version != MKHE_VERSION_V1
@@ -1484,10 +1544,14 @@ impl QuadraticCiphertext {
     }
 }
 
+#[cfg(test)]
 const RKG_ROUND_ONE_AUTH_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rkg-round-one";
+#[cfg(test)]
 const RKG_ROUND_TWO_AUTH_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rkg-round-two";
+#[cfg(test)]
 const GALOIS_KEY_AUTH_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.galois-key";
 
+#[cfg(test)]
 struct RkgEphemeralState {
     profile_digest: [u8; 32],
     party_set_digest: [u8; 32],
@@ -1500,6 +1564,7 @@ struct RkgEphemeralState {
     ephemeral: Vec<SecretPolynomial>,
 }
 
+#[cfg(test)]
 impl fmt::Debug for RkgEphemeralState {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1519,12 +1584,14 @@ impl fmt::Debug for RkgEphemeralState {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RkgRoundOneEntry {
     h0: RnsPolynomial,
     h1: RnsPolynomial,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RkgRoundOneContribution {
     version: u8,
@@ -1538,6 +1605,7 @@ struct RkgRoundOneContribution {
     authentication: ArtifactAuthentication,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RkgRoundOneAggregate {
     version: u8,
@@ -1551,6 +1619,7 @@ struct RkgRoundOneAggregate {
     digest: [u8; 32],
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RkgRoundTwoContribution {
     version: u8,
@@ -1565,6 +1634,7 @@ struct RkgRoundTwoContribution {
     authentication: ArtifactAuthentication,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProductRelinearizationKey {
     version: u8,
@@ -1579,6 +1649,7 @@ struct ProductRelinearizationKey {
     digest: [u8; 32],
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GaloisKey {
     version: u8,
@@ -1590,6 +1661,7 @@ struct GaloisKey {
     authentication: ArtifactAuthentication,
 }
 
+#[cfg(test)]
 fn generate_galois_key<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     transcript_digest: [u8; 32],
@@ -1607,7 +1679,7 @@ fn generate_galois_key<R: MaskedRelaxedRandomSourceV1>(
     if transcript_digest == [0; 32]
         || exponent == 0
         || exponent >= twice_degree
-        || exponent % 2 == 0
+        || exponent.is_multiple_of(2)
         || secret.party != public.party
         || secret.profile_digest != profile.digest()?
         || authentication_secret.party_id()? != secret.party
@@ -1651,6 +1723,7 @@ fn generate_galois_key<R: MaskedRelaxedRandomSourceV1>(
     Ok(key)
 }
 
+#[cfg(test)]
 fn validate_galois_key(profile: &BgvProfile, key: &GaloisKey) -> Result<(), ZkAmsMkheErrorV1> {
     let twice_degree = profile
         .ring_degree
@@ -1661,7 +1734,7 @@ fn validate_galois_key(profile: &BgvProfile, key: &GaloisKey) -> Result<(), ZkAm
         || key.transcript_digest == [0; 32]
         || key.exponent == 0
         || key.exponent >= twice_degree
-        || key.exponent % 2 == 0
+        || key.exponent.is_multiple_of(2)
         || key.digits.len() != profile.gadget_digits
         || key.authentication.party != key.party
         || checked_galois_key_bytes(profile)? > profile.max_evaluated_key_bytes
@@ -1679,6 +1752,7 @@ fn validate_galois_key(profile: &BgvProfile, key: &GaloisKey) -> Result<(), ZkAm
         .verify(GALOIS_KEY_AUTH_DOMAIN_V1, galois_key_digest(key, profile)?)
 }
 
+#[cfg(test)]
 fn rotate_ciphertext(
     profile: &BgvProfile,
     ciphertext: &LinearCiphertext,
@@ -1742,6 +1816,7 @@ fn rotate_ciphertext(
     Ok(output)
 }
 
+#[cfg(test)]
 fn rkg_round_one<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     party_set: &PartySet,
@@ -1846,6 +1921,7 @@ fn rkg_round_one<R: MaskedRelaxedRandomSourceV1>(
     Ok((state, contribution))
 }
 
+#[cfg(test)]
 fn validate_rkg_round_one_contribution(
     profile: &BgvProfile,
     contribution: &RkgRoundOneContribution,
@@ -1880,6 +1956,7 @@ fn validate_rkg_round_one_contribution(
     )
 }
 
+#[cfg(test)]
 fn aggregate_rkg_round_one(
     profile: &BgvProfile,
     party_set: &PartySet,
@@ -1939,6 +2016,7 @@ fn aggregate_rkg_round_one(
     Ok(aggregate)
 }
 
+#[cfg(test)]
 fn validate_rkg_round_one_aggregate(
     profile: &BgvProfile,
     aggregate: &RkgRoundOneAggregate,
@@ -1967,6 +2045,7 @@ fn validate_rkg_round_one_aggregate(
     Ok(())
 }
 
+#[cfg(test)]
 fn rkg_round_two<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     aggregate: &RkgRoundOneAggregate,
@@ -2053,6 +2132,7 @@ fn rkg_round_two<R: MaskedRelaxedRandomSourceV1>(
     Ok(contribution)
 }
 
+#[cfg(test)]
 fn validate_rkg_round_two_contribution(
     profile: &BgvProfile,
     aggregate: &RkgRoundOneAggregate,
@@ -2084,6 +2164,7 @@ fn validate_rkg_round_two_contribution(
     )
 }
 
+#[cfg(test)]
 fn aggregate_rkg_round_two(
     profile: &BgvProfile,
     aggregate: &RkgRoundOneAggregate,
@@ -2136,6 +2217,7 @@ fn aggregate_rkg_round_two(
     Ok(key)
 }
 
+#[cfg(test)]
 fn validate_product_relinearization_key(
     profile: &BgvProfile,
     key: &ProductRelinearizationKey,
@@ -2170,6 +2252,7 @@ fn validate_product_relinearization_key(
     Ok(())
 }
 
+#[cfg(test)]
 fn relinearize(
     profile: &BgvProfile,
     ciphertext: &QuadraticCiphertext,
@@ -2236,6 +2319,7 @@ fn relinearize(
     Ok(output)
 }
 
+#[cfg(test)]
 fn gadget_decompose(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -2396,6 +2480,7 @@ fn derive_uniform_rns_from_context(
     RnsPolynomial::from_flat(profile, coefficients)
 }
 
+#[cfg(test)]
 fn checked_rkg_round_one_contribution_bytes(
     profile: &BgvProfile,
 ) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -2406,6 +2491,7 @@ fn checked_rkg_round_one_contribution_bytes(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn checked_rkg_round_two_contribution_bytes(
     profile: &BgvProfile,
 ) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -2418,6 +2504,7 @@ fn checked_rkg_round_two_contribution_bytes(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn checked_product_relinearization_key_bytes(
     profile: &BgvProfile,
     party_count: usize,
@@ -2434,6 +2521,7 @@ fn checked_product_relinearization_key_bytes(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn checked_galois_key_bytes(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
     1_usize
         .checked_add(32 + 32 + PARTY_ID_BYTES_V1 + 4 + 33 + SCHNORR_SIGNATURE_BYTES_V1 + 4)
@@ -2445,6 +2533,7 @@ fn checked_galois_key_bytes(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErro
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn rkg_round_one_contribution_digest(
     contribution: &RkgRoundOneContribution,
     profile: &BgvProfile,
@@ -2462,6 +2551,7 @@ fn rkg_round_one_contribution_digest(
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn rkg_state_integrity_digest(
     state: &RkgEphemeralState,
     profile: &BgvProfile,
@@ -2492,6 +2582,7 @@ fn rkg_state_integrity_digest(
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn rkg_round_one_aggregate_digest(
     aggregate: &RkgRoundOneAggregate,
     profile: &BgvProfile,
@@ -2511,6 +2602,7 @@ fn rkg_round_one_aggregate_digest(
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn rkg_round_two_contribution_digest(
     contribution: &RkgRoundTwoContribution,
     profile: &BgvProfile,
@@ -2531,6 +2623,7 @@ fn rkg_round_two_contribution_digest(
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn product_relinearization_key_digest(
     key: &ProductRelinearizationKey,
     profile: &BgvProfile,
@@ -2553,6 +2646,7 @@ fn product_relinearization_key_digest(
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn galois_key_digest(key: &GaloisKey, profile: &BgvProfile) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut hash = super::super::sponge::Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.mkhe.galois-key");
@@ -2571,6 +2665,7 @@ fn galois_key_digest(key: &GaloisKey, profile: &BgvProfile) -> Result<[u8; 32], 
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn hash_rkg_entries(
     hash: &mut super::super::sponge::Keccak256,
     entries: &[RkgRoundOneEntry],
@@ -2588,6 +2683,7 @@ fn hash_rkg_entries(
     Ok(())
 }
 
+#[cfg(test)]
 fn hash_linear_ciphertext(
     hash: &mut super::super::sponge::Keccak256,
     ciphertext: &LinearCiphertext,
@@ -2605,6 +2701,7 @@ fn hash_linear_ciphertext(
     Ok(())
 }
 
+#[cfg(test)]
 fn hash_rns_polynomial(
     hash: &mut super::super::sponge::Keccak256,
     polynomial: &RnsPolynomial,
@@ -2717,6 +2814,7 @@ fn checked_linear_ciphertext_bytes(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn checked_quadratic_ciphertext_bytes(
     profile: &BgvProfile,
     party_count: usize,
@@ -2767,6 +2865,7 @@ fn phase23_max_composed_rotation_key_switch_count(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn phase23_rotation_ring_multiplication_count(
     profile: &BgvProfile,
     party_count: usize,
@@ -2823,6 +2922,7 @@ fn checked_rng_bytes(profile: &BgvProfile, maximum_bytes: usize) -> Result<(), Z
     Ok(())
 }
 
+#[cfg(test)]
 fn encrypt<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     public: &IndependentPublicKey,
@@ -2863,6 +2963,7 @@ fn encrypt<R: MaskedRelaxedRandomSourceV1>(
     Ok(output)
 }
 
+#[cfg(test)]
 fn decrypt_polynomial(
     profile: &BgvProfile,
     ciphertext: &LinearCiphertext,
@@ -3041,6 +3142,7 @@ fn reduce_test_polynomial(
         .collect()
 }
 
+#[cfg(test)]
 fn sample_uniform_rns<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     random: &mut R,
@@ -3143,7 +3245,7 @@ fn is_prime_u64(value: u64) -> bool {
         if value == prime {
             return true;
         }
-        if value % prime == 0 {
+        if value.is_multiple_of(prime) {
             return false;
         }
     }
@@ -3151,7 +3253,7 @@ fn is_prime_u64(value: u64) -> bool {
     let s = d.trailing_zeros();
     d >>= s;
     for base in [2_u64, 325, 9_375, 28_178, 450_775, 9_780_504, 1_795_265_022] {
-        if base % value == 0 {
+        if base.is_multiple_of(value) {
             continue;
         }
         let mut x = mod_pow(base % value, d, value);
@@ -3312,9 +3414,9 @@ impl WideUint {
         let product = multiplicand.checked_mul_u64(scalar)?;
         let mut output = [0_u64; WIDE_LIMBS];
         let mut carry = 0_u128;
-        for index in 0..WIDE_LIMBS {
+        for (index, destination) in output.iter_mut().enumerate() {
             let sum = u128::from(self.limbs[index]) + u128::from(product.limbs[index]) + carry;
-            output[index] = sum as u64;
+            *destination = sum as u64;
             carry = sum >> 64;
         }
         (carry == 0).then_some(Self { limbs: output })
@@ -3357,6 +3459,10 @@ impl WideUint {
             })
     }
 
+    #[allow(
+        dead_code,
+        reason = "used by the private fail-closed seekable evaluated-key runtime"
+    )]
     fn bits_at(self, offset: usize, width: usize) -> Result<u64, ZkAmsMkheErrorV1> {
         let bit_capacity = WIDE_LIMBS
             .checked_mul(64)

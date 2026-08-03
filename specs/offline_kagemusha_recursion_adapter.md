@@ -351,6 +351,11 @@ measured proof bounds, physical-device evidence, independent review, signed
 release attestation, and canonical top-up-finality roster. A generation label
 is not a trust anchor.
 
+The release candidate boundary requires at least four public validators in
+every supplied top-up-finality roster window. The general roster data model
+remains capable of representing smaller development fixtures, but such a
+fixture is not admissible as ABI-21 release evidence.
+
 Runtime qualification keeps its decoded working set beneath the non-raiseable
 256 MiB catalog budget. It never materializes a processed proving key: each
 multi-gigabyte PK is authenticated with fixed 64 KiB scratch, checked against

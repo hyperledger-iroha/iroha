@@ -6,7 +6,7 @@ artifacts/sorafs/governance-dag/staged
 --summary-out
 artifacts/sorafs/governance-dag/staged/rollout-summary.json
 --require-kind
-ingest_service,publisher_service,mirror_datastore,operator_recovery,dashboard_api,observability,ipfs_ipns_e2e,governance_approval
+ingest_service,publisher_service,mirror_datastore,operator_recovery,dashboard_api,observability,publication_e2e,governance_approval
 --now-unix
 1800400000
 --max-evidence-age-secs
@@ -33,8 +33,8 @@ artifacts/sorafs/governance-dag/staged/operator-recovery.json
 artifacts/sorafs/governance-dag/staged/dashboard-api.json
 --observability-evidence
 artifacts/sorafs/governance-dag/staged/observability.json
---ipfs-ipns-e2e-evidence
-artifacts/sorafs/governance-dag/staged/ipfs-ipns-e2e.json
+--publication-e2e-evidence
+artifacts/sorafs/governance-dag/staged/publication-e2e.json
 --governance-approval-evidence
 artifacts/sorafs/governance-dag/staged/governance-approval.json
 --topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

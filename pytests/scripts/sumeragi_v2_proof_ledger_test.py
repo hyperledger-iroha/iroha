@@ -19053,7 +19053,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn new_with_output_guard_and_transport(",
+            "fn new_with_output_guard_and_transport_inner(",
             "MergeSidecarTransport::open_durable_with_server_stream_capacity(",
             "MergeSidecarTransport::open_durable(",
             "lane construction must derive the canonical responder roster and restore or open only its exact durable source and stream geometry",
@@ -19067,7 +19067,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn new_with_output_guard_and_transport(",
+            "fn new_with_output_guard_and_transport_inner(",
             "sidecar_progress_drain_credit: SIDECAR_PROGRESS_DRAIN_WEIGHT,",
             "sidecar_progress_drain_credit: 0,",
             "lane construction must initialize the bounded sidecar progress/control drain credit",

@@ -815,7 +815,12 @@ The Sumeragi exact-output corridor applies the same isolation above the P2P
 actor. It preserves FIFO order for each target while round-robin service lets
 later responsive targets and fan-outs proceed during another target's
 backpressure. Completion and reducer work continue to run while such output is
-pending. The corridor freezes `roster × {Safety, Lane, Bulk}` reservations for
+pending. If the corridor cannot accept an exact fanout and returns
+`SourceRetained`, the reducer keeps the retransmittable semantic source and an
+active proposal keeps its producer fence; only exact service acceptance may
+release that fence. A timeout therefore cannot prune a proposal merely because
+its first fanout met bounded corridor pressure. The corridor freezes
+`roster × {Safety, Lane, Bulk}` reservations for
 the height, one `SidecarTopologyProgress` Lane reservation for topology-routed
 Request/Close traffic, and one independent `SidecarReplyControl` Lane
 reservation for exact-reply CloseAck/GenerationHint traffic at every frozen
@@ -994,7 +999,12 @@ exactly one of:
 - `timeout_certificate_missing`
 - `scheduler_starvation`
 - `application_pending`
+- `successor_activation_pending`
 - `local_control_pending`
+
+`successor_activation_pending` identifies a durably applied predecessor whose
+verified successor construction, service startup, or authenticated handoff has
+not completed.
 
 `local_control_pending` distinguishes a reducer blocked on safety-WAL
 persistence or consensus signing from scheduler starvation. Queued outbound

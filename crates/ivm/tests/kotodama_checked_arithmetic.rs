@@ -808,6 +808,35 @@ fn quantity_arithmetic_folding_matches_parameterized_vm_execution() {
 }
 
 #[test]
+fn constant_quantity_exact_division_rejects_each_failure_class_at_compile_time() {
+    for (case, value, divisor, expected_code) in [
+        ("zero divisor", "1", "0", "E_DIVISION_BY_ZERO"),
+        ("repeating quotient", "1", "3", "E_REPEATING_DECIMAL"),
+        (
+            "terminating quotient beyond the exact scale limit",
+            "0.0000000000000000000000000001",
+            "10",
+            "E_EXACT_DIVISION_SCALE_OVERFLOW",
+        ),
+    ] {
+        let source = format!(
+            "seiyaku InvalidConstantQuantityDivision {{\n\
+                 const quantity VALUE = {value};\n\
+                 const decimal DIVISOR = {divisor};\n\
+                 view fn run() -> quantity {{ return VALUE / DIVISOR; }}\n\
+             }}"
+        );
+        let error = Compiler::new()
+            .compile_source(&source)
+            .expect_err("invalid constant Quantity division must be rejected before bytecode");
+        assert!(
+            error.contains(expected_code),
+            "{case} used the wrong compile-time diagnostic: {error}"
+        );
+    }
+}
+
+#[test]
 fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
     for (case, source_type, value, syscall) in [
         (

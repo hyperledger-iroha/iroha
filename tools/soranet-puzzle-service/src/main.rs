@@ -164,8 +164,6 @@ impl PuzzleService {
         let puzzle_params = pow_cfg
             .puzzle_parameters(&base_params)
             .wrap_err("invalid puzzle configuration")?;
-        let ticket_ttl = Duration::from_secs(pow_cfg.min_ticket_ttl_secs.max(1));
-
         let min_ticket_ttl = puzzle_params
             .as_ref()
             .map(PuzzleParameters::min_ticket_ttl)
@@ -174,6 +172,19 @@ impl PuzzleService {
             .as_ref()
             .map(PuzzleParameters::max_future_skew)
             .unwrap_or_else(|| base_params.max_future_skew());
+        let mint_corridor = max_future_skew
+            .checked_sub(min_ticket_ttl)
+            .filter(|window| !window.is_zero())
+            .ok_or_else(|| {
+                eyre!("puzzle ticket policy must leave minting headroom above min_ticket_ttl")
+            })?;
+        let target_headroom = (mint_corridor / 2)
+            .max(Duration::from_secs(1))
+            .min(mint_corridor);
+        // Split the configured corridor between one successful candidate plus
+        // delivery and clock-skew headroom. Each geometric search candidate is
+        // independently expiry-bound by the crypto implementation.
+        let ticket_ttl = min_ticket_ttl + target_headroom;
 
         let token_opts = TokenCliOptions {
             secret_hex: args.token_secret_hex.clone(),
@@ -815,6 +826,12 @@ async fn mint_ticket(
 
     let ttl_override = payload.ttl_secs.map(Duration::from_secs);
     let ttl = state.clamp_ttl(ttl_override);
+    if state.puzzle_params.is_some() && ttl <= state.min_ticket_ttl {
+        return Err(ApiError::BadRequest(format!(
+            "ttl_secs must exceed the puzzle minimum remaining ttl of {} seconds",
+            state.min_ticket_ttl.as_secs()
+        )));
+    }
     let transcript_hash = hex_to_fixed::<32>(&payload.transcript_hash_hex)
         .map_err(|reason| ApiError::BadRequest(format!("transcript_hash_hex invalid: {reason}")))?;
     if transcript_hash.iter().all(|byte| *byte == 0) {
@@ -1303,6 +1320,52 @@ mod tests {
         }
     }
 
+    fn first_rejected_puzzle_relay_id(
+        ticket: &PowTicket,
+        params: &PuzzleParameters,
+        descriptor_commit: &[u8; 32],
+        relay_id: &[u8; 32],
+        transcript_hash: &[u8; 32],
+        verify_time: SystemTime,
+    ) -> [u8; 32] {
+        for seed in 1u8..=u8::MAX {
+            let candidate = [seed; 32];
+            if &candidate == relay_id {
+                continue;
+            }
+            let binding = PuzzleBinding::new(descriptor_commit, &candidate, transcript_hash);
+            match puzzle::verify_at(ticket, &binding, params, verify_time) {
+                Err(puzzle::Error::InvalidSolution) => return candidate,
+                Ok(()) => {}
+                Err(err) => panic!("unexpected puzzle verification error: {err}"),
+            }
+        }
+        panic!("failed to find a relay binding rejected by the puzzle predicate")
+    }
+
+    fn first_rejected_puzzle_transcript_hash(
+        ticket: &PowTicket,
+        params: &PuzzleParameters,
+        descriptor_commit: &[u8; 32],
+        relay_id: &[u8; 32],
+        transcript_hash: &[u8; 32],
+        verify_time: SystemTime,
+    ) -> [u8; 32] {
+        for seed in 1u8..=u8::MAX {
+            let candidate = [seed; 32];
+            if &candidate == transcript_hash {
+                continue;
+            }
+            let binding = PuzzleBinding::new(descriptor_commit, relay_id, &candidate);
+            match puzzle::verify_at(ticket, &binding, params, verify_time) {
+                Err(puzzle::Error::InvalidSolution) => return candidate,
+                Ok(()) => {}
+                Err(err) => panic!("unexpected puzzle verification error: {err}"),
+            }
+        }
+        panic!("failed to find a transcript binding rejected by the puzzle predicate")
+    }
+
     fn token_service() -> (PuzzleService, AdmissionTokenVerifier) {
         let pow_params = PowParameters::new(5, Duration::from_secs(180), Duration::from_secs(30));
         let min_ticket_ttl = pow_params.min_ticket_ttl();
@@ -1485,18 +1548,47 @@ mod tests {
         let params = service.puzzle_params.as_ref().expect("params");
         let binding =
             PuzzleBinding::new(&service.descriptor_commit, &service.relay_id, &transcript);
-        puzzle::verify(&ticket, &binding, params).expect("verification should succeed");
+        let verify_time = ticket
+            .checked_expires_at_time()
+            .expect("fixture expiry must be representable")
+            .checked_sub(params.min_ticket_ttl())
+            .expect("fixture expiry must exceed the minimum ticket ttl");
+        puzzle::verify_at(&ticket, &binding, params, verify_time)
+            .expect("verification should succeed");
 
+        // A difficulty-one work predicate admits half of all independent
+        // challenges by construction. Select deterministic alternate bindings
+        // that do not also satisfy the predicate instead of assuming a fixed
+        // alternate can never be a valid cross-challenge collision.
+        let wrong_relay_id = first_rejected_puzzle_relay_id(
+            &ticket,
+            params,
+            &service.descriptor_commit,
+            &service.relay_id,
+            &transcript,
+            verify_time,
+        );
         let wrong_binding =
-            PuzzleBinding::new(&service.descriptor_commit, &[0xEF; 32], &transcript);
-        let err =
-            puzzle::verify(&ticket, &wrong_binding, params).expect_err("wrong relay id must fail");
+            PuzzleBinding::new(&service.descriptor_commit, &wrong_relay_id, &transcript);
+        let err = puzzle::verify_at(&ticket, &wrong_binding, params, verify_time)
+            .expect_err("alternate relay that misses the work predicate must fail");
         assert!(matches!(err, puzzle::Error::InvalidSolution));
 
-        let wrong_transcript =
-            PuzzleBinding::new(&service.descriptor_commit, &service.relay_id, &[0xBB; 32]);
-        let err = puzzle::verify(&ticket, &wrong_transcript, params)
-            .expect_err("wrong transcript must fail");
+        let wrong_transcript_hash = first_rejected_puzzle_transcript_hash(
+            &ticket,
+            params,
+            &service.descriptor_commit,
+            &service.relay_id,
+            &transcript,
+            verify_time,
+        );
+        let wrong_transcript = PuzzleBinding::new(
+            &service.descriptor_commit,
+            &service.relay_id,
+            &wrong_transcript_hash,
+        );
+        let err = puzzle::verify_at(&ticket, &wrong_transcript, params, verify_time)
+            .expect_err("alternate transcript that misses the work predicate must fail");
         assert!(matches!(err, puzzle::Error::InvalidSolution));
     }
 
@@ -1685,6 +1777,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_mint_puzzle_rejects_ttl_without_solution_window() {
+        use axum::{body::Bytes, extract::State};
+
+        let mut service = base_service();
+        service.puzzle_params = Some(PuzzleParameters::new(
+            NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
+            NonZeroU32::new(1).expect("non-zero iterations"),
+            NonZeroU32::new(1).expect("non-zero lanes"),
+            1,
+            service.max_future_skew,
+            service.min_ticket_ttl,
+        ));
+        let state = Arc::new(service);
+        let request = MintRequest {
+            ttl_secs: Some(state.min_ticket_ttl.as_secs()),
+            transcript_hash_hex: "33".repeat(32),
+            signed: false,
+        };
+        let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
+
+        let err = mint_ticket(State(state), body)
+            .await
+            .expect_err("puzzle ttl equal to minimum remainder must fail before Argon2 work");
+        assert!(matches!(
+            err,
+            ApiError::BadRequest(message)
+                if message.contains("must exceed") && message.contains("minimum remaining ttl")
+        ));
+    }
+
+    #[tokio::test]
     async fn http_mint_without_transcript_binding_is_rejected() {
         use axum::{body::Bytes, extract::State};
 
@@ -1701,7 +1824,7 @@ mod tests {
             .await
             .expect_err("JSON without a transcript binding must fail");
         assert!(
-            matches!(err, ApiError::BadRequest(message) if message.contains("transcript_hash_hex")),
+            matches!(err, ApiError::BadRequest(ref message) if message.contains("transcript_hash_hex")),
             "unexpected error: {err:?}"
         );
     }

@@ -962,6 +962,10 @@ pub fn zk_ams_mkhe_cks_statement_digest_v1(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "validation keeps every independently authenticated wire component explicit"
+)]
 fn validate_contribution_parts(
     binding: ZkAmsMkheWireBindingV1,
     subject_digest: [u8; 32],

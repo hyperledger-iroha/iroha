@@ -58,6 +58,85 @@ class MusubiInstructionsV1FixtureTest {
     }
 
     @Test
+    fun `parent-local dependency aliases are unique across published graphs`() {
+        val publication = cases(fixture())
+            .first { it.string("id") == "publish-delegated-domain-release" }
+            .objectValue("semantic")
+            .let { parsePublication(it.objectValue("publication")) }
+        val manifest = publication.manifest
+        val lock = publication.resolution.lock
+        val firstRequirement = manifest.dependencies.single()
+        val firstEdge = lock.rootDependencies.single()
+        val firstNode = lock.nodes.single()
+        val secondPackage = MusubiPackageIdV1(
+            firstRequirement.packageId.homeDataspace,
+            firstRequirement.packageId.scope,
+            MusubiPackageNameV1("vector-next"),
+        )
+        val secondRequirement = MusubiDependencyReqV1(
+            firstRequirement.alias,
+            secondPackage,
+            firstRequirement.requirement,
+        )
+        val secondRelease = MusubiReleaseIdV1(secondPackage, firstEdge.selected.version)
+        val secondEdge = MusubiExactDependencyEdgeV1(
+            firstEdge.alias,
+            firstEdge.kind,
+            secondRelease.packageId,
+            firstEdge.requirement,
+            secondRelease,
+        )
+        val requirements = listOf(firstRequirement, secondRequirement).sorted()
+        val edges = listOf(firstEdge, secondEdge).sorted()
+
+        fun assertUniqueAliasFailure(block: () -> Unit) {
+            val error = assertFailsWith<IllegalArgumentException>(block = block)
+            assertTrue(error.message.orEmpty().contains("unique parent-local aliases"))
+        }
+
+        assertUniqueAliasFailure {
+            MusubiReleaseManifestV1(
+                manifest.release,
+                manifest.edition,
+                manifest.abi,
+                requirements,
+                manifest.exports,
+                manifest.interfaceDigest,
+                manifest.metadata,
+                manifest.archiveId,
+                manifest.verificationLockDigest,
+            )
+        }
+        assertUniqueAliasFailure {
+            MusubiVerificationNodeV1(
+                firstNode.release,
+                firstNode.releaseDigest,
+                firstNode.archiveId,
+                firstNode.sourceDigest,
+                firstNode.interfaceDigest,
+                firstNode.abi,
+                edges,
+            )
+        }
+        val secondNode = MusubiVerificationNodeV1(
+            secondRelease,
+            firstNode.releaseDigest,
+            firstNode.archiveId,
+            firstNode.sourceDigest,
+            firstNode.interfaceDigest,
+            firstNode.abi,
+            emptyList(),
+        )
+        assertUniqueAliasFailure {
+            MusubiVerificationLockV1(
+                lock.root,
+                edges,
+                listOf(firstNode, secondNode).sorted(),
+            )
+        }
+    }
+
+    @Test
     fun `new mutation compare-and-set revisions reject zero`() {
         val byId = cases(fixture()).associateBy { it.string("id") }
 
@@ -72,6 +151,16 @@ class MusubiInstructionsV1FixtureTest {
                     )
                 }
             }
+        byId.getValue("register-provider-bundle-attestation")
+            .objectValue("semantic")
+            .let { semantic ->
+                assertFailsWith<IllegalArgumentException> {
+                    MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1(
+                        parseProviderAttestation(semantic.objectValue("attestation")),
+                        BigInteger.ZERO,
+                    )
+                }
+            }
         byId.getValue("add-location-three-signed-providers")
             .objectValue("semantic")
             .let { semantic ->
@@ -81,9 +170,9 @@ class MusubiInstructionsV1FixtureTest {
                         parseDigest(semantic["location_id"]),
                         parseDigest(semantic["pin_manifest"]),
                         parseDigest(semantic["replication_order"]),
-                        semantic.arrayValue("provider_attestations").map {
-                            parseProviderAttestation(it.objectValue())
-                        },
+                        parseProviderAttestationSetDigest(
+                            semantic["provider_attestation_set_digest"],
+                        ),
                         semantic.bigInteger("renew_after_epoch"),
                         semantic.bigInteger("expires_at_epoch"),
                         BigInteger.ZERO,
@@ -135,11 +224,7 @@ class MusubiInstructionsV1FixtureTest {
 
         val location = byId.getValue("add-location-three-signed-providers")
             .objectValue("semantic")
-        val attestations = location.arrayValue("provider_attestations").map {
-            parseProviderAttestation(it.objectValue())
-        }
         fun addLocation(
-            providerAttestations: List<MusubiProviderBundleVerificationAttestationV1>,
             renewAfterEpoch: BigInteger = location.bigInteger("renew_after_epoch"),
             expiresAtEpoch: BigInteger = location.bigInteger("expires_at_epoch"),
         ) = MusubiInstructionsV1.AddMusubiArchiveLocationV1(
@@ -147,19 +232,17 @@ class MusubiInstructionsV1FixtureTest {
             parseDigest(location["location_id"]),
             parseDigest(location["pin_manifest"]),
             parseDigest(location["replication_order"]),
-            providerAttestations,
+            parseProviderAttestationSetDigest(location["provider_attestation_set_digest"]),
             renewAfterEpoch,
             expiresAtEpoch,
             location.bigInteger("expected_location_revision"),
         )
-        assertFailsWith<IllegalArgumentException> { addLocation(attestations.reversed()) }
         assertFailsWith<IllegalArgumentException> {
             addLocation(
-                attestations,
                 renewAfterEpoch = location.bigInteger("expires_at_epoch"),
             )
         }
-        addLocation(attestations, renewAfterEpoch = BigInteger.ZERO)
+        addLocation(renewAfterEpoch = BigInteger.ZERO)
 
         val metadata = byId.getValue("replace-domain-metadata-high-revision")
             .objectValue("semantic")
@@ -959,13 +1042,27 @@ class MusubiInstructionsV1FixtureTest {
                     value.toInstructionBox(),
                 )
             }
+            "register-provider-bundle-attestation" -> {
+                semantic.requireKeys("attestation", "expected_location_revision")
+                val value = MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1(
+                    parseProviderAttestation(semantic.objectValue("attestation")),
+                    semantic.bigInteger("expected_location_revision"),
+                )
+                MutationEncoding(
+                    MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1.WIRE_ID,
+                    MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1.SCHEMA_NAME,
+                    value.barePayload(),
+                    value.concreteFrame(),
+                    value.toInstructionBox(),
+                )
+            }
             "add-location-three-signed-providers" -> {
                 semantic.requireKeys(
                     "archive_id",
                     "location_id",
                     "pin_manifest",
                     "replication_order",
-                    "provider_attestations",
+                    "provider_attestation_set_digest",
                     "renew_after_epoch",
                     "expires_at_epoch",
                     "expected_location_revision",
@@ -975,9 +1072,9 @@ class MusubiInstructionsV1FixtureTest {
                     parseDigest(semantic["location_id"]),
                     parseDigest(semantic["pin_manifest"]),
                     parseDigest(semantic["replication_order"]),
-                    semantic.arrayValue("provider_attestations").map {
-                        parseProviderAttestation(it.objectValue())
-                    },
+                    parseProviderAttestationSetDigest(
+                        semantic["provider_attestation_set_digest"],
+                    ),
                     semantic.bigInteger("renew_after_epoch"),
                     semantic.bigInteger("expires_at_epoch"),
                     semantic.bigInteger("expected_location_revision"),
@@ -1589,6 +1686,11 @@ class MusubiInstructionsV1FixtureTest {
         )
     }
 
+    private fun parseProviderAttestationSetDigest(
+        value: Any?,
+    ): MusubiProviderBundleAttestationSetDigestV1 =
+        MusubiProviderBundleAttestationSetDigestV1(parseDigest(value).bytes())
+
     private fun parseGovernanceDecision(
         value: MutableMap<String, Any?>,
     ): MusubiGovernanceDecisionV1 {
@@ -1730,6 +1832,7 @@ class MusubiInstructionsV1FixtureTest {
             "retarget-one-character-alias-high-revision",
             "takedown-max-major-prerelease",
             "register-archive-max-bounds-signed-receipt",
+            "register-provider-bundle-attestation",
             "add-location-three-signed-providers",
             "publish-delegated-domain-release",
             "replace-domain-metadata-high-revision",

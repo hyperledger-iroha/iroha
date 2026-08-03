@@ -26,16 +26,8 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const defaultOutputDir = resolve(
-  __dirname,
-  '..',
-  '..',
-  '..',
-  'artifacts',
-  'openapi',
-);
-const defaultVersionsDir = join(defaultOutputDir, 'versions');
-const defaultVersionsFile = join(defaultOutputDir, 'versions.json');
+const defaultRepoRoot = resolve(__dirname, '..', '..', '..');
+const defaultOutputDir = join(defaultRepoRoot, 'artifacts', 'openapi');
 const staleHint =
   "Run 'npm --prefix tools/openapi run sync-openapi -- --latest' to refresh the version manifest.";
 const OPENAPI_SPEC_MAX_BYTES = 64 * 1024 * 1024;
@@ -45,8 +37,8 @@ const GIT_SHA1_HEX = /^[0-9a-f]{40}$/;
 
 export async function verifyOpenApiVersions(options = {}) {
   const outputDir = options.outputDir ?? defaultOutputDir;
-  const versionsDir = options.versionsDir ?? defaultVersionsDir;
-  const versionsFile = options.versionsFile ?? defaultVersionsFile;
+  const versionsDir = options.versionsDir ?? join(outputDir, 'versions');
+  const versionsFile = options.versionsFile ?? join(outputDir, 'versions.json');
   const expectedGeneratorCommit = validateExpectedGeneratorCommit(
     options.expectedGeneratorCommit,
   );
@@ -551,12 +543,23 @@ function isNonEmptyString(value) {
 }
 
 async function runCli() {
-  const args = process.argv.slice(2);
+  await verifyOpenApiVersions(parseArgs(process.argv.slice(2)));
+}
+
+export function parseArgs(args) {
   let allowUnsigned = false;
+  let allowUnsignedSeen = false;
   let expectedGeneratorCommit;
+  let outputDir;
   const unknown = [];
   for (const arg of args) {
     if (arg === '--allow-unsigned') {
+      if (allowUnsignedSeen) {
+        throw new Error(
+          'verify-openapi-versions accepts --allow-unsigned only once',
+        );
+      }
+      allowUnsignedSeen = true;
       allowUnsigned = true;
     } else if (arg.startsWith('--expected-generator-commit=')) {
       if (expectedGeneratorCommit !== undefined) {
@@ -567,6 +570,16 @@ async function runCli() {
       expectedGeneratorCommit = arg.slice(
         '--expected-generator-commit='.length,
       );
+    } else if (arg.startsWith('--output-dir=')) {
+      if (outputDir !== undefined) {
+        throw new Error(
+          'verify-openapi-versions accepts --output-dir only once',
+        );
+      }
+      outputDir = parseOutputDirectory(
+        arg.slice('--output-dir='.length),
+        '--output-dir',
+      );
     } else {
       unknown.push(arg);
     }
@@ -574,7 +587,35 @@ async function runCli() {
   if (unknown.length > 0) {
     throw new Error(`unknown verify-openapi-versions option: ${unknown.join(', ')}`);
   }
-  await verifyOpenApiVersions({allowUnsigned, expectedGeneratorCommit});
+  return {allowUnsigned, expectedGeneratorCommit, outputDir};
+}
+
+function parseOutputDirectory(value, option) {
+  if (
+    !value ||
+    value.trim() !== value ||
+    value.startsWith('-') ||
+    value.split(/[\\/]/u).some((segment) => segment === '.' || segment === '..')
+  ) {
+    throw new Error(`${option} requires an unambiguous directory path`);
+  }
+  const outputDir = resolve(value);
+  if (dirname(outputDir) === outputDir) {
+    throw new Error(`${option} must not be the filesystem root`);
+  }
+  if (outputDir === defaultRepoRoot) {
+    throw new Error(`${option} must not be the repository root`);
+  }
+  const gitMetadata = join(defaultRepoRoot, '.git');
+  const relativeToGitMetadata = relative(gitMetadata, outputDir);
+  if (
+    relativeToGitMetadata === '' ||
+    (!relativeToGitMetadata.startsWith('..') &&
+      !isAbsolute(relativeToGitMetadata))
+  ) {
+    throw new Error(`${option} must not write inside Git metadata`);
+  }
+  return outputDir;
 }
 
 const invokedUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;

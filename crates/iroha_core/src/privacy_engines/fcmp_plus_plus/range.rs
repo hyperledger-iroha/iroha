@@ -17,7 +17,10 @@
 //! therefore be transplanted across pools, assets, roots, transactions, or
 //! output orderings.
 
-use std::sync::OnceLock;
+use std::{
+    ops::{Deref, DerefMut},
+    sync::OnceLock,
+};
 
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT,
@@ -68,30 +71,154 @@ const MONERO_H_BYTES_V1: [u8; 32] = [
     0x6c, 0x72, 0x51, 0xd5, 0x41, 0x54, 0xcf, 0xa9, 0x2c, 0x17, 0x3a, 0x0d, 0xd3, 0x9c, 0x1f, 0x94,
 ];
 
-#[derive(Clone)]
-struct ScalarVector(Vec<Scalar>);
+/// Pending insertion guard for one private value not yet owned by a vector.
+struct PendingZeroizingValue<T: Zeroize>(Option<T>);
 
-impl Drop for ScalarVector {
-    fn drop(&mut self) {
-        self.0.zeroize();
+impl<T: Zeroize> PendingZeroizingValue<T> {
+    fn new(value: T) -> Self {
+        Self(Some(value))
+    }
+
+    fn take(&mut self) -> Result<T, FcmpNativeErrorV1> {
+        self.0
+            .take()
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)
     }
 }
 
+impl<T: Zeroize> Drop for PendingZeroizingValue<T> {
+    fn drop(&mut self) {
+        if let Some(value) = &mut self.0 {
+            value.zeroize();
+        }
+    }
+}
+
+/// Exact-capacity owner for prover-secret vectors.
+///
+/// Storage is reserved before the first secret copy is accepted. The logical
+/// capacity is public proof-shape data; the separately remembered allocation
+/// capacity lets every insertion assert that no reallocation occurred. Drop
+/// clears the complete allocation on success, error, and unwind.
+struct ExactSizeZeroizingVec<T: Zeroize> {
+    values: Vec<T>,
+    exact_capacity: usize,
+    allocation_capacity: usize,
+}
+
+impl<T: Zeroize> ExactSizeZeroizingVec<T> {
+    fn new(exact_capacity: usize) -> Result<Self, FcmpNativeErrorV1> {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(exact_capacity)
+            .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+        let allocation_capacity = values.capacity();
+        if allocation_capacity < exact_capacity {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        Ok(Self {
+            values,
+            exact_capacity,
+            allocation_capacity,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn is_full(&self) -> bool {
+        self.len() == self.exact_capacity
+    }
+
+    fn push(&mut self, value: T) -> Result<(), FcmpNativeErrorV1> {
+        let mut value = PendingZeroizingValue::new(value);
+        if self.len() >= self.exact_capacity {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
+        self.values.push(value.take()?);
+        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
+        Ok(())
+    }
+
+    fn extend_from_slice(&mut self, values: &[T]) -> Result<(), FcmpNativeErrorV1>
+    where
+        T: Copy,
+    {
+        let end = self
+            .len()
+            .checked_add(values.len())
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+        if end > self.exact_capacity {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
+        self.values.extend_from_slice(values);
+        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
+        Ok(())
+    }
+}
+
+impl<T: Zeroize> Deref for ExactSizeZeroizingVec<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+
+impl<T: Zeroize> DerefMut for ExactSizeZeroizingVec<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.values
+    }
+}
+
+impl<T: Zeroize> Drop for ExactSizeZeroizingVec<T> {
+    fn drop(&mut self) {
+        // `Vec::zeroize` clears every initialized element and the complete
+        // allocation capacity. Keeping that stronger guarantee matters when
+        // an allocator grants more than the requested exact logical shape.
+        self.values.zeroize();
+    }
+}
+
+struct ScalarVector(ExactSizeZeroizingVec<Scalar>);
+
 impl ScalarVector {
-    fn zero(len: usize) -> Self {
-        Self(vec![Scalar::ZERO; len])
+    fn with_capacity(len: usize) -> Result<Self, FcmpNativeErrorV1> {
+        ExactSizeZeroizingVec::new(len).map(Self)
+    }
+
+    fn from_slice(values: &[Scalar]) -> Result<Self, FcmpNativeErrorV1> {
+        let mut result = Self::with_capacity(values.len())?;
+        result.0.extend_from_slice(values)?;
+        Ok(result)
+    }
+
+    fn try_clone(&self) -> Result<Self, FcmpNativeErrorV1> {
+        Self::from_slice(&self.0)
+    }
+
+    fn zero(len: usize) -> Result<Self, FcmpNativeErrorV1> {
+        let mut vector = Self::with_capacity(len)?;
+        for _ in 0..len {
+            vector.0.push(Scalar::ZERO)?;
+        }
+        Ok(vector)
     }
 
     fn powers(value: Scalar, len: usize) -> Result<Self, FcmpNativeErrorV1> {
         if len == 0 {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
-        let mut powers = Vec::with_capacity(len);
-        powers.push(Scalar::ONE);
+        let value = Zeroizing::new(value);
+        let mut powers = Self::with_capacity(len)?;
+        powers.0.push(Scalar::ONE)?;
         for index in 1..len {
-            powers.push(powers[index - 1] * value);
+            powers.0.push(powers.0[index - 1] * *value)?;
         }
-        Ok(Self(powers))
+        Ok(powers)
     }
 
     fn len(&self) -> usize {
@@ -99,22 +226,25 @@ impl ScalarVector {
     }
 
     fn add_scalar(mut self, scalar: Scalar) -> Self {
-        for value in &mut self.0 {
-            *value += scalar;
+        let scalar = Zeroizing::new(scalar);
+        for value in self.0.iter_mut() {
+            *value += *scalar;
         }
         self
     }
 
     fn sub_scalar(mut self, scalar: Scalar) -> Self {
-        for value in &mut self.0 {
-            *value -= scalar;
+        let scalar = Zeroizing::new(scalar);
+        for value in self.0.iter_mut() {
+            *value -= *scalar;
         }
         self
     }
 
     fn mul_scalar(mut self, scalar: Scalar) -> Self {
-        for value in &mut self.0 {
-            *value *= scalar;
+        let scalar = Zeroizing::new(scalar);
+        for value in self.0.iter_mut() {
+            *value *= *scalar;
         }
         self
     }
@@ -123,7 +253,7 @@ impl ScalarVector {
         if self.len() != other.len() {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
-        for (left, right) in self.0.iter_mut().zip(&other.0) {
+        for (left, right) in self.0.iter_mut().zip(other.0.iter()) {
             *left += right;
         }
         Ok(self)
@@ -133,14 +263,18 @@ impl ScalarVector {
         if self.len() != other.len() {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
-        for (left, right) in self.0.iter_mut().zip(&other.0) {
+        for (left, right) in self.0.iter_mut().zip(other.0.iter()) {
             *left *= right;
         }
         Ok(self)
     }
 
     fn sum(&self) -> Scalar {
-        self.0.iter().copied().sum()
+        let mut sum = Zeroizing::new(Scalar::ZERO);
+        for value in self.0.iter().copied() {
+            *sum += value;
+        }
+        *sum
     }
 
     fn weighted_inner_product(
@@ -151,12 +285,30 @@ impl ScalarVector {
         Ok(self.mul_vector(other)?.mul_vector(weights)?.sum())
     }
 
-    fn split(mut self) -> Result<(Self, Self), FcmpNativeErrorV1> {
+    fn truncate(&mut self, len: usize) -> Result<(), FcmpNativeErrorV1> {
+        if len > self.len() {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        if len != self.len() {
+            // Allocate the new public final size before copying its secret
+            // prefix. Replacing `self` then clears the complete old allocation
+            // through Drop, including the discarded suffix.
+            *self = Self::from_slice(&self.0[..len])?;
+        }
+        Ok(())
+    }
+
+    fn split(self) -> Result<(Self, Self), FcmpNativeErrorV1> {
         if self.len() <= 1 || self.len() % 2 != 0 {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
-        let right = self.0.split_off(self.len() / 2);
-        Ok((self, Self(right)))
+        let half = self.len() / 2;
+        // Reserve both public final sizes before copying either secret half.
+        let mut left = Self::with_capacity(half)?;
+        let mut right = Self::with_capacity(half)?;
+        left.0.extend_from_slice(&self.0[..half])?;
+        right.0.extend_from_slice(&self.0[half..])?;
+        Ok((left, right))
     }
 }
 
@@ -609,7 +761,6 @@ impl FcmpRangeProofV1 {
     }
 }
 
-#[derive(Clone)]
 struct RangeWitnessCommitment {
     mask: Scalar,
     amount: u64,
@@ -659,41 +810,46 @@ fn strict_public_commitments(
 
 fn strict_witness_commitments(
     openings: &[FcmpOutputCommitmentOpeningV1],
-) -> Result<Vec<RangeWitnessCommitment>, FcmpNativeErrorV1> {
+    exact_capacity: usize,
+) -> Result<ExactSizeZeroizingVec<RangeWitnessCommitment>, FcmpNativeErrorV1> {
     if openings.is_empty() || openings.len() > FCMP_MAX_OUTPUTS_NATIVE_V1 {
         return Err(FcmpNativeErrorV1::RangeOutputCount {
             actual: openings.len(),
             max: FCMP_MAX_OUTPUTS_NATIVE_V1,
         });
     }
-    let mut witnesses = Vec::with_capacity(
-        openings
-            .len()
-            .checked_mul(FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1)
-            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
-    );
+    let witness_count = openings
+        .len()
+        .checked_mul(FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    if exact_capacity < witness_count {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let mut witnesses = ExactSizeZeroizingVec::new(exact_capacity)?;
     for opening in openings {
-        let predecessor = opening
-            .amount
-            .checked_sub(1)
-            .ok_or(FcmpNativeErrorV1::RangeWitnessOutOfRange)?;
+        let amount = Zeroizing::new(opening.amount);
+        let mask = Zeroizing::new(opening.mask);
+        let predecessor = Zeroizing::new(
+            amount
+                .checked_sub(1)
+                .ok_or(FcmpNativeErrorV1::RangeWitnessOutOfRange)?,
+        );
         witnesses.push(RangeWitnessCommitment {
-            mask: opening.mask,
-            amount: opening.amount,
-        });
+            mask: *mask,
+            amount: *amount,
+        })?;
         witnesses.push(RangeWitnessCommitment {
-            mask: opening.mask,
-            amount: predecessor,
-        });
+            mask: *mask,
+            amount: *predecessor,
+        })?;
+    }
+    while !witnesses.is_full() {
+        witnesses.push(RangeWitnessCommitment {
+            mask: Scalar::ZERO,
+            amount: 0,
+        })?;
     }
     Ok(witnesses)
-}
-
-fn multiexp(terms: &[(Scalar, EdwardsPoint)]) -> EdwardsPoint {
-    EdwardsPoint::multiscalar_mul(
-        terms.iter().map(|(scalar, _)| *scalar),
-        terms.iter().map(|(_, point)| *point),
-    )
 }
 
 fn multiexp_vartime(terms: &[(Scalar, EdwardsPoint)]) -> EdwardsPoint {
@@ -703,19 +859,56 @@ fn multiexp_vartime(terms: &[(Scalar, EdwardsPoint)]) -> EdwardsPoint {
     )
 }
 
+struct SecretMultiexpTerm {
+    scalar: Scalar,
+    point: EdwardsPoint,
+}
+
+impl Zeroize for SecretMultiexpTerm {
+    fn zeroize(&mut self) {
+        self.scalar.zeroize();
+        self.point.zeroize();
+    }
+}
+
+/// Exact-capacity owner for prover-secret multiscalar-multiplication terms.
+struct SecretMultiexpBuilder {
+    terms: ExactSizeZeroizingVec<SecretMultiexpTerm>,
+}
+
+impl SecretMultiexpBuilder {
+    fn new(exact_capacity: usize) -> Result<Self, FcmpNativeErrorV1> {
+        Ok(Self {
+            terms: ExactSizeZeroizingVec::new(exact_capacity)?,
+        })
+    }
+
+    fn push(&mut self, scalar: Scalar, point: EdwardsPoint) -> Result<(), FcmpNativeErrorV1> {
+        self.terms.push(SecretMultiexpTerm { scalar, point })
+    }
+
+    fn evaluate(self) -> Result<EdwardsPoint, FcmpNativeErrorV1> {
+        if !self.terms.is_full() {
+            return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+        }
+        Ok(EdwardsPoint::multiscalar_mul(
+            self.terms.iter().map(|term| term.scalar),
+            self.terms.iter().map(|term| term.point),
+        ))
+    }
+}
+
 fn random_nonzero_scalar(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<Scalar, FcmpNativeErrorV1> {
     for _ in 0..MAX_SCALAR_SAMPLING_ATTEMPTS_V1 {
-        let mut wide = [0_u8; 64];
-        if rng.try_fill_bytes(&mut wide).is_err() {
-            wide.zeroize();
+        let mut wide = Zeroizing::new([0_u8; 64]);
+        if rng.try_fill_bytes(&mut *wide).is_err() {
             return Err(FcmpNativeErrorV1::RandomnessUnavailable);
         }
-        let scalar = Scalar::from_bytes_mod_order_wide(&wide);
-        wide.zeroize();
-        if scalar != Scalar::ZERO {
-            return Ok(scalar);
+        let scalar = Zeroizing::new(Scalar::from_bytes_mod_order_wide(&*wide));
+        if *scalar != Scalar::ZERO {
+            return Ok(*scalar);
         }
     }
     Err(FcmpNativeErrorV1::ProverRandomnessExhausted)
@@ -813,16 +1006,17 @@ fn d_j(index: usize, commitments: usize) -> Result<ScalarVector, FcmpNativeError
     let total = commitments
         .checked_mul(FCMP_AMOUNT_BITS_V1)
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
-    let mut vector = vec![Scalar::ZERO; total];
+    let mut vector = ScalarVector::zero(total)?;
     let start = (index - 1)
         .checked_mul(FCMP_AMOUNT_BITS_V1)
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
     let powers = ScalarVector::powers(Scalar::from(2_u8), FCMP_AMOUNT_BITS_V1)?;
     vector
+        .0
         .get_mut(start..start + FCMP_AMOUNT_BITS_V1)
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?
-        .copy_from_slice(&powers.0);
-    Ok(ScalarVector(vector))
+        .copy_from_slice(&powers.0[..]);
+    Ok(vector)
 }
 
 struct AHatComputation {
@@ -858,15 +1052,15 @@ fn compute_a_hat(
 
     let z_squared = z * z;
     let z_pow = ScalarVector::powers(z_squared, commitments.len())?.mul_scalar(z_squared);
-    let mut d = ScalarVector::zero(mn);
+    let mut d = ScalarVector::zero(mn)?;
     for index in 1..=commitments.len() {
         d = d.add_vector(&d_j(index, commitments.len())?.mul_scalar(z_pow.0[index - 1]))?;
     }
     let ascending_y = ScalarVector::powers(y, d.len())?.mul_scalar(y);
     let y_pows = ascending_y.sum();
-    let mut descending_y = ascending_y.clone();
+    let mut descending_y = ascending_y.try_clone()?;
     descending_y.0.reverse();
-    let d_descending_y = d.clone().mul_vector(&descending_y)?;
+    let d_descending_y = d.try_clone()?.mul_vector(&descending_y)?;
     let d_descending_y_plus_z = d_descending_y.add_scalar(z);
     let y_mn_plus_one = descending_y
         .0
@@ -876,7 +1070,7 @@ fn compute_a_hat(
         * y;
 
     let mut commitment_accumulator = EdwardsPoint::identity();
-    for (commitment, power) in commitments.0.iter().zip(&z_pow.0) {
+    for (commitment, power) in commitments.0.iter().zip(z_pow.0.iter()) {
         commitment_accumulator += commitment * power;
     }
 
@@ -987,10 +1181,25 @@ fn prove_wip(
     {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
     }
+    let lr_len = usize::try_from(generators.len().ilog2())
+        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let mut l_proof = Zeroizing::new(Vec::new());
+    l_proof
+        .try_reserve_exact(lr_len)
+        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let l_proof_allocation_capacity = l_proof.capacity();
+    let mut r_proof = Zeroizing::new(Vec::new());
+    r_proof
+        .try_reserve_exact(lr_len)
+        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let r_proof_allocation_capacity = r_proof.capacity();
     let mut y_vector = wip_y_vector(y, generators.len())?;
     let mut g_bold = PointVector(generators.g_bold);
     let mut h_bold = PointVector(generators.h_bold);
-    let mut inverses = Vec::new();
+    let mut inverses = Zeroizing::new(Vec::new());
+    inverses
+        .try_reserve_exact(lr_len)
+        .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?;
     let mut index = 1;
     while index < g_bold.len() {
         let value = y_vector
@@ -1009,34 +1218,35 @@ fn prove_wip(
 
     #[cfg(debug_assertions)]
     {
-        let mut terms = witness
+        let term_count = witness
             .a
-            .0
-            .iter()
-            .copied()
-            .zip(g_bold.0.iter().copied())
-            .chain(witness.b.0.iter().copied().zip(h_bold.0.iter().copied()))
-            .collect::<Vec<_>>();
-        terms.push((
+            .len()
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(2))
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+        let mut terms = SecretMultiexpBuilder::new(term_count)?;
+        for (scalar, point) in witness.a.0.iter().copied().zip(g_bold.0.iter().copied()) {
+            terms.push(scalar, point)?;
+        }
+        for (scalar, point) in witness.b.0.iter().copied().zip(h_bold.0.iter().copied()) {
+            terms.push(scalar, point)?;
+        }
+        let inner_product = Zeroizing::new(
             witness
                 .a
-                .clone()
+                .try_clone()?
                 .weighted_inner_product(&witness.b, &y_vector)?,
-            amount_generator()?,
-        ));
-        terms.push((witness.alpha, ED25519_BASEPOINT_POINT));
-        if multiexp(&terms) != p {
-            terms.zeroize();
+        );
+        terms.push(*inner_product, amount_generator()?)?;
+        terms.push(witness.alpha, ED25519_BASEPOINT_POINT)?;
+        if terms.evaluate()? != p {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
-        terms.zeroize();
     }
 
-    let mut a = witness.a.clone();
-    let mut b = witness.b.clone();
-    let mut alpha = witness.alpha;
-    let mut l_proof = Vec::new();
-    let mut r_proof = Vec::new();
+    let mut a = witness.a.try_clone()?;
+    let mut b = witness.b.try_clone()?;
+    let mut alpha = Zeroizing::new(witness.alpha);
     let inverse_eight = Scalar::from(8_u8).invert();
     while g_bold.len() > 1 {
         let (a_1, a_2) = a.split()?;
@@ -1059,48 +1269,55 @@ fn prove_wip(
             .get(n_hat - 1)
             .copied()
             .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
-        y_vector.0.truncate(n_hat);
-        let d_l = random_nonzero_scalar(rng)?;
-        let d_r = random_nonzero_scalar(rng)?;
-        let c_l = a_1.clone().weighted_inner_product(&b_2, &y_vector)?;
-        let c_r = a_2
-            .clone()
-            .mul_scalar(y_n_hat)
-            .weighted_inner_product(&b_1, &y_vector)?;
+        y_vector.truncate(n_hat)?;
+        let d_l = Zeroizing::new(random_nonzero_scalar(rng)?);
+        let d_r = Zeroizing::new(random_nonzero_scalar(rng)?);
+        let c_l = Zeroizing::new(a_1.try_clone()?.weighted_inner_product(&b_2, &y_vector)?);
+        let c_r = Zeroizing::new(
+            a_2.try_clone()?
+                .mul_scalar(y_n_hat)
+                .weighted_inner_product(&b_1, &y_vector)?,
+        );
         let y_inverse_n_hat = inverses
             .pop()
             .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
 
-        let left_a = a_1.clone().mul_scalar(y_inverse_n_hat);
-        let mut left_terms = left_a
-            .0
-            .iter()
-            .copied()
-            .zip(g_2.0.iter().copied())
-            .chain(b_2.0.iter().copied().zip(h_1.0.iter().copied()))
-            .collect::<Vec<_>>();
-        left_terms.push((c_l, amount_generator()?));
-        left_terms.push((d_l, ED25519_BASEPOINT_POINT));
-        let left = multiexp(&left_terms) * inverse_eight;
-        left_terms.zeroize();
+        let round_term_count = n_hat
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(2))
+            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+        let left_a = a_1.try_clone()?.mul_scalar(y_inverse_n_hat);
+        let mut left_terms = SecretMultiexpBuilder::new(round_term_count)?;
+        for (scalar, point) in left_a.0.iter().copied().zip(g_2.0.iter().copied()) {
+            left_terms.push(scalar, point)?;
+        }
+        for (scalar, point) in b_2.0.iter().copied().zip(h_1.0.iter().copied()) {
+            left_terms.push(scalar, point)?;
+        }
+        left_terms.push(*c_l, amount_generator()?)?;
+        left_terms.push(*d_l, ED25519_BASEPOINT_POINT)?;
+        let left = left_terms.evaluate()? * inverse_eight;
 
-        let right_a = a_2.clone().mul_scalar(y_n_hat);
-        let mut right_terms = right_a
-            .0
-            .iter()
-            .copied()
-            .zip(g_1.0.iter().copied())
-            .chain(b_1.0.iter().copied().zip(h_2.0.iter().copied()))
-            .collect::<Vec<_>>();
-        right_terms.push((c_r, amount_generator()?));
-        right_terms.push((d_r, ED25519_BASEPOINT_POINT));
-        let right = multiexp(&right_terms) * inverse_eight;
-        right_terms.zeroize();
+        let right_a = a_2.try_clone()?.mul_scalar(y_n_hat);
+        let mut right_terms = SecretMultiexpBuilder::new(round_term_count)?;
+        for (scalar, point) in right_a.0.iter().copied().zip(g_1.0.iter().copied()) {
+            right_terms.push(scalar, point)?;
+        }
+        for (scalar, point) in b_1.0.iter().copied().zip(h_2.0.iter().copied()) {
+            right_terms.push(scalar, point)?;
+        }
+        right_terms.push(*c_r, amount_generator()?)?;
+        right_terms.push(*d_r, ED25519_BASEPOINT_POINT)?;
+        let right = right_terms.evaluate()? * inverse_eight;
         if left.is_identity() || right.is_identity() {
             return Err(FcmpNativeErrorV1::RangeProofPoint);
         }
+        debug_assert_eq!(l_proof.capacity(), l_proof_allocation_capacity);
+        debug_assert_eq!(r_proof.capacity(), r_proof_allocation_capacity);
         l_proof.push(left);
         r_proof.push(right);
+        debug_assert_eq!(l_proof.capacity(), l_proof_allocation_capacity);
+        debug_assert_eq!(r_proof.capacity(), r_proof_allocation_capacity);
 
         let (challenge, inverse, challenge_squared, inverse_squared, next_g, next_h) =
             next_wip_generators(transcript, g_1, g_2, h_1, h_2, left, right, y_inverse_n_hat)?;
@@ -1112,46 +1329,48 @@ fn prove_wip(
         b = b_1
             .mul_scalar(inverse)
             .add_vector(&b_2.mul_scalar(challenge))?;
-        alpha += (d_l * challenge_squared) + (d_r * inverse_squared);
+        *alpha += (*d_l * challenge_squared) + (*d_r * inverse_squared);
     }
 
-    if g_bold.len() != 1 || h_bold.len() != 1 || a.len() != 1 || b.len() != 1 {
+    if g_bold.len() != 1
+        || h_bold.len() != 1
+        || a.len() != 1
+        || b.len() != 1
+        || l_proof.len() != lr_len
+        || r_proof.len() != lr_len
+    {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
     }
-    let r = random_nonzero_scalar(rng)?;
-    let s = random_nonzero_scalar(rng)?;
-    let delta = random_nonzero_scalar(rng)?;
-    let eta = random_nonzero_scalar(rng)?;
-    let r_y = r * y_vector.0[0];
-    let mut a_terms = vec![
-        (r, g_bold.0[0]),
-        (s, h_bold.0[0]),
-        (
-            (r_y * b.0[0]) + (s * y_vector.0[0] * a.0[0]),
-            amount_generator()?,
-        ),
-        (delta, ED25519_BASEPOINT_POINT),
-    ];
-    let proof_a = multiexp(&a_terms) * inverse_eight;
-    a_terms.zeroize();
-    let mut b_terms = vec![
-        (r_y * s, amount_generator()?),
-        (eta, ED25519_BASEPOINT_POINT),
-    ];
-    let proof_b = multiexp(&b_terms) * inverse_eight;
-    b_terms.zeroize();
+    let r = Zeroizing::new(random_nonzero_scalar(rng)?);
+    let s = Zeroizing::new(random_nonzero_scalar(rng)?);
+    let delta = Zeroizing::new(random_nonzero_scalar(rng)?);
+    let eta = Zeroizing::new(random_nonzero_scalar(rng)?);
+    let r_y = Zeroizing::new(*r * y_vector.0[0]);
+    let mut a_terms = SecretMultiexpBuilder::new(4)?;
+    a_terms.push(*r, g_bold.0[0])?;
+    a_terms.push(*s, h_bold.0[0])?;
+    a_terms.push(
+        (*r_y * b.0[0]) + (*s * y_vector.0[0] * a.0[0]),
+        amount_generator()?,
+    )?;
+    a_terms.push(*delta, ED25519_BASEPOINT_POINT)?;
+    let proof_a = a_terms.evaluate()? * inverse_eight;
+    let mut b_terms = SecretMultiexpBuilder::new(2)?;
+    b_terms.push(*r_y * *s, amount_generator()?)?;
+    b_terms.push(*eta, ED25519_BASEPOINT_POINT)?;
+    let proof_b = b_terms.evaluate()? * inverse_eight;
     if proof_a.is_identity() || proof_b.is_identity() {
         return Err(FcmpNativeErrorV1::RangeProofPoint);
     }
     let challenge = transcript.append_ab(proof_a, proof_b)?;
     Ok(WipProof {
-        l: l_proof,
-        r: r_proof,
+        l: core::mem::take(&mut *l_proof),
+        r: core::mem::take(&mut *r_proof),
         a: proof_a,
         b: proof_b,
-        r_answer: r + (a.0[0] * challenge),
-        s_answer: s + (b.0[0] * challenge),
-        delta_answer: eta + (delta * challenge) + (alpha * challenge * challenge),
+        r_answer: *r + (a.0[0] * challenge),
+        s_answer: *s + (b.0[0] * challenge),
+        delta_answer: *eta + (*delta * challenge) + (*alpha * challenge * challenge),
     })
 }
 
@@ -1288,12 +1507,17 @@ fn prove_range_once(
         .map(FcmpOutputCommitmentOpeningV1::output)
         .collect::<Vec<_>>();
     let public_commitments = strict_public_commitments(&outputs)?;
-    let mut witnesses = strict_witness_commitments(openings)?;
-    if public_commitments.len() != witnesses.len() {
+    let witness_count = openings
+        .len()
+        .checked_mul(FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let padded_commitments = padded_range_commitment_count(openings.len())?;
+    let witnesses = strict_witness_commitments(openings, padded_commitments)?;
+    if public_commitments.len() != witness_count || witnesses.len() != padded_commitments {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
     }
     let amount_generator = amount_generator()?;
-    for (point, witness) in public_commitments.iter().zip(&witnesses) {
+    for (point, witness) in public_commitments.iter().zip(witnesses.iter()) {
         let expected = amount_generator * Scalar::from(witness.amount)
             + ED25519_BASEPOINT_POINT * witness.mask;
         if expected != *point {
@@ -1311,45 +1535,36 @@ fn prove_range_once(
         .iter()
         .map(EdwardsPoint::mul_by_cofactor)
         .collect::<Vec<_>>();
-    let padded_commitments = commitments
-        .len()
-        .max(1)
-        .checked_next_power_of_two()
-        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
     commitments.resize(padded_commitments, EdwardsPoint::identity());
-    witnesses.resize_with(padded_commitments, || RangeWitnessCommitment {
-        mask: Scalar::ZERO,
-        amount: 0,
-    });
     let generator_count = padded_commitments
         .checked_mul(FCMP_AMOUNT_BITS_V1)
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
     let generators = bp_plus_generators()?.reduce(generator_count)?;
 
-    let mut a_l = Vec::with_capacity(generator_count);
-    for witness in &witnesses {
+    let mut a_l = ScalarVector::with_capacity(generator_count)?;
+    for witness in witnesses.iter() {
         for bit in 0..FCMP_AMOUNT_BITS_V1 {
-            a_l.push(Scalar::from((witness.amount >> bit) & 1));
+            a_l.0.push(Scalar::from((witness.amount >> bit) & 1))?;
         }
     }
-    let a_l = ScalarVector(a_l);
-    let a_r = a_l.clone().sub_scalar(Scalar::ONE);
-    let alpha = random_nonzero_scalar(rng)?;
-    let mut a_terms = Vec::with_capacity(
-        generator_count
-            .checked_mul(2)
-            .and_then(|value| value.checked_add(1))
-            .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?,
-    );
+    if !a_l.0.is_full() {
+        return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
+    }
+    let a_r = a_l.try_clone()?.sub_scalar(Scalar::ONE);
+    let alpha = Zeroizing::new(random_nonzero_scalar(rng)?);
+    let a_term_count = generator_count
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1))
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let mut a_terms = SecretMultiexpBuilder::new(a_term_count)?;
     for (index, value) in a_l.0.iter().copied().enumerate() {
-        a_terms.push((value, generators.g_bold[index]));
+        a_terms.push(value, generators.g_bold[index])?;
     }
     for (index, value) in a_r.0.iter().copied().enumerate() {
-        a_terms.push((value, generators.h_bold[index]));
+        a_terms.push(value, generators.h_bold[index])?;
     }
-    a_terms.push((alpha, ED25519_BASEPOINT_POINT));
-    let proof_a = multiexp(&a_terms) * inverse_eight;
-    a_terms.zeroize();
+    a_terms.push(*alpha, ED25519_BASEPOINT_POINT)?;
+    let proof_a = a_terms.evaluate()? * inverse_eight;
     if proof_a.is_identity() {
         return Err(FcmpNativeErrorV1::RangeProofPoint);
     }
@@ -1369,9 +1584,9 @@ fn prove_range_once(
     )?;
     let a_l = a_l.sub_scalar(z);
     let a_r = a_r.add_vector(&d_descending_y_plus_z)?;
-    let mut alpha_hat = alpha;
+    let mut alpha_hat = Zeroizing::new(*alpha);
     for (index, witness) in witnesses.iter().enumerate() {
-        alpha_hat += z_pow.0[index] * witness.mask * y_mn_plus_one;
+        *alpha_hat += z_pow.0[index] * witness.mask * y_mn_plus_one;
     }
     let wip = prove_wip(
         rng,
@@ -1382,7 +1597,7 @@ fn prove_range_once(
         WipWitness {
             a: a_l,
             b: a_r,
-            alpha: alpha_hat,
+            alpha: *alpha_hat,
         },
     )?;
     FcmpRangeProofV1::from_parts(
@@ -1405,12 +1620,16 @@ fn preflight_fcmp_range_v1(
         .map(FcmpOutputCommitmentOpeningV1::output)
         .collect::<Vec<_>>();
     let public_commitments = strict_public_commitments(&outputs)?;
-    let witnesses = strict_witness_commitments(openings)?;
+    let witness_count = openings
+        .len()
+        .checked_mul(FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1)
+        .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
+    let witnesses = strict_witness_commitments(openings, witness_count)?;
     if public_commitments.len() != witnesses.len() {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
     }
     let amount_generator = amount_generator()?;
-    for (point, witness) in public_commitments.iter().zip(&witnesses) {
+    for (point, witness) in public_commitments.iter().zip(witnesses.iter()) {
         let expected = amount_generator * Scalar::from(witness.amount)
             + ED25519_BASEPOINT_POINT * witness.mask;
         if expected != *point {
@@ -1504,6 +1723,11 @@ pub fn verify_fcmp_range_v1(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use rand_08::{SeedableRng as _, rngs::StdRng};
 
     use super::*;
@@ -1512,6 +1736,27 @@ mod tests {
     struct PeriodicRng {
         period: usize,
         cursor: usize,
+    }
+
+    struct TrackingSecret {
+        value: u64,
+        clear_calls: Arc<AtomicUsize>,
+    }
+
+    impl TrackingSecret {
+        fn new(value: u64, clear_calls: &Arc<AtomicUsize>) -> Self {
+            Self {
+                value,
+                clear_calls: Arc::clone(clear_calls),
+            }
+        }
+    }
+
+    impl Zeroize for TrackingSecret {
+        fn zeroize(&mut self) {
+            self.value = 0;
+            self.clear_calls.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     const ZERO_REDUCTION_BLOCK_V1: [u8; 64] = [
@@ -1621,6 +1866,112 @@ mod tests {
         .expect("canonical output");
         FcmpOutputCommitmentOpeningV1::new(output, amount, Scalar::from(mask).to_bytes())
             .expect("valid opening")
+    }
+
+    #[test]
+    fn exact_size_secret_vector_keeps_capacity_and_clears_success_and_error_paths() {
+        let clear_calls = Arc::new(AtomicUsize::new(0));
+        let mut secrets = ExactSizeZeroizingVec::new(2).expect("fixed secret capacity");
+        let allocation = secrets.values.as_ptr();
+        let allocation_capacity = secrets.values.capacity();
+        assert_eq!(secrets.exact_capacity, 2);
+        assert!(allocation_capacity >= secrets.exact_capacity);
+
+        secrets
+            .push(TrackingSecret::new(11, &clear_calls))
+            .expect("first secret fits");
+        assert_eq!(secrets.values.as_ptr(), allocation);
+        assert_eq!(secrets.values.capacity(), allocation_capacity);
+        secrets
+            .push(TrackingSecret::new(13, &clear_calls))
+            .expect("second secret fits");
+        assert_eq!(secrets.values.as_ptr(), allocation);
+        assert_eq!(secrets.values.capacity(), allocation_capacity);
+
+        assert_eq!(
+            secrets.push(TrackingSecret::new(17, &clear_calls)),
+            Err(FcmpNativeErrorV1::RangeArithmeticInvariant)
+        );
+        assert_eq!(clear_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(secrets.values.as_ptr(), allocation);
+        assert_eq!(secrets.values.capacity(), allocation_capacity);
+        drop(secrets);
+        assert_eq!(clear_calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn exact_size_secret_vector_clears_initialized_prefix_during_unwind() {
+        let clear_calls = Arc::new(AtomicUsize::new(0));
+        let unwind_clear_calls = Arc::clone(&clear_calls);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let mut secrets = ExactSizeZeroizingVec::new(3).expect("fixed unwind-test capacity");
+            secrets
+                .push(TrackingSecret::new(19, &unwind_clear_calls))
+                .expect("first secret fits");
+            secrets
+                .push(TrackingSecret::new(23, &unwind_clear_calls))
+                .expect("second secret fits");
+            panic!("exercise secret-vector unwind cleanup");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(clear_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn secret_multiexp_builder_requires_its_public_exact_shape() {
+        let mut incomplete = SecretMultiexpBuilder::new(2).expect("two-term secret MSM");
+        incomplete
+            .push(Scalar::from(3_u8), ED25519_BASEPOINT_POINT)
+            .expect("first term fits");
+        assert_eq!(
+            incomplete.evaluate(),
+            Err(FcmpNativeErrorV1::RangeArithmeticInvariant)
+        );
+
+        let amount_generator = amount_generator().expect("amount generator");
+        let mut exact = SecretMultiexpBuilder::new(2).expect("two-term secret MSM");
+        exact
+            .push(Scalar::from(3_u8), ED25519_BASEPOINT_POINT)
+            .expect("first term fits");
+        exact
+            .push(Scalar::from(5_u8), amount_generator)
+            .expect("second term fits");
+        assert_eq!(
+            exact.evaluate().expect("complete secret MSM"),
+            ED25519_BASEPOINT_POINT * Scalar::from(3_u8) + amount_generator * Scalar::from(5_u8)
+        );
+
+        let mut overflow = SecretMultiexpBuilder::new(1).expect("one-term secret MSM");
+        overflow
+            .push(Scalar::from(7_u8), ED25519_BASEPOINT_POINT)
+            .expect("sole term fits");
+        assert_eq!(
+            overflow.push(Scalar::from(11_u8), amount_generator),
+            Err(FcmpNativeErrorV1::RangeArithmeticInvariant)
+        );
+        assert_eq!(
+            overflow.evaluate().expect("original exact shape remains"),
+            ED25519_BASEPOINT_POINT * Scalar::from(7_u8)
+        );
+    }
+
+    #[test]
+    fn padded_witness_vector_uses_public_final_capacity_before_secret_insertion() {
+        let openings = [opening(1, 3, 5), opening(2, 7, 11), opening(3, 13, 17)];
+        let padded = padded_range_commitment_count(openings.len()).expect("public padded count");
+        assert_eq!(padded, 8);
+        let witnesses = strict_witness_commitments(&openings, padded).expect("padded witnesses");
+        assert_eq!(witnesses.exact_capacity, padded);
+        assert_eq!(witnesses.len(), padded);
+        assert_eq!(witnesses.values.capacity(), witnesses.allocation_capacity);
+        assert_eq!(
+            witnesses
+                .iter()
+                .skip(openings.len() * FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1)
+                .map(|witness| (witness.amount, witness.mask))
+                .collect::<Vec<_>>(),
+            vec![(0, Scalar::ZERO); 2]
+        );
     }
 
     #[test]

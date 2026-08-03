@@ -166,6 +166,32 @@ impl JindoRnsPolynomialV1 {
         self.residues.iter().flatten().all(|residue| *residue == 0)
     }
 
+    /// Return whether this element is a unit in every RNS ring factor.
+    ///
+    /// Each pinned prime splits `X^1024 + 1` completely. The twisted NTT is
+    /// evaluation at its 1024 distinct roots, so an element is invertible if
+    /// and only if every evaluation is non-zero in every CRT component.
+    pub(crate) fn is_unit(&self, moduli: [JindoPrimeModulusV1; 2]) -> bool {
+        self.residues
+            .iter()
+            .zip(moduli)
+            .all(|(coefficients, prime)| {
+                let modulus = prime.modulus;
+                let mut evaluations = *coefficients;
+                let mut twist = 1_u64;
+                for value in &mut evaluations {
+                    *value = mul_mod(*value, twist, modulus);
+                    twist = mul_mod(twist, prime.psi, modulus);
+                }
+                cyclic_ntt(
+                    &mut evaluations,
+                    mul_mod(prime.psi, prime.psi, modulus),
+                    modulus,
+                );
+                evaluations.iter().all(|value| *value != 0)
+            })
+    }
+
     /// Reconstruct one coefficient in `[0, q_0 q_1)`.
     pub(crate) fn reconstruct_coefficient(
         &self,
@@ -497,5 +523,28 @@ mod tests {
             JindoRnsPolynomialV1::zero()
         );
         assert_eq!(left.mul(&right, moduli), right.mul(&left, moduli));
+    }
+
+    #[test]
+    fn unit_test_uses_every_negacyclic_root_and_rns_factor() {
+        let mut monomial = [0_i128; JINDO_RING_DEGREE_V1];
+        monomial[JINDO_RING_DEGREE_V1 - 1] = -1;
+        assert!(
+            JindoRnsPolynomialV1::from_balanced_coefficients(monomial, JINDO_OUTER_MODULI_V1)
+                .is_unit(JINDO_OUTER_MODULI_V1)
+        );
+
+        let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
+        residues[0][0] = sub_mod(
+            0,
+            JINDO_OUTER_MODULI_V1[0].psi,
+            JINDO_OUTER_MODULI_V1[0].modulus,
+        );
+        residues[0][1] = 1;
+        residues[1][0] = 1;
+        let vanishes_at_first_root =
+            JindoRnsPolynomialV1::from_residues(residues, JINDO_OUTER_MODULI_V1)
+                .expect("canonical residues");
+        assert!(!vanishes_at_first_root.is_unit(JINDO_OUTER_MODULI_V1));
     }
 }

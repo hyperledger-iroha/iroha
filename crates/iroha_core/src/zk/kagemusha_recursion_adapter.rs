@@ -7381,6 +7381,7 @@ impl KagemushaPastaCycleProverV4 {
     }
 
     /// Parse candidate evidence without conferring production-release trust.
+    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     pub(crate) fn from_candidate_artifact_spool_loader<F>(
         candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
         expected_candidate_sha256: [u8; 32],
@@ -13861,9 +13862,6 @@ struct KagemushaCandidateQualificationAppendV4 {
     bound_parent_bundle_digest: [u8; 32],
     statement: KagemushaRecursiveSpendPublicStatementV4,
     operation: KagemushaStepOperationVectorV4,
-    secure: super::confidential_v2::KagemushaStepSecureWitnessV3,
-    output_membership: super::kagemusha_v2::KagemushaOutputMembershipWitnessV4,
-    parent_state: Vec<u32>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -14025,7 +14023,7 @@ fn kagemusha_candidate_qualification_append_v4(
         rho: recipient_rho,
         owner_tag: recipient_owner_tag,
     }];
-    let secure = confidential_v2::prepare_kagemusha_step_transfer_witness_v3_with_paths(
+    confidential_v2::prepare_kagemusha_step_transfer_witness_v3_with_paths(
         &candidate.manifest.chain_id,
         &candidate.manifest.asset.to_string(),
         &KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4,
@@ -14034,18 +14032,11 @@ fn kagemusha_candidate_qualification_append_v4(
         &outputs,
         init_statement.final_root,
     )?;
-    let parent_state =
-        kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(init_statement)?
-            .limbs
-            .to_vec();
     Ok(KagemushaCandidateQualificationAppendV4 {
         initialization_bundle_digest,
         bound_parent_bundle_digest: split.inputs[0].bundle_digest,
         statement,
         operation,
-        secure,
-        output_membership,
-        parent_state,
     })
 }
 

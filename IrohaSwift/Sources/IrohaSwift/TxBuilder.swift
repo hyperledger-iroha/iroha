@@ -436,8 +436,7 @@ public struct VerifyingKeyIdReference: Equatable, Sendable {
 }
 
 public enum ZkAssetMode: UInt8, Sendable {
-    case zkNative = 0
-    case hybrid = 1
+    case hybrid = 0
 }
 
 public struct RegisterZkAssetRequest {
@@ -447,7 +446,6 @@ public struct RegisterZkAssetRequest {
     public let mode: ZkAssetMode
     public let allowShield: Bool
     public let allowUnshield: Bool
-    public let transferVerifyingKey: VerifyingKeyIdReference?
     public let unshieldVerifyingKey: VerifyingKeyIdReference?
     public let shieldVerifyingKey: VerifyingKeyIdReference?
     public let feePayment: FeePaymentIntent
@@ -459,7 +457,6 @@ public struct RegisterZkAssetRequest {
                 mode: ZkAssetMode = .hybrid,
                 allowShield: Bool = true,
                 allowUnshield: Bool = true,
-                transferVerifyingKey: VerifyingKeyIdReference? = nil,
                 unshieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 shieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 feePayment: FeePaymentIntent,
@@ -470,7 +467,6 @@ public struct RegisterZkAssetRequest {
         self.mode = mode
         self.allowShield = allowShield
         self.allowUnshield = allowUnshield
-        self.transferVerifyingKey = transferVerifyingKey
         self.unshieldVerifyingKey = unshieldVerifyingKey
         self.shieldVerifyingKey = shieldVerifyingKey
         self.feePayment = feePayment
@@ -478,232 +474,14 @@ public struct RegisterZkAssetRequest {
     }
 }
 
-public enum ShieldRequestError: Error, LocalizedError {
-    case invalidNoteCommitmentLength
-    case invalidAmount
-
-    public var errorDescription: String? {
-        switch self {
-        case .invalidNoteCommitmentLength:
-            return "Note commitment must be exactly 32 bytes."
-        case .invalidAmount:
-            return "Amount must be a canonical non-negative Kotodama V1 quantity string."
-        }
-    }
-}
-
-public struct ShieldRequest {
-    public let chainId: String
-    public let authority: String
-    public let assetDefinitionId: String
-    public let fromAccountId: String
-    public let amount: String
-    public let noteCommitment: Data
-    public let payload: ConfidentialEncryptedPayload
-    public let feePayment: FeePaymentIntent
-    public let ttlMs: UInt64?
-
-    public init(chainId: String,
-                authority: String,
-                assetDefinitionId: String,
-                fromAccountId: String,
-                amount: String,
-                noteCommitment: Data,
-                payload: ConfidentialEncryptedPayload,
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) throws {
-        guard noteCommitment.count == 32 else {
-            throw ShieldRequestError.invalidNoteCommitmentLength
-        }
-        let canonicalAmount: String
-        do {
-            canonicalAmount = try KotodamaNumericV1Codec.decodeQuantityJSON(amount).canonicalString
-        } catch {
-            throw ShieldRequestError.invalidAmount
-        }
-        self.chainId = chainId
-        self.authority = authority
-        self.assetDefinitionId = assetDefinitionId
-        self.fromAccountId = fromAccountId
-        self.amount = canonicalAmount
-        self.noteCommitment = noteCommitment
-        self.payload = payload
-        self.feePayment = feePayment
-        self.ttlMs = ttlMs
-    }
-}
-
-public enum UnshieldRequestError: Error, LocalizedError {
-    case inputsEmpty
-    case invalidNullifierLength(expected: Int, actual: Int)
-    case invalidRootHintLength
-    case invalidPublicAmount
-
-    public var errorDescription: String? {
-        switch self {
-        case .inputsEmpty:
-            return "Unshield requests must include at least one nullifier."
-        case let .invalidNullifierLength(expected, actual):
-            return "Nullifier must be exactly \(expected) bytes (found \(actual))."
-        case .invalidRootHintLength:
-            return "Root hint must be exactly 32 bytes when provided."
-        case .invalidPublicAmount:
-            return "Public amount must be a canonical non-negative Kotodama V1 quantity string."
-        }
-    }
-}
-
-public struct UnshieldRequest {
-    private static let nullifierLength = 32
-
-    public let chainId: String
-    public let authority: String
-    public let assetDefinitionId: String
-    public let toAccountId: String
-    public let publicAmount: String
-    public let inputs: [Data]
-    public let proof: ProofAttachment
-    public let rootHint: Data?
-    public let feePayment: FeePaymentIntent
-    public let ttlMs: UInt64?
-
-    public init(chainId: String,
-                authority: String,
-                assetDefinitionId: String,
-                toAccountId: String,
-                publicAmount: String,
-                inputs: [Data],
-                proof: ProofAttachment,
-                rootHint: Data? = nil,
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) throws {
-        guard !inputs.isEmpty else {
-            throw UnshieldRequestError.inputsEmpty
-        }
-        for nullifier in inputs {
-            guard nullifier.count == Self.nullifierLength else {
-                throw UnshieldRequestError.invalidNullifierLength(expected: Self.nullifierLength,
-                                                                  actual: nullifier.count)
-            }
-        }
-        if let hint = rootHint, hint.count != Self.nullifierLength {
-            throw UnshieldRequestError.invalidRootHintLength
-        }
-        let canonicalPublicAmount: String
-        do {
-            canonicalPublicAmount = try KotodamaNumericV1Codec
-                .decodeQuantityJSON(publicAmount).canonicalString
-        } catch {
-            throw UnshieldRequestError.invalidPublicAmount
-        }
-        self.chainId = chainId
-        self.authority = authority
-        self.assetDefinitionId = assetDefinitionId
-        self.toAccountId = toAccountId
-        self.publicAmount = canonicalPublicAmount
-        self.inputs = inputs
-        self.proof = proof
-        self.rootHint = rootHint
-        self.feePayment = feePayment
-        self.ttlMs = ttlMs
-    }
-
-    var flattenedInputs: Data {
-        Data(inputs.flatMap { $0 })
-    }
-}
-
-public enum ZkTransferRequestError: Error, LocalizedError {
-    case inputsEmpty
-    case outputsEmpty
-    case invalidInputLength(expected: Int, actual: Int)
-    case invalidOutputLength(expected: Int, actual: Int)
-    case invalidRootHintLength
-
-    public var errorDescription: String? {
-        switch self {
-        case .inputsEmpty:
-            return "ZkTransfer requests must include at least one input."
-        case .outputsEmpty:
-            return "ZkTransfer requests must include at least one output."
-        case let .invalidInputLength(expected, actual):
-            return "Input must be exactly \(expected) bytes (found \(actual))."
-        case let .invalidOutputLength(expected, actual):
-            return "Output must be exactly \(expected) bytes (found \(actual))."
-        case .invalidRootHintLength:
-            return "Root hint must be exactly 32 bytes when provided."
-        }
-    }
-}
-
-public struct ZkTransferRequest {
-    private static let fieldElementLength = 32
-
-    public let chainId: String
-    public let authority: String
-    public let assetDefinitionId: String
-    public let inputs: [Data]
-    public let outputs: [Data]
-    public let proof: ProofAttachment
-    public let rootHint: Data?
-    public let feePayment: FeePaymentIntent
-    public let ttlMs: UInt64?
-
-    public init(chainId: String,
-                authority: String,
-                assetDefinitionId: String,
-                inputs: [Data],
-                outputs: [Data],
-                proof: ProofAttachment,
-                rootHint: Data? = nil,
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) throws {
-        guard !inputs.isEmpty else {
-            throw ZkTransferRequestError.inputsEmpty
-        }
-        for input in inputs {
-            guard input.count == Self.fieldElementLength else {
-                throw ZkTransferRequestError.invalidInputLength(expected: Self.fieldElementLength,
-                                                                actual: input.count)
-            }
-        }
-        guard !outputs.isEmpty else {
-            throw ZkTransferRequestError.outputsEmpty
-        }
-        for output in outputs {
-            guard output.count == Self.fieldElementLength else {
-                throw ZkTransferRequestError.invalidOutputLength(expected: Self.fieldElementLength,
-                                                                 actual: output.count)
-            }
-        }
-        if let hint = rootHint, hint.count != Self.fieldElementLength {
-            throw ZkTransferRequestError.invalidRootHintLength
-        }
-        self.chainId = chainId
-        self.authority = authority
-        self.assetDefinitionId = assetDefinitionId
-        self.inputs = inputs
-        self.outputs = outputs
-        self.proof = proof
-        self.rootHint = rootHint
-        self.feePayment = feePayment
-        self.ttlMs = ttlMs
-    }
-
-    var flattenedInputs: Data {
-        Data(inputs.flatMap { $0 })
-    }
-
-    var flattenedOutputs: Data {
-        Data(outputs.flatMap { $0 })
-    }
-}
-
 public struct GovernanceWindow: Sendable {
     public let lower: UInt64
     public let upper: UInt64
 
-    public init(lower: UInt64, upper: UInt64) {
+    public init(lower: UInt64, upper: UInt64) throws {
+        guard lower <= upper else {
+            throw TransactionInputError.invalidGovernanceWindow(lower: lower, upper: upper)
+        }
         self.lower = lower
         self.upper = upper
     }
@@ -741,7 +519,10 @@ public struct ProposeDeployContractRequest {
                 window: GovernanceWindow? = nil,
                 mode: GovernanceVotingMode? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) {
+                ttlMs: UInt64? = 100_000) throws {
+        guard abiVersion == "1" else {
+            throw TransactionInputError.invalidGovernanceAbiVersion(abiVersion)
+        }
         self.chainId = chainId
         self.authority = authority
         self.contractAddress = contractAddress
@@ -792,7 +573,7 @@ public struct CastZkBallotRequest {
     public let authority: String
     public let electionId: String
     public let proofB64: String
-    public let publicInputs: NoritoJSON
+    public let publicInputs: GovernanceZkBallotPublicInputs
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
@@ -800,7 +581,7 @@ public struct CastZkBallotRequest {
                 authority: String,
                 electionId: String,
                 proofB64: String,
-                publicInputs: NoritoJSON,
+                publicInputs: GovernanceZkBallotPublicInputs = .init(),
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
@@ -810,23 +591,6 @@ public struct CastZkBallotRequest {
         self.publicInputs = publicInputs
         self.feePayment = feePayment
         self.ttlMs = ttlMs
-    }
-
-    public init(chainId: String,
-                authority: String,
-                electionId: String,
-                proofB64: String,
-                publicInputs: ToriiJSONValue,
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) throws {
-        let encoded = try NoritoJSON(publicInputs)
-        self.init(chainId: chainId,
-                  authority: authority,
-                  electionId: electionId,
-                  proofB64: proofB64,
-                  publicInputs: encoded,
-                  feePayment: feePayment,
-                  ttlMs: ttlMs)
     }
 }
 
@@ -1763,48 +1527,6 @@ public final class IrohaSDK: @unchecked Sendable {
         )
     }
 
-    public func buildShield(shield: ShieldRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeShield(request: shield,
-                                                        keypair: keypair,
-                                                        creationTimeMs: creationTimeMs)
-    }
-
-    public func buildShield(shield: ShieldRequest, signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeShield(request: shield,
-                                                        signingKey: signingKey,
-                                                        creationTimeMs: creationTimeMs)
-    }
-
-    public func buildUnshield(unshield: UnshieldRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeUnshield(request: unshield,
-                                                          keypair: keypair,
-                                                          creationTimeMs: creationTimeMs)
-    }
-
-    public func buildUnshield(unshield: UnshieldRequest, signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeUnshield(request: unshield,
-                                                          signingKey: signingKey,
-                                                          creationTimeMs: creationTimeMs)
-    }
-
-    public func buildZkTransfer(request: ZkTransferRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeZkTransfer(request: request,
-                                                            keypair: keypair,
-                                                            creationTimeMs: creationTimeMs)
-    }
-
-    public func buildZkTransfer(request: ZkTransferRequest, signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeZkTransfer(request: request,
-                                                            signingKey: signingKey,
-                                                            creationTimeMs: creationTimeMs)
-    }
-
     /// Build a `ClaimTwitterFollowReward` instruction payload (Norito JSON) for SOC-2 viral incentives.
     public func buildClaimTwitterFollowReward(binding: SocialKeyedHash) throws -> NoritoJSON {
         try SocialInstructionBuilders.claimTwitterFollowReward(binding: binding)
@@ -2316,13 +2038,31 @@ public final class IrohaSDK: @unchecked Sendable {
         toriiRestClient.submitGovernancePlainBallot(request, completion: completion)
     }
 
-    public func submitGovernanceZkBallot(_ request: ToriiGovernanceZkBallotRequest,
-                                         completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
+    public func submitGovernanceParliamentBallot(_ request: ToriiGovernanceParliamentBallotRequest,
+                                                 completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.submitGovernanceZkBallot(request, completion: completion)
+        toriiRestClient.submitGovernanceParliamentBallot(request, completion: completion)
+    }
+
+    public func submitGovernanceZkBallotV1(_ request: ToriiGovernanceZkBallotV1Request,
+                                           completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
+        guard let toriiRestClient else {
+            completion(.failure(Self.restUnavailableError()))
+            return
+        }
+        toriiRestClient.submitGovernanceZkBallotV1(request, completion: completion)
+    }
+
+    public func submitGovernanceZkBallotProofV1(_ request: ToriiGovernanceZkBallotProofRequest,
+                                                completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
+        guard let toriiRestClient else {
+            completion(.failure(Self.restUnavailableError()))
+            return
+        }
+        toriiRestClient.submitGovernanceZkBallotProofV1(request, completion: completion)
     }
 
     public func finalizeGovernanceReferendum(_ request: ToriiGovernanceFinalizeRequest,
@@ -2408,11 +2148,27 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func submitGovernanceZkBallot(_ request: ToriiGovernanceZkBallotRequest) async throws -> ToriiGovernanceBallotResponse {
+    public func submitGovernanceParliamentBallot(_ request: ToriiGovernanceParliamentBallotRequest) async throws -> ToriiGovernanceBallotResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.submitGovernanceZkBallot(request)
+        return try await toriiRestClient.submitGovernanceParliamentBallot(request)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submitGovernanceZkBallotV1(_ request: ToriiGovernanceZkBallotV1Request) async throws -> ToriiGovernanceBallotResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitGovernanceZkBallotV1(request)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submitGovernanceZkBallotProofV1(_ request: ToriiGovernanceZkBallotProofRequest) async throws -> ToriiGovernanceBallotResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitGovernanceZkBallotProofV1(request)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2586,39 +2342,6 @@ public final class IrohaSDK: @unchecked Sendable {
         try await submit(envelope: envelope)
     }
 
-    public func submit(shield request: ShieldRequest, keypair: Keypair, completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildShield(shield: request, keypair: keypair)
-        submit(envelope: envelope, completion: completion)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func submit(shield request: ShieldRequest, keypair: Keypair) async throws {
-        let envelope = try buildShield(shield: request, keypair: keypair)
-        try await submit(envelope: envelope)
-    }
-
-    public func submit(unshield request: UnshieldRequest, keypair: Keypair, completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildUnshield(unshield: request, keypair: keypair)
-        submit(envelope: envelope, completion: completion)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func submit(unshield request: UnshieldRequest, keypair: Keypair) async throws {
-        let envelope = try buildUnshield(unshield: request, keypair: keypair)
-        try await submit(envelope: envelope)
-    }
-
-    public func submit(zkTransfer request: ZkTransferRequest, keypair: Keypair, completion: @Sendable @escaping (Error?) -> Void) throws {
-        let envelope = try buildZkTransfer(request: request, keypair: keypair)
-        submit(envelope: envelope, completion: completion)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func submit(zkTransfer request: ZkTransferRequest, keypair: Keypair) async throws {
-        let envelope = try buildZkTransfer(request: request, keypair: keypair)
-        try await submit(envelope: envelope)
-    }
-
     public func submit(multisigRegister request: MultisigRegisterRequest,
                        keypair: Keypair,
                        completion: @Sendable @escaping (Error?) -> Void) throws {
@@ -2722,84 +2445,6 @@ public final class IrohaSDK: @unchecked Sendable {
                                keypair: Keypair,
                                pollOptions: PipelineStatusPollOptions? = nil) async throws -> ToriiPipelineTransactionStatus {
         let envelope = try buildBurn(burn: request, keypair: keypair)
-        return try await submitAndWait(envelope: envelope, pollOptions: pollOptions)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    @discardableResult
-    public func submitAndWait(shield request: ShieldRequest,
-                                  keypair: Keypair,
-                                  pollOptions: PipelineStatusPollOptions? = nil,
-                                  completion: @Sendable @escaping (Result<ToriiPipelineTransactionStatus, Error>) -> Void) -> Task<Void, Never> {
-        do {
-            let envelope = try buildShield(shield: request, keypair: keypair)
-            return submitAndWait(envelope: envelope, pollOptions: pollOptions, completion: completion)
-        } catch {
-            return Task {
-                await MainActor.run {
-                    completion(.failure(error))
-                }
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func submitAndWait(shield request: ShieldRequest,
-                               keypair: Keypair,
-                               pollOptions: PipelineStatusPollOptions? = nil) async throws -> ToriiPipelineTransactionStatus {
-        let envelope = try buildShield(shield: request, keypair: keypair)
-        return try await submitAndWait(envelope: envelope, pollOptions: pollOptions)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    @discardableResult
-    public func submitAndWait(unshield request: UnshieldRequest,
-                                   keypair: Keypair,
-                                   pollOptions: PipelineStatusPollOptions? = nil,
-                                   completion: @Sendable @escaping (Result<ToriiPipelineTransactionStatus, Error>) -> Void) -> Task<Void, Never> {
-        do {
-            let envelope = try buildUnshield(unshield: request, keypair: keypair)
-            return submitAndWait(envelope: envelope, pollOptions: pollOptions, completion: completion)
-        } catch {
-            return Task {
-                await MainActor.run {
-                    completion(.failure(error))
-                }
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func submitAndWait(unshield request: UnshieldRequest,
-                               keypair: Keypair,
-                               pollOptions: PipelineStatusPollOptions? = nil) async throws -> ToriiPipelineTransactionStatus {
-        let envelope = try buildUnshield(unshield: request, keypair: keypair)
-        return try await submitAndWait(envelope: envelope, pollOptions: pollOptions)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    @discardableResult
-    public func submitAndWait(zkTransfer request: ZkTransferRequest,
-                                   keypair: Keypair,
-                                   pollOptions: PipelineStatusPollOptions? = nil,
-                                   completion: @Sendable @escaping (Result<ToriiPipelineTransactionStatus, Error>) -> Void) -> Task<Void, Never> {
-        do {
-            let envelope = try buildZkTransfer(request: request, keypair: keypair)
-            return submitAndWait(envelope: envelope, pollOptions: pollOptions, completion: completion)
-        } catch {
-            return Task {
-                await MainActor.run {
-                    completion(.failure(error))
-                }
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func submitAndWait(zkTransfer request: ZkTransferRequest,
-                               keypair: Keypair,
-                               pollOptions: PipelineStatusPollOptions? = nil) async throws -> ToriiPipelineTransactionStatus {
-        let envelope = try buildZkTransfer(request: request, keypair: keypair)
         return try await submitAndWait(envelope: envelope, pollOptions: pollOptions)
     }
 

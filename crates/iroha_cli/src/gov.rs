@@ -6,6 +6,8 @@ mod deploy;
 mod shared;
 mod vote;
 
+pub(crate) use shared::parse_governance_selector_v1;
+
 use self::council::CouncilArgs;
 use crate::{Run, RunContext};
 use eyre::Result;

@@ -14,7 +14,15 @@ helper rather than invoking Cargo directly:
 ```sh
 SOURCE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
 git verify-commit "$SOURCE_COMMIT"
-python3 -I scripts/build_kagemusha_v4_candidate_bundle.py --root "$PWD"
+python3 -I scripts/kagemusha_source_tree_seal.py descriptor \
+  --root "$PWD" > /absolute/private/reviewed-source-closure-v1.json
+REVIEWED_SOURCE_CLOSURE_SHA256=<reviewed-descriptor-sha256>
+python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
+  --root "$PWD" \
+  --target-dir /absolute/private/new-kagemusha-cargo-target \
+  --reviewed-source-closure /absolute/private/reviewed-source-closure-v1.json \
+  --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256" \
+  > /absolute/private/sealed-build-report.json
 ```
 
 The seal requires an entirely clean checkout, including untracked files. It
@@ -86,13 +94,14 @@ duplicate-input-block-height.txt
 duplicate-input-verified-at-ms.txt
 ```
 
-The finality roster must be byte-identical to the candidate roster. The anchor,
-Commit QC, inclusion proof, and roster must come from an external finality
-ceremony or capture that already commits to this exact candidate manifest. The
-stager does not contact a live chain, manufacture consensus evidence, or define
-a live-chain capture procedure. Consequently, a successful stage means that
-the supplied external evidence was cryptographically verified and
-candidate-manifest-bound; it does not claim that this repository captured it.
+The finality roster must be byte-identical to the candidate roster and every
+release window must contain at least four public validators. The anchor, Commit
+QC, inclusion proof, and roster must come from an external finality ceremony or
+capture that already commits to this exact candidate manifest. The stager does
+not contact a live chain, manufacture consensus evidence, or define a live-chain
+capture procedure. Consequently, a successful stage means that the supplied
+external evidence was cryptographically verified and candidate-manifest-bound;
+it does not claim that this repository captured it.
 
 Operation IDs are distinct nonzero 32-byte values. The two verifier commitments
 must equal the current source's canonical transfer and unshield verifier-key

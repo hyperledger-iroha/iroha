@@ -2003,6 +2003,11 @@ pub mod musubi {
         "musubi.v1.query.exact_release",
         "/v1/musubi/queries/exact-release",
     );
+    /// Fetch one exact immutable provider bundle-attestation record.
+    pub const PROVIDER_BUNDLE_ATTESTATION: RouteDescriptor = app_post(
+        "musubi.v1.query.provider_bundle_attestation",
+        "/v1/musubi/queries/provider-bundle-attestation",
+    );
     /// Fetch a finalized resolver-index page.
     pub const RESOLVER_INDEX: RouteDescriptor = app_post(
         "musubi.v1.query.resolver_index",
@@ -2051,6 +2056,11 @@ pub mod musubi {
     pub const ARCHIVE_REGISTER: RouteDescriptor = app_post(
         "musubi.v1.instruction.archive_register",
         "/v1/musubi/instructions/archive-register",
+    );
+    /// Build an unsigned immutable provider bundle-attestation registration.
+    pub const PROVIDER_BUNDLE_ATTESTATION_REGISTER: RouteDescriptor = app_post(
+        "musubi.v1.instruction.provider_bundle_attestation_register",
+        "/v1/musubi/instructions/provider-bundle-attestation-register",
     );
     /// Build an unsigned archive-location add or renewal.
     pub const ARCHIVE_LOCATION_ADD: RouteDescriptor = app_post(
@@ -2137,6 +2147,7 @@ pub mod musubi {
     pub const ROUTES: &[RouteDescriptor] = &[
         EXACT_PACKAGE,
         EXACT_RELEASE,
+        PROVIDER_BUNDLE_ATTESTATION,
         RESOLVER_INDEX,
         VERSIONS,
         MAINTAINERS,
@@ -2148,6 +2159,7 @@ pub mod musubi {
         SEARCH,
         NAMESPACE_BINDING_REGISTER,
         ARCHIVE_REGISTER,
+        PROVIDER_BUNDLE_ATTESTATION_REGISTER,
         ARCHIVE_LOCATION_ADD,
         ARCHIVE_LOCATION_RETIRE,
         RELEASE_PUBLISH,
@@ -2477,18 +2489,6 @@ pub mod sumeragi {
         public_get(id, path).with_feature_gate(FeatureGate::Feature("telemetry"))
     }
 
-    const fn operator_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        RouteDescriptor::new(
-            id,
-            HttpMethod::Post,
-            path,
-            ApiSurface::Operator,
-            Listener::Torii,
-        )
-        .with_authentication(AuthenticationPolicy::OperatorSignature)
-        .with_projections(RouteProjections::ALL)
-    }
-
     const fn telemetry_sse(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2610,16 +2610,6 @@ pub mod sumeragi {
         "/v1/sumeragi/commit-qcs/{block_hash}",
     );
 
-    /// Submit authenticated consensus evidence.
-    pub const EVIDENCE_SUBMIT: RouteDescriptor =
-        operator_post("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence");
-    /// Submit an authenticated VRF commitment.
-    pub const VRF_COMMIT: RouteDescriptor =
-        operator_post("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit");
-    /// Submit an authenticated VRF reveal.
-    pub const VRF_REVEAL: RouteDescriptor =
-        operator_post("operator.sumeragi.vrf.reveal", "/v1/sumeragi/vrf/reveal");
-
     /// Complete route family registered by `add_sumeragi_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         EVIDENCE_COUNT,
@@ -2650,9 +2640,6 @@ pub mod sumeragi {
         TELEMETRY,
         PARAMETERS,
         COMMIT_QC,
-        EVIDENCE_SUBMIT,
-        VRF_COMMIT,
-        VRF_REVEAL,
     ];
 }
 
@@ -2933,9 +2920,6 @@ pub mod runtime_governance {
     /// Read a referendum tally snapshot.
     pub const GOV_TALLY_GET: RouteDescriptor =
         app_get("governance.tally.read", "/v1/gov/tally/{id}");
-    /// Submit a zero-knowledge governance ballot.
-    pub const GOV_BALLOT_ZK: RouteDescriptor =
-        app_post("governance.ballot.zk", "/v1/gov/ballots/zk");
     /// Submit a version-one zero-knowledge governance ballot.
     pub const GOV_BALLOT_ZK_V1: RouteDescriptor =
         app_post("governance.ballot.zk_v1", "/v1/gov/ballots/zk-v1");
@@ -3044,7 +3028,6 @@ pub mod runtime_governance {
         GOV_LOCKS_GET,
         GOV_REFERENDUM_GET,
         GOV_TALLY_GET,
-        GOV_BALLOT_ZK,
         GOV_BALLOT_ZK_V1,
         GOV_BALLOT_ZK_V1_PROOF,
         GOV_BALLOT_PLAIN,
@@ -4006,8 +3989,6 @@ pub mod application_api {
         ASSETS_DEFINITIONS_BY_ASSET_GET => app_get("application.assets_definitions_by_asset_get", "/v1/assets/definitions/{asset}");
         ASSETS_DEFINITIONS_QUERY_POST => app_post("application.assets_definitions_query_post", "/v1/assets/definitions/query");
         CONFIDENTIAL_ASSETS_BY_DEFINITION_ID_TRANSITIONS_GET => app_get("application.confidential_assets_by_definition_id_transitions_get", "/v1/confidential/assets/{definition_id}/transitions");
-        CONFIDENTIAL_NOTES_GET => app_sdk_get("application.confidential_notes_get", "/v1/confidential/notes");
-        CONFIDENTIAL_RELAY_SUBMIT_POST => app_sdk_post("application.confidential_relay_submit_post", "/v1/confidential/relay/submit");
         NFTS_GET => app_get("application.nfts_get", "/v1/nfts");
         NFTS_QUERY_POST => app_post("application.nfts_query_post", "/v1/nfts/query");
         RWAS_GET => app_get("application.rwas_get", "/v1/rwas");
@@ -4544,6 +4525,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     data_availability::PIN_INTENTS_VERIFY,
     musubi::EXACT_PACKAGE,
     musubi::EXACT_RELEASE,
+    musubi::PROVIDER_BUNDLE_ATTESTATION,
     musubi::RESOLVER_INDEX,
     musubi::VERSIONS,
     musubi::MAINTAINERS,
@@ -4555,6 +4537,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     musubi::SEARCH,
     musubi::NAMESPACE_BINDING_REGISTER,
     musubi::ARCHIVE_REGISTER,
+    musubi::PROVIDER_BUNDLE_ATTESTATION_REGISTER,
     musubi::ARCHIVE_LOCATION_ADD,
     musubi::ARCHIVE_LOCATION_RETIRE,
     musubi::RELEASE_PUBLISH,
@@ -4618,9 +4601,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::TELEMETRY,
     sumeragi::PARAMETERS,
     sumeragi::COMMIT_QC,
-    sumeragi::EVIDENCE_SUBMIT,
-    sumeragi::VRF_COMMIT,
-    sumeragi::VRF_REVEAL,
     runtime_governance::ZK_ROOTS,
     runtime_governance::ZK_MERKLE_PATH,
     runtime_governance::ZK_VOTE_TALLY,
@@ -4665,7 +4645,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::GOV_LOCKS_GET,
     runtime_governance::GOV_REFERENDUM_GET,
     runtime_governance::GOV_TALLY_GET,
-    runtime_governance::GOV_BALLOT_ZK,
     runtime_governance::GOV_BALLOT_ZK_V1,
     runtime_governance::GOV_BALLOT_ZK_V1_PROOF,
     runtime_governance::GOV_BALLOT_PLAIN,
@@ -4901,8 +4880,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     application_api::ASSETS_DEFINITIONS_BY_ASSET_GET,
     application_api::ASSETS_DEFINITIONS_QUERY_POST,
     application_api::CONFIDENTIAL_ASSETS_BY_DEFINITION_ID_TRANSITIONS_GET,
-    application_api::CONFIDENTIAL_NOTES_GET,
-    application_api::CONFIDENTIAL_RELAY_SUBMIT_POST,
     application_api::NFTS_GET,
     application_api::NFTS_QUERY_POST,
     application_api::RWAS_GET,
@@ -5214,6 +5191,38 @@ mod tests {
             assert!(
                 CATALOGED_ROUTES.iter().all(|route| route.path() != retired),
                 "retired route {retired} leaked into the canonical catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_catalog_retires_direct_sumeragi_mutation_routes() {
+        assert_eq!(sumeragi::EVIDENCE_LIST.method(), HttpMethod::Get);
+        assert_eq!(sumeragi::EVIDENCE_LIST.path(), "/v1/sumeragi/evidence");
+
+        for (stable_route_id, path) in [
+            ("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence"),
+            ("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit"),
+            ("operator.sumeragi.vrf.reveal", "/v1/sumeragi/vrf/reveal"),
+        ] {
+            assert!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .all(|route| route.stable_route_id() != stable_route_id),
+                "retired Sumeragi route id remains cataloged: {stable_route_id}"
+            );
+            assert!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .all(|route| route.method() != HttpMethod::Post || route.path() != path),
+                "retired Sumeragi mutation route remains cataloged: POST {path}"
+            );
+        }
+
+        for path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+            assert!(
+                CATALOGED_ROUTES.iter().all(|route| route.path() != path),
+                "retired Sumeragi mutation path remains cataloged: {path}"
             );
         }
     }
@@ -5863,6 +5872,7 @@ mod tests {
             "/v1/sorafs/capacity/por-challenge",
             "/v1/sorafs/capacity/por",
             "/v1/sorafs/por/trigger",
+            "/v1/gov/ballots/zk",
         ] {
             assert!(
                 routes.iter().all(|route| route.path() != unsupported_path),
@@ -6512,7 +6522,7 @@ mod tests {
 
     #[test]
     fn musubi_v1_catalog_is_post_only_and_has_no_legacy_routes() {
-        assert_eq!(musubi::ROUTES.len(), 29);
+        assert_eq!(musubi::ROUTES.len(), 31);
         assert_eq!(RouteCatalog::new(musubi::ROUTES).validate(), Ok(()));
         assert!(musubi::ROUTES.iter().all(|route| {
             route.method() == HttpMethod::Post

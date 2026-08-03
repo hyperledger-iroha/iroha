@@ -4,9 +4,8 @@
 //! blocking signing, body fsync/validation, state application, and certified
 //! body serving execute on one ordered I/O worker and return tagged
 //! completions. Control messages use the bounded committee topology: proposal
-//! manifests reach the full committee, first-send body chunks reach Set A,
-//! votes go directly to the proxy tail, and timeout/QC recovery remains
-//! committee-wide.
+//! manifests and phase votes reach the full committee, first-send body chunks
+//! reach Set A, and timeout/QC recovery remains committee-wide.
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -94,11 +93,11 @@ use super::{
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
-        CertifiedBodyFetchCompletionDisposition, CompletionDisposition, ConsensusSignTask,
-        DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
-        EffectTransportError, EffectWorkId, PayloadChunkLifecycleDisposition,
-        PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
-        V2EffectExecutor, V2EffectServices,
+        CertifiedBodyFetchCompletionDisposition, CompletionDisposition,
+        ConsensusBroadcastDisposition, ConsensusSignTask, DurableApplyCompletion,
+        EffectExecutorError, EffectExecutorStatus, EffectRuntime, EffectTransportError,
+        EffectWorkId, PayloadChunkLifecycleDisposition, PendingTipRecoveryAttemptResult,
+        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{
         DurableLaneRolloverAuthority, V2LaneWorkEffect, durable_historical_lane_output_source_hash,
@@ -17873,7 +17872,7 @@ impl V2EffectServices for ProductionV2Services {
     fn broadcast_consensus(
         &mut self,
         message: wire::ConsensusMessageV2,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<ConsensusBroadcastDisposition, Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
@@ -17883,11 +17882,8 @@ impl V2EffectServices for ProductionV2Services {
             .map_err(|error| error.to_string())?;
 
         let control_targets = match &message.payload {
-            wire::ConsensusMessageV2Payload::Vote(vote) => {
-                let committee = self.committee_for_round(vote.round)?;
-                self.remote_voters_for_indices(&[committee.proxy_tail()])?
-            }
             wire::ConsensusMessageV2Payload::Proposal(_)
+            | wire::ConsensusMessageV2Payload::Vote(_)
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
@@ -17946,7 +17942,11 @@ impl V2EffectServices for ProductionV2Services {
             iroha_logger::debug!("deferred Sumeragi v2 control fanout to reducer retransmission");
         }
         operation.complete();
-        Ok(())
+        Ok(if source_retained {
+            ConsensusBroadcastDisposition::SourceRetained
+        } else {
+            ConsensusBroadcastDisposition::ExactServiceAccepted
+        })
     }
 
     fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
@@ -22872,11 +22872,12 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn prepare_and_commit_votes_target_only_the_current_view_proxy_tail() {
+    fn prepare_and_commit_votes_reach_every_remote_voter_across_views() {
         let (mut service, _) = fixture();
         let observations = install_consensus_route_observer(&mut service);
         let roster_len =
             u64::try_from(service.context.roster.len()).expect("fixture roster length");
+        let expected = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
 
         for view in 0..roster_len {
             let round = wire::ConsensusRound {
@@ -22884,26 +22885,13 @@ pub(super) mod tests {
                 height: service.context.height,
                 view,
             };
-            let committee = service
-                .committee_for_round(round)
-                .expect("project current-view committee");
-            let proxy_tail = service.context.roster
-                [usize::try_from(committee.proxy_tail()).expect("proxy-tail index")]
-            .validator
-            .clone();
-            let expected = if proxy_tail == service.local_peer {
-                BTreeSet::new()
-            } else {
-                BTreeSet::from([proxy_tail])
-            };
-
             for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
                 let vote = routing_vote(&service, view, phase);
                 service
                     .broadcast_consensus(wire::ConsensusMessageV2::new(
                         wire::ConsensusMessageV2Payload::Vote(vote),
                     ))
-                    .expect("route vote to the projected proxy tail");
+                    .expect("route phase vote to every remote voter");
                 let routed = take_consensus_route_observations(&observations);
                 let targets = routed
                     .iter()
@@ -22916,7 +22904,10 @@ pub(super) mod tests {
                         _ => None,
                     })
                     .collect::<BTreeSet<_>>();
-                assert_eq!(targets, expected);
+                assert_eq!(
+                    targets, expected,
+                    "phase vote fanout differs in view {view}"
+                );
                 assert_eq!(routed.len(), expected.len());
             }
         }
@@ -23010,6 +23001,72 @@ pub(super) mod tests {
             proposal_route_targets(&retransmission, proposal.round, &manifest),
             expected_all
         );
+    }
+
+    #[test]
+    fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
+        let (mut service, keys) = fixture_with_block_payload();
+        service
+            .set_exact_output_shared_unit_capacity_for_test(1)
+            .expect("install one-unit adversarial output corridor");
+        service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+
+        let blocking_vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
+        assert_eq!(
+            service
+                .broadcast_consensus(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(blocking_vote),
+                ))
+                .expect("the first control transfers into the exact corridor"),
+            ConsensusBroadcastDisposition::ExactServiceAccepted
+        );
+        assert!(
+            service
+                .has_pending_exact_output()
+                .expect("inspect actor-backpressured control")
+        );
+
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        set_local_validator(&mut service, &keys, proposal.proposer);
+        service
+            .register_outbound_payload(service.active_tag, payload)
+            .expect("retain proposal chunks before broadcast");
+        let message = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+            proposal.clone(),
+        ));
+        assert_eq!(
+            service
+                .broadcast_consensus(message.clone())
+                .expect("corridor pressure is a typed ownership disposition"),
+            ConsensusBroadcastDisposition::SourceRetained,
+            "a full same-class corridor must not masquerade as Proposal acceptance"
+        );
+        assert!(!service.output_guard.restart_required());
+
+        service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        assert!(
+            !service
+                .retry_pending_exact_output()
+                .expect("network recovery drains the previously accepted exact suffix")
+        );
+        assert_eq!(
+            service
+                .broadcast_consensus(message)
+                .expect("the retained Proposal source retries after corridor recovery"),
+            ConsensusBroadcastDisposition::ExactServiceAccepted
+        );
+        assert!(
+            !service
+                .has_pending_exact_output()
+                .expect("accepted retransmission drains immediately")
+        );
+        assert!(!service.output_guard.restart_required());
     }
 
     #[test]
@@ -24928,12 +24985,17 @@ pub(super) mod tests {
         let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
         let mut invalid_body = body.clone();
         invalid_body[0] ^= 1;
+        let invalid_chunks = wire::encode_payload_chunks(service.context.da_layout, &invalid_body)
+            .expect("canonically encode the alternate reconstruction body");
+        // Deliberate negative data: the alternate bytes use complete RS16
+        // geometry, but the manifest remains bound to the original proposal
+        // subject so reconstruction reaches the semantic payload-hash check.
         let invalid_manifest = wire::PayloadManifest::derive(
             &service.context,
             proposal.round,
             proposal.subject,
-            u64::try_from(body.len()).expect("body length"),
-            std::slice::from_ref(&invalid_body),
+            u64::try_from(invalid_body.len()).expect("body length"),
+            &invalid_chunks,
         )
         .expect("structurally valid invalid manifest");
         assert_ne!(invalid_manifest, *payload.manifest());
@@ -24949,7 +25011,7 @@ pub(super) mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&invalid_manifest),
             index: 0,
-            bytes: invalid_body,
+            bytes: invalid_chunks[0].clone(),
             sender: 0,
             signature: Vec::new(),
         };

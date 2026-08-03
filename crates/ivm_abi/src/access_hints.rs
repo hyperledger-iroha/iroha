@@ -115,6 +115,10 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1: &[&str] = &["__kotodam
 // END GENERATED: kotodama-v1-dynamic-access-policy
 
 /// Reason a dynamic-access hint is outside the canonical V1 domain.
+#[allow(
+    clippy::enum_variant_names,
+    reason = "the public V1 validation errors retain their explicit invalid-field names"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DynamicAccessHintV1Error {
     /// `base_key` was not exactly `state:` plus one state declaration identifier.

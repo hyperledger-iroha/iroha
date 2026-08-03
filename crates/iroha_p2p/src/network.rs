@@ -7,7 +7,7 @@
 #[cfg(feature = "quic")]
 use std::sync::OnceLock;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt::Debug,
     io,
     net::{IpAddr, ToSocketAddrs},
@@ -50,8 +50,8 @@ use tokio::{
 #[cfg(feature = "p2p_tls")]
 use crate::boilerplate;
 use crate::{
-    Broadcast, Error, NetworkMessage, OnlinePeers, Post, Priority, RelayRole, UpdatePeers,
-    UpdateTopology, UpdateTrustedPeers,
+    Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
+    UpdatePeers, UpdateTopology, UpdateTrustedPeers,
     boilerplate::*,
     peer::{
         Connection, ConnectionId, OutboundFrameQueueLimits, OutboundPostByteBudgets,
@@ -98,6 +98,7 @@ struct ConsensusCapsSnapshot {
 #[derive(Clone, Debug, Default)]
 struct PendingReplySourceAuthority {
     topology: Option<UpdateTopology>,
+    validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
     trusted: Option<UpdateTrustedPeers>,
     acl: Option<message::UpdateAcl>,
     consensus_caps: Option<ConsensusCapsSnapshot>,
@@ -106,16 +107,151 @@ struct PendingReplySourceAuthority {
 impl PendingReplySourceAuthority {
     fn is_empty(&self) -> bool {
         self.topology.is_none()
+            && self.validator_dial_roster.is_none()
             && self.trusted.is_none()
             && self.acl.is_none()
             && self.consensus_caps.is_none()
     }
 }
 
+/// Retained validator-dial authority updates.
+///
+/// Consensus topology changes use the coupled variant so a newly admitted
+/// validator can never be observed as an unmanaged eager-dial peer between two
+/// independently scheduled actor updates.
+#[derive(Clone, Debug)]
+enum ValidatorDialControlUpdate {
+    Roster(message::UpdateValidatorDialRoster),
+    Topology(message::UpdateValidatorTopology),
+}
+
 #[derive(Clone, Debug)]
 struct ReplySourceAuthorityProjection {
     protected_sources: HashSet<PeerId>,
     reconciliation_topology: HashSet<PeerId>,
+}
+
+/// Deterministic ownership of configured-validator connection establishment.
+///
+/// The canonical roster defines a balanced tournament: every unordered pair
+/// has one preferred dialer, while each node owns either `floor((n - 1) / 2)`
+/// or `ceil((n - 1) / 2)` of its pairs.  A standby installs its takeover
+/// deadline only when that pair first has an address to dial, so daemon startup
+/// work before topology publication cannot consume the failover interval.
+#[derive(Debug)]
+struct ValidatorDialScheduler {
+    configured_roster: BTreeSet<PeerId>,
+    roster: BTreeSet<PeerId>,
+    standby_not_before: HashMap<PeerId, tokio::time::Instant>,
+    takeover_delay: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidatorDialRole {
+    /// Relay, observer, dynamic, or otherwise unmanaged peer.
+    Unmanaged,
+    /// This endpoint owns the pair's immediate dial attempt.
+    Preferred,
+    /// The other endpoint owns the immediate attempt; this endpoint is backup.
+    Standby,
+}
+
+impl ValidatorDialScheduler {
+    fn new(roster: HashSet<PeerId>, takeover_delay: Duration) -> Self {
+        let roster: BTreeSet<_> = roster.into_iter().collect();
+        Self {
+            configured_roster: roster.clone(),
+            roster,
+            standby_not_before: HashMap::new(),
+            takeover_delay,
+        }
+    }
+
+    fn replace_roster(&mut self, roster: HashSet<PeerId>, self_id: &PeerId) {
+        self.roster = roster
+            .into_iter()
+            .filter(|peer_id| self.configured_roster.contains(peer_id))
+            .collect();
+        let roster = &self.roster;
+        self.standby_not_before.retain(|peer_id, _| {
+            Self::role_in(roster, self_id, peer_id) == ValidatorDialRole::Standby
+        });
+    }
+
+    fn role(&self, self_id: &PeerId, peer_id: &PeerId) -> ValidatorDialRole {
+        Self::role_in(&self.roster, self_id, peer_id)
+    }
+
+    fn role_in(roster: &BTreeSet<PeerId>, self_id: &PeerId, peer_id: &PeerId) -> ValidatorDialRole {
+        if self_id == peer_id || !roster.contains(self_id) || !roster.contains(peer_id) {
+            return ValidatorDialRole::Unmanaged;
+        }
+
+        let Some(self_rank) = roster.iter().position(|candidate| candidate == self_id) else {
+            return ValidatorDialRole::Unmanaged;
+        };
+        let Some(peer_rank) = roster.iter().position(|candidate| candidate == peer_id) else {
+            return ValidatorDialRole::Unmanaged;
+        };
+        let count = roster.len();
+        let forward = (peer_rank + count - self_rank) % count;
+        let reverse = count - forward;
+        let preferred = forward < reverse || (forward == reverse && self_rank < peer_rank);
+        if preferred {
+            ValidatorDialRole::Preferred
+        } else {
+            ValidatorDialRole::Standby
+        }
+    }
+
+    /// Return the earliest instant at which this endpoint may dial `peer_id`.
+    ///
+    /// `None` means immediate. Repeated calls retain the first standby deadline;
+    /// topology refreshes and malicious address gossip therefore cannot postpone
+    /// takeover indefinitely or create additional retry epochs.
+    fn not_before(
+        &mut self,
+        self_id: &PeerId,
+        peer_id: &PeerId,
+        now: tokio::time::Instant,
+        startup_not_before: tokio::time::Instant,
+    ) -> Option<tokio::time::Instant> {
+        match self.role(self_id, peer_id) {
+            ValidatorDialRole::Unmanaged | ValidatorDialRole::Preferred => {
+                self.standby_not_before.remove(peer_id);
+                None
+            }
+            ValidatorDialRole::Standby => {
+                let base = core::cmp::max(now, startup_not_before);
+                Some(
+                    *self
+                        .standby_not_before
+                        .entry(peer_id.clone())
+                        .or_insert_with(|| base + self.takeover_delay),
+                )
+            }
+        }
+    }
+
+    /// Start a fresh failover epoch after an authenticated session exists.
+    fn note_session_established(
+        &mut self,
+        self_id: &PeerId,
+        peer_id: &PeerId,
+        now: tokio::time::Instant,
+        startup_not_before: tokio::time::Instant,
+    ) {
+        match self.role(self_id, peer_id) {
+            ValidatorDialRole::Standby => {
+                let base = core::cmp::max(now, startup_not_before);
+                self.standby_not_before
+                    .insert(peer_id.clone(), base + self.takeover_delay);
+            }
+            ValidatorDialRole::Unmanaged | ValidatorDialRole::Preferred => {
+                self.standby_not_before.remove(peer_id);
+            }
+        }
+    }
 }
 
 impl ConsensusCapsSnapshot {
@@ -345,6 +481,11 @@ fn runtime_from_handshake(
             })
         })
         .transpose()?;
+    if puzzle_params.is_some() && ticket_ttl <= min_ticket_ttl {
+        return Err(Error::HandshakeSoranet(format!(
+            "invalid soranet puzzle ticket timing: ticket_ttl {ticket_ttl:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
+        )));
+    }
 
     let signed_ticket_public_key = signed_ticket_public_key
         .map(|key| {
@@ -373,8 +514,7 @@ fn runtime_from_handshake(
         )
         .map_err(|err| {
             Error::HandshakeSoranet(format!(
-                "failed to load soranet revocation store at {}: {err}",
-                revocation_store_path
+                "failed to load soranet revocation store at {revocation_store_path}: {err}"
             ))
         })?
     } else {
@@ -7220,6 +7360,8 @@ pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     update_topology_sender: ControlUpdateSender<UpdateTopology>,
     /// Latest [`UpdatePeers`] snapshot sender.
     update_peers_sender: ControlUpdateSender<UpdatePeers>,
+    /// Latest configured-validator dial-roster snapshot sender.
+    update_validator_dial_roster_sender: ControlUpdateSender<ValidatorDialControlUpdate>,
     /// Latest [`UpdatePeerCapabilities`] snapshot sender.
     update_peer_capabilities_sender: ControlUpdateSender<message::UpdatePeerCapabilities>,
     /// Latest trusted-peers snapshot sender.
@@ -7279,6 +7421,7 @@ impl<T: Pload, E: Enc> Clone for NetworkBaseHandle<T, E> {
             reply_route_source_capacity: self.reply_route_source_capacity,
             update_topology_sender: self.update_topology_sender.clone(),
             update_peers_sender: self.update_peers_sender.clone(),
+            update_validator_dial_roster_sender: self.update_validator_dial_roster_sender.clone(),
             update_peer_capabilities_sender: self.update_peer_capabilities_sender.clone(),
             update_trusted_peers_sender: self.update_trusted_peers_sender.clone(),
             update_acl_sender: self.update_acl_sender.clone(),
@@ -7741,9 +7884,9 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// # Errors
     /// Returns an error for invalid frame/queue geometry, listener binding or
     /// transport setup failures, and incompatible handshake configuration.
-    #[log(skip(key_pair, shutdown_signal))]
+    #[log(skip(identity_keys, shutdown_signal))]
     pub async fn start(
-        key_pair: KeyPair,
+        identity_keys: P2pIdentityKeys,
         config: Config,
         chain_id: ChainId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
@@ -7751,7 +7894,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
         Self::start_with_crypto(
-            key_pair,
+            identity_keys,
             config,
             chain_id,
             consensus_caps,
@@ -7770,6 +7913,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
         let (update_topology_tx, update_topology_rx) = control_update_channel();
         let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_validator_dial_roster_tx, update_validator_dial_roster_rx) =
+            control_update_channel();
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
@@ -7794,6 +7939,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
 
         drop(update_topology_rx);
         drop(update_peers_rx);
+        drop(update_validator_dial_roster_rx);
         drop(update_peer_capabilities_rx);
         drop(update_trusted_rx);
         drop(update_acl_rx);
@@ -7810,6 +7956,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             reply_route_source_capacity: 1,
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
+            update_validator_dial_roster_sender: update_validator_dial_roster_tx,
             update_peer_capabilities_sender: update_peer_capabilities_tx,
             update_trusted_peers_sender: update_trusted_tx,
             update_acl_sender: update_acl_tx,
@@ -7845,7 +7992,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         }
     }
 
-    /// Launch the P2P runtime with pluggable Noise/TLS capability overrides.
+    /// Launch the P2P runtime with pluggable SoraNet/TLS capability overrides.
     ///
     /// Use this entrypoint when tests or specialised deployments need to force
     /// specific handshake capabilities (e.g., consensus/torii lanes, confidential
@@ -7862,10 +8009,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// address, if the crypto handshake fails during bootstrap, or if the
     /// reactor tasks fail to initialise (for example, due to TLS key/cert issues
     /// or capability mismatches).
-    #[log(skip(key_pair, shutdown_signal))]
+    #[log(skip(identity_keys, shutdown_signal))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
     pub async fn start_with_crypto(
-        key_pair: KeyPair,
+        identity_keys: P2pIdentityKeys,
         config: Config,
         chain_id: ChainId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
@@ -7874,7 +8021,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
         Self::start_with_crypto_and_initial_trusted_sources(
-            key_pair,
+            identity_keys,
             config,
             chain_id,
             consensus_caps,
@@ -7899,10 +8046,48 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// Returns an error under the same conditions as [`Self::start_with_crypto`],
     /// and when the initial protected-source projection exceeds
     /// `network.max_total_connections`.
-    #[log(skip(key_pair, shutdown_signal))]
+    #[log(skip(identity_keys, shutdown_signal))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
     pub async fn start_with_crypto_and_initial_trusted_sources(
-        key_pair: KeyPair,
+        identity_keys: P2pIdentityKeys,
+        config: Config,
+        chain_id: ChainId,
+        consensus_caps: Option<crate::ConsensusHandshakeCaps>,
+        confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
+        crypto_caps: Option<crate::CryptoHandshakeCaps>,
+        initial_trusted_sources: HashSet<PeerId>,
+        shutdown_signal: ShutdownSignal,
+    ) -> Result<(Self, Child), Error> {
+        Self::start_with_crypto_and_initial_authorities(
+            identity_keys,
+            config,
+            chain_id,
+            consensus_caps,
+            confidential_caps,
+            crypto_caps,
+            initial_trusted_sources,
+            HashSet::new(),
+            shutdown_signal,
+        )
+        .await
+    }
+
+    /// Launch with both protected-source authority and the configured validator
+    /// roster that owns pairwise initial dials.
+    ///
+    /// The validator roster is installed before the actor can process topology
+    /// or address snapshots, closing the zero-delay startup race that would
+    /// otherwise permit both endpoints to begin the expensive mandatory-PQ
+    /// handshake.
+    #[log(skip(
+        identity_keys,
+        initial_trusted_sources,
+        initial_validator_dial_roster,
+        shutdown_signal
+    ))]
+    #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
+    pub async fn start_with_crypto_and_initial_authorities(
+        identity_keys: P2pIdentityKeys,
         Config {
             address: listen_addr,
             public_address,
@@ -7991,11 +8176,16 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
         mut initial_trusted_sources: HashSet<PeerId>,
+        mut initial_validator_dial_roster: HashSet<PeerId>,
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
+        let P2pIdentityKeys {
+            node: key_pair,
+            soranet_transport: soranet_transport_key_pair,
+        } = identity_keys;
         // This is the first startup preflight because QUIC and TCP listener setup below may bind
-        // sockets. It also prevents a sender from reaching encryption with a frame length that
-        // the deterministic contiguous-buffer limit cannot represent.
+        // sockets. It prevents a sender from reaching encryption with a frame length that the
+        // deterministic contiguous-buffer limit cannot represent.
         let topic_frame_caps = TopicFrameCaps {
             consensus: max_frame_bytes_consensus,
             control: max_frame_bytes_control,
@@ -8101,6 +8291,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             NetworkActorByteBudget::new(p2p_outbound_frame_queue_max_low_bytes.get(), 0)
                 .expect("zero-reserve low actor byte geometry cannot overflow");
         let self_id = PeerId::from(key_pair.public_key().clone());
+        initial_validator_dial_roster
+            .retain(|peer_id| peer_id == &self_id || initial_trusted_sources.contains(peer_id));
+        let validator_dial_scheduler = ValidatorDialScheduler::new(
+            initial_validator_dial_roster,
+            dial_timeout.saturating_add(idle_timeout),
+        );
         initial_trusted_sources.remove(&self_id);
         let authenticated_source_geometry =
             crate::peer::AuthenticatedSourceGeometry::new(max_total_connections);
@@ -8375,6 +8571,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             mpsc::channel(p2p_subscriber_queue_cap.get());
         let (update_topology_sender, update_topology_receiver) = control_update_channel();
         let (update_peers_sender, update_peers_receiver) = control_update_channel();
+        let (update_validator_dial_roster_sender, update_validator_dial_roster_receiver) =
+            control_update_channel();
         let (update_peer_capabilities_sender, update_peer_capabilities_receiver) =
             control_update_channel();
         let (update_trusted_peers_sender, update_trusted_peers_receiver) = control_update_channel();
@@ -8415,6 +8613,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             match start_quic_listener::<WireMessage<T>, E>(
                 &listen_addr.value().to_socket_addrs()?.as_slice()[0],
                 key_pair.clone(),
+                soranet_transport_key_pair.clone(),
                 public_address.value().clone(),
                 service_message_sender.clone(),
                 idle_timeout,
@@ -8465,6 +8664,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 match start_tls_listener::<WireMessage<T>, E>(
                     tls_addr.to_socket_addrs()?.as_slice()[0],
                     key_pair.clone(),
+                    soranet_transport_key_pair.clone(),
                     public_address.value().clone(),
                     service_message_sender.clone(),
                     idle_timeout,
@@ -8546,6 +8746,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet_runtime.clone(),
+            soranet_transport_key_pair,
             listener,
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
@@ -8567,6 +8768,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             network_actor_progress_budget: Arc::clone(&network_actor_progress_budget),
             update_topology_receiver,
             update_peers_receiver,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver,
@@ -8587,6 +8789,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler,
             current_peers_addresses: Vec::new(),
             idle_timeout,
             reply_writer_flush_timeout,
@@ -8696,6 +8899,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 reply_route_source_capacity: max_total_connections,
                 update_topology_sender,
                 update_peers_sender,
+                update_validator_dial_roster_sender,
                 update_peer_capabilities_sender,
                 update_trusted_peers_sender,
                 update_acl_sender,
@@ -9817,6 +10021,34 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         send_control_update(&self.update_peers_sender, "peers", peers);
     }
 
+    /// Replace the configured-validator subset governed by deterministic
+    /// pairwise dial ownership.
+    ///
+    /// Relay hubs, observers, dynamically discovered peers, and ordinary P2P
+    /// test callers remain on the existing eager dial policy unless explicitly
+    /// included in this authenticated local roster.
+    pub fn update_validator_dial_roster(&self, roster: message::UpdateValidatorDialRoster) {
+        send_control_update(
+            &self.update_validator_dial_roster_sender,
+            "validator dial roster",
+            ValidatorDialControlUpdate::Roster(roster),
+        );
+    }
+
+    /// Atomically replace the consensus topology and the configured-validator
+    /// subset governed by deterministic pairwise dial ownership.
+    ///
+    /// Publishing the two snapshots as one retained actor update prevents a
+    /// newly admitted validator from briefly entering the eager dynamic-peer
+    /// dial path before its ownership role is installed.
+    pub fn update_validator_topology(&self, update: message::UpdateValidatorTopology) {
+        send_control_update(
+            &self.update_validator_dial_roster_sender,
+            "validator topology",
+            ValidatorDialControlUpdate::Topology(update),
+        );
+    }
+
     /// Send [`UpdatePeerCapabilities`] message on network actor.
     pub fn update_peer_capabilities(&self, capabilities: message::UpdatePeerCapabilities) {
         send_control_update(
@@ -10811,6 +11043,7 @@ mod handle_update_tests {
     struct ControlUpdateReceivers {
         topology: ControlUpdateReceiver<message::UpdateTopology>,
         peers: ControlUpdateReceiver<message::UpdatePeers>,
+        validator_dial_roster: ControlUpdateReceiver<ValidatorDialControlUpdate>,
         peer_capabilities: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
         trusted_peers: ControlUpdateReceiver<message::UpdateTrustedPeers>,
         acl: ControlUpdateReceiver<message::UpdateAcl>,
@@ -10825,6 +11058,8 @@ mod handle_update_tests {
         let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
         let (update_topology_tx, update_topology_rx) = control_update_channel();
         let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_validator_dial_roster_tx, update_validator_dial_roster_rx) =
+            control_update_channel();
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
@@ -10857,6 +11092,7 @@ mod handle_update_tests {
                 reply_route_source_capacity: 8,
                 update_topology_sender: update_topology_tx,
                 update_peers_sender: update_peers_tx,
+                update_validator_dial_roster_sender: update_validator_dial_roster_tx,
                 update_peer_capabilities_sender: update_peer_capabilities_tx,
                 update_trusted_peers_sender: update_trusted_tx,
                 update_acl_sender: update_acl_tx,
@@ -10882,6 +11118,7 @@ mod handle_update_tests {
             ControlUpdateReceivers {
                 topology: update_topology_rx,
                 peers: update_peers_rx,
+                validator_dial_roster: update_validator_dial_roster_rx,
                 peer_capabilities: update_peer_capabilities_rx,
                 trusted_peers: update_trusted_rx,
                 acl: update_acl_rx,
@@ -10925,6 +11162,8 @@ mod handle_update_tests {
         let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
         let (update_topology_tx, update_topology_rx) = control_update_channel();
         let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_validator_dial_roster_tx, update_validator_dial_roster_rx) =
+            control_update_channel();
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
@@ -10946,6 +11185,7 @@ mod handle_update_tests {
 
         drop(update_topology_rx);
         drop(update_peers_rx);
+        drop(update_validator_dial_roster_rx);
         drop(update_peer_capabilities_rx);
         drop(update_trusted_rx);
         drop(update_acl_rx);
@@ -10962,6 +11202,7 @@ mod handle_update_tests {
             reply_route_source_capacity: 8,
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
+            update_validator_dial_roster_sender: update_validator_dial_roster_tx,
             update_peer_capabilities_sender: update_peer_capabilities_tx,
             update_trusted_peers_sender: update_trusted_tx,
             update_acl_sender: update_acl_tx,
@@ -11012,6 +11253,8 @@ mod handle_update_tests {
         let (subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
         let (update_topology_tx, update_topology_rx) = control_update_channel();
         let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_validator_dial_roster_tx, update_validator_dial_roster_rx) =
+            control_update_channel();
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
@@ -11029,6 +11272,7 @@ mod handle_update_tests {
 
         drop(update_topology_rx);
         drop(update_peers_rx);
+        drop(update_validator_dial_roster_rx);
         drop(update_peer_capabilities_rx);
         drop(update_trusted_rx);
         drop(update_acl_rx);
@@ -11048,6 +11292,7 @@ mod handle_update_tests {
                 reply_route_source_capacity: 8,
                 update_topology_sender: update_topology_tx,
                 update_peers_sender: update_peers_tx,
+                update_validator_dial_roster_sender: update_validator_dial_roster_tx,
                 update_peer_capabilities_sender: update_peer_capabilities_tx,
                 update_trusted_peers_sender: update_trusted_tx,
                 update_acl_sender: update_acl_tx,
@@ -11303,6 +11548,39 @@ mod handle_update_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn validator_membership_and_dial_roster_share_one_retained_snapshot() {
+        let (handle, mut receivers) = handle_with_control_update_receivers();
+        let self_id = handle.self_id.clone();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let topology = HashSet::from([self_id.clone(), peer_id.clone()]);
+        let validator_dial_roster = topology.clone();
+
+        handle.update_validator_topology(message::UpdateValidatorTopology {
+            topology: topology.clone(),
+            validator_dial_roster: validator_dial_roster.clone(),
+        });
+
+        let ValidatorDialControlUpdate::Topology(message::UpdateValidatorTopology {
+            topology: actual_topology,
+            validator_dial_roster: actual_roster,
+        }) = receive_control_update(&mut receivers.validator_dial_roster)
+            .await
+            .expect("coupled validator topology update")
+        else {
+            panic!("expected coupled validator topology update");
+        };
+        assert_eq!(actual_topology, topology);
+        assert_eq!(actual_roster, validator_dial_roster);
+        assert!(
+            !receivers
+                .topology
+                .has_changed()
+                .expect("ordinary topology channel remains open"),
+            "membership must not race ownership through an independent topology snapshot"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn all_control_update_methods_keep_newest_category_snapshot() {
         let (handle, mut receivers) = handle_with_control_update_receivers();
         let newest_handle = handle.clone();
@@ -11313,6 +11591,9 @@ mod handle_update_tests {
 
         handle.update_topology(message::UpdateTopology(HashSet::from([stale_peer.clone()])));
         handle.update_peers_addresses(message::UpdatePeers(vec![(stale_peer.clone(), stale_addr)]));
+        handle.update_validator_dial_roster(message::UpdateValidatorDialRoster(HashSet::from([
+            stale_peer.clone(),
+        ])));
         handle.update_peer_capabilities(message::UpdatePeerCapabilities(vec![(
             stale_peer.clone(),
             message::PeerTransportCapabilities {
@@ -11341,6 +11622,9 @@ mod handle_update_tests {
             newest_peer.clone(),
             newest_addr.clone(),
         )]));
+        newest_handle.update_validator_dial_roster(message::UpdateValidatorDialRoster(
+            HashSet::from([newest_peer.clone()]),
+        ));
         newest_handle.update_peer_capabilities(message::UpdatePeerCapabilities(vec![(
             newest_peer.clone(),
             message::PeerTransportCapabilities {
@@ -11365,6 +11649,12 @@ mod handle_update_tests {
 
         assert!(receivers.topology.has_changed().expect("topology open"));
         assert!(receivers.peers.has_changed().expect("peers open"));
+        assert!(
+            receivers
+                .validator_dial_roster
+                .has_changed()
+                .expect("validator dial roster open")
+        );
         assert!(
             receivers
                 .peer_capabilities
@@ -11395,6 +11685,16 @@ mod handle_update_tests {
             .await
             .expect("peer-address update");
         assert_eq!(peers, vec![(newest_peer.clone(), newest_addr)]);
+
+        let ValidatorDialControlUpdate::Roster(message::UpdateValidatorDialRoster(
+            validator_dial_roster,
+        )) = receive_control_update(&mut receivers.validator_dial_roster)
+            .await
+            .expect("validator dial roster update")
+        else {
+            panic!("expected standalone validator dial roster update");
+        };
+        assert_eq!(validator_dial_roster, HashSet::from([newest_peer.clone()]));
 
         let message::UpdatePeerCapabilities(capabilities) =
             receive_control_update(&mut receivers.peer_capabilities)
@@ -12479,6 +12779,20 @@ mod accept_stream_tests {
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
 
+    fn test_node_key_pair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x71; 32], Algorithm::BlsNormal)
+            .expect("test BLS-normal node key")
+    }
+
+    fn test_transport_key_pair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 transport key")
+    }
+
+    fn test_p2p_identity_keys(node: KeyPair) -> P2pIdentityKeys {
+        P2pIdentityKeys::new(node, test_transport_key_pair()).expect("test P2P identity roles")
+    }
+
     impl crate::network::message::ClassifyTopic for Dummy {}
 
     macro_rules! impl_decode_from_slice_via_codec {
@@ -12930,7 +13244,7 @@ mod accept_stream_tests {
         cfg.max_frame_bytes = crate::MAX_ENCRYPTED_FRAME_BYTES + 1;
 
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            KeyPair::random(),
+            test_p2p_identity_keys(test_node_key_pair()),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -12948,7 +13262,7 @@ mod accept_stream_tests {
         cfg.deferred_send_max_bytes_total = 1;
 
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            KeyPair::random(),
+            test_p2p_identity_keys(test_node_key_pair()),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -12965,12 +13279,12 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn accept_stream_denied_by_incoming_cap() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.max_incoming = core::num::NonZeroUsize::new(1);
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13013,14 +13327,14 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_proxy_required_without_proxy() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.p2p_proxy_required = true;
         cfg.p2p_proxy = None;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13037,7 +13351,7 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_proxy_required_with_no_proxy_exemptions() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.p2p_proxy_required = true;
         cfg.p2p_proxy = Some("http://proxy.invalid:8080".to_string());
@@ -13045,7 +13359,7 @@ mod accept_stream_tests {
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13062,7 +13376,7 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_https_proxy_without_pin_when_verify_enabled() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.p2p_proxy = Some("https://proxy.invalid:443".to_string());
         cfg.p2p_proxy_tls_verify = true;
@@ -13070,7 +13384,7 @@ mod accept_stream_tests {
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13088,14 +13402,14 @@ mod accept_stream_tests {
     #[cfg(not(feature = "p2p_tls"))]
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_tls_without_feature_when_tls_only_outbound() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.tls_enabled = true;
         cfg.tls_fallback_to_plain = false;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13113,14 +13427,14 @@ mod accept_stream_tests {
     #[cfg(not(feature = "p2p_tls"))]
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_tls_inbound_only_without_feature() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.tls_enabled = true;
         cfg.tls_inbound_only = true;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13138,14 +13452,14 @@ mod accept_stream_tests {
     #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn start_accepts_tls_inbound_only_with_tls_feature() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.tls_enabled = true;
         cfg.tls_inbound_only = true;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13169,7 +13483,7 @@ mod accept_stream_tests {
     #[cfg(feature = "quic")]
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_proxy_required_with_quic_enabled() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.p2p_proxy_required = true;
         cfg.p2p_proxy = Some("http://proxy.invalid:8080".to_string());
@@ -13177,7 +13491,7 @@ mod accept_stream_tests {
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13194,12 +13508,12 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn accept_stream_allows_basic() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.max_incoming = core::num::NonZeroUsize::new(1);
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13235,12 +13549,12 @@ mod accept_stream_tests {
 
         let baseline = snapshot().len();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.max_frame_bytes = 37_777;
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13297,7 +13611,9 @@ mod accept_stream_tests {
         };
 
         let baseline = snapshot().len();
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
+        let chain_id = ChainId::from("test-chain");
+        let soranet_transport_key_pair = test_transport_key_pair();
         let max_frame_bytes = 59_999usize;
 
         let (service_tx, mut service_rx) =
@@ -13324,10 +13640,11 @@ mod accept_stream_tests {
         let _listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
             key_pair.clone(),
+            soranet_transport_key_pair,
             socket_addr!(127.0.0.1:1_337),
             service_tx,
             Duration::from_secs(1),
-            ChainId::from("test-chain"),
+            chain_id,
             None,
             None,
             None,
@@ -13394,13 +13711,13 @@ mod accept_stream_tests {
 
         let baseline = snapshot().len();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.max_incoming = core::num::NonZeroUsize::new(2);
         cfg.max_frame_bytes = 48_888;
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13453,13 +13770,13 @@ mod accept_stream_tests {
     async fn start_provides_bind_listener_context_on_failure() {
         use iroha_primitives::addr::socket_addr;
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
         cfg.public_address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let result = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13496,7 +13813,7 @@ mod accept_stream_tests {
     async fn accept_new_peer_propagates_frame_cap() {
         let baseline = snapshot().len();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let max_frame_bytes = 59_999usize;
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
@@ -13516,6 +13833,8 @@ mod accept_stream_tests {
         let (_subscribe_tx, subscribe_rx) = mpsc::channel::<super::Subscriber<Dummy>>(1);
         let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
         let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            super::control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
         let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         #[allow(unused_variables)]
@@ -13559,6 +13878,7 @@ mod accept_stream_tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet.clone(),
+            soranet_transport_key_pair: test_transport_key_pair(),
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -13580,6 +13900,7 @@ mod accept_stream_tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -13600,6 +13921,10 @@ mod accept_stream_tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
             chain_id: ChainId::from("test-chain"),
             consensus_caps: None,
@@ -13755,7 +14080,9 @@ mod accept_stream_tests {
         use tokio::sync::mpsc;
 
         let baseline = snapshot().len();
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
+        let chain_id = ChainId::from("test-chain");
+        let soranet_transport_key_pair = test_transport_key_pair();
         let max_frame_bytes = 61_111usize;
 
         let (service_tx, mut service_rx) =
@@ -13781,6 +14108,7 @@ mod accept_stream_tests {
         let _listener_task = start_quic_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             &addr,
             key_pair.clone(),
+            soranet_transport_key_pair,
             socket_addr!(127.0.0.1:4_321),
             service_tx,
             Duration::from_secs(1),
@@ -13789,7 +14117,7 @@ mod accept_stream_tests {
             0,
             0,
             0,
-            ChainId::from("test-chain"),
+            chain_id,
             None,
             None,
             None,
@@ -13884,7 +14212,7 @@ mod accept_stream_tests {
         use crate::network::cap_violations_consensus;
         let _guard = cap_violation_test_guard();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -13904,6 +14232,8 @@ mod accept_stream_tests {
             mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
         let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            super::control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
         let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
@@ -13946,6 +14276,7 @@ mod accept_stream_tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet.clone(),
+            soranet_transport_key_pair: test_transport_key_pair(),
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -13971,6 +14302,7 @@ mod accept_stream_tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -13991,6 +14323,10 @@ mod accept_stream_tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
             reply_writer_flush_timeout:
@@ -14120,7 +14456,7 @@ mod accept_stream_tests {
         use crate::network::cap_violations_consensus;
         let _guard = cap_violation_test_guard();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -14142,6 +14478,8 @@ mod accept_stream_tests {
         ) = mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
         let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            super::control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
         let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
@@ -14180,6 +14518,7 @@ mod accept_stream_tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet.clone(),
+            soranet_transport_key_pair: test_transport_key_pair(),
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -14205,6 +14544,7 @@ mod accept_stream_tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -14225,6 +14565,10 @@ mod accept_stream_tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
             reply_writer_flush_timeout:
@@ -14374,7 +14718,7 @@ mod accept_stream_tests {
         use crate::network::cap_violations_block_sync;
         let _guard = cap_violation_test_guard();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -14396,6 +14740,8 @@ mod accept_stream_tests {
         ) = mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
         let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            super::control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
         let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
@@ -14434,6 +14780,7 @@ mod accept_stream_tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet.clone(),
+            soranet_transport_key_pair: test_transport_key_pair(),
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -14459,6 +14806,7 @@ mod accept_stream_tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -14479,6 +14827,10 @@ mod accept_stream_tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
             reply_writer_flush_timeout:
@@ -14782,6 +15134,7 @@ mod reputation_tests {
 async fn start_quic_listener<T, E>(
     addr: &std::net::SocketAddr,
     key_pair: iroha_crypto::KeyPair,
+    soranet_transport_key_pair: iroha_crypto::KeyPair,
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
@@ -14913,6 +15266,7 @@ where
             };
             let service_message_sender = service_message_sender.clone();
             let key_pair = key_pair.clone();
+            let soranet_transport_key_pair = soranet_transport_key_pair.clone();
             let public_address = public_address.clone();
             let chain_id = chain_id.clone();
             let consensus_caps = consensus_caps.clone();
@@ -15014,6 +15368,7 @@ where
                 let peer_task = connected_from::<T, E>(
                     public_address,
                     key_pair,
+                    soranet_transport_key_pair,
                     Connection::from_quic(
                         conn_id,
                         new_conn.clone(),
@@ -15079,7 +15434,11 @@ mod quic_tests {
         let reserved = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve UDP port");
         let addr = reserved.local_addr().expect("reserved UDP address");
         drop(reserved);
-        let kp = KeyPair::random();
+        let kp = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::BlsNormal)
+            .expect("test BLS-normal node key");
+        let transport = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 transport key");
+        let chain_id = iroha_data_model::ChainId::from("test-chain");
         let (tx, _rx) = tokio::sync::mpsc::channel::<
             crate::peer::message::ServiceMessage<WireMessage<Dummy>>,
         >(1);
@@ -15088,6 +15447,7 @@ mod quic_tests {
         let task = match start_quic_listener::<WireMessage<Dummy>, ChaCha20Poly1305>(
             &addr,
             kp,
+            transport,
             socket_addr!(127.0.0.1:1337),
             tx,
             std::time::Duration::from_secs(1),
@@ -15096,7 +15456,7 @@ mod quic_tests {
             0,
             0,
             0,
-            iroha_data_model::ChainId::from("test-chain"),
+            chain_id,
             None,
             None,
             None,
@@ -15147,6 +15507,7 @@ mod quic_tests {
 async fn start_tls_listener<T, E>(
     addr: std::net::SocketAddr,
     key_pair: iroha_crypto::KeyPair,
+    soranet_transport_key_pair: iroha_crypto::KeyPair,
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
@@ -15224,6 +15585,7 @@ where
             };
             let service_message_sender = service_message_sender.clone();
             let key_pair = key_pair.clone();
+            let soranet_transport_key_pair = soranet_transport_key_pair.clone();
             let public_address = public_address.clone();
             let chain_id = chain_id.clone();
             let consensus_caps = consensus_caps.clone();
@@ -15278,6 +15640,7 @@ where
                         let peer_task = connected_from::<T, E>(
                             public_address,
                             key_pair,
+                            soranet_transport_key_pair,
                             Connection::from_split_with_binding(
                                 conn_id,
                                 read_half,
@@ -15373,6 +15736,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     peer_reputations: PeerReputationBook,
     /// `SoraNet` handshake runtime configuration shared across peers.
     soranet_handshake: Arc<SoranetHandshakeConfig>,
+    /// Dedicated Ed25519 identity used by the `SoraNet` transport handshake.
+    soranet_transport_key_pair: KeyPair,
     /// Current [`Peer`]s in [`Peer::Ready`] state.
     peers: HashMap<PeerId, RefPeer<WireMessage<T>>>,
     /// [`Peer`]s in process of being connected.
@@ -15420,6 +15785,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     update_topology_receiver: ControlUpdateReceiver<UpdateTopology>,
     /// Latest [`UpdatePeers`] snapshot receiver.
     update_peers_receiver: ControlUpdateReceiver<UpdatePeers>,
+    /// Latest configured-validator dial-roster snapshot receiver.
+    update_validator_dial_roster_receiver: ControlUpdateReceiver<ValidatorDialControlUpdate>,
     /// Latest [`UpdatePeerCapabilities`] snapshot receiver.
     update_peer_capabilities_receiver: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
     /// Latest trusted-peers snapshot receiver.
@@ -15460,6 +15827,9 @@ struct NetworkBase<T: Pload, E: Enc> {
     requested_topology: HashSet<PeerId>,
     /// Current topology
     current_topology: HashSet<PeerId>,
+    /// Pairwise preferred-owner and bounded standby takeover state for the
+    /// configured validator subset only.
+    validator_dial_scheduler: ValidatorDialScheduler,
     /// Peers which are not yet connected, but should.
     ///
     /// Can have two addresses for same `PeerId`.
@@ -15707,6 +16077,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 let task = connected_from::<WireMessage<T>, E>(
                     self.public_address.clone(),
                     self.key_pair.clone(),
+                    self.soranet_transport_key_pair.clone(),
                     Connection::from_split(conn_id, read, write),
                     service_message_sender,
                     self.idle_timeout,
@@ -16268,6 +16639,18 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 Some(update_peers) = receive_control_update(&mut self.update_peers_receiver) => {
                     self.set_current_peers_addresses(update_peers);
                 }
+                Some(update_validator_dial_control) = receive_control_update(
+                    &mut self.update_validator_dial_roster_receiver,
+                ) => {
+                    match update_validator_dial_control {
+                        ValidatorDialControlUpdate::Roster(roster) => {
+                            self.set_validator_dial_roster(roster);
+                        }
+                        ValidatorDialControlUpdate::Topology(topology) => {
+                            self.set_validator_topology(topology);
+                        }
+                    }
+                }
                 Some(update_capabilities) = receive_control_update(
                     &mut self.update_peer_capabilities_receiver,
                 ) => {
@@ -16566,6 +16949,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let task = connected_from::<WireMessage<T>, E>(
             self.public_address.clone(),
             self.key_pair.clone(),
+            self.soranet_transport_key_pair.clone(),
             Connection::new(conn_id, stream),
             service_message_sender,
             self.idle_timeout,
@@ -16686,6 +17070,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if let Some(trusted) = pending.trusted {
             self.apply_reply_source_trusted(trusted);
         }
+        if let Some(message::UpdateValidatorDialRoster(roster)) = pending.validator_dial_roster {
+            self.validator_dial_scheduler
+                .replace_roster(roster, &self.self_id);
+        }
         if let Some(topology) = pending.topology {
             self.apply_current_topology(topology);
         } else {
@@ -16720,6 +17108,30 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     }
 
     fn set_current_topology(&mut self, update: UpdateTopology) {
+        self.stage_current_topology(update, None, "topology update");
+    }
+
+    fn set_validator_topology(
+        &mut self,
+        message::UpdateValidatorTopology {
+            topology,
+            mut validator_dial_roster,
+        }: message::UpdateValidatorTopology,
+    ) {
+        validator_dial_roster.retain(|peer_id| topology.contains(peer_id));
+        self.stage_current_topology(
+            UpdateTopology(topology),
+            Some(message::UpdateValidatorDialRoster(validator_dial_roster)),
+            "validator topology update",
+        );
+    }
+
+    fn stage_current_topology(
+        &mut self,
+        update: UpdateTopology,
+        validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
+        transition: &'static str,
+    ) {
         let logical_topology: HashSet<_> = update
             .0
             .iter()
@@ -16732,7 +17144,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
         let prior = self.pending_reply_source_authority.clone();
         self.pending_reply_source_authority.topology = Some(update);
-        self.accept_staged_reply_source_authority(prior, "topology update");
+        if let Some(validator_dial_roster) = validator_dial_roster {
+            self.pending_reply_source_authority.validator_dial_roster = Some(validator_dial_roster);
+        }
+        self.accept_staged_reply_source_authority(prior, transition);
     }
 
     fn apply_reply_source_acl(&mut self, acl: message::UpdateAcl) {
@@ -16939,6 +17354,15 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .collect();
     }
 
+    fn set_validator_dial_roster(&mut self, roster: message::UpdateValidatorDialRoster) {
+        let prior = self.pending_reply_source_authority.clone();
+        self.pending_reply_source_authority.validator_dial_roster = Some(roster);
+        // Existing authenticated sessions are deliberately retained. The
+        // roster commits through the same authority transaction as topology so
+        // pending membership changes cannot expose an unmanaged validator.
+        self.accept_staged_reply_source_authority(prior, "validator dial roster update");
+    }
+
     fn update_topology(&mut self) {
         if !self.pending_reply_source_authority.is_empty()
             && !self.retry_pending_reply_source_authority()
@@ -17002,6 +17426,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
 
         // Order addresses by preference and schedule staggered attempts
         for (peer_id, mut addrs) in by_peer {
+            let validator_not_before = self.validator_dial_scheduler.not_before(
+                &self.self_id,
+                &peer_id,
+                now,
+                self.connect_startup_delay_until,
+            );
             addrs.sort_by_key(|a| self.addr_preference(a));
             for (i, addr) in addrs.into_iter().enumerate() {
                 if self.is_scheduled(&peer_id, &addr) {
@@ -17021,7 +17451,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     self.happy_eyeballs_stagger,
                     jitter_cap_ms,
                 );
-                let when = now + base + Duration::from_millis(jitter_ms);
+                let mut when = now + base + Duration::from_millis(jitter_ms);
+                if let Some(validator_not_before) = validator_not_before {
+                    when = core::cmp::max(when, validator_not_before);
+                }
                 let when = apply_connect_startup_delay(when, self.connect_startup_delay_until);
                 self.pending_connects
                     .push((when, Peer::new(addr, peer_id.clone())));
@@ -17137,7 +17570,21 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             return false;
         }
         let peer = Peer::new(addr.clone(), peer_id.clone());
-        if self.ready_to_retry_addr(peer_id, &addr, now) {
+        let validator_not_before = self.validator_dial_scheduler.not_before(
+            &self.self_id,
+            peer_id,
+            now,
+            self.connect_startup_delay_until,
+        );
+        let backoff_not_before = self
+            .retry_backoff
+            .get(peer_id)
+            .and_then(|inner| inner.get(&addr.to_string()).map(|(when, _)| *when));
+        let not_before = validator_not_before
+            .into_iter()
+            .chain(backoff_not_before)
+            .fold(self.connect_startup_delay_until, core::cmp::max);
+        if now >= not_before {
             if !self.connect_peer(&peer) {
                 let when = apply_connect_startup_delay(
                     now + Duration::from_millis(50),
@@ -17146,13 +17593,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.pending_connects.push((when, peer));
             }
         } else {
-            let when = self
-                .retry_backoff
-                .get(peer_id)
-                .and_then(|inner| inner.get(&addr.to_string()).map(|(when, _)| *when))
-                .unwrap_or_else(|| now + Duration::from_millis(50));
-            let when = apply_connect_startup_delay(when, self.connect_startup_delay_until);
-            self.pending_connects.push((when, peer));
+            self.pending_connects.push((not_before, peer));
         }
         SESSION_RECONNECT_TOTAL.fetch_add(1, Ordering::Relaxed);
         true
@@ -17924,6 +18365,23 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             if !self.current_topology.contains(&id) && !self.relay_trusted_peers.contains(&id) {
                 continue;
             }
+            if self.peers.contains_key(&id) {
+                // A pending standby or Happy-Eyeballs attempt became obsolete
+                // when either direction authenticated. Dropping it here avoids
+                // a permanent 50 ms reschedule loop and leaves future reconnects
+                // to the existing termination/backoff path.
+                continue;
+            }
+            if let Some(not_before) = self.validator_dial_scheduler.not_before(
+                &self.self_id,
+                &id,
+                now,
+                self.connect_startup_delay_until,
+            ) && not_before > now
+            {
+                self.pending_connects.push((not_before, peer));
+                continue;
+            }
             if self.exceeds_caps() {
                 // Outbound handshakes consume the same finite process slot as
                 // accepted inbound and established connections. Keep the due
@@ -17936,11 +18394,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.pending_connects.push((when, peer));
                 continue;
             }
-            if !self.peers.contains_key(&id)
-                && !self
-                    .connecting_peers
-                    .values()
-                    .any(|p| (p.id(), p.address()) == (&id, &addr))
+            if !self
+                .connecting_peers
+                .values()
+                .any(|p| (p.id(), p.address()) == (&id, &addr))
                 && self.ready_to_retry_addr(&id, &addr, now)
             {
                 let connected = self.connect_peer(&peer);
@@ -18390,6 +18847,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
 
         // Register externally visible state only after the peer task accepts
         // its actor handoff; a closed oneshot must not leave a zombie session.
+        self.validator_dial_scheduler.note_session_established(
+            &self.self_id,
+            peer.id(),
+            tokio::time::Instant::now(),
+            self.connect_startup_delay_until,
+        );
         self.reset_backoff_addr(peer.id(), peer.address());
         self.last_active
             .insert(peer.id().clone(), tokio::time::Instant::now());
@@ -19851,6 +20314,271 @@ mod tests {
             ),
             0
         );
+    }
+
+    fn deterministic_validator_roster(count: u8) -> Vec<PeerId> {
+        let mut roster: Vec<_> = (1..=count)
+            .map(|seed| {
+                let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic BLS validator fixture");
+                PeerId::from(key_pair.public_key().clone())
+            })
+            .collect();
+        roster.sort();
+        roster
+    }
+
+    fn validator_scheduler(roster: &[PeerId], takeover_delay: Duration) -> ValidatorDialScheduler {
+        ValidatorDialScheduler::new(roster.iter().cloned().collect(), takeover_delay)
+    }
+
+    #[test]
+    fn four_validator_full_mesh_has_exactly_six_balanced_initial_dial_owners() {
+        let roster = deterministic_validator_roster(4);
+        let now = tokio::time::Instant::now();
+        let mut total_immediate = 0usize;
+        let mut out_degrees = vec![0usize; roster.len()];
+
+        for (self_rank, self_id) in roster.iter().enumerate() {
+            let mut scheduler = validator_scheduler(&roster, Duration::from_secs(30));
+            for peer_id in roster.iter().filter(|peer_id| *peer_id != self_id) {
+                match scheduler.role(self_id, peer_id) {
+                    ValidatorDialRole::Preferred => {
+                        assert_eq!(scheduler.not_before(self_id, peer_id, now, now), None);
+                        total_immediate += 1;
+                        out_degrees[self_rank] += 1;
+                    }
+                    ValidatorDialRole::Standby => {
+                        assert_eq!(
+                            scheduler.not_before(self_id, peer_id, now, now),
+                            Some(now + Duration::from_secs(30))
+                        );
+                    }
+                    ValidatorDialRole::Unmanaged => {
+                        panic!("every distinct configured-validator pair must be managed")
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            total_immediate, 6,
+            "four validators have six unordered pairs"
+        );
+        let min = *out_degrees.iter().min().expect("non-empty degrees");
+        let max = *out_degrees.iter().max().expect("non-empty degrees");
+        assert!(
+            max - min <= 1,
+            "pair ownership must remain balanced: {out_degrees:?}"
+        );
+    }
+
+    #[test]
+    fn standby_takes_over_once_after_bounded_owner_unavailability() {
+        let roster = deterministic_validator_roster(2);
+        let now = tokio::time::Instant::now();
+        let delay = Duration::from_secs(17);
+        let (preferred, standby) = if validator_scheduler(&roster, delay)
+            .role(&roster[0], &roster[1])
+            == ValidatorDialRole::Preferred
+        {
+            (&roster[0], &roster[1])
+        } else {
+            (&roster[1], &roster[0])
+        };
+        let mut preferred_scheduler = validator_scheduler(&roster, delay);
+        let mut standby_scheduler = validator_scheduler(&roster, delay);
+
+        assert_eq!(
+            preferred_scheduler.not_before(preferred, standby, now, now),
+            None
+        );
+        let deadline = standby_scheduler
+            .not_before(standby, preferred, now, now)
+            .expect("backup endpoint has a takeover deadline");
+        assert_eq!(deadline, now + delay);
+        assert!(now + delay - Duration::from_nanos(1) < deadline);
+        assert_eq!(
+            standby_scheduler.not_before(standby, preferred, deadline, now),
+            Some(deadline),
+            "takeover becomes eligible without minting another retry epoch"
+        );
+    }
+
+    #[test]
+    fn simultaneous_restart_and_roster_iteration_order_choose_the_same_pair_owners() {
+        let roster = deterministic_validator_roster(6);
+        let reversed: HashSet<_> = roster.iter().rev().cloned().collect();
+        let canonical: HashSet<_> = roster.iter().cloned().collect();
+        let first = ValidatorDialScheduler::new(canonical, Duration::from_secs(5));
+        let restarted = ValidatorDialScheduler::new(reversed, Duration::from_secs(5));
+
+        for self_id in &roster {
+            for peer_id in roster.iter().filter(|peer_id| *peer_id != self_id) {
+                assert_eq!(
+                    first.role(self_id, peer_id),
+                    restarted.role(self_id, peer_id),
+                    "hash-map insertion order and simultaneous restart must not affect ownership"
+                );
+                assert_ne!(
+                    first.role(self_id, peer_id),
+                    first.role(peer_id, self_id),
+                    "each unordered pair has exactly one preferred endpoint"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn address_order_and_malicious_gossip_cannot_change_validator_pair_ownership() {
+        let roster = deterministic_validator_roster(4);
+        let self_id = &roster[0];
+        let peer_id = &roster[3];
+        let outsider_key = KeyPair::try_from_seed(vec![99; 32], Algorithm::BlsNormal)
+            .expect("derive deterministic outsider fixture");
+        let outsider = PeerId::from(outsider_key.public_key().clone());
+        let mut scheduler = validator_scheduler(&roster, Duration::from_secs(9));
+        let role = scheduler.role(self_id, peer_id);
+        let now = tokio::time::Instant::now();
+        let first_deadline = scheduler.not_before(self_id, peer_id, now, now);
+
+        // Address ordering and gossip source identities are intentionally absent
+        // from the scheduler input. Re-observing a validator through arbitrary
+        // gossip cannot reset its retained failover epoch.
+        for _untrusted_address in [
+            socket_addr!(203.0.113.9:1),
+            socket_addr!(127.0.0.1:65_000),
+            socket_addr!(192.0.2.1:2),
+        ] {
+            assert_eq!(scheduler.role(self_id, peer_id), role);
+            assert_eq!(
+                scheduler.not_before(self_id, peer_id, now, now),
+                first_deadline
+            );
+        }
+        assert_eq!(
+            scheduler.role(self_id, &outsider),
+            ValidatorDialRole::Unmanaged,
+            "malicious gossip cannot promote an outsider into validator dial authority"
+        );
+        let mut forged_roster: HashSet<_> = roster.iter().cloned().collect();
+        forged_roster.insert(outsider.clone());
+        scheduler.replace_roster(forged_roster, self_id);
+        assert_eq!(
+            scheduler.role(self_id, &outsider),
+            ValidatorDialRole::Unmanaged,
+            "runtime updates cannot expand the startup-authenticated configured subset"
+        );
+    }
+
+    #[test]
+    fn dynamic_validator_add_remove_preserves_non_validator_dial_behavior() {
+        let roster = deterministic_validator_roster(5);
+        let initial: HashSet<_> = roster[..4].iter().cloned().collect();
+        let self_id = &roster[0];
+        let removed = &roster[1];
+        let added = &roster[4];
+        let now = tokio::time::Instant::now();
+        let mut scheduler = validator_scheduler(&roster, Duration::from_secs(13));
+        scheduler.replace_roster(initial, self_id);
+
+        let _ = scheduler.not_before(self_id, removed, now, now);
+        let updated: HashSet<_> = [
+            roster[0].clone(),
+            roster[2].clone(),
+            roster[3].clone(),
+            added.clone(),
+        ]
+        .into_iter()
+        .collect();
+        scheduler.replace_roster(updated, self_id);
+
+        assert_eq!(
+            scheduler.role(self_id, removed),
+            ValidatorDialRole::Unmanaged,
+            "a removed validator immediately returns to ordinary dynamic-peer policy"
+        );
+        assert_eq!(scheduler.not_before(self_id, removed, now, now), None);
+        assert_ne!(
+            scheduler.role(self_id, added),
+            ValidatorDialRole::Unmanaged,
+            "a configured validator added by authority enters pair ownership"
+        );
+    }
+
+    #[test]
+    fn live_validator_membership_commits_with_pair_ownership_and_prunes_outsiders() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let self_id = network.self_id.clone();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let outsider = PeerId::from(KeyPair::random().public_key().clone());
+        let configured = HashSet::from([self_id.clone(), peer_id.clone(), outsider.clone()]);
+        network.validator_dial_scheduler =
+            ValidatorDialScheduler::new(configured, Duration::from_secs(11));
+        network
+            .validator_dial_scheduler
+            .replace_roster(HashSet::from([self_id.clone()]), &self_id);
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &peer_id),
+            ValidatorDialRole::Unmanaged
+        );
+
+        network.set_validator_topology(message::UpdateValidatorTopology {
+            topology: HashSet::from([self_id.clone(), peer_id.clone()]),
+            validator_dial_roster: HashSet::from([
+                self_id.clone(),
+                peer_id.clone(),
+                outsider.clone(),
+            ]),
+        });
+
+        assert!(network.current_topology.contains(&peer_id));
+        assert_ne!(
+            network.validator_dial_scheduler.role(&self_id, &peer_id),
+            ValidatorDialRole::Unmanaged,
+            "membership must never commit without pair ownership"
+        );
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &outsider),
+            ValidatorDialRole::Unmanaged,
+            "an identity outside the same topology snapshot cannot gain dial authority"
+        );
+    }
+
+    #[test]
+    fn authenticated_session_restart_has_one_immediate_reconnector_and_stable_backup_deadline() {
+        let roster = deterministic_validator_roster(4);
+        let now = tokio::time::Instant::now();
+        let delay = Duration::from_secs(23);
+        let mut immediate = 0usize;
+        let mut standby_deadlines = Vec::new();
+
+        for self_id in &roster {
+            let mut scheduler = validator_scheduler(&roster, delay);
+            for peer_id in roster.iter().filter(|peer_id| *peer_id != self_id) {
+                scheduler.note_session_established(self_id, peer_id, now, now);
+                match scheduler.not_before(self_id, peer_id, now, now) {
+                    None => immediate += 1,
+                    Some(deadline) => {
+                        assert_eq!(deadline, now + delay);
+                        assert_eq!(
+                            scheduler.not_before(self_id, peer_id, now, now),
+                            Some(deadline),
+                            "repeated reconnect triggers must coalesce on one deadline"
+                        );
+                        standby_deadlines.push(deadline);
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            immediate, 6,
+            "only one endpoint per pair reconnects immediately"
+        );
+        assert_eq!(standby_deadlines.len(), 6);
     }
 
     #[test]
@@ -21704,11 +22432,18 @@ mod tests {
     #[test]
     fn runtime_from_handshake_accepts_signed_ticket_with_configured_key() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
+        let revocation_dir = tempfile::tempdir().expect("temporary revocation directory");
         let mut handshake = ActualSoranetHandshake::default();
         handshake.pow.required = true;
         handshake.pow.difficulty = 1;
         handshake.pow.puzzle = None;
         handshake.pow.signed_ticket_public_key = Some(keypair.public_key().to_vec());
+        handshake.pow.revocation_store_path = revocation_dir
+            .path()
+            .join("ticket_revocations.norito")
+            .to_string_lossy()
+            .into_owned()
+            .into();
 
         let config = runtime_from_handshake(handshake).expect("runtime");
 
@@ -21915,7 +22650,11 @@ mod tests {
     fn bare_network_with<T: Pload + message::ClassifyTopic>()
     -> Option<NetworkBase<T, ChaCha20Poly1305>> {
         let _guard = enter_test_runtime();
-        let key_pair = KeyPair::random();
+        let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::BlsNormal)
+            .expect("test BLS-normal node key");
+        let soranet_transport_key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 transport key");
+        let chain_id = ChainId::from("test-chain");
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return None,
@@ -21933,6 +22672,8 @@ mod tests {
         let (_subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
         let (_update_topology_tx, update_topology_rx) = control_update_channel();
         let (_update_peers_tx, update_peers_rx) = control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = control_update_channel();
         let (_update_acl_tx, update_acl_rx) = control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) = control_update_channel();
@@ -21971,6 +22712,7 @@ mod tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet,
+            soranet_transport_key_pair,
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -21992,6 +22734,7 @@ mod tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -22012,8 +22755,12 @@ mod tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
-            chain_id: ChainId::from("test-chain"),
+            chain_id,
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -23728,6 +24475,40 @@ mod tests {
     }
 
     #[test]
+    fn rejected_validator_topology_cannot_partially_promote_dial_ownership() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        network.max_total_connections = Some(2);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        let self_id = network.self_id.clone();
+        let candidate = PeerId::from(KeyPair::random().public_key().clone());
+        let configured = HashSet::from([self_id.clone(), candidate.clone()]);
+        network.validator_dial_scheduler =
+            ValidatorDialScheduler::new(configured, Duration::from_secs(7));
+        network
+            .validator_dial_scheduler
+            .replace_roster(HashSet::from([self_id.clone()]), &self_id);
+        let oversized = HashSet::from([
+            candidate.clone(),
+            PeerId::from(KeyPair::random().public_key().clone()),
+            PeerId::from(KeyPair::random().public_key().clone()),
+        ]);
+
+        network.set_validator_topology(message::UpdateValidatorTopology {
+            topology: oversized,
+            validator_dial_roster: HashSet::from([self_id.clone(), candidate.clone()]),
+        });
+
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &candidate),
+            ValidatorDialRole::Unmanaged,
+            "a rejected membership snapshot must roll back its ownership roster"
+        );
+        assert!(network.pending_reply_source_authority.is_empty());
+    }
+
+    #[test]
     fn blocked_a_to_b_drains_old_route_and_suppresses_obsolete_reconnect() {
         let Some(mut network) = bare_network() else {
             return;
@@ -24322,6 +25103,27 @@ mod tests {
             network.pending_connects[0].0 >= delay_until,
             "rescheduled connect should honor startup delay"
         );
+    }
+
+    #[test]
+    fn authenticated_session_cancels_obsolete_standby_attempt_without_reschedule_loop() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let addr = socket_addr!(127.0.0.1:45683);
+        network.current_topology.insert(peer_id.clone());
+        let (handle, _receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DummyMsg>>(1);
+        insert_dummy_ref_peer(&mut network, peer_id.clone(), addr.clone(), 93, handle);
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), Peer::new(addr, peer_id)));
+
+        network.process_pending_connects();
+
+        assert!(network.pending_connects.is_empty());
+        assert!(network.connecting_peers.is_empty());
     }
 
     #[test]
@@ -30991,6 +31793,26 @@ pub mod message {
     /// The message that is sent to `NetworkBase` to update peers addresses of the network.
     #[derive(Clone, Debug)]
     pub struct UpdatePeers(pub Vec<(PeerId, SocketAddr)>);
+
+    /// Configured validators eligible for deterministic pairwise dial ownership.
+    ///
+    /// This is local scheduling authority, never peer-gossip input. The set
+    /// includes the local validator when it participates in the roster.
+    #[derive(Clone, Debug)]
+    pub struct UpdateValidatorDialRoster(pub HashSet<PeerId>);
+
+    /// One atomic consensus-topology and validator-dial-ownership snapshot.
+    ///
+    /// `validator_dial_roster` must be the locally authenticated configured
+    /// validator subset of `topology`; the network actor also intersects it
+    /// with the immutable startup authority before applying it.
+    #[derive(Clone, Debug)]
+    pub struct UpdateValidatorTopology {
+        /// Logical consensus topology, including the local peer when active.
+        pub topology: HashSet<PeerId>,
+        /// Configured validators governed by deterministic pairwise ownership.
+        pub validator_dial_roster: HashSet<PeerId>,
+    }
 
     /// Full latest-state snapshot of transport capabilities for peers.
     #[derive(Clone, Debug)]

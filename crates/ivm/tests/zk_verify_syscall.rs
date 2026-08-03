@@ -1,7 +1,7 @@
 use ivm::{IVMHost, syscalls};
 
 #[test]
-fn zk_verify_transfer_default_host_rejects_invalid_envelope() {
+fn zk_verify_ballot_default_host_rejects_invalid_envelope() {
     let payload = vec![0xAA, 0xBB];
 
     // Build a TLV envelope: type(0x0009)=NoritoBytes, ver=1, len=payload.len(), hash=Hash(payload)
@@ -20,7 +20,7 @@ fn zk_verify_transfer_default_host_rejects_invalid_envelope() {
     // Pass pointer in r10 and call verify syscall
     vm.set_register(10, ptr);
     let gas = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
+        .syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
         .expect("syscall ok");
     assert_eq!(gas, ivm::gas::zk_verify_gas(payload.len()));
     assert_eq!(vm.register(10), 0);

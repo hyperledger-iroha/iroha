@@ -19,9 +19,8 @@ log() { printf '%s\n' "$*" >&2; }
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    log "warning: missing required command '$1'; XCFramework smoke harness will emit telemetry and exit."
-    echo '{"generated_at":"'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'","buildkite":{"lanes":[]},"devices":{"emulators":{"passes":0,"failures":0},"strongbox_capable":{"passes":0,"failures":0}},"alert_state":{"consecutive_failures":0,"open_incidents":["xcframework_smoke_prereq_missing"]}}' >"$RESULT_PATH"
-    exit 0
+    log "error: missing required command '$1'"
+    exit 1
   fi
 }
 
@@ -97,16 +96,14 @@ fi
 
 ensure_disk_budget "$DERIVED_DATA_ROOT" 20
 
-if [[ "${IOS6_SMOKE_SKIP_BRIDGE:-0}" != "1" ]]; then
-  if [[ -x "$BRIDGE_SCRIPT" ]]; then
-    log "[xcframework] building NoritoBridge.xcframework"
-    if ! "$BRIDGE_SCRIPT" >/dev/null; then
-      log "error: failed to build NoritoBridge.xcframework"
-      exit 1
-    fi
-  else
-    log "warning: bridge build script missing at $BRIDGE_SCRIPT; continuing without rebuilding"
-  fi
+if [[ ! -x "$BRIDGE_SCRIPT" ]]; then
+  log "error: bridge build script missing or not executable at $BRIDGE_SCRIPT"
+  exit 1
+fi
+log "[xcframework] building NoritoBridge.xcframework"
+if ! "$BRIDGE_SCRIPT" >/dev/null; then
+  log "error: failed to build NoritoBridge.xcframework"
+  exit 1
 fi
 
 run_xcodebuild_logged() {
@@ -114,20 +111,14 @@ run_xcodebuild_logged() {
   shift
   local rc
   if command -v xcbeautify >/dev/null 2>&1; then
-    set +e
     xcodebuild "$@" 2>&1 | tee "$log_path" | xcbeautify
     rc=${PIPESTATUS[0]}
-    set -e
   elif command -v xcpretty >/dev/null 2>&1; then
-    set +e
     xcodebuild "$@" 2>&1 | tee "$log_path" | xcpretty
     rc=${PIPESTATUS[0]}
-    set -e
   else
-    set +e
     xcodebuild "$@" 2>&1 | tee "$log_path"
     rc=${PIPESTATUS[0]}
-    set -e
   fi
   return "$rc"
 }
@@ -540,3 +531,20 @@ python3 "${ROOT_DIR}/scripts/swift_smoke_anomalies.py" \
   --logs-root "${DERIVED_DATA_ROOT}" \
   --out "${ANOMALY_PATH}"
 log "[xcframework] anomaly summary written to $ANOMALY_PATH"
+
+smoke_failed=0
+for lane in "${LANE_ORDER[@]}"; do
+  lane_index="$(lane_index_for "$lane")"
+  if [[ "${LANE_STATUS[$lane_index]}" == "fail" ]]; then
+    smoke_failed=1
+  fi
+done
+strongbox_lane_index="$(lane_index_for "strongbox")"
+if [[ "${LANE_STATUS[$strongbox_lane_index]}" != "pass" ]]; then
+  log "[xcframework] required StrongBox lane did not pass"
+  smoke_failed=1
+fi
+if (( smoke_failed != 0 )); then
+  log "[xcframework] mandatory smoke evidence failed"
+  exit 1
+fi

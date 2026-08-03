@@ -9,25 +9,60 @@ these Node tools reject legacy manifests, unknown fields, unsafe paths, and
 digest or signature mismatches. `allowed_signers.json` is deliberately empty;
 production operators must supply a separately governed Ed25519 allowlist.
 
-## Development refresh
+## Cargo.lock pin owner
 
-Generate an explicitly unsigned first-release artifact, synchronize the
-`current` alias, and run the metadata checks:
+`release/openapi-cargo-lock-v1.txt` is generated metadata, not a second lock
+authority. Derive it only from an explicit, stable Cargo.lock into an absolute
+path outside the repository:
 
 ```bash
-NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- \
-  openapi --output artifacts/openapi/torii.json --unsigned-manifest
+REPO_ROOT="$(pwd -P)"
+PIN_STAGE=<task-owned-cache>/openapi-cargo-lock-v1.txt
 
-npm --prefix tools/openapi run sync-openapi -- --allow-unsigned
+node tools/openapi/scripts/provision-openapi-cargo-lock.mjs pin \
+  --source="${REPO_ROOT}/Cargo.lock" \
+  --output="${PIN_STAGE}"
+node tools/openapi/scripts/provision-openapi-cargo-lock.mjs pin \
+  --source="${REPO_ROOT}/Cargo.lock" \
+  --check="${PIN_STAGE}"
+```
+
+The owner rejects relative paths, links, executable inputs, source races, and
+repository output paths. It never edits `Cargo.lock` or the tracked pin.
+Publish reviewed staged bytes through the repository's per-file preimage guard,
+then run the `--check` form against the tracked pin. Rust and Node parse that
+tracked file as the sole size and SHA-256 authority; no hash constant is
+hand-maintained in either implementation.
+
+## Staging-safe development refresh
+
+Copy the existing artifact tree to a task-owned cache directory, generate an
+explicitly unsigned first-release artifact there, synchronize the `current`
+alias from that canonical spec, and run the metadata check. The Node steps do
+not launch Cargo or read the live artifact tree.
+
+```bash
+OPENAPI_STAGE=<task-owned-cache>/openapi
+mkdir -p "${OPENAPI_STAGE}"
+cp -R artifacts/openapi/. "${OPENAPI_STAGE}/"
+
+NORITO_SKIP_BINDINGS_SYNC=1 \
+  cargo run --locked --offline --jobs 1 -Z unstable-options \
+  --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- \
+  openapi --output-root "${OPENAPI_STAGE}" --unsigned-manifest
+
+node tools/openapi/scripts/sync-openapi.mjs \
+  --version=current --latest --allow-unsigned \
+  --output-dir="${OPENAPI_STAGE}"
+node tools/openapi/scripts/verify-openapi-versions.mjs \
+  --output-dir="${OPENAPI_STAGE}" --allow-unsigned
 npm --prefix tools/openapi test
-npm --prefix tools/openapi run check:openapi-versions -- --allow-unsigned
-npm --prefix tools/openapi run check:openapi-signatures -- \
-  --allow-unsigned=latest --allow-unsigned=current
 ```
 
 Unsigned artifacts are for development only. Their manifests still bind the
 artifact path, byte count, SHA-256, BLAKE3, and generator provenance.
+Publish the five generated JSON files only after comparing this complete cache
+tree with `artifacts/openapi/`; `allowed_signers.json` remains an input.
 
 ## Release signing
 
@@ -37,8 +72,9 @@ emit the deterministic signing payload:
 
 ```bash
 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- \
-  openapi --output artifacts/openapi/torii.json \
+  cargo run --locked --offline --jobs 1 -Z unstable-options \
+  --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- \
+  openapi --output-root artifacts/openapi \
   --unsigned-manifest \
   --signing-payload <operator-staging>/openapi-manifest-v2.payload
 ```
@@ -48,8 +84,9 @@ source state and attach it:
 
 ```bash
 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- \
-  openapi --output artifacts/openapi/torii.json \
+  cargo run --locked --offline --jobs 1 -Z unstable-options \
+  --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- \
+  openapi --output-root artifacts/openapi \
   --signature-envelope <operator-staging>/openapi-manifest-v2.signature.json
 
 npm --prefix tools/openapi run sync-openapi -- \

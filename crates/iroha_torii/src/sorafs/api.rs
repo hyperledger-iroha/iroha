@@ -200,13 +200,13 @@ use sorafs_node::reputation::runtime::{
     ReputationCommittedReadApiV1, ReputationCommittedReadProjectionV1,
 };
 use sorafs_node::{
-    ModerationAuthenticatedScreeningAdmissionError, ModerationAuthenticatedScreeningEvidenceV1,
-    ModerationAuthenticatedScreeningOutcomeV1, ModerationAuthenticatedScreeningRequestV1,
-    ModerationCorpusRegistryRecord, ModerationModelRegistryError, ModerationModelRegistrySnapshot,
-    ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
-    ModerationQuarantineObjectPayload, ModerationQuarantineObjectRecord,
-    ModerationQuarantineRecord, ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput,
-    ModerationQuarantineState, ModerationReproRegistryRecord,
+    GovernanceDagServiceError, ModerationAuthenticatedScreeningAdmissionError,
+    ModerationAuthenticatedScreeningEvidenceV1, ModerationAuthenticatedScreeningOutcomeV1,
+    ModerationAuthenticatedScreeningRequestV1, ModerationCorpusRegistryRecord,
+    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
+    ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
+    ModerationQuarantineObjectRecord, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
+    ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
     ModerationScreeningAuthenticationError, ModerationScreeningError, ModerationScreeningRecord,
     ModerationScreeningSnapshot, NodeStorageError, PrivacyAggregateScheduleOutcome,
     PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
@@ -401,21 +401,17 @@ const RANGE_CAPABILITY_FEATURE_ALIGNMENT: &str = "requires_alignment";
 const RANGE_CAPABILITY_FEATURE_MERKLE: &str = "supports_merkle_proof";
 const RANGE_CAPABILITY_FEATURE_STREAM_BUDGET: &str = "stream_budget";
 const RANGE_CAPABILITY_FEATURE_TRANSPORT_HINTS: &str = "transport_hints";
-const GOVERNANCE_DAG_MIRROR_INDEX_FILE: &str = "mirror-index.json";
-const GOVERNANCE_DAG_PUBLICATION_STATE_FILE: &str = "governance-publication-state-v1.json";
 const GOVERNANCE_DAG_PUBLICATION_STATE_SCHEMA: &str =
     "sorafs.governance_dag.local_publication_state.v1";
-const GOVERNANCE_DAG_PUBLISH_INDEX_FILE: &str = "publish-index.json";
-const GOVERNANCE_DAG_CAR_QUEUE_FILE: &str = "car-queue.json";
+const GOVERNANCE_DAG_MIRROR_SOURCE_V1: &str = "sorafs.governance_dag.mirror_store.v1";
+const GOVERNANCE_DAG_PUBLICATION_SOURCE_V1: &str = "sorafs.governance_dag.publication_store.v1";
+const GOVERNANCE_DAG_RUNTIME_SOURCE_V1: &str = "sorafs.governance_dag.runtime_store.v1";
 const GOVERNANCE_DAG_PUBLICATION_SOURCES_DIR: &str = "publication-sources";
 const GOVERNANCE_DAG_CAR_SEGMENTS_DIR: &str = "car-segments";
-const GOVERNANCE_DAG_RUNTIME_INDEX_FILE: &str = "runtime-dag-index.json";
 // Public index metadata is root-relative; the node's retained descriptor is authoritative.
 const GOVERNANCE_DAG_LOGICAL_ROOT: &str = ".";
-const GOVERNANCE_DAG_RUNTIME_HEAD_FILE: &str = "runtime-dag/head.to";
 const GOVERNANCE_DAG_RUNTIME_BLOCKS_DIR: &str = "runtime-dag/blocks";
 const GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
-const GOVERNANCE_DAG_PUBLICATION_STATE_MAX_BYTES: u64 = 160 * 1024 * 1024;
 // A governance CAR contains one bounded canonical payload, one 64 MiB JSON
 // projection, two 65-byte sidecars,
 // and the canonical CARv2 DAG/index overhead. Keep archive reads endpoint-local
@@ -4041,12 +4037,19 @@ pub(crate) async fn handle_get_sorafs_governance_dag_dashboard(
 }
 
 fn governance_dag_dashboard_response(state: &SharedAppState, headers: HeaderMap) -> Response {
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_mirror_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
-    let etag = governance_dag_representation_etag(&etag, "mirror-dashboard", &[]);
+    let (index, metadata) = match load_governance_dag_mirror_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_dag_dashboard_response_from_index(index, metadata, headers)
+}
+
+fn governance_dag_dashboard_response_from_index(
+    index: Value,
+    metadata: GovernanceDagSourceMetadata,
+    headers: HeaderMap,
+) -> Response {
+    let etag = governance_dag_representation_etag(&metadata.etag, "mirror-dashboard", &[]);
     if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
         return response;
     }
@@ -4084,10 +4087,7 @@ fn governance_dag_dashboard_response(state: &SharedAppState, headers: HeaderMap)
         "schema".into(),
         Value::from("sorafs.governance_dag.dashboard.v1"),
     );
-    response.insert("source".into(), Value::from("local_mirror_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "mirror_generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -4134,12 +4134,19 @@ pub(crate) async fn handle_get_sorafs_governance_dag_head(
 }
 
 fn governance_dag_head_response(state: &SharedAppState, headers: HeaderMap) -> Response {
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_mirror_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
-    let etag = governance_dag_representation_etag(&etag, "mirror-head", &[]);
+    let (index, metadata) = match load_governance_dag_mirror_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_dag_head_response_from_index(index, metadata, headers)
+}
+
+fn governance_dag_head_response_from_index(
+    index: Value,
+    metadata: GovernanceDagSourceMetadata,
+    headers: HeaderMap,
+) -> Response {
+    let etag = governance_dag_representation_etag(&metadata.etag, "mirror-head", &[]);
     if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
         return response;
     }
@@ -4149,10 +4156,7 @@ fn governance_dag_head_response(state: &SharedAppState, headers: HeaderMap) -> R
         "schema".into(),
         Value::from("sorafs.governance_dag.head.v1"),
     );
-    response.insert("source".into(), Value::from("local_mirror_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "head".into(),
         index.get("head").cloned().unwrap_or(Value::Null),
@@ -4220,14 +4224,16 @@ fn governance_dag_publish_index_response(
         Ok(limit) => limit,
         Err(err) => return err.into_response(),
     };
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let limit_component = limit.to_string();
-    let etag =
-        governance_dag_representation_etag(&etag, "publish-index", &[limit_component.as_str()]);
+    let etag = governance_dag_representation_etag(
+        &metadata.etag,
+        "publish-index",
+        &[limit_component.as_str()],
+    );
     let (index, indexed_entry_count, truncated_entries) =
         match limit_governance_publish_index_entries(index, limit) {
             Ok(value) => value,
@@ -4243,10 +4249,7 @@ fn governance_dag_publish_index_response(
         "schema".into(),
         Value::from("sorafs.governance_dag.publish_index.v1"),
     );
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -4353,14 +4356,13 @@ fn transparency_cycles_response(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "transparency-cycles",
         &[limit_component.as_str()],
     );
@@ -4387,10 +4389,7 @@ fn transparency_cycles_response(
         "schema".into(),
         Value::from("sorafs.transparency.cycles.v1"),
     );
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -4480,14 +4479,13 @@ fn transparency_explorer_response(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "transparency-explorer",
         &[limit_component.as_str()],
     );
@@ -4529,10 +4527,7 @@ fn transparency_explorer_response(
         "schema".into(),
         Value::from("sorafs.transparency.explorer_snapshot.v1"),
     );
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -4887,14 +4882,13 @@ fn transparency_token_issuances_response(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "transparency-token-issuances",
         &[limit_component.as_str()],
     );
@@ -4921,10 +4915,7 @@ fn transparency_token_issuances_response(
         "schema".into(),
         Value::from("sorafs.transparency.proof_token_issuances.v1"),
     );
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -5627,14 +5618,13 @@ fn appeal_finance_reports_response(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "appeal-finance-reports",
         &[limit_component.as_str()],
     );
@@ -5661,10 +5651,7 @@ fn appeal_finance_reports_response(
         "schema".into(),
         Value::from("sorafs.appeal_finance.reports.v1"),
     );
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -5752,14 +5739,13 @@ fn appeal_finance_weekly_rollups_response(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "appeal-finance-weekly-rollups",
         &[limit_component.as_str()],
     );
@@ -5783,10 +5769,7 @@ fn appeal_finance_weekly_rollups_response(
         "schema".into(),
         Value::from("sorafs.appeal_finance.weekly_rollups.v1"),
     );
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -5853,14 +5836,13 @@ fn appeal_finance_settlement_receipts_response(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "appeal-finance-settlement-receipts",
         &[limit_component.as_str()],
     );
@@ -5887,10 +5869,7 @@ fn appeal_finance_settlement_receipts_response(
         "schema".into(),
         Value::from("sorafs.appeal_finance.settlement_receipts.v1"),
     );
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -6008,12 +5987,11 @@ where
 }
 
 fn governance_car_queue_response(state: &SharedAppState, headers: HeaderMap) -> Response {
-    let (queue, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_car_queue(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
-    let etag = governance_dag_representation_etag(&etag, "car-queue", &[]);
+    let (queue, metadata) = match load_governance_dag_car_queue(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let etag = governance_dag_representation_etag(&metadata.etag, "car-queue", &[]);
     if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
         return response;
     }
@@ -6023,10 +6001,7 @@ fn governance_car_queue_response(state: &SharedAppState, headers: HeaderMap) -> 
         "schema".into(),
         Value::from("sorafs.governance_dag.car_queue.v1"),
     );
-    response.insert("source".into(), Value::from("local_car_queue"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         queue.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -6130,12 +6105,11 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime(
 }
 
 fn governance_dag_runtime_response(state: &SharedAppState, headers: HeaderMap) -> Response {
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_runtime_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
-    let etag = governance_dag_representation_etag(&etag, "runtime-index", &[]);
+    let (index, metadata) = match load_governance_dag_runtime_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let etag = governance_dag_representation_etag(&metadata.etag, "runtime-index", &[]);
     let blocks = match governance_runtime_dag_blocks(&index) {
         Ok(blocks) => blocks,
         Err(response) => return response,
@@ -6151,10 +6125,7 @@ fn governance_dag_runtime_response(state: &SharedAppState, headers: HeaderMap) -
         "schema".into(),
         Value::from("sorafs.governance_dag.runtime_index.v1"),
     );
-    response.insert("source".into(), Value::from("local_runtime_dag_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -6186,10 +6157,6 @@ fn governance_dag_runtime_response(state: &SharedAppState, headers: HeaderMap) -
             .get("head_block_cid_hex")
             .cloned()
             .unwrap_or(Value::Null),
-    );
-    response.insert(
-        "head_path".into(),
-        index.get("head_path").cloned().unwrap_or(Value::Null),
     );
     response.insert(
         "block_count".into(),
@@ -6230,12 +6197,11 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_head(
 }
 
 fn governance_dag_runtime_head_response(state: &SharedAppState, headers: HeaderMap) -> Response {
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_runtime_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
-    let etag = governance_dag_representation_etag(&etag, "runtime-head", &[]);
+    let (index, metadata) = match load_governance_dag_runtime_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let etag = governance_dag_representation_etag(&metadata.etag, "runtime-head", &[]);
     let latest_block = match governance_runtime_dag_latest_block(&index) {
         Ok(value) => value,
         Err(response) => return response,
@@ -6248,10 +6214,7 @@ fn governance_dag_runtime_head_response(state: &SharedAppState, headers: HeaderM
         "schema".into(),
         Value::from("sorafs.governance_dag.runtime_head.v1"),
     );
-    response.insert("source".into(), Value::from("local_runtime_dag_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert(
         "generated_at".into(),
         index.get("generated_at").cloned().unwrap_or(Value::Null),
@@ -6262,10 +6225,6 @@ fn governance_dag_runtime_head_response(state: &SharedAppState, headers: HeaderM
             .get("head_block_cid_hex")
             .cloned()
             .unwrap_or(Value::Null),
-    );
-    response.insert(
-        "head_path".into(),
-        index.get("head_path").cloned().unwrap_or(Value::Null),
     );
     response.insert(
         "block_count".into(),
@@ -6386,20 +6345,134 @@ struct VerifiedGovernanceRuntimeState {
     head_raw_ipfs_cid: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GovernanceDagSourceMetadata {
+    source: &'static str,
+    source_generation: u64,
+    source_record_blake3: String,
+    encoded_len: u64,
+    blake3_hex: String,
+    etag: String,
+    checkpoint: Option<(u64, String)>,
+}
+
+impl GovernanceDagSourceMetadata {
+    fn new(
+        source: &'static str,
+        store_identity: (u64, [u8; 32]),
+        canonical_bytes: &[u8],
+        checkpoint_identity: Option<(u64, [u8; 32])>,
+    ) -> Self {
+        let (source_generation, source_record_digest) = store_identity;
+        let source_record_blake3 = encode(source_record_digest);
+        let mut etag_hasher = blake3::Hasher::new();
+        etag_hasher.update(b"sorafs.governance-dag.typed-source-etag.v1\0");
+        etag_hasher.update(
+            &u64::try_from(source.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        etag_hasher.update(source.as_bytes());
+        etag_hasher.update(&source_generation.to_le_bytes());
+        etag_hasher.update(&source_record_digest);
+        if let Some((checkpoint_generation, checkpoint_revision)) = checkpoint_identity {
+            etag_hasher.update(&[1]);
+            etag_hasher.update(&checkpoint_generation.to_le_bytes());
+            etag_hasher.update(&checkpoint_revision);
+        } else {
+            etag_hasher.update(&[0]);
+        }
+        let etag = format!("\"{}\"", etag_hasher.finalize().to_hex());
+        Self {
+            source,
+            source_generation,
+            etag,
+            source_record_blake3,
+            encoded_len: u64::try_from(canonical_bytes.len()).unwrap_or(u64::MAX),
+            blake3_hex: encode(blake3_hash(canonical_bytes).as_bytes()),
+            checkpoint: checkpoint_identity
+                .map(|(generation, revision)| (generation, encode(revision))),
+        }
+    }
+}
+
+fn insert_governance_dag_source_metadata(
+    response: &mut Map,
+    metadata: &GovernanceDagSourceMetadata,
+) {
+    insert_governance_dag_source_identity(response, metadata);
+    response.insert("encoded_len".into(), Value::from(metadata.encoded_len));
+    response.insert("blake3".into(), Value::from(metadata.blake3_hex.clone()));
+}
+
+fn insert_governance_dag_source_identity(
+    response: &mut Map,
+    metadata: &GovernanceDagSourceMetadata,
+) {
+    response.insert("source".into(), Value::from(metadata.source));
+    response.insert(
+        "source_generation".into(),
+        Value::from(metadata.source_generation),
+    );
+    response.insert(
+        "source_record_blake3".into(),
+        Value::from(metadata.source_record_blake3.clone()),
+    );
+    if let Some((generation, revision)) = metadata.checkpoint.as_ref() {
+        response.insert(
+            "source_checkpoint_generation".into(),
+            Value::from(*generation),
+        );
+        response.insert(
+            "source_checkpoint_revision".into(),
+            Value::from(revision.clone()),
+        );
+    }
+}
+
 fn load_governance_dag_mirror_index(
     state: &SharedAppState,
-) -> Result<(Value, String, u64, String, String), Response> {
-    let path = governance_dag_mirror_index_path(state)?;
-    let bytes = read_bounded_governance_dag_file(
-        state,
-        &path,
-        GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
-        "governance DAG mirror index",
-    )?;
-    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
-    let mut index: Value = json::from_slice(&bytes).map_err(|err| {
-        warn!(error = %err, path = %path.display(), "failed to decode governance DAG mirror index");
+) -> Result<(Value, GovernanceDagSourceMetadata), Response> {
+    let _ = governance_dag_root_dir(state)?;
+    let snapshot = state
+        .sorafs_node
+        .governance_dag_mirror_snapshot()
+        .map_err(|err| {
+            warn!(error = %err, "failed to read authenticated governance DAG mirror snapshot");
+            let status = if matches!(err, GovernanceDagServiceError::Unavailable(_)) {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            json_error(
+                status,
+                "failed to read authenticated governance DAG mirror snapshot",
+            )
+        })?
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::NOT_FOUND,
+                "governance DAG mirror snapshot is not available",
+            )
+        })?;
+    let metadata = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_MIRROR_SOURCE_V1,
+        snapshot.mirror_store_identity(),
+        snapshot.canonical_bytes(),
+        Some((
+            snapshot.checkpoint_identity().generation(),
+            snapshot.checkpoint_identity().revision(),
+        )),
+    );
+    parse_governance_dag_mirror_index(snapshot.canonical_bytes(), metadata)
+}
+
+fn parse_governance_dag_mirror_index(
+    canonical_bytes: &[u8],
+    metadata: GovernanceDagSourceMetadata,
+) -> Result<(Value, GovernanceDagSourceMetadata), Response> {
+    let index: Value = json::from_slice(canonical_bytes).map_err(|err| {
+        warn!(error = %err, "failed to decode authenticated governance DAG mirror snapshot");
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to decode governance DAG mirror index",
@@ -6411,76 +6484,286 @@ fn load_governance_dag_mirror_index(
             "governance DAG mirror index uses an unsupported schema",
         ));
     }
-    let (_, verified_runtime) = load_verified_governance_dag_runtime_index(state)?;
-    verify_and_bind_governance_dag_mirror_index(&mut index, &verified_runtime)?;
-    let etag = format!("\"{blake3_hex}\"");
-    Ok((
-        index,
-        GOVERNANCE_DAG_MIRROR_INDEX_FILE.to_owned(),
-        encoded_len,
-        blake3_hex,
-        etag,
-    ))
+    validate_governance_dag_mirror_index(&index)?;
+    Ok((index, metadata))
 }
 
-struct LoadedGovernancePublicationState {
-    publish_index: Value,
-    car_queue: Value,
-    encoded_len: u64,
-    blake3_hex: String,
-    etag: String,
-}
-
-fn reject_legacy_governance_publication_authorities(
-    state: &SharedAppState,
-) -> Result<(), Response> {
-    for file in [
-        GOVERNANCE_DAG_PUBLISH_INDEX_FILE,
-        GOVERNANCE_DAG_CAR_QUEUE_FILE,
+fn validate_governance_dag_mirror_index(index: &Value) -> Result<(), Response> {
+    const MIRROR_INDEX_FIELDS: [&str; 11] = [
+        "schema",
+        "generation",
+        "generated_at",
+        "head",
+        "block_count",
+        "indexed_block_count",
+        "blocks",
+        "by_block_cid_hex",
+        "by_node_cid_hex",
+        "by_encoded_blake3",
+        "by_payload_kind",
+    ];
+    const MIRROR_HEAD_FIELDS: [&str; 5] = [
+        "head_block_cid_hex",
+        "block_count",
+        "generated_at",
+        "ipfs_cid",
+        "blake3",
+    ];
+    const MIRROR_BLOCK_FIELDS: [&str; 11] = [
+        "position",
+        "sequence",
+        "timestamp",
+        "payload_kind",
+        "block_cid_hex",
+        "node_cid_hex",
+        "blake3",
+        "encoded_len",
+        "ipfs_cid",
+        "submission_publisher_account_digest_hex",
+        "submission_origin",
+    ];
+    let context = "governance DAG mirror index";
+    let root = index.as_object().ok_or_else(|| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror index root is not an object",
+        )
+    })?;
+    require_exact_map_fields(root, &MIRROR_INDEX_FIELDS, context)?;
+    if required_value_u64(index, "generation", context)? == 0 {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror generation must be positive",
+        ));
+    }
+    required_value_u64(index, "generated_at", context)?;
+    let head = index
+        .get("head")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG mirror index is missing `head` object",
+            )
+        })?;
+    require_exact_map_fields(head, &MIRROR_HEAD_FIELDS, "governance DAG mirror head")?;
+    let head_block_cid = required_map_string(head, "head_block_cid_hex", context)?;
+    let head_blake3 = required_map_string(head, "blake3", context)?;
+    for (label, value) in [
+        ("head block CID", head_block_cid.as_str()),
+        ("head digest", head_blake3.as_str()),
     ] {
-        match state
-            .sorafs_node
-            .read_governance_dag_file(StdPath::new(file), 1)
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Ok(_) | Err(_) => {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("governance DAG mirror {label} is noncanonical"),
+            ));
+        }
+    }
+    let head_count = required_map_u64(head, "block_count", context)?;
+    if head_count == 0 || required_value_u64(index, "block_count", context)? != head_count {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror block count disagrees with its head",
+        ));
+    }
+    required_map_u64(head, "generated_at", context)?;
+    if required_map_string(head, "ipfs_cid", context)?.is_empty() {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror head metadata is noncanonical",
+        ));
+    }
+
+    let blocks = index
+        .get("blocks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG mirror index is missing `blocks` array",
+            )
+        })?;
+    if blocks.is_empty() || blocks.len() > GOVERNANCE_DAG_RUNTIME_ENTRY_HARD_CAP {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror block inventory is empty or oversized",
+        ));
+    }
+    let indexed_count = u64::try_from(blocks.len()).map_err(|_| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror block count exceeds u64",
+        )
+    })?;
+    if required_value_u64(index, "indexed_block_count", context)? != indexed_count {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror indexed block count is stale",
+        ));
+    }
+    if head_count < indexed_count {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror head count is smaller than its retained tail",
+        ));
+    }
+
+    let mut by_block_cid = Map::new();
+    let mut by_node_cid = Map::new();
+    let mut by_digest = Map::new();
+    let mut by_kind = Map::new();
+    let mut previous_sequence: Option<u64> = None;
+    for (position, block) in blocks.iter().enumerate() {
+        let entry_context = format!("governance DAG mirror block {position}");
+        let block = block.as_object().ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{entry_context} is not an object"),
+            )
+        })?;
+        require_exact_map_fields(block, &MIRROR_BLOCK_FIELDS, &entry_context)?;
+        let position_u64 = u64::try_from(position).map_err(|_| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG mirror position exceeds u64",
+            )
+        })?;
+        let sequence = required_map_u64(block, "sequence", &entry_context)?;
+        if required_map_u64(block, "position", &entry_context)? != position_u64
+            || previous_sequence.is_some_and(|previous| previous.checked_add(1) != Some(sequence))
+        {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{entry_context} position or sequence is noncanonical"),
+            ));
+        }
+        previous_sequence = Some(sequence);
+        required_map_u64(block, "timestamp", &entry_context)?;
+        let block_cid = required_map_string(block, "block_cid_hex", &entry_context)?;
+        let node_cid = required_map_string(block, "node_cid_hex", &entry_context)?;
+        let digest = required_map_string(block, "blake3", &entry_context)?;
+        for value in [&block_cid, &node_cid, &digest] {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
                 return Err(json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!(
-                        "legacy governance publication authority `{file}` is unsupported by the first-release schema"
-                    ),
+                    format!("{entry_context} contains noncanonical digest metadata"),
                 ));
             }
+        }
+        let payload_kind = required_map_string(block, "payload_kind", &entry_context)?;
+        let normalized_payload_kind = normalize_governance_publish_kind(&payload_kind)?;
+        if normalized_payload_kind != payload_kind
+            || required_map_u64(block, "encoded_len", &entry_context)? == 0
+            || required_map_string(block, "ipfs_cid", &entry_context)?.is_empty()
+        {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{entry_context} contains noncanonical payload metadata"),
+            ));
+        }
+        required_nullable_governance_string(
+            block,
+            "submission_publisher_account_digest_hex",
+            &entry_context,
+        )?;
+        required_nullable_governance_string(block, "submission_origin", &entry_context)?;
+        if by_block_cid
+            .insert(block_cid.clone(), Value::from(position_u64))
+            .is_some()
+            || by_node_cid
+                .insert(node_cid.clone(), Value::from(position_u64))
+                .is_some()
+            || by_digest
+                .insert(digest.clone(), Value::from(position_u64))
+                .is_some()
+        {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{entry_context} duplicates a mirror identity"),
+            ));
+        }
+        append_governance_lookup_position(&mut by_kind, payload_kind, position_u64);
+    }
+    let last = blocks.last().expect("nonempty mirror blocks checked above");
+    if last.get("block_cid_hex").and_then(Value::as_str) != Some(head_block_cid.as_str())
+        || previous_sequence.and_then(|sequence| sequence.checked_add(1)) != Some(head_count)
+    {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror history does not end at its head",
+        ));
+    }
+    for (field, expected) in [
+        ("by_block_cid_hex", by_block_cid),
+        ("by_node_cid_hex", by_node_cid),
+        ("by_encoded_blake3", by_digest),
+        ("by_payload_kind", by_kind),
+    ] {
+        if index.get(field) != Some(&Value::Object(expected)) {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("governance DAG mirror `{field}` lookup is stale or substituted"),
+            ));
         }
     }
     Ok(())
 }
 
+struct LoadedGovernancePublicationState {
+    publish_index: Value,
+    car_queue: Value,
+    metadata: GovernanceDagSourceMetadata,
+}
+
 fn load_governance_publication_state(
     state: &SharedAppState,
 ) -> Result<LoadedGovernancePublicationState, Response> {
-    reject_legacy_governance_publication_authorities(state)?;
-    let path = governance_dag_index_file_path(
-        state,
-        GOVERNANCE_DAG_PUBLICATION_STATE_FILE,
-        "sorafs governance publication-state directory is not configured",
-    )?;
-    let bytes = read_bounded_governance_dag_file(
-        state,
-        &path,
-        GOVERNANCE_DAG_PUBLICATION_STATE_MAX_BYTES,
-        "governance publication state",
-    )?;
-    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
-    let publication_state: Value = json::from_slice(&bytes).map_err(|err| {
-        warn!(error = %err, path = %path.display(), "failed to decode governance publication state");
+    let _ = governance_dag_root_dir(state)?;
+    let snapshot = state
+        .sorafs_node
+        .governance_dag_publication_snapshot()
+        .map_err(|err| {
+            warn!(error = %err, "failed to read typed governance publication authority");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to read governance publication state",
+            )
+        })?
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::NOT_FOUND,
+                "governance publication state was not found",
+            )
+        })?;
+    let metadata = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_PUBLICATION_SOURCE_V1,
+        snapshot.store_identity(),
+        snapshot.canonical_bytes(),
+        None,
+    );
+    parse_governance_publication_state(snapshot.canonical_bytes(), metadata)
+}
+
+fn parse_governance_publication_state(
+    canonical_bytes: &[u8],
+    metadata: GovernanceDagSourceMetadata,
+) -> Result<LoadedGovernancePublicationState, Response> {
+    let publication_state: Value = json::from_slice(canonical_bytes).map_err(|err| {
+        warn!(error = %err, "failed to decode typed governance publication authority");
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to decode governance publication state",
         )
     })?;
-    drop(bytes);
     let root = publication_state.as_object().ok_or_else(|| {
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -6562,27 +6845,18 @@ fn load_governance_publication_state(
             "governance publication state lost its CAR queue",
         )
     })?;
-    let etag = format!("\"{blake3_hex}\"");
     Ok(LoadedGovernancePublicationState {
         publish_index,
         car_queue,
-        encoded_len,
-        blake3_hex,
-        etag,
+        metadata,
     })
 }
 
 fn load_governance_dag_publish_index(
     state: &SharedAppState,
-) -> Result<(Value, String, u64, String, String), Response> {
+) -> Result<(Value, GovernanceDagSourceMetadata), Response> {
     let loaded = load_governance_publication_state(state)?;
-    Ok((
-        loaded.publish_index,
-        GOVERNANCE_DAG_PUBLICATION_STATE_FILE.to_owned(),
-        loaded.encoded_len,
-        loaded.blake3_hex,
-        loaded.etag,
-    ))
+    Ok((loaded.publish_index, loaded.metadata))
 }
 
 fn governance_source_pair_relative_paths(
@@ -6994,15 +7268,9 @@ fn validate_governance_dag_publish_index(index: &Value) -> Result<(), Response> 
 
 fn load_governance_dag_car_queue(
     state: &SharedAppState,
-) -> Result<(Value, String, u64, String, String), Response> {
+) -> Result<(Value, GovernanceDagSourceMetadata), Response> {
     let loaded = load_governance_publication_state(state)?;
-    Ok((
-        loaded.car_queue,
-        GOVERNANCE_DAG_PUBLICATION_STATE_FILE.to_owned(),
-        loaded.encoded_len,
-        loaded.blake3_hex,
-        loaded.etag,
-    ))
+    Ok((loaded.car_queue, loaded.metadata))
 }
 
 fn validate_governance_dag_car_queue(queue: &Value) -> Result<(), Response> {
@@ -8232,7 +8500,7 @@ fn verify_governance_car_segment_artifacts(
 
 fn load_governance_dag_runtime_index(
     state: &SharedAppState,
-) -> Result<(Value, String, u64, String, String), Response> {
+) -> Result<(Value, GovernanceDagSourceMetadata), Response> {
     load_verified_governance_dag_runtime_index(state).map(|(index, _verified)| index)
 }
 
@@ -8240,26 +8508,36 @@ fn load_verified_governance_dag_runtime_index(
     state: &SharedAppState,
 ) -> Result<
     (
-        (Value, String, u64, String, String),
+        (Value, GovernanceDagSourceMetadata),
         VerifiedGovernanceRuntimeState,
     ),
     Response,
 > {
-    let path = governance_dag_index_file_path(
-        state,
-        GOVERNANCE_DAG_RUNTIME_INDEX_FILE,
-        "sorafs governance DAG runtime index directory is not configured",
-    )?;
-    let bytes = read_bounded_governance_dag_file(
-        state,
-        &path,
-        GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
-        "governance DAG runtime index",
-    )?;
-    let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
-    let mut index: Value = json::from_slice(&bytes).map_err(|err| {
-        warn!(error = %err, path = %path.display(), "failed to decode governance DAG runtime index");
+    let _ = governance_dag_root_dir(state)?;
+    let snapshot = state
+        .sorafs_node
+        .governance_dag_runtime_snapshot()
+        .map_err(|err| {
+            warn!(error = %err, "failed to read authenticated governance DAG runtime snapshot");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to read authenticated governance DAG runtime snapshot",
+            )
+        })?
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::NOT_FOUND,
+                "governance DAG runtime snapshot was not found",
+            )
+        })?;
+    let metadata = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+        snapshot.store_identity(),
+        snapshot.index_bytes(),
+        Some(snapshot.checkpoint_identity()),
+    );
+    let mut index: Value = json::from_slice(snapshot.index_bytes()).map_err(|err| {
+        warn!(error = %err, "failed to decode authenticated governance DAG runtime index");
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to decode governance DAG runtime index",
@@ -8273,18 +8551,9 @@ fn load_verified_governance_dag_runtime_index(
             "governance DAG runtime index uses an unsupported schema",
         ));
     }
-    let verified = verify_and_bind_governance_dag_runtime_index(state, &mut index)?;
-    let etag = format!("\"{blake3_hex}\"");
-    Ok((
-        (
-            index,
-            GOVERNANCE_DAG_RUNTIME_INDEX_FILE.to_owned(),
-            encoded_len,
-            blake3_hex,
-            etag,
-        ),
-        verified,
-    ))
+    let verified =
+        verify_and_bind_governance_dag_runtime_index(state, &mut index, snapshot.head_bytes())?;
+    Ok(((index, metadata), verified))
 }
 
 fn read_bounded_governance_dag_file(
@@ -8505,6 +8774,7 @@ fn bind_signed_governance_submission_provenance(
 fn verify_and_bind_governance_dag_runtime_index(
     state: &SharedAppState,
     index: &mut Value,
+    head_bytes: &[u8],
 ) -> Result<VerifiedGovernanceRuntimeState, Response> {
     let root = governance_dag_root_dir(state)?;
     let context = "governance DAG runtime index";
@@ -8514,7 +8784,7 @@ fn verify_and_bind_governance_dag_runtime_index(
             "governance DAG runtime index root is not an object",
         )
     })?;
-    const RUNTIME_INDEX_FIELDS: [&str; 21] = [
+    const RUNTIME_INDEX_FIELDS: [&str; 20] = [
         "schema",
         "source",
         "root",
@@ -8530,7 +8800,6 @@ fn verify_and_bind_governance_dag_runtime_index(
         "checkpoint_store_policy_digest_hex",
         "head_block_cid_hex",
         "head_generated_at",
-        "head_path",
         "block_count",
         "by_encoded_blake3",
         "by_source_payload_blake3",
@@ -8732,15 +9001,8 @@ fn verify_and_bind_governance_dag_runtime_index(
         verified_raw_ipfs_cid.push(governance_dag_raw_ipfs_cid(&block_bytes));
     }
 
-    let head_path = root.join(GOVERNANCE_DAG_RUNTIME_HEAD_FILE);
-    let head_bytes = read_bounded_governance_dag_file(
-        state,
-        &head_path,
-        u64::try_from(GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1).unwrap_or(u64::MAX),
-        "canonical governance DAG head",
-    )?;
     let head: GovernanceDagHeadV1 =
-        decode_canonical_governance_dag_value(&head_bytes, "governance DAG head")?;
+        decode_canonical_governance_dag_value(head_bytes, "governance DAG head")?;
     validate_governance_dag_head_against_rotatable_chain_v1(&head, &verified_blocks).map_err(
         |err| {
             json_error(
@@ -8756,98 +9018,12 @@ fn verify_and_bind_governance_dag_runtime_index(
             "governance DAG runtime block count exceeds u64",
         )
     })?;
-    let config = state.sorafs_node.config();
-    let configured_peer_id = config.governance_dag_publisher_peer_id().ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG runtime signer peer binding is unavailable",
-        )
-    })?;
-    let configured_signer_handle = config.governance_dag_signer_handle().ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG runtime signer handle binding is unavailable",
-        )
-    })?;
-    let configured_signer_qualification =
-        config
-            .governance_dag_signer_qualification()
-            .ok_or_else(|| {
-                json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "governance DAG runtime signer qualification is unavailable",
-                )
-            })?;
-    let configured_public_key_hex = config
-        .governance_dag_publisher_public_key_hex()
-        .ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "governance DAG runtime signer public-key binding is unavailable",
-            )
-        })?;
-    let configured_store_handle =
-        config
-            .governance_dag_checkpoint_store_handle()
-            .ok_or_else(|| {
-                json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "governance DAG runtime checkpoint-store handle binding is unavailable",
-                )
-            })?;
-    let configured_store_qualification = config
-        .governance_dag_checkpoint_store_qualification()
-        .ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "governance DAG runtime checkpoint-store qualification is unavailable",
-            )
-        })?;
-    let (active_store_handle, active_store_qualification) = state
-        .sorafs_node
-        .governance_dag_checkpoint_store_binding()
-        .ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "governance DAG runtime checkpoint-store provider is unavailable",
-            )
-        })?;
-    if active_store_handle != configured_store_handle.as_str()
-        || active_store_qualification != configured_store_qualification
-    {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG runtime checkpoint-store provider binding was substituted",
-        ));
-    }
-    let expected_peer_text = String::from_utf8_lossy(&head.publisher_peer_id);
-    if head.publisher_peer_id.as_slice() != configured_peer_id.as_bytes()
-        || encode(&head.head_signature.public_key) != configured_public_key_hex.as_str()
-        || required_value_string(index, "signer_handle", context)?
-            != configured_signer_handle.as_str()
-        || required_value_u64(index, "signer_revision", context)?
-            != configured_signer_qualification.revision
-        || required_value_string(index, "signer_policy_digest_hex", context)?
-            != encode(configured_signer_qualification.policy_digest)
-        || required_value_string(index, "checkpoint_store_handle", context)?
-            != configured_store_handle.as_str()
-        || required_value_u64(index, "checkpoint_store_revision", context)?
-            != configured_store_qualification.revision
-        || required_value_string(index, "checkpoint_store_policy_digest_hex", context)?
-            != encode(configured_store_qualification.policy_digest)
-        || required_value_u64(index, "block_count", context)? != block_count
+    if required_value_u64(index, "block_count", context)? != block_count
         || head.block_count != block_count
         || required_value_string(index, "head_block_cid_hex", context)?
             != encode(&head.head_block_cid)
         || required_value_u64(index, "generated_at", context)? != head.generated_at
         || required_value_u64(index, "head_generated_at", context)? != head.generated_at
-        || required_value_string(index, "head_path", context)? != GOVERNANCE_DAG_RUNTIME_HEAD_FILE
-        || required_value_string(index, "publisher_peer_id", context)?
-            != expected_peer_text.as_ref()
-        || required_value_string(index, "publisher_peer_id_hex", context)?
-            != encode(&head.publisher_peer_id)
-        || required_value_string(index, "publisher_public_key_hex", context)?
-            != encode(&head.head_signature.public_key)
     {
         return Err(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -8874,251 +9050,9 @@ fn verify_and_bind_governance_dag_runtime_index(
         raw_ipfs_cid: verified_raw_ipfs_cid,
         block_positions_by_cid,
         head,
-        head_blake3_hex: encode(blake3_hash(&head_bytes).as_bytes()),
-        head_raw_ipfs_cid: governance_dag_raw_ipfs_cid(&head_bytes),
+        head_blake3_hex: encode(blake3_hash(head_bytes).as_bytes()),
+        head_raw_ipfs_cid: governance_dag_raw_ipfs_cid(head_bytes),
     })
-}
-
-fn verify_and_bind_governance_dag_mirror_index(
-    index: &mut Value,
-    runtime: &VerifiedGovernanceRuntimeState,
-) -> Result<(), Response> {
-    let context = "governance DAG mirror index";
-    let index_object = index.as_object().ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG mirror index root is not an object",
-        )
-    })?;
-    const MIRROR_INDEX_FIELDS: [&str; 11] = [
-        "schema",
-        "generation",
-        "generated_at",
-        "head",
-        "block_count",
-        "indexed_block_count",
-        "blocks",
-        "by_block_cid_hex",
-        "by_node_cid_hex",
-        "by_encoded_blake3",
-        "by_payload_kind",
-    ];
-    require_exact_map_fields(index_object, &MIRROR_INDEX_FIELDS, context)?;
-    let head = index
-        .get("head")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "governance DAG mirror index is missing `head` object",
-            )
-        })?;
-    const MIRROR_HEAD_FIELDS: [&str; 6] = [
-        "head_block_cid_hex",
-        "block_count",
-        "generated_at",
-        "ipfs_cid",
-        "public_token",
-        "blake3",
-    ];
-    require_exact_map_fields(head, &MIRROR_HEAD_FIELDS, "governance DAG mirror head")?;
-    if required_value_u64(index, "generation", context)? == 0 {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG mirror generation must be positive",
-        ));
-    }
-    required_value_u64(index, "generated_at", context)?;
-    let public_token = required_map_string(head, "public_token", context)?;
-    if public_token.is_empty()
-        || public_token.len() > 512
-        || public_token.trim() != public_token
-        || !public_token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
-    {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG mirror public token is noncanonical",
-        ));
-    }
-    if required_map_string(head, "head_block_cid_hex", context)?
-        != encode(&runtime.head.head_block_cid)
-        || required_map_u64(head, "block_count", context)? != runtime.head.block_count
-        || required_map_u64(head, "generated_at", context)? != runtime.head.generated_at
-        || required_map_string(head, "blake3", context)? != runtime.head_blake3_hex
-        || required_map_string(head, "ipfs_cid", context)? != runtime.head_raw_ipfs_cid
-        || required_value_u64(index, "block_count", context)? != runtime.head.block_count
-    {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG mirror head does not match the canonical signed head",
-        ));
-    }
-
-    let indexed_block_count = index
-        .get("blocks")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "governance DAG mirror index is missing `blocks` array",
-            )
-        })
-        .and_then(|blocks| {
-            if blocks.is_empty() || blocks.len() > runtime.blocks.len() {
-                return Err(json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "governance DAG mirror blocks are empty or exceed the signed runtime history",
-                ));
-            }
-            u64::try_from(blocks.len()).map_err(|_| {
-                json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "governance DAG mirror block count exceeds u64",
-                )
-            })
-        })?;
-    if required_value_u64(index, "indexed_block_count", context)? != indexed_block_count {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG mirror indexed_block_count does not match blocks array",
-        ));
-    }
-    let blocks = index
-        .get_mut("blocks")
-        .and_then(Value::as_array_mut)
-        .expect("blocks were validated as an array above");
-
-    let mut seen_signed_positions = BTreeSet::new();
-    let mut previous_signed_position = None;
-    let mut by_block_cid = Map::new();
-    let mut by_node_cid = Map::new();
-    let mut by_digest = Map::new();
-    let mut by_kind = Map::new();
-    for (position, value) in blocks.iter_mut().enumerate() {
-        let entry_context = format!("governance DAG mirror block {position}");
-        let entry = value.as_object_mut().ok_or_else(|| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{entry_context} is not an object"),
-            )
-        })?;
-        const MIRROR_BLOCK_FIELDS: [&str; 11] = [
-            "position",
-            "sequence",
-            "timestamp",
-            "payload_kind",
-            "block_cid_hex",
-            "node_cid_hex",
-            "blake3",
-            "encoded_len",
-            "ipfs_cid",
-            "submission_publisher_account_digest_hex",
-            "submission_origin",
-        ];
-        require_exact_map_fields(entry, &MIRROR_BLOCK_FIELDS, &entry_context)?;
-        let position_u64 = u64::try_from(position).map_err(|_| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "governance DAG mirror position exceeds u64",
-            )
-        })?;
-        if required_map_u64(entry, "position", &entry_context)? != position_u64 {
-            return Err(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{entry_context} position is noncanonical"),
-            ));
-        }
-        let block_cid_hex = required_map_string(entry, "block_cid_hex", &entry_context)?;
-        let signed_position = runtime
-            .block_positions_by_cid
-            .get(&block_cid_hex)
-            .copied()
-            .ok_or_else(|| {
-                json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("{entry_context} does not reference a canonical signed block"),
-                )
-            })?;
-        if !seen_signed_positions.insert(signed_position) {
-            return Err(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{entry_context} duplicates a canonical signed block"),
-            ));
-        }
-        if let Some(previous) = previous_signed_position
-            && signed_position != previous + 1
-        {
-            return Err(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{entry_context} is not the next canonical signed block"),
-            ));
-        }
-        previous_signed_position = Some(signed_position);
-        let signed = &runtime.blocks[signed_position];
-        let node_cid_hex = encode(&signed.node.node_cid);
-        let payload_kind = governance_dag_payload_kind(&signed.node.payload).to_owned();
-        if required_map_u64(entry, "sequence", &entry_context)? != signed.sequence
-            || required_map_u64(entry, "timestamp", &entry_context)? != signed.timestamp
-            || required_map_string(entry, "node_cid_hex", &entry_context)? != node_cid_hex
-            || required_map_string(entry, "payload_kind", &entry_context)? != payload_kind
-            || required_map_string(entry, "blake3", &entry_context)?
-                != runtime.encoded_blake3_hex[signed_position]
-            || required_map_u64(entry, "encoded_len", &entry_context)?
-                != runtime.encoded_len[signed_position]
-            || required_map_string(entry, "ipfs_cid", &entry_context)?
-                != runtime.raw_ipfs_cid[signed_position]
-        {
-            return Err(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{entry_context} metadata does not match its canonical signed block"),
-            ));
-        }
-        bind_signed_governance_submission_provenance(entry, signed, &entry_context)?;
-        by_block_cid.insert(block_cid_hex, Value::from(position_u64));
-        by_node_cid.insert(node_cid_hex, Value::from(position_u64));
-        by_digest.insert(
-            runtime.encoded_blake3_hex[signed_position].clone(),
-            Value::from(position_u64),
-        );
-        append_governance_lookup_position(&mut by_kind, payload_kind, position_u64);
-    }
-    if previous_signed_position != runtime.blocks.len().checked_sub(1) {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG mirror does not end at the canonical signed head",
-        ));
-    }
-    let index_object = index.as_object_mut().ok_or_else(|| {
-        json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG mirror index root is not an object",
-        )
-    })?;
-    index_object.insert("by_block_cid_hex".into(), Value::Object(by_block_cid));
-    index_object.insert("by_node_cid_hex".into(), Value::Object(by_node_cid));
-    index_object.insert("by_encoded_blake3".into(), Value::Object(by_digest));
-    index_object.insert("by_payload_kind".into(), Value::Object(by_kind));
-    Ok(())
-}
-
-fn governance_dag_mirror_index_path(
-    state: &SharedAppState,
-) -> Result<std::path::PathBuf, Response> {
-    governance_dag_index_file_path(
-        state,
-        GOVERNANCE_DAG_MIRROR_INDEX_FILE,
-        "sorafs governance DAG mirror directory is not configured",
-    )
-}
-
-fn governance_dag_index_file_path(
-    state: &SharedAppState,
-    file_name: &str,
-    missing_config_message: &str,
-) -> Result<std::path::PathBuf, Response> {
-    Ok(governance_dag_root_dir_with_message(state, missing_config_message)?.join(file_name))
 }
 
 fn governance_dag_root_dir(state: &SharedAppState) -> Result<PathBuf, Response> {
@@ -9152,11 +9086,24 @@ fn governance_dag_lookup_response(
         Ok(cid_hex) => cid_hex,
         Err(response) => return response,
     };
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_mirror_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_mirror_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    governance_dag_lookup_response_from_index(
+        index, metadata, headers, query, map_name, schema, cid_hex,
+    )
+}
+
+fn governance_dag_lookup_response_from_index(
+    index: Value,
+    metadata: GovernanceDagSourceMetadata,
+    headers: HeaderMap,
+    query: &str,
+    map_name: &str,
+    schema: &str,
+    cid_hex: String,
+) -> Response {
     let block = match governance_dag_mirror_lookup_block(&index, map_name, &cid_hex) {
         Ok(Some(block)) => block,
         Ok(None) => {
@@ -9168,7 +9115,7 @@ fn governance_dag_lookup_response(
         Err(response) => return response,
     };
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "mirror-lookup",
         &[schema, query, map_name, cid_hex.as_str()],
     );
@@ -9177,10 +9124,7 @@ fn governance_dag_lookup_response(
     }
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
-    response.insert("source".into(), Value::from("local_mirror_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert("query".into(), Value::from(query));
     response.insert("cid_hex".into(), Value::from(cid_hex));
     response.insert("found".into(), Value::from(true));
@@ -9349,11 +9293,10 @@ fn governance_runtime_dag_block_lookup_response(
     field_name: &str,
     cid_hex: &str,
 ) -> Response {
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_runtime_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_runtime_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let block = match governance_runtime_dag_lookup_block_by_field(&index, field_name, cid_hex) {
         Ok(Some(block)) => block,
         Ok(None) => {
@@ -9365,7 +9308,7 @@ fn governance_runtime_dag_block_lookup_response(
         Err(response) => return response,
     };
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "runtime-block-lookup",
         &[schema, query, field_name, cid_hex],
     );
@@ -9375,10 +9318,7 @@ fn governance_runtime_dag_block_lookup_response(
 
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
-    response.insert("source".into(), Value::from("local_runtime_dag_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert("query".into(), Value::from(query));
     response.insert("cid_hex".into(), Value::from(cid_hex.to_string()));
     response.insert("found".into(), Value::from(true));
@@ -9407,11 +9347,10 @@ fn governance_runtime_dag_index_lookup_response(
     key: &str,
     limit: usize,
 ) -> Response {
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_runtime_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_runtime_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let blocks = match governance_runtime_dag_lookup_blocks(&index, map_name, key) {
         Ok(blocks) if blocks.is_empty() => {
             return json_error(
@@ -9424,7 +9363,7 @@ fn governance_runtime_dag_index_lookup_response(
     };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "runtime-index-lookup",
         &[schema, query, map_name, key, limit_component.as_str()],
     );
@@ -9436,10 +9375,7 @@ fn governance_runtime_dag_index_lookup_response(
 
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
-    response.insert("source".into(), Value::from("local_runtime_dag_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert("query".into(), Value::from(query));
     response.insert("key".into(), Value::from(key.to_string()));
     response.insert("found".into(), Value::from(true));
@@ -9516,11 +9452,10 @@ fn governance_publish_index_lookup_response(
     key: &str,
     limit: usize,
 ) -> Response {
-    let (index, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let entries = match governance_publish_index_lookup_entries(&index, map_name, key) {
         Ok(entries) if entries.is_empty() => {
             return json_error(
@@ -9533,7 +9468,7 @@ fn governance_publish_index_lookup_response(
     };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "publish-index-lookup",
         &[schema, query, map_name, key, limit_component.as_str()],
     );
@@ -9545,10 +9480,7 @@ fn governance_publish_index_lookup_response(
 
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert("query".into(), Value::from(query));
     response.insert("key".into(), Value::from(key.to_string()));
     response.insert("found".into(), Value::from(true));
@@ -9728,11 +9660,10 @@ fn transparency_cycle_publication_response(
     entry_id_hex: Option<&str>,
     publication_limit: usize,
 ) -> Response {
-    let (index, source_path, index_encoded_len, blake3_hex, etag) =
-        match load_governance_dag_publish_index(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (index, metadata) = match load_governance_dag_publish_index(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let entries = match transparency_publication_index_entries(&index) {
         Ok(entries) => entries,
         Err(response) => return response,
@@ -9775,12 +9706,12 @@ fn transparency_cycle_publication_response(
     let limit_component = publication_limit.to_string();
     let etag = match entry_id_hex {
         Some(entry_id_hex) => governance_dag_representation_etag(
-            &etag,
+            &metadata.etag,
             "transparency-entry",
             &[cycle_id_hex, entry_id_hex],
         ),
         None => governance_dag_representation_etag(
-            &etag,
+            &metadata.etag,
             "transparency-cycle",
             &[cycle_id_hex, limit_component.as_str()],
         ),
@@ -9847,10 +9778,15 @@ fn transparency_cycle_publication_response(
     }
 
     let mut response = Map::new();
-    response.insert("source".into(), Value::from("local_publish_index"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("index_encoded_len".into(), Value::from(index_encoded_len));
-    response.insert("index_blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_identity(&mut response, &metadata);
+    response.insert(
+        "index_encoded_len".into(),
+        Value::from(metadata.encoded_len),
+    );
+    response.insert(
+        "index_blake3".into(),
+        Value::from(metadata.blake3_hex.clone()),
+    );
     response.insert("cycle_id_hex".into(), Value::from(cycle_id_hex.to_string()));
     response.insert(
         "encoded_path".into(),
@@ -10986,11 +10922,10 @@ fn governance_car_queue_lookup_response(
     key: &str,
     limit: usize,
 ) -> Response {
-    let (queue, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_car_queue(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (queue, metadata) = match load_governance_dag_car_queue(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let segments = match governance_car_queue_lookup_segments(&queue, map_name, key) {
         Ok(segments) if segments.is_empty() => {
             return json_error(
@@ -11003,7 +10938,7 @@ fn governance_car_queue_lookup_response(
     };
     let limit_component = limit.to_string();
     let etag = governance_dag_representation_etag(
-        &etag,
+        &metadata.etag,
         "car-queue-lookup",
         &[schema, query, map_name, key, limit_component.as_str()],
     );
@@ -11015,10 +10950,7 @@ fn governance_car_queue_lookup_response(
 
     let mut response = Map::new();
     response.insert("schema".into(), Value::from(schema));
-    response.insert("source".into(), Value::from("local_car_queue"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert("query".into(), Value::from(query));
     response.insert("key".into(), Value::from(key.to_string()));
     response.insert("found".into(), Value::from(true));
@@ -11035,11 +10967,10 @@ fn governance_car_queue_archive_lookup_response(
     headers: HeaderMap,
     car_archive_blake3: &str,
 ) -> Response {
-    let (queue, source_path, encoded_len, blake3_hex, etag) =
-        match load_governance_dag_car_queue(state) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (queue, metadata) = match load_governance_dag_car_queue(state) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let segment = match governance_car_queue_lookup_segments(
         &queue,
         "by_car_archive_blake3",
@@ -11063,8 +10994,11 @@ fn governance_car_queue_archive_lookup_response(
     if let Err(response) = verify_governance_car_segment_artifacts(state, &segment) {
         return response;
     }
-    let etag =
-        governance_dag_representation_etag(&etag, "car-queue-archive", &[car_archive_blake3]);
+    let etag = governance_dag_representation_etag(
+        &metadata.etag,
+        "car-queue-archive",
+        &[car_archive_blake3],
+    );
     if let Some(response) = governance_dag_not_modified_response(&headers, &etag) {
         return response;
     }
@@ -11074,10 +11008,7 @@ fn governance_car_queue_archive_lookup_response(
         "schema".into(),
         Value::from("sorafs.governance_dag.car_queue.archive.lookup.v1"),
     );
-    response.insert("source".into(), Value::from("local_car_queue"));
-    response.insert("source_path".into(), Value::from(source_path));
-    response.insert("encoded_len".into(), Value::from(encoded_len));
-    response.insert("blake3".into(), Value::from(blake3_hex));
+    insert_governance_dag_source_metadata(&mut response, &metadata);
     response.insert("query".into(), Value::from("car_archive_blake3"));
     response.insert("key".into(), Value::from(car_archive_blake3.to_string()));
     response.insert("found".into(), Value::from(true));
@@ -32735,7 +32666,9 @@ mod app_api_tests {
 
     use axum::{body, http::Uri};
     use ed25519_dalek::{Signer as _, SigningKey};
-    use iroha_config::parameters::actual::SorafsTokenConfig;
+    use iroha_config::parameters::actual::{
+        SorafsGovernanceDagService, SorafsGovernanceDagServiceView, SorafsTokenConfig,
+    };
     use sorafs_car::{
         CarBuildPlan, CarWriter,
         multi_fetch::{
@@ -34706,10 +34639,12 @@ mod advert_tests {
         FencedTransparencyAuthoritativeHeadReaderV1, FencedTransparencyHeadAncestryProofV1,
         FencedTransparencyPublicationInclusionV1, FencedTransparencyPublishErrorV1,
         FencedTransparencyPublisherV1, FencedTransparencyTargetHeadV1,
+        GovernanceDagCanonicalRequestV1, GovernanceDagRequestAuthenticationEnvelopeV1,
+        GovernanceDagRequestAuthenticator, GovernanceDagRequestIngressQualificationV1,
         GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner,
         GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
-        GovernanceDagSealedStateSlot, ModerationQuarantineKeyOperationErrorV1,
-        ModerationQuarantineKeyProviderQualificationV1,
+        GovernanceDagSealedStateSlot, GovernanceDagServiceRuntimeProviders,
+        ModerationQuarantineKeyOperationErrorV1, ModerationQuarantineKeyProviderQualificationV1,
         ModerationQuarantineKeyProviderReadinessErrorV1, ModerationQuarantineKeyWrapper,
         NodeRuntimeDeps, PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1,
         PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1,
@@ -34717,6 +34652,7 @@ mod advert_tests {
         ProductionTransparencyRuntimeProviderV1, TransparencyRuntimeProviderBindingV1,
         TransparencyRuntimeProviderQualificationV1,
         config::{StorageConfig, StorageConfigBuilder},
+        prepare_governance_dag_service_from_view,
         reputation::runtime::{
             REPUTATION_COMMITTED_READ_PROJECTION_VERSION_V1,
             REPUTATION_GOVERNANCE_DAG_ACKNOWLEDGEMENT_VERSION_V1, ReputationCommittedSnapshotV1,
@@ -34955,6 +34891,287 @@ mod advert_tests {
         }
     }
 
+    struct ApiTestGovernanceRequestAuthenticator {
+        handle: &'static str,
+        ingress_qualification: GovernanceDagRequestIngressQualificationV1,
+        key_pair: KeyPair,
+        nonce_counter: AtomicU64,
+    }
+
+    impl std::fmt::Debug for ApiTestGovernanceRequestAuthenticator {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("ApiTestGovernanceRequestAuthenticator")
+                .field("handle", &self.handle)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl ApiTestGovernanceRequestAuthenticator {
+        fn new(
+            handle: &'static str,
+            seed: u8,
+            ingress_qualification: GovernanceDagRequestIngressQualificationV1,
+        ) -> Arc<Self> {
+            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive Torii Governance DAG request-auth key");
+            let (algorithm, public_key) = key_pair
+                .public_key()
+                .try_to_bytes()
+                .expect("serialize Torii Governance DAG request-auth key");
+            assert_eq!(algorithm, Algorithm::Ed25519);
+            let public_key: [u8; 32] = public_key.try_into().expect("Ed25519 public key width");
+            assert_eq!(
+                public_key,
+                ingress_qualification.binding().public_key(),
+                "request-auth ingress binding must name the test signer's public key"
+            );
+            Arc::new(Self {
+                handle,
+                ingress_qualification,
+                key_pair,
+                nonce_counter: AtomicU64::new(1),
+            })
+        }
+
+        fn public_key_bytes(&self) -> [u8; 32] {
+            let (algorithm, bytes) = self
+                .key_pair
+                .public_key()
+                .try_to_bytes()
+                .expect("serialize Torii Governance DAG request-auth key");
+            assert_eq!(algorithm, Algorithm::Ed25519);
+            bytes.try_into().expect("Ed25519 public key width")
+        }
+    }
+
+    impl GovernanceDagRequestAuthenticator for ApiTestGovernanceRequestAuthenticator {
+        fn handle(&self) -> &str {
+            self.handle
+        }
+
+        fn ingress_qualification(
+            &self,
+        ) -> Result<GovernanceDagRequestIngressQualificationV1, String> {
+            Ok(self.ingress_qualification)
+        }
+
+        fn authenticate(
+            &self,
+            request: &GovernanceDagCanonicalRequestV1,
+        ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, String> {
+            let issued_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "system time precedes Unix epoch")?
+                .as_secs()
+                .max(1);
+            let expires_at = issued_at.saturating_add(15);
+            let counter = self.nonce_counter.fetch_add(1, Ordering::SeqCst);
+            let mut nonce = *blake3::hash(self.handle.as_bytes()).as_bytes();
+            nonce[..8].copy_from_slice(&counter.to_be_bytes());
+            let public_key = self.public_key_bytes();
+            let payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
+                request, issued_at, expires_at, nonce, public_key,
+            );
+            let signature = IrohaSignature::try_new(self.key_pair.private_key(), &payload)
+                .map_err(|_| "request-auth signing failed")?;
+            GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
+                request,
+                issued_at,
+                expires_at,
+                nonce,
+                public_key,
+                signature
+                    .payload()
+                    .try_into()
+                    .map_err(|_| "request-auth signature width changed")?,
+            )
+            .map_err(str::to_owned)
+        }
+    }
+
+    #[derive(Default)]
+    struct ApiTestGovernancePublicationHttpInner {
+        objects: BTreeMap<String, Vec<u8>>,
+        head: Option<Vec<u8>>,
+        head_generation: u64,
+    }
+
+    #[derive(Clone, Default)]
+    struct ApiTestGovernancePublicationHttpState(Arc<Mutex<ApiTestGovernancePublicationHttpInner>>);
+
+    fn api_test_http_response(status: StatusCode, body: impl Into<Body>) -> Response {
+        let mut response = Response::new(body.into());
+        *response.status_mut() = status;
+        response
+    }
+
+    fn api_test_find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        (!needle.is_empty())
+            .then(|| {
+                haystack
+                    .windows(needle.len())
+                    .position(|window| window == needle)
+            })
+            .flatten()
+    }
+
+    fn api_test_query_arg(raw_query: Option<&str>) -> Option<&str> {
+        raw_query?.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (key == "arg").then_some(value)
+        })
+    }
+
+    async fn api_test_governance_ipfs_add(
+        State(state): State<ApiTestGovernancePublicationHttpState>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        let Some(boundary) = headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("multipart/form-data; boundary="))
+        else {
+            return api_test_http_response(StatusCode::BAD_REQUEST, Body::empty());
+        };
+        let Some(payload_start) =
+            api_test_find_bytes(&body, b"\r\n\r\n").and_then(|offset| offset.checked_add(4))
+        else {
+            return api_test_http_response(StatusCode::BAD_REQUEST, Body::empty());
+        };
+        let suffix = format!("\r\n--{boundary}--\r\n");
+        if !body.ends_with(suffix.as_bytes()) || payload_start > body.len() - suffix.len() {
+            return api_test_http_response(StatusCode::BAD_REQUEST, Body::empty());
+        }
+        let payload = body[payload_start..body.len() - suffix.len()].to_vec();
+        let cid = governance_dag_raw_ipfs_cid(&payload);
+        state
+            .0
+            .lock()
+            .expect("lock Governance DAG publication HTTP state")
+            .objects
+            .insert(cid.clone(), payload);
+        api_test_http_response(StatusCode::OK, format!(r#"{{"Hash":"{cid}"}}"#))
+    }
+
+    async fn api_test_governance_ipfs_pin_add() -> Response {
+        api_test_http_response(StatusCode::OK, "{}")
+    }
+
+    async fn api_test_governance_ipfs_pin_ls(
+        State(state): State<ApiTestGovernancePublicationHttpState>,
+        axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    ) -> Response {
+        let Some(cid) = api_test_query_arg(raw_query.as_deref()) else {
+            return api_test_http_response(StatusCode::BAD_REQUEST, Body::empty());
+        };
+        let exists = state
+            .0
+            .lock()
+            .expect("lock Governance DAG publication HTTP state")
+            .objects
+            .contains_key(cid);
+        let body = if exists {
+            format!(r#"{{"Keys":{{"{cid}":{{}}}}}}"#)
+        } else {
+            r#"{"Keys":{}}"#.to_owned()
+        };
+        api_test_http_response(StatusCode::OK, body)
+    }
+
+    async fn api_test_governance_ipfs_cat(
+        State(state): State<ApiTestGovernancePublicationHttpState>,
+        axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    ) -> Response {
+        let Some(cid) = api_test_query_arg(raw_query.as_deref()) else {
+            return api_test_http_response(StatusCode::BAD_REQUEST, Body::empty());
+        };
+        let payload = state
+            .0
+            .lock()
+            .expect("lock Governance DAG publication HTTP state")
+            .objects
+            .get(cid)
+            .cloned();
+        payload.map_or_else(
+            || api_test_http_response(StatusCode::NOT_FOUND, Body::empty()),
+            |payload| api_test_http_response(StatusCode::OK, payload),
+        )
+    }
+
+    async fn api_test_governance_head_get(
+        State(state): State<ApiTestGovernancePublicationHttpState>,
+    ) -> Response {
+        let state = state
+            .0
+            .lock()
+            .expect("lock Governance DAG publication HTTP state");
+        let Some(head) = state.head.clone() else {
+            return api_test_http_response(StatusCode::NOT_FOUND, Body::empty());
+        };
+        let mut response = api_test_http_response(StatusCode::OK, head);
+        response.headers_mut().insert(
+            ETAG,
+            HeaderValue::from_str(&format!("\"{}\"", state.head_generation))
+                .expect("canonical mock Governance DAG head ETag"),
+        );
+        response
+    }
+
+    async fn api_test_governance_head_put(
+        State(state): State<ApiTestGovernancePublicationHttpState>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        let mut state = state
+            .0
+            .lock()
+            .expect("lock Governance DAG publication HTTP state");
+        if state.head.is_some()
+            || headers.get(IF_NONE_MATCH) != Some(&HeaderValue::from_static("*"))
+        {
+            return api_test_http_response(StatusCode::PRECONDITION_FAILED, Body::empty());
+        }
+        state.head = Some(body.to_vec());
+        state.head_generation = state.head_generation.saturating_add(1);
+        api_test_http_response(StatusCode::NO_CONTENT, Body::empty())
+    }
+
+    async fn spawn_api_test_governance_publication_http() -> (
+        String,
+        ApiTestGovernancePublicationHttpState,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let state = ApiTestGovernancePublicationHttpState::default();
+        let router = Router::new()
+            .route("/api/v0/add", post(api_test_governance_ipfs_add))
+            .route("/api/v0/pin/add", post(api_test_governance_ipfs_pin_add))
+            .route("/api/v0/pin/ls", post(api_test_governance_ipfs_pin_ls))
+            .route("/api/v0/cat", post(api_test_governance_ipfs_cat))
+            .route(
+                "/head",
+                get(api_test_governance_head_get).put(api_test_governance_head_put),
+            )
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Governance DAG publication HTTP fixture");
+        let address = listener
+            .local_addr()
+            .expect("read Governance DAG publication HTTP address");
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, router.into_make_service())
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
+        });
+        (format!("http://{address}"), state, shutdown_tx, task)
+    }
+
     #[derive(Debug, Default)]
     struct ApiTestFencedPrivacyState {
         head: Option<FencedTransparencyTargetHeadV1>,
@@ -35176,6 +35393,17 @@ mod advert_tests {
         builder: StorageConfigBuilder,
         runtime_deps: NodeRuntimeDeps,
     ) -> sorafs_node::NodeHandle {
+        node_with_test_governance_publisher_and_store(builder, runtime_deps).0
+    }
+
+    fn node_with_test_governance_publisher_and_store(
+        builder: StorageConfigBuilder,
+        runtime_deps: NodeRuntimeDeps,
+    ) -> (
+        sorafs_node::NodeHandle,
+        Arc<ApiTestGovernanceDagSigner>,
+        Arc<ApiTestGovernanceDagCheckpointStore>,
+    ) {
         let signer = Arc::new(ApiTestGovernanceDagSigner::new());
         let checkpoint_store = Arc::new(ApiTestGovernanceDagCheckpointStore::default());
         let config = builder
@@ -35195,13 +35423,14 @@ mod advert_tests {
                 ApiTestGovernanceDagCheckpointStore::expected_qualification(),
             ))
             .build();
-        sorafs_node::NodeHandle::try_new_with_runtime_deps(
+        let node = sorafs_node::NodeHandle::try_new_with_runtime_deps(
             config,
             runtime_deps
-                .with_governance_dag_signer(signer)
-                .with_governance_dag_checkpoint_store(checkpoint_store),
+                .with_governance_dag_signer(signer.clone())
+                .with_governance_dag_checkpoint_store(checkpoint_store.clone()),
         )
-        .expect("initialise runtime-signed test Governance DAG publisher")
+        .expect("initialise runtime-signed test Governance DAG publisher");
+        (node, signer, checkpoint_store)
     }
 
     fn valid_transparency_proof_token_verify_request(
@@ -35343,29 +35572,24 @@ mod advert_tests {
         assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
     }
 
-    fn sorafs_app_state_with_governance_mirror() -> (SharedAppState, TempDir, String, String, String)
-    {
+    fn governance_mirror_fixture() -> (
+        SharedAppState,
+        TempDir,
+        Value,
+        GovernanceDagSourceMetadata,
+        String,
+        String,
+        String,
+    ) {
         let (app, temp_dir, _digest_hex, block_cid_hex, node_cid_hex) =
             sorafs_app_state_with_governance_runtime_index();
-        let governance_dir = app
-            .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured governance dir")
-            .clone();
-        let runtime_index: Value = norito::json::from_slice(
-            &fs::read(governance_dir.join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE))
-                .expect("read generated runtime index"),
-        )
-        .expect("decode generated runtime index");
+        let ((runtime_index, _runtime_metadata), verified) =
+            load_verified_governance_dag_runtime_index(&app)
+                .expect("load verified runtime fixture");
         let runtime_blocks = runtime_index
             .get("blocks")
             .and_then(Value::as_array)
             .expect("generated runtime blocks");
-        let head_bytes = fs::read(governance_dir.join(GOVERNANCE_DAG_RUNTIME_HEAD_FILE))
-            .expect("read generated runtime head");
-        let signed_head: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode generated runtime head");
 
         let mut blocks = Vec::with_capacity(runtime_blocks.len());
         let mut by_block_cid_hex = Map::new();
@@ -35382,10 +35606,10 @@ mod advert_tests {
                 .get("node_cid_hex")
                 .and_then(Value::as_str)
                 .expect("runtime node CID");
-            let encoded_blake3 = runtime_block
-                .get("encoded_blake3")
-                .and_then(Value::as_str)
-                .expect("runtime block digest");
+            let encoded_blake3 = verified
+                .encoded_blake3_hex
+                .get(position)
+                .expect("verified runtime block digest");
             let payload_kind = runtime_block
                 .get("payload_kind")
                 .and_then(Value::as_str)
@@ -35413,21 +35637,21 @@ mod advert_tests {
                     .cloned()
                     .expect("runtime published timestamp"),
             );
-            block.insert("blake3".into(), Value::from(encoded_blake3));
-            let block_path = runtime_block
-                .get("block_path")
-                .and_then(Value::as_str)
-                .expect("runtime block path");
-            let block_bytes =
-                fs::read(governance_dir.join(block_path)).expect("read generated runtime block");
+            block.insert("blake3".into(), Value::from(encoded_blake3.clone()));
             block.insert(
                 "ipfs_cid".into(),
-                Value::from(governance_dag_raw_ipfs_cid(&block_bytes)),
+                Value::from(
+                    verified
+                        .raw_ipfs_cid
+                        .get(position)
+                        .expect("verified runtime block IPFS CID")
+                        .clone(),
+                ),
             );
             blocks.push(Value::Object(block));
             by_block_cid_hex.insert(block_cid.to_owned(), Value::from(position_u64));
             by_node_cid_hex.insert(node_cid.to_owned(), Value::from(position_u64));
-            by_encoded_blake3.insert(encoded_blake3.to_owned(), Value::from(position_u64));
+            by_encoded_blake3.insert(encoded_blake3.clone(), Value::from(position_u64));
             append_governance_lookup_position(
                 &mut by_payload_kind,
                 payload_kind.to_owned(),
@@ -35438,18 +35662,20 @@ mod advert_tests {
         let mut head = Map::new();
         head.insert(
             "head_block_cid_hex".into(),
-            Value::from(encode(&signed_head.head_block_cid)),
+            Value::from(encode(&verified.head.head_block_cid)),
         );
-        head.insert("block_count".into(), Value::from(signed_head.block_count));
-        head.insert("generated_at".into(), Value::from(signed_head.generated_at));
+        head.insert("block_count".into(), Value::from(verified.head.block_count));
+        head.insert(
+            "generated_at".into(),
+            Value::from(verified.head.generated_at),
+        );
         head.insert(
             "ipfs_cid".into(),
-            Value::from(governance_dag_raw_ipfs_cid(&head_bytes)),
+            Value::from(verified.head_raw_ipfs_cid.clone()),
         );
-        head.insert("public_token".into(), Value::from("test-public-token"));
         head.insert(
             "blake3".into(),
-            Value::from(encode(blake3_hash(&head_bytes).as_bytes())),
+            Value::from(verified.head_blake3_hex.clone()),
         );
 
         let mut index = Map::new();
@@ -35457,10 +35683,13 @@ mod advert_tests {
             "schema".into(),
             Value::from("sorafs.governance_dag.mirror.v1"),
         );
-        index.insert("generation".into(), Value::from(1_u64));
-        index.insert("generated_at".into(), Value::from(signed_head.generated_at));
+        index.insert("generation".into(), Value::from(7_u64));
+        index.insert(
+            "generated_at".into(),
+            Value::from(verified.head.generated_at),
+        );
         index.insert("head".into(), Value::Object(head));
-        index.insert("block_count".into(), Value::from(signed_head.block_count));
+        index.insert("block_count".into(), Value::from(verified.head.block_count));
         index.insert(
             "indexed_block_count".into(),
             Value::from(u64::try_from(blocks.len()).expect("mirror block count fits u64")),
@@ -35470,18 +35699,118 @@ mod advert_tests {
         index.insert("by_node_cid_hex".into(), Value::Object(by_node_cid_hex));
         index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
         index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
-        fs::write(
-            governance_dir.join(GOVERNANCE_DAG_MIRROR_INDEX_FILE),
-            norito::json::to_vec(&Value::Object(index)).expect("encode governance mirror index"),
-        )
-        .expect("write governance mirror index");
+        let index = Value::Object(index);
+        let canonical_bytes = json::to_json_pretty(&index)
+            .expect("encode canonical mirror fixture")
+            .into_bytes();
+        let metadata = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_MIRROR_SOURCE_V1,
+            (3, [0xA3; 32]),
+            &canonical_bytes,
+            Some((7, [0xB7; 32])),
+        );
+        let (index, metadata) = parse_governance_dag_mirror_index(&canonical_bytes, metadata)
+            .expect("validate canonical mirror fixture");
+        let head_block_cid_hex = encode(&verified.head.head_block_cid);
         (
             app,
             temp_dir,
+            index,
+            metadata,
             block_cid_hex,
             node_cid_hex,
-            encode(&signed_head.head_block_cid),
+            head_block_cid_hex,
         )
+    }
+
+    fn assert_governance_source_metadata(
+        value: &Value,
+        expected_source: &str,
+        expect_checkpoint: bool,
+    ) {
+        assert_eq!(
+            value.get("source").and_then(Value::as_str),
+            Some(expected_source)
+        );
+        assert!(
+            value
+                .get("source_generation")
+                .and_then(Value::as_u64)
+                .is_some_and(|generation| generation > 0)
+        );
+        let record_digest = value
+            .get("source_record_blake3")
+            .and_then(Value::as_str)
+            .expect("source record digest");
+        assert!(is_canonical_lower_hex(record_digest, 64));
+        assert!(value.get("source_path").is_none());
+        assert!(value.get("head_path").is_none());
+        if expect_checkpoint {
+            assert!(
+                value
+                    .get("source_checkpoint_generation")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|generation| generation > 0)
+            );
+            let revision = value
+                .get("source_checkpoint_revision")
+                .and_then(Value::as_str)
+                .expect("source checkpoint revision");
+            assert!(is_canonical_lower_hex(revision, 64));
+        } else {
+            assert!(value.get("source_checkpoint_generation").is_none());
+            assert!(value.get("source_checkpoint_revision").is_none());
+        }
+    }
+
+    fn read_publication_state_fixture(app: &SharedAppState) -> Value {
+        let snapshot = app
+            .sorafs_node
+            .governance_dag_publication_snapshot()
+            .expect("read typed publication fixture")
+            .expect("published publication fixture");
+        json::from_slice(snapshot.canonical_bytes()).expect("decode typed publication fixture")
+    }
+
+    fn read_publication_section_fixture(app: &SharedAppState, section: &str) -> Value {
+        read_publication_state_fixture(app)
+            .get(section)
+            .unwrap_or_else(|| panic!("publication state contains {section}"))
+            .clone()
+    }
+
+    fn publication_state_section_mut<'a>(state: &'a mut Value, section: &str) -> &'a mut Value {
+        state
+            .get_mut(section)
+            .unwrap_or_else(|| panic!("publication state contains {section}"))
+    }
+
+    fn publication_source_paths_fixture(
+        app: &SharedAppState,
+        payload_kind: &str,
+    ) -> Vec<(PathBuf, PathBuf)> {
+        let governance_root = app
+            .sorafs_node
+            .governance_dag_root()
+            .expect("configured governance root");
+        read_publication_section_fixture(app, "publish_index")
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("publication entries")
+            .iter()
+            .filter(|entry| entry.get("payload_kind").and_then(Value::as_str) == Some(payload_kind))
+            .map(|entry| {
+                let encoded = entry
+                    .get("encoded_path")
+                    .and_then(Value::as_str)
+                    .expect("encoded source path");
+                let json = entry
+                    .get("json_path")
+                    .and_then(Value::as_str)
+                    .expect("JSON source path");
+                (governance_root.join(encoded), governance_root.join(json))
+            })
+            .collect()
     }
 
     fn set_canonical_publication_entry_paths(entry: &mut Map) {
@@ -35524,351 +35853,68 @@ mod advert_tests {
     fn sorafs_app_state_with_governance_publish_index() -> (SharedAppState, TempDir, String) {
         let mut app = mk_app_state_for_tests();
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let temp_root = temp_dir
-            .path()
-            .canonicalize()
-            .expect("canonicalize governance publish-index temp dir");
-        let governance_dir = temp_root.join("governance");
-        fs::create_dir_all(&governance_dir).expect("create governance dir");
-
-        let digest_hex = "aa".repeat(32);
-        let reputation_digest_hex = "bb".repeat(32);
-        let rollup_digest_hex = "cc".repeat(32);
-        let report_digest_hex = "dd".repeat(32);
-        let receipt_digest_hex = "ee".repeat(32);
-        let proof_token_digest_hex = "ff".repeat(32);
-        let insert_json_identity = |entry: &mut Map, digest_byte: u8, json_len: u64| {
-            entry.insert(
-                "json_blake3".into(),
-                Value::from(hex::encode([digest_byte; 32])),
-            );
-            entry.insert("json_len".into(), Value::from(json_len));
-        };
-        let mut repair_labels = Map::new();
-        repair_labels.insert("ticket_id".into(), Value::from("REP-123"));
-        repair_labels.insert("status".into(), Value::from("queued"));
-        let mut repair_entry = Map::new();
-        repair_entry.insert("position".into(), Value::from(0_u64));
-        repair_entry.insert("payload_kind".into(), Value::from("repair_audit"));
-        repair_entry.insert(
-            "encoded_path".into(),
-            Value::from("repairs/audit/00000000000000000001.to"),
-        );
-        repair_entry.insert(
-            "json_path".into(),
-            Value::from("repairs/audit/00000000000000000001.json"),
-        );
-        repair_entry.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
-        repair_entry.insert("encoded_len".into(), Value::from(128_u64));
-        insert_json_identity(&mut repair_entry, 0x10, 192);
-        repair_entry.insert("published_at_unix".into(), Value::from(1_800_000_300_u64));
-        repair_entry.insert("labels".into(), Value::Object(repair_labels));
-
-        let mut reputation_labels = Map::new();
-        reputation_labels.insert("provider_count".into(), Value::from(2_u64));
-        let mut reputation_entry = Map::new();
-        reputation_entry.insert("position".into(), Value::from(1_u64));
-        reputation_entry.insert("payload_kind".into(), Value::from("reputation_snapshot"));
-        reputation_entry.insert(
-            "encoded_path".into(),
-            Value::from("reputation/snapshots/snapshot-a.to"),
-        );
-        reputation_entry.insert(
-            "json_path".into(),
-            Value::from("reputation/snapshots/snapshot-a.json"),
-        );
-        reputation_entry.insert(
-            "encoded_blake3".into(),
-            Value::from(reputation_digest_hex.clone()),
-        );
-        reputation_entry.insert("encoded_len".into(), Value::from(256_u64));
-        insert_json_identity(&mut reputation_entry, 0x20, 224);
-        reputation_entry.insert("published_at_unix".into(), Value::from(1_800_000_301_u64));
-        reputation_entry.insert("labels".into(), Value::Object(reputation_labels));
-
-        let mut report_labels = Map::new();
-        report_labels.insert("case_id".into(), Value::from("case-appeal-dashboard"));
-        report_labels.insert("round_id".into(), Value::from("round-1"));
-        report_labels.insert("report_id_hex".into(), Value::from("42".repeat(16)));
-        report_labels.insert("outcome".into(), Value::from("overturn"));
-        report_labels.insert(
-            "generated_at_unix_ms".into(),
-            Value::from(1_800_000_090_000_u64),
-        );
-        report_labels.insert(
-            "appeal_finance_config_version".into(),
-            Value::from("baseline-v1"),
-        );
-        report_labels.insert("deposit_xor".into(), Value::from("420"));
-        report_labels.insert("refund_xor".into(), Value::from("420"));
-        report_labels.insert("treasury_xor".into(), Value::from("25"));
-        report_labels.insert("held_xor".into(), Value::from("0"));
-        report_labels.insert("panel_size".into(), Value::from(3_u64));
-        report_labels.insert("panel_reward_total_xor".into(), Value::from("85"));
-        report_labels.insert("rewards_paid_total_xor".into(), Value::from("60"));
-        report_labels.insert("rewards_forfeited_treasury_xor".into(), Value::from("25"));
-        report_labels.insert("juror_payout_count".into(), Value::from(2_u64));
-        report_labels.insert("no_show_count".into(), Value::from(1_u64));
-        let mut report_entry = Map::new();
-        report_entry.insert("position".into(), Value::from(2_u64));
-        report_entry.insert(
-            "payload_kind".into(),
-            Value::from(APPEAL_FINANCE_REPORT_KIND),
-        );
-        report_entry.insert(
-            "encoded_path".into(),
-            Value::from("appeals/finance/reports/case-appeal-dashboard/report.to"),
-        );
-        report_entry.insert(
-            "json_path".into(),
-            Value::from("appeals/finance/reports/case-appeal-dashboard/report.json"),
-        );
-        report_entry.insert(
-            "encoded_blake3".into(),
-            Value::from(report_digest_hex.clone()),
-        );
-        report_entry.insert("encoded_len".into(), Value::from(320_u64));
-        insert_json_identity(&mut report_entry, 0x30, 352);
-        report_entry.insert("published_at_unix".into(), Value::from(1_800_000_302_u64));
-        report_entry.insert("labels".into(), Value::Object(report_labels));
-
-        let mut rollup_labels = Map::new();
-        rollup_labels.insert("cycle".into(), Value::from("2026-W26"));
-        rollup_labels.insert(
-            "generated_at_unix_ms".into(),
-            Value::from(1_800_000_100_000_u64),
-        );
-        rollup_labels.insert("report_count".into(), Value::from(3_u64));
-        rollup_labels.insert("case_count".into(), Value::from(2_u64));
-        rollup_labels.insert("config_version_count".into(), Value::from(1_u64));
-        rollup_labels.insert("outcome_count".into(), Value::from(2_u64));
-        rollup_labels.insert("juror_payout_count".into(), Value::from(7_u64));
-        rollup_labels.insert("no_show_count".into(), Value::from(1_u64));
-        let mut rollup_entry = Map::new();
-        rollup_entry.insert("position".into(), Value::from(3_u64));
-        rollup_entry.insert(
-            "payload_kind".into(),
-            Value::from(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND),
-        );
-        rollup_entry.insert(
-            "encoded_path".into(),
-            Value::from("appeals/finance/weekly/2026-W26/rollup.to"),
-        );
-        rollup_entry.insert(
-            "json_path".into(),
-            Value::from("appeals/finance/weekly/2026-W26/rollup.json"),
-        );
-        rollup_entry.insert(
-            "encoded_blake3".into(),
-            Value::from(rollup_digest_hex.clone()),
-        );
-        rollup_entry.insert("encoded_len".into(), Value::from(384_u64));
-        insert_json_identity(&mut rollup_entry, 0x40, 416);
-        rollup_entry.insert("published_at_unix".into(), Value::from(1_800_000_303_u64));
-        rollup_entry.insert("labels".into(), Value::Object(rollup_labels));
-
-        let mut receipt_labels = Map::new();
-        receipt_labels.insert("case_id".into(), Value::from("case-appeal-dashboard"));
-        receipt_labels.insert("round_id".into(), Value::from("round-1"));
-        receipt_labels.insert("receipt_id_hex".into(), Value::from("52".repeat(16)));
-        receipt_labels.insert(
-            "generated_at_unix_ms".into(),
-            Value::from(1_800_000_110_000_u64),
-        );
-        receipt_labels.insert(
-            "appeal_finance_config_version".into(),
-            Value::from("baseline-v1"),
-        );
-        receipt_labels.insert(
-            "appeal_finance_policy_digest_hex".into(),
-            Value::from("44".repeat(32)),
-        );
-        receipt_labels.insert("outcome".into(), Value::from("frivolous"));
-        receipt_labels.insert("escrow_id_hex".into(), Value::from("11".repeat(32)));
-        receipt_labels.insert("submitted_step".into(), Value::from("drawdown_non_refund"));
-        receipt_labels.insert("required_authority".into(), Value::from("provider@sora"));
-        receipt_labels.insert("tx_hash_hex".into(), Value::from("22".repeat(32)));
-        receipt_labels.insert(
-            "reconciliation_digest_hex".into(),
-            Value::from("33".repeat(32)),
-        );
-        receipt_labels.insert(
-            "reconciliation_status".into(),
-            Value::from("pending_forwarder_submission"),
-        );
-        receipt_labels.insert("observed_lifecycle_status".into(), Value::from("locked"));
-        receipt_labels.insert("amount_xor".into(), Value::from("420"));
-        receipt_labels.insert("deposit_xor".into(), Value::from("420"));
-        receipt_labels.insert("refund_xor".into(), Value::from("0"));
-        receipt_labels.insert("treasury_xor".into(), Value::from("210"));
-        receipt_labels.insert("held_xor".into(), Value::from("210"));
-        receipt_labels.insert("panel_size".into(), Value::from(7_u64));
-        receipt_labels.insert("configured_signer_count".into(), Value::from(1_u64));
-        let mut receipt_entry = Map::new();
-        receipt_entry.insert("position".into(), Value::from(4_u64));
-        receipt_entry.insert(
-            "payload_kind".into(),
-            Value::from(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND),
-        );
-        receipt_entry.insert(
-            "encoded_path".into(),
-            Value::from("appeals/finance/settlement-receipts/case-appeal-dashboard/receipt.to"),
-        );
-        receipt_entry.insert(
-            "json_path".into(),
-            Value::from("appeals/finance/settlement-receipts/case-appeal-dashboard/receipt.json"),
-        );
-        receipt_entry.insert(
-            "encoded_blake3".into(),
-            Value::from(receipt_digest_hex.clone()),
-        );
-        receipt_entry.insert("encoded_len".into(), Value::from(448_u64));
-        insert_json_identity(&mut receipt_entry, 0x50, 480);
-        receipt_entry.insert("published_at_unix".into(), Value::from(1_800_000_304_u64));
-        receipt_entry.insert("labels".into(), Value::Object(receipt_labels));
-
-        let proof_token_id_hex = "61".repeat(16);
-        let proof_token_signer_key_hex = "62".repeat(32);
-        let mut proof_token_labels = Map::new();
-        proof_token_labels.insert(
-            "token_id_hex".into(),
-            Value::from(proof_token_id_hex.clone()),
-        );
-        proof_token_labels.insert("issued_at_unix".into(), Value::from(1_800_000_305_u64));
-        proof_token_labels.insert("expires_at_unix".into(), Value::from(1_800_086_705_u64));
-        proof_token_labels.insert("moderation_action_code".into(), Value::from(2_u64));
-        proof_token_labels.insert(
-            "signer_key_hex".into(),
-            Value::from(proof_token_signer_key_hex),
-        );
-        proof_token_labels.insert("token_blake3_hex".into(), Value::from("63".repeat(32)));
-        proof_token_labels.insert("blinded_digest_hex".into(), Value::from("64".repeat(32)));
-        proof_token_labels.insert("entry_count".into(), Value::from(2_u64));
-        proof_token_labels.insert("first_entry_id".into(), Value::from("denylist/global"));
-        proof_token_labels.insert("evidence_digest_hex".into(), Value::from("65".repeat(32)));
-        proof_token_labels.insert("policy_digest_hex".into(), Value::from("66".repeat(32)));
-        let mut proof_token_entry = Map::new();
-        proof_token_entry.insert("position".into(), Value::from(5_u64));
-        proof_token_entry.insert(
-            "payload_kind".into(),
-            Value::from(PROOF_TOKEN_ISSUANCE_KIND),
-        );
-        proof_token_entry.insert(
-            "encoded_path".into(),
-            Value::from(format!(
-                "transparency/proof-tokens/{proof_token_id_hex}/issuance.to"
-            )),
-        );
-        proof_token_entry.insert(
-            "json_path".into(),
-            Value::from(format!(
-                "transparency/proof-tokens/{proof_token_id_hex}/issuance.json"
-            )),
-        );
-        proof_token_entry.insert(
-            "encoded_blake3".into(),
-            Value::from(proof_token_digest_hex.clone()),
-        );
-        proof_token_entry.insert("encoded_len".into(), Value::from(512_u64));
-        insert_json_identity(&mut proof_token_entry, 0x60, 544);
-        proof_token_entry.insert("published_at_unix".into(), Value::from(1_800_000_305_u64));
-        proof_token_entry.insert("labels".into(), Value::Object(proof_token_labels));
-
-        for entry in [
-            &mut repair_entry,
-            &mut reputation_entry,
-            &mut report_entry,
-            &mut rollup_entry,
-            &mut receipt_entry,
-            &mut proof_token_entry,
-        ] {
-            set_canonical_publication_entry_paths(entry);
-        }
-
-        let mut payload_kind_counts = Map::new();
-        payload_kind_counts.insert("repair_audit".into(), Value::from(1_u64));
-        payload_kind_counts.insert("reputation_snapshot".into(), Value::from(1_u64));
-        payload_kind_counts.insert(APPEAL_FINANCE_REPORT_KIND.into(), Value::from(1_u64));
-        payload_kind_counts.insert(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND.into(), Value::from(1_u64));
-        payload_kind_counts.insert(
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND.into(),
-            Value::from(1_u64),
-        );
-        payload_kind_counts.insert(PROOF_TOKEN_ISSUANCE_KIND.into(), Value::from(1_u64));
-        let mut by_encoded_blake3 = Map::new();
-        by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
-        by_encoded_blake3.insert(
-            reputation_digest_hex,
-            Value::Array(vec![Value::from(1_u64)]),
-        );
-        by_encoded_blake3.insert(report_digest_hex, Value::Array(vec![Value::from(2_u64)]));
-        by_encoded_blake3.insert(rollup_digest_hex, Value::Array(vec![Value::from(3_u64)]));
-        by_encoded_blake3.insert(receipt_digest_hex, Value::Array(vec![Value::from(4_u64)]));
-        by_encoded_blake3.insert(
-            proof_token_digest_hex,
-            Value::Array(vec![Value::from(5_u64)]),
-        );
-        let mut by_payload_kind = Map::new();
-        by_payload_kind.insert(
-            "repair_audit".into(),
-            Value::Array(vec![Value::from(0_u64)]),
-        );
-        by_payload_kind.insert(
-            "reputation_snapshot".into(),
-            Value::Array(vec![Value::from(1_u64)]),
-        );
-        by_payload_kind.insert(
-            APPEAL_FINANCE_REPORT_KIND.into(),
-            Value::Array(vec![Value::from(2_u64)]),
-        );
-        by_payload_kind.insert(
-            APPEAL_FINANCE_WEEKLY_ROLLUP_KIND.into(),
-            Value::Array(vec![Value::from(3_u64)]),
-        );
-        by_payload_kind.insert(
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND.into(),
-            Value::Array(vec![Value::from(4_u64)]),
-        );
-        by_payload_kind.insert(
-            PROOF_TOKEN_ISSUANCE_KIND.into(),
-            Value::Array(vec![Value::from(5_u64)]),
-        );
-
-        let mut index = Map::new();
-        index.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.local_publish_index.v1"),
-        );
-        index.insert("source".into(), Value::from("filesystem"));
-        index.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
-        index.insert("generated_at".into(), Value::from(1_800_000_400_u64));
-        index.insert("entry_count".into(), Value::from(6_u64));
-        index.insert(
-            "payload_kind_counts".into(),
-            Value::Object(payload_kind_counts),
-        );
-        index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
-        index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
-        index.insert(
-            "entries".into(),
-            Value::Array(vec![
-                Value::Object(repair_entry),
-                Value::Object(reputation_entry),
-                Value::Object(report_entry),
-                Value::Object(rollup_entry),
-                Value::Object(receipt_entry),
-                Value::Object(proof_token_entry),
-            ]),
-        );
-        write_publish_index_fixture(&governance_dir, Value::Object(index));
-
+        let governance_dir = temp_dir.path().join("governance");
         let node = node_with_test_governance_publisher(
             StorageConfig::builder()
                 .enabled(true)
-                .data_dir(temp_root.join("storage"))
+                .data_dir(temp_dir.path().join("storage"))
                 .governance_dir(Some(governance_dir)),
             NodeRuntimeDeps::default(),
         );
+        let publisher_key = KeyPair::try_from_seed(
+            b"torii-governance-publication-provenance".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive publication provenance account");
+        let publisher = AccountId::new(publisher_key.public_key().clone());
+        let report = appeal_finance_report_fixture();
+        let report_bytes = norito::to_bytes(&report).expect("encode report fixture");
+        let digest_hex = hex::encode(blake3_hash(&report_bytes).as_bytes());
+        node.publish_authenticated_appeal_finance_report(report, publisher.clone())
+            .expect("publish typed appeal-finance report fixture");
+        node.publish_authenticated_appeal_finance_weekly_rollup(
+            appeal_finance_weekly_rollup_fixture(),
+            publisher,
+        )
+        .expect("publish typed appeal-finance rollup fixture");
+        node.publish_transparency_ledger_publication(transparency_publication_fixture())
+            .expect("publish typed transparency fixture");
+
+        let token_request = transparency_proof_token_issuance_request(0x67);
+        let signer_key: [u8; 32] = hex::decode(&token_request.signer_key_hex)
+            .expect("decode token signer key")
+            .try_into()
+            .expect("32-byte token signer key");
+        let evidence_digest = token_request.evidence_digest_hex.as_deref().map(|digest| {
+            hex::decode(digest)
+                .expect("decode token evidence digest")
+                .try_into()
+                .expect("32-byte token evidence digest")
+        });
+        let policy_digest = token_request.policy_digest_hex.as_deref().map(|digest| {
+            hex::decode(digest)
+                .expect("decode token policy digest")
+                .try_into()
+                .expect("32-byte token policy digest")
+        });
+        let metadata = token_request
+            .metadata
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| ModerationLedgerMetadataV1 {
+                key: entry.key,
+                value: entry.value,
+            })
+            .collect();
+        node.publish_proof_token_base64_issuance(
+            &token_request.token_b64,
+            signer_key,
+            evidence_digest,
+            policy_digest,
+            metadata,
+        )
+        .expect("publish typed proof-token fixture");
+
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .sorafs_node = node;
@@ -35931,502 +35977,11 @@ mod advert_tests {
         .expect("transparency publication fixture")
     }
 
-    fn synthetic_car_queue_for_publish_index(index: &Value) -> Value {
-        let entries = index
-            .get("entries")
-            .and_then(Value::as_array)
-            .expect("publish-index fixture entries");
-        let mut segments = Vec::with_capacity(entries.len());
-        let mut by_encoded_blake3 = Map::new();
-        let mut by_payload_kind = Map::new();
-        let mut by_car_archive_blake3 = Map::new();
-        for (position, entry) in entries.iter().enumerate() {
-            let encoded_path = entry
-                .get("encoded_path")
-                .and_then(Value::as_str)
-                .expect("fixture encoded path");
-            let json_path = entry
-                .get("json_path")
-                .and_then(Value::as_str)
-                .expect("fixture JSON path");
-            let encoded_blake3 = entry
-                .get("encoded_blake3")
-                .and_then(Value::as_str)
-                .expect("fixture encoded digest");
-            let json_blake3 = entry
-                .get("json_blake3")
-                .and_then(Value::as_str)
-                .expect("fixture JSON digest");
-            let encoded_len = entry
-                .get("encoded_len")
-                .and_then(Value::as_u64)
-                .expect("fixture encoded length");
-            let json_len = entry
-                .get("json_len")
-                .and_then(Value::as_u64)
-                .expect("fixture JSON length");
-            let payload_kind = entry
-                .get("payload_kind")
-                .and_then(Value::as_str)
-                .expect("fixture payload kind");
-            let position_u64 = u64::try_from(position).expect("fixture position");
-            let archive_digest = blake3_hash(
-                format!("synthetic-governance-car:{position}:{encoded_blake3}").as_bytes(),
-            )
-            .to_hex()
-            .to_string();
-            let car_digest = blake3_hash(
-                format!("synthetic-governance-car-cid:{position}:{encoded_blake3}").as_bytes(),
-            );
-            let root_digest = blake3_hash(
-                format!("synthetic-governance-root-cid:{position}:{encoded_blake3}").as_bytes(),
-            );
-            let sidecar_record = |role: &str, path: String, seed: &str| {
-                let mut file = Map::new();
-                file.insert("role".into(), Value::from(role));
-                file.insert("path".into(), Value::from(path));
-                file.insert("bytes".into(), Value::from(65_u64));
-                file.insert(
-                    "blake3".into(),
-                    Value::from(blake3_hash(seed.as_bytes()).to_hex().to_string()),
-                );
-                Value::Object(file)
-            };
-            let source_record = |role: &str, path: &str, bytes: u64, digest: &str| {
-                let mut file = Map::new();
-                file.insert("role".into(), Value::from(role));
-                file.insert("path".into(), Value::from(path));
-                file.insert("bytes".into(), Value::from(bytes));
-                file.insert("blake3".into(), Value::from(digest));
-                Value::Object(file)
-            };
-            let mut profile = Map::new();
-            profile.insert(
-                "min_size".into(),
-                Value::from(ChunkProfile::DEFAULT.min_size as u64),
-            );
-            profile.insert(
-                "target_size".into(),
-                Value::from(ChunkProfile::DEFAULT.target_size as u64),
-            );
-            profile.insert(
-                "max_size".into(),
-                Value::from(ChunkProfile::DEFAULT.max_size as u64),
-            );
-            profile.insert(
-                "break_mask".into(),
-                Value::from(ChunkProfile::DEFAULT.break_mask),
-            );
-            let pair_id = governance_source_pair_id_hex(
-                payload_kind,
-                encoded_len,
-                encoded_blake3,
-                json_len,
-                json_blake3,
-                "synthetic governance CAR fixture",
-            )
-            .expect("derive synthetic CAR source identity");
-            let base = format!("{GOVERNANCE_DAG_CAR_SEGMENTS_DIR}/{position:020}_{pair_id}");
-            let mut segment = Map::new();
-            segment.insert(
-                "schema".into(),
-                Value::from("sorafs.governance_dag.local_car_segment.v1"),
-            );
-            segment.insert("queue_position".into(), Value::from(position_u64));
-            segment.insert("status".into(), Value::from("assembled"));
-            segment.insert("source".into(), Value::from("filesystem"));
-            segment.insert(
-                "source_publish_index_position".into(),
-                Value::from(position_u64),
-            );
-            segment.insert("payload_kind".into(), Value::from(payload_kind));
-            segment.insert("encoded_path".into(), Value::from(encoded_path));
-            segment.insert("json_path".into(), Value::from(json_path));
-            segment.insert("encoded_blake3".into(), Value::from(encoded_blake3));
-            segment.insert("encoded_len".into(), Value::from(encoded_len));
-            segment.insert("car_path".into(), Value::from(format!("{base}.car")));
-            segment.insert("plan_path".into(), Value::from(format!("{base}.plan.json")));
-            segment.insert("manifest_path".into(), Value::from(format!("{base}.json")));
-            segment.insert("car_size".into(), Value::from(2_048_u64));
-            segment.insert(
-                "car_archive_blake3".into(),
-                Value::from(archive_digest.clone()),
-            );
-            segment.insert(
-                "car_payload_blake3".into(),
-                Value::from(blake3_hash(archive_digest.as_bytes()).to_hex().to_string()),
-            );
-            segment.insert(
-                "car_cid_hex".into(),
-                Value::from(format!("01551f20{}", car_digest.to_hex())),
-            );
-            segment.insert(
-                "root_cids_hex".into(),
-                Value::Array(vec![Value::from(format!(
-                    "01711f20{}",
-                    root_digest.to_hex()
-                ))]),
-            );
-            segment.insert("dag_codec".into(), Value::from(0x71_u64));
-            segment.insert("chunk_count".into(), Value::from(4_u64));
-            segment.insert(
-                "payload_bytes".into(),
-                Value::from(encoded_len + json_len + 130),
-            );
-            segment.insert(
-                "files".into(),
-                Value::Array(vec![
-                    source_record("encoded", encoded_path, encoded_len, encoded_blake3),
-                    sidecar_record(
-                        "encoded_blake3_sidecar",
-                        format!("{encoded_path}.blake3"),
-                        encoded_blake3,
-                    ),
-                    source_record("json", json_path, json_len, json_blake3),
-                    sidecar_record(
-                        "json_blake3_sidecar",
-                        format!("{json_path}.blake3"),
-                        json_blake3,
-                    ),
-                ]),
-            );
-            segment.insert("chunk_profile".into(), Value::Object(profile));
-            append_governance_lookup_position(
-                &mut by_encoded_blake3,
-                encoded_blake3.to_owned(),
-                position_u64,
-            );
-            append_governance_lookup_position(
-                &mut by_payload_kind,
-                payload_kind.to_owned(),
-                position_u64,
-            );
-            append_governance_lookup_position(
-                &mut by_car_archive_blake3,
-                archive_digest,
-                position_u64,
-            );
-            segments.push(Value::Object(segment));
-        }
-        let count = u64::try_from(segments.len()).expect("fixture segment count");
-        let mut queue = Map::new();
-        queue.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.local_car_queue.v1"),
-        );
-        queue.insert("source".into(), Value::from("filesystem"));
-        queue.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
-        queue.insert("generated_at".into(), Value::from(1_800_000_000_u64));
-        queue.insert("segment_count".into(), Value::from(count));
-        queue.insert("assembled_count".into(), Value::from(count));
-        queue.insert("pending_count".into(), Value::from(0_u64));
-        queue.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
-        queue.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
-        queue.insert(
-            "by_car_archive_blake3".into(),
-            Value::Object(by_car_archive_blake3),
-        );
-        queue.insert("segments".into(), Value::Array(segments));
-        Value::Object(queue)
-    }
-
-    fn synthetic_publish_index_for_car_queue(queue: &Value) -> Value {
-        let segments = queue
-            .get("segments")
-            .and_then(Value::as_array)
-            .expect("CAR queue fixture segments");
-        let mut entries = Vec::with_capacity(segments.len());
-        let mut payload_kind_counts = Map::new();
-        let mut by_encoded_blake3 = Map::new();
-        let mut by_payload_kind = Map::new();
-        for (position, segment) in segments.iter().enumerate() {
-            let files = segment
-                .get("files")
-                .and_then(Value::as_array)
-                .expect("fixture source files");
-            let json_file = files
-                .iter()
-                .find(|file| file.get("role").and_then(Value::as_str) == Some("json"))
-                .expect("fixture JSON source file");
-            let payload_kind = segment
-                .get("payload_kind")
-                .and_then(Value::as_str)
-                .expect("fixture payload kind");
-            let encoded_blake3 = segment
-                .get("encoded_blake3")
-                .and_then(Value::as_str)
-                .expect("fixture encoded digest");
-            let position_u64 = u64::try_from(position).expect("fixture position");
-            let mut entry = Map::new();
-            entry.insert("position".into(), Value::from(position_u64));
-            for field in [
-                "payload_kind",
-                "encoded_path",
-                "json_path",
-                "encoded_blake3",
-                "encoded_len",
-            ] {
-                entry.insert(
-                    field.into(),
-                    segment.get(field).cloned().expect("fixture segment field"),
-                );
-            }
-            entry.insert(
-                "json_blake3".into(),
-                json_file
-                    .get("blake3")
-                    .cloned()
-                    .expect("fixture JSON digest"),
-            );
-            entry.insert(
-                "json_len".into(),
-                json_file
-                    .get("bytes")
-                    .cloned()
-                    .expect("fixture JSON length"),
-            );
-            entry.insert("published_at_unix".into(), Value::from(1_800_000_000_u64));
-            entry.insert("labels".into(), Value::Object(Map::new()));
-            entries.push(Value::Object(entry));
-            let count = payload_kind_counts
-                .get(payload_kind)
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                + 1;
-            payload_kind_counts.insert(payload_kind.to_owned(), Value::from(count));
-            append_governance_lookup_position(
-                &mut by_encoded_blake3,
-                encoded_blake3.to_owned(),
-                position_u64,
-            );
-            append_governance_lookup_position(
-                &mut by_payload_kind,
-                payload_kind.to_owned(),
-                position_u64,
-            );
-        }
-        let mut index = Map::new();
-        index.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.local_publish_index.v1"),
-        );
-        index.insert("source".into(), Value::from("filesystem"));
-        index.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
-        index.insert("generated_at".into(), Value::from(1_800_000_000_u64));
-        index.insert(
-            "entry_count".into(),
-            Value::from(u64::try_from(entries.len()).expect("fixture entry count")),
-        );
-        index.insert(
-            "payload_kind_counts".into(),
-            Value::Object(payload_kind_counts),
-        );
-        index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
-        index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
-        index.insert("entries".into(), Value::Array(entries));
-        Value::Object(index)
-    }
-
-    fn write_publication_state_fixture(
-        governance_dir: &StdPath,
-        publish_index: Value,
-        car_queue: Value,
-    ) {
-        let mut state = Map::new();
-        state.insert(
-            "schema".into(),
-            Value::from(GOVERNANCE_DAG_PUBLICATION_STATE_SCHEMA),
-        );
-        state.insert("source".into(), Value::from("filesystem"));
-        state.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
-        state.insert("generation".into(), Value::from(1_u64));
-        state.insert("generated_at".into(), Value::from(1_800_000_000_u64));
-        state.insert("publish_index".into(), publish_index);
-        state.insert("car_queue".into(), car_queue);
-        fs::write(
-            governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE),
-            norito::json::to_vec(&Value::Object(state)).expect("encode publication state fixture"),
-        )
-        .expect("write publication state fixture");
-    }
-
-    fn read_publication_state_fixture(governance_dir: &StdPath) -> Value {
-        norito::json::from_slice(
-            &fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE))
-                .expect("read publication state fixture"),
-        )
-        .expect("decode publication state fixture")
-    }
-
-    fn write_publication_state_value(governance_dir: &StdPath, state: &Value) {
-        fs::write(
-            governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE),
-            norito::json::to_vec(state).expect("encode publication state fixture"),
-        )
-        .expect("write publication state fixture");
-    }
-
-    fn publication_state_section_mut<'a>(state: &'a mut Value, section: &str) -> &'a mut Value {
-        state
-            .get_mut(section)
-            .unwrap_or_else(|| panic!("publication state contains {section}"))
-    }
-
-    fn read_publication_section_fixture(governance_dir: &StdPath, section: &str) -> Value {
-        read_publication_state_fixture(governance_dir)
-            .get(section)
-            .unwrap_or_else(|| panic!("publication state contains {section}"))
-            .clone()
-    }
-
-    fn publication_source_paths_fixture(
-        governance_dir: &StdPath,
-        payload_kind: &str,
-    ) -> Vec<(PathBuf, PathBuf)> {
-        read_publication_section_fixture(governance_dir, "publish_index")
-            .get("entries")
-            .and_then(Value::as_array)
-            .expect("publication entries")
-            .iter()
-            .filter(|entry| entry.get("payload_kind").and_then(Value::as_str) == Some(payload_kind))
-            .map(|entry| {
-                let encoded = entry
-                    .get("encoded_path")
-                    .and_then(Value::as_str)
-                    .expect("encoded source path");
-                let json = entry
-                    .get("json_path")
-                    .and_then(Value::as_str)
-                    .expect("JSON source path");
-                (governance_dir.join(encoded), governance_dir.join(json))
-            })
-            .collect()
-    }
-
-    fn write_publish_index_fixture(governance_dir: &StdPath, publish_index: Value) {
-        let car_queue = synthetic_car_queue_for_publish_index(&publish_index);
-        write_publication_state_fixture(governance_dir, publish_index, car_queue);
-    }
-
-    fn write_car_queue_fixture(governance_dir: &StdPath, car_queue: Value) {
-        let publish_index = synthetic_publish_index_for_car_queue(&car_queue);
-        write_publication_state_fixture(governance_dir, publish_index, car_queue);
-    }
-
     fn sorafs_app_state_with_transparency_publication()
     -> (SharedAppState, TempDir, String, String, String) {
         let mut app = mk_app_state_for_tests();
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let governance_dir = temp_dir.path().join("governance");
-        fs::create_dir_all(&governance_dir).expect("create governance dir");
-
-        let publication = transparency_publication_fixture();
-        let encoded = norito::to_bytes(&publication).expect("encode transparency publication");
-        let digest_hex = hex::encode(blake3_hash(&encoded).as_bytes());
-        let cycle_id_hex = hex::encode(publication.block.cycle_id);
-        let entry_id_hex = hex::encode(publication.proofs[0].entry.entry_id);
-        let block_hash_hex =
-            hex::encode(publication.block.block_hash().expect("block hash fixture"));
-        let publication_hash_hex = hex::encode(
-            publication
-                .publication_hash()
-                .expect("publication hash fixture"),
-        );
-
-        let json_sidecar = br#"{"schema":"sorafs.transparency.test_sidecar.v1"}"#;
-        let (relative_encoded, relative_json) = governance_source_pair_relative_paths(
-            TRANSPARENCY_LEDGER_PUBLICATION_KIND,
-            u64::try_from(encoded.len()).expect("transparency encoded length"),
-            &digest_hex,
-            u64::try_from(json_sidecar.len()).expect("transparency JSON length"),
-            &blake3_hash(json_sidecar).to_hex().to_string(),
-            "transparency publication fixture",
-        )
-        .expect("derive transparency fixture source paths");
-        let encoded_path = governance_dir.join(&relative_encoded);
-        fs::create_dir_all(encoded_path.parent().expect("encoded parent"))
-            .expect("create transparency dir");
-        fs::write(&encoded_path, &encoded).expect("write transparency publication");
-        fs::write(governance_dir.join(&relative_json), json_sidecar)
-            .expect("write transparency sidecar");
-
-        let mut labels = Map::new();
-        labels.insert("cycle_id_hex".into(), Value::from(cycle_id_hex.clone()));
-        labels.insert(
-            "cycle_start_unix".into(),
-            Value::from(publication.block.cycle_start_unix),
-        );
-        labels.insert(
-            "cycle_end_unix".into(),
-            Value::from(publication.block.cycle_end_unix),
-        );
-        labels.insert(
-            "generated_at_unix".into(),
-            Value::from(publication.block.generated_at_unix),
-        );
-        labels.insert(
-            "entry_count".into(),
-            Value::from(u64::from(publication.block.entry_count)),
-        );
-        labels.insert(
-            "entry_root_hex".into(),
-            Value::from(hex::encode(publication.block.entry_root)),
-        );
-        labels.insert("block_hash_hex".into(), Value::from(block_hash_hex));
-        labels.insert(
-            "publication_hash_hex".into(),
-            Value::from(publication_hash_hex),
-        );
-
-        let mut entry = Map::new();
-        entry.insert("position".into(), Value::from(0_u64));
-        entry.insert(
-            "payload_kind".into(),
-            Value::from(TRANSPARENCY_LEDGER_PUBLICATION_KIND),
-        );
-        entry.insert("encoded_path".into(), Value::from(relative_encoded));
-        entry.insert("json_path".into(), Value::from(relative_json));
-        entry.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
-        entry.insert("encoded_len".into(), Value::from(encoded.len() as u64));
-        entry.insert(
-            "json_blake3".into(),
-            Value::from(blake3_hash(json_sidecar).to_hex().to_string()),
-        );
-        entry.insert("json_len".into(), Value::from(json_sidecar.len() as u64));
-        entry.insert("published_at_unix".into(), Value::from(1_800_000_080_u64));
-        entry.insert("labels".into(), Value::Object(labels));
-
-        let mut payload_kind_counts = Map::new();
-        payload_kind_counts.insert(
-            TRANSPARENCY_LEDGER_PUBLICATION_KIND.into(),
-            Value::from(1_u64),
-        );
-        let mut by_encoded_blake3 = Map::new();
-        by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
-        let mut by_payload_kind = Map::new();
-        by_payload_kind.insert(
-            TRANSPARENCY_LEDGER_PUBLICATION_KIND.into(),
-            Value::Array(vec![Value::from(0_u64)]),
-        );
-
-        let mut index = Map::new();
-        index.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.local_publish_index.v1"),
-        );
-        index.insert("source".into(), Value::from("filesystem"));
-        index.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
-        index.insert("generated_at".into(), Value::from(1_800_000_090_u64));
-        index.insert("entry_count".into(), Value::from(1_u64));
-        index.insert(
-            "payload_kind_counts".into(),
-            Value::Object(payload_kind_counts),
-        );
-        index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
-        index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
-        index.insert("entries".into(), Value::Array(vec![Value::Object(entry)]));
-        write_publish_index_fixture(&governance_dir, Value::Object(index));
-
         let node = node_with_test_governance_publisher(
             StorageConfig::builder()
                 .enabled(true)
@@ -36434,6 +35989,13 @@ mod advert_tests {
                 .governance_dir(Some(governance_dir)),
             NodeRuntimeDeps::default(),
         );
+        let publication = transparency_publication_fixture();
+        let encoded = norito::to_bytes(&publication).expect("encode transparency publication");
+        let digest_hex = hex::encode(blake3_hash(&encoded).as_bytes());
+        let cycle_id_hex = hex::encode(publication.block.cycle_id);
+        let entry_id_hex = hex::encode(publication.proofs[0].entry.entry_id);
+        node.publish_transparency_ledger_publication(publication)
+            .expect("publish typed transparency fixture");
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .sorafs_node = node;
@@ -36441,254 +36003,29 @@ mod advert_tests {
     }
 
     fn sorafs_app_state_with_governance_car_queue() -> (SharedAppState, TempDir, String, String) {
-        let mut app = mk_app_state_for_tests();
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let governance_dir = temp_dir.path().join("governance");
-        fs::create_dir_all(&governance_dir).expect("create governance dir");
-
-        let source_files = |encoded_path: &str,
-                            json_path: &str,
-                            encoded_len: u64,
-                            encoded_digest: &str,
-                            json_len: u64| {
-            let file = |role: &str, path: String, bytes: u64, digest: String| {
-                let mut record = Map::new();
-                record.insert("role".into(), Value::from(role));
-                record.insert("path".into(), Value::from(path));
-                record.insert("bytes".into(), Value::from(bytes));
-                record.insert("blake3".into(), Value::from(digest));
-                Value::Object(record)
-            };
-            Value::Array(vec![
-                file(
-                    "encoded",
-                    encoded_path.to_owned(),
-                    encoded_len,
-                    encoded_digest.to_owned(),
-                ),
-                file(
-                    "encoded_blake3_sidecar",
-                    format!("{encoded_path}.blake3"),
-                    65,
-                    "11".repeat(32),
-                ),
-                file("json", json_path.to_owned(), json_len, "22".repeat(32)),
-                file(
-                    "json_blake3_sidecar",
-                    format!("{json_path}.blake3"),
-                    65,
-                    "33".repeat(32),
-                ),
-            ])
-        };
-        let chunk_profile = || {
-            let mut profile = Map::new();
-            profile.insert("min_size".into(), Value::from(64 * 1024_u64));
-            profile.insert("target_size".into(), Value::from(256 * 1024_u64));
-            profile.insert("max_size".into(), Value::from(512 * 1024_u64));
-            profile.insert("break_mask".into(), Value::from(0x0000_FFFF_u64));
-            Value::Object(profile)
-        };
-
-        let digest_hex = "aa".repeat(32);
-        let reputation_digest_hex = "bb".repeat(32);
-        let car_archive_hex = "cc".repeat(32);
-        let reputation_car_archive_hex = "dd".repeat(32);
-
-        let mut repair_segment = Map::new();
-        repair_segment.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.local_car_segment.v1"),
+        let (app, temp_dir, digest_hex) = sorafs_app_state_with_governance_publish_index();
+        let snapshot = app
+            .sorafs_node
+            .governance_dag_publication_snapshot()
+            .expect("read typed publication fixture")
+            .expect("published publication fixture");
+        let metadata = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_PUBLICATION_SOURCE_V1,
+            snapshot.store_identity(),
+            snapshot.canonical_bytes(),
+            None,
         );
-        repair_segment.insert("queue_position".into(), Value::from(0_u64));
-        repair_segment.insert("status".into(), Value::from("assembled"));
-        repair_segment.insert("source".into(), Value::from("filesystem"));
-        repair_segment.insert("source_publish_index_position".into(), Value::from(0_u64));
-        repair_segment.insert("payload_kind".into(), Value::from("repair_audit"));
-        repair_segment.insert(
-            "encoded_path".into(),
-            Value::from("repairs/audit/00000000000000000001.to"),
-        );
-        repair_segment.insert(
-            "json_path".into(),
-            Value::from("repairs/audit/00000000000000000001.json"),
-        );
-        repair_segment.insert("encoded_blake3".into(), Value::from(digest_hex.clone()));
-        repair_segment.insert("encoded_len".into(), Value::from(128_u64));
-        repair_segment.insert(
-            "car_path".into(),
-            Value::from("car-segments/00000000000000000000_repair_audit_aaaaaaaaaaaaaaaa.car"),
-        );
-        repair_segment.insert(
-            "plan_path".into(),
-            Value::from(
-                "car-segments/00000000000000000000_repair_audit_aaaaaaaaaaaaaaaa.plan.json",
-            ),
-        );
-        repair_segment.insert(
-            "manifest_path".into(),
-            Value::from("car-segments/00000000000000000000_repair_audit_aaaaaaaaaaaaaaaa.json"),
-        );
-        repair_segment.insert("car_size".into(), Value::from(2_048_u64));
-        repair_segment.insert(
-            "car_archive_blake3".into(),
-            Value::from(car_archive_hex.clone()),
-        );
-        repair_segment.insert("car_payload_blake3".into(), Value::from("ee".repeat(32)));
-        repair_segment.insert(
-            "car_cid_hex".into(),
-            Value::from(format!("01551f20{}", "01".repeat(32))),
-        );
-        repair_segment.insert(
-            "root_cids_hex".into(),
-            Value::Array(vec![Value::from(format!("01711f20{}", "02".repeat(32)))]),
-        );
-        repair_segment.insert("dag_codec".into(), Value::from(0x71_u64));
-        repair_segment.insert("chunk_count".into(), Value::from(3_u64));
-        repair_segment.insert("payload_bytes".into(), Value::from(512_u64));
-        repair_segment.insert(
-            "files".into(),
-            source_files(
-                "repairs/audit/00000000000000000001.to",
-                "repairs/audit/00000000000000000001.json",
-                128,
-                &digest_hex,
-                254,
-            ),
-        );
-        repair_segment.insert("chunk_profile".into(), chunk_profile());
-
-        let mut reputation_segment = repair_segment.clone();
-        reputation_segment.insert("queue_position".into(), Value::from(1_u64));
-        reputation_segment.insert("source_publish_index_position".into(), Value::from(1_u64));
-        reputation_segment.insert("payload_kind".into(), Value::from("reputation_snapshot"));
-        reputation_segment.insert(
-            "encoded_path".into(),
-            Value::from("reputation/snapshots/snapshot-a.to"),
-        );
-        reputation_segment.insert(
-            "json_path".into(),
-            Value::from("reputation/snapshots/snapshot-a.json"),
-        );
-        reputation_segment.insert(
-            "encoded_blake3".into(),
-            Value::from(reputation_digest_hex.clone()),
-        );
-        reputation_segment.insert("encoded_len".into(), Value::from(256_u64));
-        reputation_segment.insert(
-            "car_path".into(),
-            Value::from(
-                "car-segments/00000000000000000001_reputation_snapshot_bbbbbbbbbbbbbbbb.car",
-            ),
-        );
-        reputation_segment.insert(
-            "plan_path".into(),
-            Value::from(
-                "car-segments/00000000000000000001_reputation_snapshot_bbbbbbbbbbbbbbbb.plan.json",
-            ),
-        );
-        reputation_segment.insert(
-            "manifest_path".into(),
-            Value::from(
-                "car-segments/00000000000000000001_reputation_snapshot_bbbbbbbbbbbbbbbb.json",
-            ),
-        );
-        reputation_segment.insert(
-            "car_archive_blake3".into(),
-            Value::from(reputation_car_archive_hex.clone()),
-        );
-        reputation_segment.insert(
-            "files".into(),
-            source_files(
-                "reputation/snapshots/snapshot-a.to",
-                "reputation/snapshots/snapshot-a.json",
-                256,
-                &reputation_digest_hex,
-                126,
-            ),
-        );
-
-        let mut by_encoded_blake3 = Map::new();
-        by_encoded_blake3.insert(digest_hex.clone(), Value::Array(vec![Value::from(0_u64)]));
-        by_encoded_blake3.insert(
-            reputation_digest_hex,
-            Value::Array(vec![Value::from(1_u64)]),
-        );
-        let mut by_payload_kind = Map::new();
-        by_payload_kind.insert(
-            "repair_audit".into(),
-            Value::Array(vec![Value::from(0_u64)]),
-        );
-        by_payload_kind.insert(
-            "reputation_snapshot".into(),
-            Value::Array(vec![Value::from(1_u64)]),
-        );
-        let mut by_car_archive_blake3 = Map::new();
-        by_car_archive_blake3.insert(
-            car_archive_hex.clone(),
-            Value::Array(vec![Value::from(0_u64)]),
-        );
-        by_car_archive_blake3.insert(
-            reputation_car_archive_hex,
-            Value::Array(vec![Value::from(1_u64)]),
-        );
-
-        let mut queue = Map::new();
-        queue.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.local_car_queue.v1"),
-        );
-        queue.insert("source".into(), Value::from("filesystem"));
-        queue.insert("root".into(), Value::from(GOVERNANCE_DAG_LOGICAL_ROOT));
-        queue.insert("generated_at".into(), Value::from(1_800_000_600_u64));
-        queue.insert("segment_count".into(), Value::from(2_u64));
-        queue.insert("assembled_count".into(), Value::from(2_u64));
-        queue.insert("pending_count".into(), Value::from(0_u64));
-        queue.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
-        queue.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
-        queue.insert(
-            "by_car_archive_blake3".into(),
-            Value::Object(by_car_archive_blake3),
-        );
-        queue.insert(
-            "segments".into(),
-            Value::Array(vec![
-                Value::Object(repair_segment),
-                Value::Object(reputation_segment),
-            ]),
-        );
-        let legacy_queue = Value::Object(queue);
-        let mut publish_index = synthetic_publish_index_for_car_queue(&legacy_queue);
-        for entry in publish_index
-            .get_mut("entries")
-            .and_then(Value::as_array_mut)
-            .expect("synthetic publish entries")
-        {
-            set_canonical_publication_entry_paths(
-                entry.as_object_mut().expect("synthetic publish entry"),
-            );
-        }
-        let queue = synthetic_car_queue_for_publish_index(&publish_index);
-        let car_archive_hex = queue
+        let publication = parse_governance_publication_state(snapshot.canonical_bytes(), metadata)
+            .expect("parse typed publication fixture");
+        let car_archive_hex = publication
+            .car_queue
             .get("segments")
             .and_then(Value::as_array)
             .and_then(|segments| segments.first())
             .and_then(|segment| segment.get("car_archive_blake3"))
             .and_then(Value::as_str)
-            .expect("synthetic CAR archive digest")
+            .expect("typed CAR archive digest")
             .to_owned();
-        write_publication_state_fixture(&governance_dir, publish_index, queue);
-
-        let node = node_with_test_governance_publisher(
-            StorageConfig::builder()
-                .enabled(true)
-                .data_dir(temp_dir.path().join("storage"))
-                .governance_dir(Some(governance_dir)),
-            NodeRuntimeDeps::default(),
-        );
-        Arc::get_mut(&mut app)
-            .expect("unique app state")
-            .sorafs_node = node;
         (app, temp_dir, digest_hex, car_archive_hex)
     }
 
@@ -36726,11 +36063,12 @@ mod advert_tests {
         )
         .expect("publish signed appeal finance weekly rollup");
 
-        let index: Value = norito::json::from_slice(
-            &fs::read(governance_dir.join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE))
-                .expect("read generated runtime index"),
-        )
-        .expect("decode generated runtime index");
+        let runtime_snapshot = node
+            .governance_dag_runtime_snapshot()
+            .expect("read authenticated runtime snapshot")
+            .expect("published runtime snapshot");
+        let index: Value = norito::json::from_slice(runtime_snapshot.index_bytes())
+            .expect("decode generated runtime index");
         let first = index
             .get("blocks")
             .and_then(Value::as_array)
@@ -36979,47 +36317,30 @@ mod advert_tests {
     async fn governance_dag_indexes_reject_unknown_host_path_fields() {
         const FORBIDDEN_PATH: &str = "/private/retained/governance/state";
 
-        let (mirror_app, _mirror_temp, _block_cid, _node_cid, _head_cid) =
-            sorafs_app_state_with_governance_mirror();
-        let mirror_path = mirror_app
-            .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured mirror governance dir")
-            .join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
-        let mut mirror: Value = norito::json::from_slice(
-            &fs::read(&mirror_path).expect("read governance mirror fixture"),
-        )
-        .expect("decode governance mirror fixture");
+        let (runtime_app, _temp, mut mirror, metadata, ..) = governance_mirror_fixture();
         mirror
             .as_object_mut()
             .expect("mirror index object")
             .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
-        fs::write(
-            &mirror_path,
-            norito::json::to_vec(&mirror).expect("encode mirror with unknown field"),
-        )
-        .expect("write mirror with unknown field");
-        let response =
-            handle_get_sorafs_governance_dag_dashboard(State(mirror_app), HeaderMap::new()).await;
+        let canonical = json::to_json_pretty(&mirror)
+            .expect("encode mirror with unknown field")
+            .into_bytes();
+        let response = parse_governance_dag_mirror_index(&canonical, metadata)
+            .expect_err("unknown mirror field must fail")
+            .into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect rejected mirror response");
         assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
 
-        let (runtime_app, _runtime_temp, _digest, _block_cid, _node_cid) =
-            sorafs_app_state_with_governance_runtime_index();
-        let runtime_path = runtime_app
+        let runtime_snapshot = runtime_app
             .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured runtime governance dir")
-            .join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE);
-        let mut runtime: Value = norito::json::from_slice(
-            &fs::read(&runtime_path).expect("read governance runtime fixture"),
-        )
-        .expect("decode governance runtime fixture");
+            .governance_dag_runtime_snapshot()
+            .expect("read typed runtime fixture")
+            .expect("published runtime fixture");
+        let mut runtime: Value =
+            json::from_slice(runtime_snapshot.index_bytes()).expect("decode typed runtime fixture");
         runtime
             .get_mut("blocks")
             .and_then(Value::as_array_mut)
@@ -37027,23 +36348,23 @@ mod advert_tests {
             .and_then(Value::as_object_mut)
             .expect("first runtime block")
             .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
-        fs::write(
-            &runtime_path,
-            norito::json::to_vec(&runtime).expect("encode runtime with unknown field"),
-        )
-        .expect("write runtime with unknown field");
-        let response =
-            handle_get_sorafs_governance_dag_runtime(State(runtime_app), HeaderMap::new()).await;
+        let response = match verify_and_bind_governance_dag_runtime_index(
+            &runtime_app,
+            &mut runtime,
+            runtime_snapshot.head_bytes(),
+        ) {
+            Err(response) => response,
+            Ok(_) => panic!("unknown runtime field must fail"),
+        };
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect rejected runtime response");
         assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
 
-        let (car_app, car_temp, _digest, _archive_digest) =
+        let (publication_app, _temp, _digest, _archive) =
             sorafs_app_state_with_governance_car_queue();
-        let governance_dir = car_temp.path().join("governance");
-        let mut state = read_publication_state_fixture(&governance_dir);
+        let mut state = read_publication_state_fixture(&publication_app);
         publication_state_section_mut(&mut state, "car_queue")
             .get_mut("segments")
             .and_then(Value::as_array_mut)
@@ -37051,9 +36372,19 @@ mod advert_tests {
             .and_then(Value::as_object_mut)
             .expect("first CAR queue segment")
             .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
-        write_publication_state_value(&governance_dir, &state);
-        let response =
-            handle_get_sorafs_governance_dag_car_queue(State(car_app), HeaderMap::new()).await;
+        let canonical = json::to_json_pretty(&state)
+            .expect("encode publication state with unknown field")
+            .into_bytes();
+        let metadata = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_PUBLICATION_SOURCE_V1,
+            (9, [0xC9; 32]),
+            &canonical,
+            None,
+        );
+        let response = match parse_governance_publication_state(&canonical, metadata) {
+            Err(response) => response,
+            Ok(_) => panic!("unknown CAR field must fail"),
+        };
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -37061,15 +36392,12 @@ mod advert_tests {
         assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
     }
 
-    #[tokio::test]
-    async fn governance_dag_pending_car_segment_cannot_hide_an_artifact_path() {
-        let (app, temp_dir, _digest, car_archive_digest) =
+    #[test]
+    fn governance_dag_pending_car_segment_cannot_hide_an_artifact_path() {
+        let (app, _temp, _digest, car_archive_digest) =
             sorafs_app_state_with_governance_car_queue();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut state = read_publication_state_fixture(&governance_dir);
-        let queue_object = publication_state_section_mut(&mut state, "car_queue")
-            .as_object_mut()
-            .expect("CAR queue object");
+        let mut queue = read_publication_section_fixture(&app, "car_queue");
+        let queue_object = queue.as_object_mut().expect("CAR queue object");
         let segment = queue_object
             .get_mut("segments")
             .and_then(Value::as_array_mut)
@@ -37105,10 +36433,9 @@ mod advert_tests {
             .and_then(Value::as_object_mut)
             .expect("CAR archive lookup")
             .remove(&car_archive_digest);
-        write_publication_state_value(&governance_dir, &state);
 
-        let response =
-            handle_get_sorafs_governance_dag_car_queue(State(app), HeaderMap::new()).await;
+        let response = validate_governance_dag_car_queue(&queue)
+            .expect_err("pending segment cannot smuggle an artifact path");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -37146,10 +36473,72 @@ mod advert_tests {
         }
     }
 
+    #[test]
+    fn governance_source_etag_commits_record_and_checkpoint_identity() {
+        let canonical_bytes = br#"{"schema":"fixture"}"#;
+        let base = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+            (7, [0x31; 32]),
+            canonical_bytes,
+            Some((11, [0x41; 32])),
+        );
+        let changed_record_generation = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+            (8, [0x31; 32]),
+            canonical_bytes,
+            Some((11, [0x41; 32])),
+        );
+        let changed_record_digest = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+            (7, [0x32; 32]),
+            canonical_bytes,
+            Some((11, [0x41; 32])),
+        );
+        let changed_checkpoint_generation = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+            (7, [0x31; 32]),
+            canonical_bytes,
+            Some((12, [0x41; 32])),
+        );
+        let changed_checkpoint_revision = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+            (7, [0x31; 32]),
+            canonical_bytes,
+            Some((11, [0x42; 32])),
+        );
+        let without_checkpoint = GovernanceDagSourceMetadata::new(
+            GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+            (7, [0x31; 32]),
+            canonical_bytes,
+            None,
+        );
+
+        for changed in [
+            &changed_record_generation,
+            &changed_record_digest,
+            &changed_checkpoint_generation,
+            &changed_checkpoint_revision,
+            &without_checkpoint,
+        ] {
+            assert_ne!(base.etag, changed.etag);
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IF_NONE_MATCH,
+            HeaderValue::from_str(&base.etag).expect("valid typed-source entity tag"),
+        );
+        assert!(if_none_match_matches(&headers, &base.etag));
+        assert!(
+            !if_none_match_matches(&headers, &changed_checkpoint_revision.etag),
+            "a stale conditional tag must not conceal changed checkpoint authentication metadata"
+        );
+    }
+
     #[tokio::test]
-    async fn governance_dag_dashboard_head_and_lookups_read_local_mirror() {
-        let (app, _temp_dir, block_cid_hex, node_cid_hex, head_block_cid_hex) =
-            sorafs_app_state_with_governance_mirror();
+    async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
+        let (_app, _temp, index, metadata, block_cid_hex, node_cid_hex, head_block_cid_hex) =
+            governance_mirror_fixture();
         let publisher_key = KeyPair::try_from_seed(
             b"torii-governance-runtime-provenance".to_vec(),
             Algorithm::Ed25519,
@@ -37160,65 +36549,51 @@ mod advert_tests {
             sorafs_manifest::governance_dag_submission_account_digest_v1(&publisher.encode()),
         );
 
-        let response =
-            handle_get_sorafs_governance_dag_dashboard(State(app.clone()), HeaderMap::new()).await;
+        let response = governance_dag_dashboard_response_from_index(
+            index.clone(),
+            metadata.clone(),
+            HeaderMap::new(),
+        );
         assert_eq!(response.status(), StatusCode::OK);
         let dashboard_etag = response
             .headers()
             .get(ETAG)
             .cloned()
             .expect("dashboard etag");
-        assert_eq!(
-            response
-                .headers()
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
-            Some(GOVERNANCE_DAG_CACHE_CONTROL)
-        );
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect dashboard body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode dashboard JSON");
+        let value: Value = json::from_slice(&body_bytes).expect("decode dashboard JSON");
         assert_eq!(
             value.get("schema").and_then(Value::as_str),
             Some("sorafs.governance_dag.dashboard.v1")
         );
-        assert_eq!(
-            value.get("source_path").and_then(Value::as_str),
-            Some(GOVERNANCE_DAG_MIRROR_INDEX_FILE)
-        );
+        assert_governance_source_metadata(&value, GOVERNANCE_DAG_MIRROR_SOURCE_V1, true);
         assert_eq!(value.get("block_count").and_then(Value::as_u64), Some(2));
         assert_eq!(value.get("first_sequence").and_then(Value::as_u64), Some(0));
         assert_eq!(
             value.get("last_timestamp").and_then(Value::as_u64),
             Some(1_800_000_100)
         );
-        assert_eq!(
-            value
-                .get("payload_kind_counts")
-                .and_then(Value::as_object)
-                .and_then(|counts| counts.get(APPEAL_FINANCE_REPORT_KIND))
-                .and_then(Value::as_u64),
-            Some(1)
-        );
 
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, dashboard_etag.clone());
         let response =
-            handle_get_sorafs_governance_dag_dashboard(State(app.clone()), headers).await;
+            governance_dag_dashboard_response_from_index(index.clone(), metadata.clone(), headers);
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-        assert_eq!(response.headers().get(ETAG), Some(&dashboard_etag));
 
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, dashboard_etag.clone());
-        let response = handle_get_sorafs_governance_dag_head(State(app.clone()), headers).await;
+        let response =
+            governance_dag_head_response_from_index(index.clone(), metadata.clone(), headers);
         assert_eq!(response.status(), StatusCode::OK);
         let head_etag = response.headers().get(ETAG).cloned().expect("head etag");
         assert_ne!(head_etag, dashboard_etag);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect head body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode head JSON");
+        let value: Value = json::from_slice(&body_bytes).expect("decode head JSON");
+        assert_governance_source_metadata(&value, GOVERNANCE_DAG_MIRROR_SOURCE_V1, true);
         assert_eq!(
             value
                 .get("head")
@@ -37227,34 +36602,22 @@ mod advert_tests {
             Some(head_block_cid_hex.as_str())
         );
 
-        let response = handle_get_sorafs_governance_dag_block(
-            State(app.clone()),
+        let response = governance_dag_lookup_response_from_index(
+            index.clone(),
+            metadata.clone(),
             HeaderMap::new(),
-            Path(block_cid_hex.clone()),
-        )
-        .await;
+            "block",
+            "by_block_cid_hex",
+            "sorafs.governance_dag.block.lookup.v1",
+            block_cid_hex.clone(),
+        );
         assert_eq!(response.status(), StatusCode::OK);
-        let block_etag = response
-            .headers()
-            .get(ETAG)
-            .cloned()
-            .expect("block lookup etag");
+        let block_etag = response.headers().get(ETAG).cloned().expect("block etag");
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect block lookup body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode block JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.governance_dag.block.lookup.v1")
-        );
-        assert_eq!(value.get("found").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            value
-                .get("block")
-                .and_then(|block| block.get("block_cid_hex"))
-                .and_then(Value::as_str),
-            Some(block_cid_hex.as_str())
-        );
+        let value: Value = json::from_slice(&body_bytes).expect("decode block JSON");
+        assert_governance_source_metadata(&value, GOVERNANCE_DAG_MIRROR_SOURCE_V1, true);
         assert_eq!(
             value
                 .get("block")
@@ -37265,29 +36628,31 @@ mod advert_tests {
 
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, block_etag);
-        let response = handle_get_sorafs_governance_dag_block(
-            State(app.clone()),
+        let response = governance_dag_lookup_response_from_index(
+            index.clone(),
+            metadata.clone(),
             headers,
-            Path("ff".repeat(32)),
-        )
-        .await;
+            "block",
+            "by_block_cid_hex",
+            "sorafs.governance_dag.block.lookup.v1",
+            "ff".repeat(32),
+        );
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-        let response = handle_get_sorafs_governance_dag_node(
-            State(app.clone()),
+        let response = governance_dag_lookup_response_from_index(
+            index,
+            metadata,
             HeaderMap::new(),
-            Path(format!("hex:{node_cid_hex}")),
-        )
-        .await;
+            "node",
+            "by_node_cid_hex",
+            "sorafs.governance_dag.node.lookup.v1",
+            node_cid_hex.clone(),
+        );
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect node lookup body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode node JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.governance_dag.node.lookup.v1")
-        );
+        let value: Value = json::from_slice(&body_bytes).expect("decode node JSON");
         assert_eq!(
             value
                 .get("block")
@@ -37295,136 +36660,55 @@ mod advert_tests {
                 .and_then(Value::as_str),
             Some(node_cid_hex.as_str())
         );
-        assert_eq!(
-            value
-                .get("block")
-                .and_then(|block| block.get("submission_origin"))
-                .and_then(Value::as_str),
-            Some("appeal_finance_report")
-        );
     }
 
-    #[tokio::test]
-    async fn governance_dag_mirror_rejects_unsigned_provenance_substitution() {
-        let (app, _temp_dir, block_cid_hex, _node_cid_hex, _head_block_cid_hex) =
-            sorafs_app_state_with_governance_mirror();
-        let governance_dir = app
-            .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured governance dir");
-        let mirror_path = governance_dir.join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
-        let mut mirror: Value = norito::json::from_slice(
-            &fs::read(&mirror_path).expect("read governance mirror index"),
-        )
-        .expect("decode governance mirror index");
-        mirror
+    #[test]
+    fn governance_dag_mirror_rejects_history_not_ending_at_head() {
+        let (_app, _temp, mut index, _metadata, ..) = governance_mirror_fixture();
+        index
             .get_mut("blocks")
             .and_then(Value::as_array_mut)
-            .and_then(|blocks| blocks.first_mut())
-            .and_then(Value::as_object_mut)
-            .expect("first governance mirror block")
-            .insert(
-                "submission_publisher_account_digest_hex".into(),
-                Value::from("00".repeat(32)),
-            );
-        fs::write(
-            &mirror_path,
-            norito::json::to_vec(&mirror).expect("encode tampered governance mirror index"),
-        )
-        .expect("write tampered governance mirror index");
-
-        let response = handle_get_sorafs_governance_dag_block(
-            State(app),
-            HeaderMap::new(),
-            Path(block_cid_hex),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[tokio::test]
-    async fn governance_dag_mirror_rejects_ipfs_cid_substitution() {
-        let (app, _temp_dir, block_cid_hex, _node_cid_hex, _head_block_cid_hex) =
-            sorafs_app_state_with_governance_mirror();
-        let governance_dir = app
-            .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured governance dir");
-        let mirror_path = governance_dir.join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
-        let mut mirror: Value = norito::json::from_slice(
-            &fs::read(&mirror_path).expect("read governance mirror index"),
-        )
-        .expect("decode governance mirror index");
-        mirror
-            .get_mut("blocks")
-            .and_then(Value::as_array_mut)
-            .and_then(|blocks| blocks.first_mut())
-            .and_then(Value::as_object_mut)
-            .expect("first governance mirror block")
-            .insert(
-                "ipfs_cid".into(),
-                Value::from(governance_dag_raw_ipfs_cid(b"substituted block")),
-            );
-        fs::write(
-            &mirror_path,
-            norito::json::to_vec(&mirror).expect("encode tampered governance mirror index"),
-        )
-        .expect("write tampered governance mirror index");
-
-        let response = handle_get_sorafs_governance_dag_block(
-            State(app),
-            HeaderMap::new(),
-            Path(block_cid_hex),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[tokio::test]
-    async fn governance_dag_mirror_rejects_history_not_ending_at_signed_head() {
-        let (app, _temp_dir, _block_cid_hex, _node_cid_hex, _head_block_cid_hex) =
-            sorafs_app_state_with_governance_mirror();
-        let governance_dir = app
-            .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured governance dir");
-        let mirror_path = governance_dir.join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
-        let mut mirror: Value = norito::json::from_slice(
-            &fs::read(&mirror_path).expect("read governance mirror index"),
-        )
-        .expect("decode governance mirror index");
-        mirror
-            .get_mut("blocks")
-            .and_then(Value::as_array_mut)
-            .expect("governance mirror blocks")
+            .expect("mirror blocks")
             .truncate(1);
-        mirror
+        index
             .as_object_mut()
-            .expect("governance mirror root")
+            .expect("mirror root")
             .insert("indexed_block_count".into(), Value::from(1_u64));
-        fs::write(
-            &mirror_path,
-            norito::json::to_vec(&mirror).expect("encode truncated governance mirror index"),
-        )
-        .expect("write truncated governance mirror index");
 
-        let response =
-            handle_get_sorafs_governance_dag_dashboard(State(app), HeaderMap::new()).await;
+        let response = validate_governance_dag_mirror_index(&index)
+            .expect_err("truncated mirror history must fail");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn governance_dag_mirror_rejects_sequence_overflow() {
+        let (_app, _temp, mut index, _metadata, ..) = governance_mirror_fixture();
+        let blocks = index
+            .get_mut("blocks")
+            .and_then(Value::as_array_mut)
+            .expect("mirror blocks");
+        blocks[0]
+            .as_object_mut()
+            .expect("first mirror block")
+            .insert("sequence".into(), Value::from(u64::MAX));
+        blocks[1]
+            .as_object_mut()
+            .expect("second mirror block")
+            .insert("sequence".into(), Value::from(0_u64));
+
+        let response = validate_governance_dag_mirror_index(&index)
+            .expect_err("overflowing mirror sequence continuity must fail closed");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
-    async fn governance_dag_lookup_rejects_malformed_and_missing_cids() {
-        let (app, _temp_dir, _block_cid_hex, _node_cid_hex, _head_block_cid_hex) =
-            sorafs_app_state_with_governance_mirror();
+    async fn governance_dag_lookup_rejects_malformed_and_absent_capability() {
+        let (app, _temp, index, metadata, ..) = governance_mirror_fixture();
 
         let response = handle_get_sorafs_governance_dag_block(
             State(app.clone()),
             HeaderMap::new(),
-            Path("not-hex".to_string()),
+            Path("not-hex".to_owned()),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -37432,7 +36716,7 @@ mod advert_tests {
         let response = handle_get_sorafs_governance_dag_block(
             State(app.clone()),
             HeaderMap::new(),
-            Path("ff".to_string()),
+            Path("ff".to_owned()),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -37443,7 +36727,397 @@ mod advert_tests {
             Path("ff".repeat(32)),
         )
         .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "a node without an installed mirror capability must fail closed"
+        );
+
+        let response = governance_dag_lookup_response_from_index(
+            index,
+            metadata,
+            HeaderMap::new(),
+            "block",
+            "by_block_cid_hex",
+            "sorafs.governance_dag.block.lookup.v1",
+            "ff".repeat(32),
+        );
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    fn api_test_governance_request_public_key(seed: u8) -> [u8; 32] {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive Governance DAG request-auth public key");
+        let (algorithm, bytes) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("serialize Governance DAG request-auth public key");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        bytes.try_into().expect("Ed25519 public key width")
+    }
+
+    fn api_test_governance_ingress_qualification(
+        scope: sorafs_node::GovernanceDagAuthenticationScope,
+        endpoint: &str,
+        seed: u8,
+        provider: GovernanceDagRuntimeProviderQualificationV1,
+        max_body_bytes: u64,
+    ) -> GovernanceDagRequestIngressQualificationV1 {
+        let binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+            scope,
+            sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)
+                .expect("derive canonical test request-ingress endpoint binding"),
+            api_test_governance_request_public_key(seed),
+            max_body_bytes,
+            30,
+            5,
+        )
+        .expect("construct canonical test request-ingress binding");
+        let scope_tag = match scope {
+            sorafs_node::GovernanceDagAuthenticationScope::Ipfs => 0x91,
+            sorafs_node::GovernanceDagAuthenticationScope::SignedHead => 0x92,
+        };
+        GovernanceDagRequestIngressQualificationV1::try_new(
+            provider,
+            binding,
+            [scope_tag; 32],
+            [scope_tag.wrapping_add(1); 32],
+            [scope_tag.wrapping_add(2); 32],
+        )
+        .expect("construct live test request-ingress qualification")
+    }
+
+    #[tokio::test]
+    async fn running_governance_dag_service_installs_authenticated_mirror_for_torii() {
+        const IPFS_AUTH_HANDLE: &str = "hsm:governance-dag:torii-api-ipfs-ingress";
+        const HEAD_AUTH_HANDLE: &str = "hsm:governance-dag:torii-api-head-ingress";
+        const IPFS_AUTH_SEED: u8 = 0x61;
+        const HEAD_AUTH_SEED: u8 = 0x62;
+
+        let temp_dir = tempfile::tempdir().expect("create Governance DAG service temp dir");
+        let temp_root = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonicalize Governance DAG service temp dir");
+        let governance_dir = temp_root.join("governance");
+        let (mut node, signer, checkpoint_store) = node_with_test_governance_publisher_and_store(
+            StorageConfig::builder()
+                .enabled(true)
+                .data_dir(temp_root.join("storage"))
+                .governance_dir(Some(governance_dir.clone())),
+            NodeRuntimeDeps::default(),
+        );
+        let publisher_key = KeyPair::try_from_seed(
+            b"torii-running-governance-service-provenance".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive Governance DAG publication provenance account");
+        let publisher = AccountId::new(publisher_key.public_key().clone());
+        node.publish_authenticated_appeal_finance_report(
+            appeal_finance_report_fixture(),
+            publisher,
+        )
+        .expect("publish signed Governance DAG source block");
+
+        let runtime_snapshot = node
+            .governance_dag_runtime_snapshot()
+            .expect("read signed local Governance DAG")
+            .expect("signed local Governance DAG exists");
+        let source_index: Value = json::from_slice(runtime_snapshot.index_bytes())
+            .expect("decode signed local Governance DAG index");
+        let expected_block_cid_hex = source_index
+            .get("blocks")
+            .and_then(Value::as_array)
+            .and_then(|blocks| blocks.first())
+            .and_then(|block| block.get("block_cid_hex"))
+            .and_then(Value::as_str)
+            .expect("signed local Governance DAG block CID")
+            .to_owned();
+        let expected_head: GovernanceDagHeadV1 = decode_canonical_governance_dag_value(
+            runtime_snapshot.head_bytes(),
+            "signed local Governance DAG head",
+        )
+        .expect("decode signed local Governance DAG head");
+        let expected_head_cid_hex = encode(expected_head.head_block_cid);
+
+        let (publication_base, publication_state, publication_shutdown, publication_task) =
+            spawn_api_test_governance_publication_http().await;
+        let signed_head_url = format!("{publication_base}/head");
+        let mut service = SorafsGovernanceDagService::default();
+        service.enabled = true;
+        service.state_dir = Some(temp_root.join("governance-service-state"));
+        service.ipfs_api_url = Some(publication_base.clone());
+        service.signed_head_url = Some(signed_head_url.clone());
+        service.ipfs_authenticator_handle = Some(IPFS_AUTH_HANDLE.to_owned());
+        service.ipfs_authenticator_revision = Some(1);
+        service.ipfs_authenticator_policy_digest = Some([0xA1; 32]);
+        service.ipfs_request_auth_public_key =
+            Some(api_test_governance_request_public_key(IPFS_AUTH_SEED));
+        service.head_authenticator_handle = Some(HEAD_AUTH_HANDLE.to_owned());
+        service.head_authenticator_revision = Some(1);
+        service.head_authenticator_policy_digest = Some([0xA2; 32]);
+        service.head_request_auth_public_key =
+            Some(api_test_governance_request_public_key(HEAD_AUTH_SEED));
+        service.request_auth_max_envelope_lifetime_secs = 30;
+        service.request_auth_max_future_skew_secs = 5;
+        service.checkpoint_store_handle = Some(ApiTestGovernanceDagCheckpointStore::HANDLE.into());
+        service.checkpoint_store_revision =
+            Some(ApiTestGovernanceDagCheckpointStore::expected_qualification().revision);
+        service.checkpoint_store_policy_digest =
+            Some(ApiTestGovernanceDagCheckpointStore::expected_qualification().policy_digest);
+        service.publisher_public_key_hex = Some(hex::encode(signer.public_key()));
+        service.poll_interval = Duration::from_millis(10);
+        service.max_future_skew_secs = 100_000_000;
+        service.allow_insecure_http = true;
+        service.allow_private_ipfs_endpoint = true;
+        service.allow_private_head_endpoint = true;
+        service.allow_head_bootstrap = true;
+        service.listen_addr = "127.0.0.1:0".to_owned();
+
+        let ipfs_provider_qualification =
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0xA1; 32]);
+        let head_provider_qualification =
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0xA2; 32]);
+        let ipfs_authenticator = ApiTestGovernanceRequestAuthenticator::new(
+            IPFS_AUTH_HANDLE,
+            IPFS_AUTH_SEED,
+            api_test_governance_ingress_qualification(
+                sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
+                &publication_base,
+                IPFS_AUTH_SEED,
+                ipfs_provider_qualification,
+                sorafs_node::governance_service::authenticated_ipfs_wire_body_max_bytes(
+                    service.max_request_bytes.0,
+                )
+                .expect("derive authenticated IPFS wire-body ceiling"),
+            ),
+        );
+        let head_authenticator = ApiTestGovernanceRequestAuthenticator::new(
+            HEAD_AUTH_HANDLE,
+            HEAD_AUTH_SEED,
+            api_test_governance_ingress_qualification(
+                sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
+                &signed_head_url,
+                HEAD_AUTH_SEED,
+                head_provider_qualification,
+                service.max_request_bytes.0,
+            ),
+        );
+        let view = SorafsGovernanceDagServiceView {
+            source_dir: Some(governance_dir),
+            producer_publisher_peer_id: Some(
+                String::from_utf8(ApiTestGovernanceDagSigner::PEER_ID.to_vec())
+                    .expect("Governance DAG producer peer id is UTF-8"),
+            ),
+            producer_signer_handle: Some(ApiTestGovernanceDagSigner::HANDLE.to_owned()),
+            producer_signer_revision: Some(
+                ApiTestGovernanceDagSigner::expected_qualification().revision,
+            ),
+            producer_signer_policy_digest: Some(
+                ApiTestGovernanceDagSigner::expected_qualification().policy_digest,
+            ),
+            producer_publisher_public_key_hex: Some(hex::encode(signer.public_key())),
+            service,
+        };
+        let runner = prepare_governance_dag_service_from_view(
+            view,
+            GovernanceDagServiceRuntimeProviders::default()
+                .with_ipfs_authenticator(ipfs_authenticator)
+                .with_head_authenticator(head_authenticator)
+                .with_checkpoint_store(checkpoint_store),
+        )
+        .await
+        .expect("prepare real Governance DAG service");
+        let mirror_reader = runner.mirror_read_handle();
+        let (service_shutdown, service_shutdown_rx) = tokio::sync::oneshot::channel();
+        let service_task = tokio::spawn(async move {
+            runner
+                .run_until(async move {
+                    let _ = service_shutdown_rx.await;
+                })
+                .await
+        });
+
+        let mirror_snapshot = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if service_task.is_finished() {
+                    panic!("Governance DAG service exited before publishing its mirror");
+                }
+                match mirror_reader.read() {
+                    Ok(Some(snapshot)) => break snapshot,
+                    Ok(None) | Err(GovernanceDagServiceError::Unavailable(_)) => {}
+                    Err(GovernanceDagServiceError::State(message))
+                        if message.contains("active sealed publish intent") => {}
+                    Err(error) => panic!("Governance DAG mirror failed authentication: {error}"),
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Governance DAG service publishes an authenticated mirror");
+        let mirror_store_identity = mirror_snapshot.mirror_store_identity();
+        let checkpoint_identity = mirror_snapshot.checkpoint_identity();
+        let mirror: Value = json::from_slice(mirror_snapshot.canonical_bytes())
+            .expect("decode service-owned Governance DAG mirror");
+        assert_eq!(
+            mirror
+                .get("head")
+                .and_then(|head| head.get("head_block_cid_hex"))
+                .and_then(Value::as_str),
+            Some(expected_head_cid_hex.as_str())
+        );
+        let head_ipfs_cid = mirror
+            .get("head")
+            .and_then(|head| head.get("ipfs_cid"))
+            .and_then(Value::as_str)
+            .expect("authenticated mirror head IPFS CID")
+            .to_owned();
+        let block_ipfs_cid = mirror
+            .get("blocks")
+            .and_then(Value::as_array)
+            .and_then(|blocks| blocks.first())
+            .and_then(|block| block.get("ipfs_cid"))
+            .and_then(Value::as_str)
+            .expect("authenticated mirror block IPFS CID")
+            .to_owned();
+        assert!(
+            publication_state
+                .0
+                .lock()
+                .expect("lock Governance DAG publication state")
+                .head
+                .is_some(),
+            "the running service must commit the public head before exposing the mirror"
+        );
+
+        node.install_governance_dag_mirror_read_handle(mirror_reader)
+            .expect("install the real service-owned mirror capability into NodeHandle");
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique Torii app state")
+            .sorafs_node = node;
+
+        let response =
+            handle_get_sorafs_governance_dag_head(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read Torii Governance DAG head response");
+        let response: Value =
+            json::from_slice(&body_bytes).expect("decode Torii Governance DAG head response");
+        assert_eq!(
+            response.get("source").and_then(Value::as_str),
+            Some(GOVERNANCE_DAG_MIRROR_SOURCE_V1)
+        );
+        assert_eq!(
+            response.get("source_generation").and_then(Value::as_u64),
+            Some(mirror_store_identity.0)
+        );
+        assert_eq!(
+            response.get("source_record_blake3").and_then(Value::as_str),
+            Some(encode(mirror_store_identity.1).as_str())
+        );
+        assert_eq!(
+            response
+                .get("source_checkpoint_generation")
+                .and_then(Value::as_u64),
+            Some(checkpoint_identity.generation())
+        );
+        assert_eq!(
+            response
+                .get("source_checkpoint_revision")
+                .and_then(Value::as_str),
+            Some(encode(checkpoint_identity.revision()).as_str())
+        );
+        assert_eq!(
+            response
+                .get("head")
+                .and_then(|head| head.get("head_block_cid_hex"))
+                .and_then(Value::as_str),
+            Some(expected_head_cid_hex.as_str())
+        );
+
+        let response = handle_get_sorafs_governance_dag_block(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(expected_block_cid_hex.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read Torii Governance DAG block response");
+        let response: Value =
+            json::from_slice(&body_bytes).expect("decode Torii Governance DAG block response");
+        assert_eq!(
+            response
+                .get("block")
+                .and_then(|block| block.get("block_cid_hex"))
+                .and_then(Value::as_str),
+            Some(expected_block_cid_hex.as_str())
+        );
+        assert_eq!(
+            response
+                .get("source_checkpoint_revision")
+                .and_then(Value::as_str),
+            Some(encode(checkpoint_identity.revision()).as_str())
+        );
+
+        {
+            let mut state = publication_state
+                .0
+                .lock()
+                .expect("lock Governance DAG publication state for pin loss");
+            assert!(state.objects.remove(&head_ipfs_cid).is_some());
+            assert!(state.objects.remove(&block_ipfs_cid).is_some());
+            assert!(
+                state.head.is_some(),
+                "the public head remains committed while derived IPFS state is repaired"
+            );
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let repaired = {
+                    let state = publication_state
+                        .0
+                        .lock()
+                        .expect("lock Governance DAG publication repair state");
+                    state.objects.contains_key(&head_ipfs_cid)
+                        && state.objects.contains_key(&block_ipfs_cid)
+                };
+                if repaired {
+                    break;
+                }
+                if service_task.is_finished() {
+                    panic!("Governance DAG service exited before repairing lost IPFS objects");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("steady reconciliation repairs post-commit IPFS loss");
+
+        service_shutdown
+            .send(())
+            .expect("request Governance DAG service shutdown");
+        tokio::time::timeout(Duration::from_secs(5), service_task)
+            .await
+            .expect("Governance DAG service shuts down")
+            .expect("join Governance DAG service")
+            .expect("Governance DAG service exits cleanly");
+        let response = handle_get_sorafs_governance_dag_head(State(app), HeaderMap::new()).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Torii must withdraw a retained mirror capability when its supervising service exits"
+        );
+        publication_shutdown
+            .send(())
+            .expect("request Governance DAG publication fixture shutdown");
+        tokio::time::timeout(Duration::from_secs(5), publication_task)
+            .await
+            .expect("Governance DAG publication fixture shuts down")
+            .expect("join Governance DAG publication fixture");
     }
 
     #[tokio::test]
@@ -37473,10 +37147,7 @@ mod advert_tests {
             value.get("schema").and_then(Value::as_str),
             Some("sorafs.governance_dag.publish_index.v1")
         );
-        assert_eq!(
-            value.get("source_path").and_then(Value::as_str),
-            Some(GOVERNANCE_DAG_PUBLICATION_STATE_FILE)
-        );
+        assert_governance_source_metadata(&value, GOVERNANCE_DAG_PUBLICATION_SOURCE_V1, false);
         assert_eq!(
             value
                 .get("index")
@@ -37929,7 +37600,7 @@ mod advert_tests {
 
     #[tokio::test]
     async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
-        let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
         let request = transparency_proof_token_issuance_request(0xAE);
         let signer_key_hex = request.signer_key_hex.clone();
 
@@ -37967,7 +37638,7 @@ mod advert_tests {
             Some("torii")
         );
         assert_governance_publish_provenance(
-            &temp_dir.path().join("governance"),
+            &app,
             PROOF_TOKEN_ISSUANCE_KIND,
             &auth.provider.account,
             "transparency_token_issuance",
@@ -38230,7 +37901,7 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let governance_dir = temp_dir.path().join("governance");
-        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
+        let mut index = read_publication_section_fixture(&app, "publish_index");
         let response = handle_get_sorafs_transparency_cycles(
             State(app.clone()),
             HeaderMap::new(),
@@ -38269,24 +37940,17 @@ mod advert_tests {
             .expect("entries");
         let entry = entries[0].as_object_mut().expect("entry object");
         entry.insert("encoded_path".into(), Value::from("../escape.to"));
-        write_publish_index_fixture(&governance_dir, index);
-
-        let response = handle_get_sorafs_transparency_cycle(
-            State(app),
-            HeaderMap::new(),
-            Path(cycle_id_hex),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = validate_governance_dag_publish_index(&index)
+            .expect_err("escaping typed publication path must fail");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
     async fn transparency_cycle_api_rejects_noncanonical_norito_payload() {
-        let (app, temp_dir, cycle_id_hex, _entry_id_hex, old_digest_hex) =
+        let (app, temp_dir, cycle_id_hex, _entry_id_hex, _old_digest_hex) =
             sorafs_app_state_with_transparency_publication();
         let governance_dir = temp_dir.path().join("governance");
-        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
+        let mut index = read_publication_section_fixture(&app, "publish_index");
         let entry = index
             .get_mut("entries")
             .and_then(Value::as_array_mut)
@@ -38297,11 +37961,6 @@ mod advert_tests {
             .get("encoded_path")
             .and_then(Value::as_str)
             .expect("old encoded path")
-            .to_owned();
-        let old_json_path = entry
-            .get("json_path")
-            .and_then(Value::as_str)
-            .expect("old JSON path")
             .to_owned();
         let encoded_path = governance_dir.join(&old_encoded_path);
         let mut encoded = fs::read(&encoded_path).expect("read transparency publication fixture");
@@ -38316,11 +37975,6 @@ mod advert_tests {
             .and_then(Value::as_str)
             .expect("new encoded path")
             .to_owned();
-        let new_json_path = entry
-            .get("json_path")
-            .and_then(Value::as_str)
-            .expect("new JSON path")
-            .to_owned();
         fs::create_dir_all(
             governance_dir
                 .join(&new_encoded_path)
@@ -38330,26 +37984,16 @@ mod advert_tests {
         .expect("create new source parent");
         fs::write(governance_dir.join(&new_encoded_path), &encoded)
             .expect("write noncanonical transparency publication");
-        fs::rename(
-            governance_dir.join(old_json_path),
-            governance_dir.join(new_json_path),
-        )
-        .expect("move transparency JSON source");
-        let lookup = index
-            .get_mut("by_encoded_blake3")
-            .and_then(Value::as_object_mut)
-            .expect("publish digest lookup");
-        lookup.remove(&old_digest_hex);
-        lookup.insert(new_digest_hex, Value::Array(vec![Value::from(0_u64)]));
-        write_publish_index_fixture(&governance_dir, index);
-
-        let response = handle_get_sorafs_transparency_cycle(
-            State(app),
-            HeaderMap::new(),
-            Path(cycle_id_hex),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let entry = index
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .expect("noncanonical transparency entry")
+            .clone();
+        let response = match load_verified_transparency_publication(&app, &[entry], &cycle_id_hex) {
+            Err(response) => response,
+            Ok(_) => panic!("noncanonical Norito publication must fail"),
+        };
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -38445,115 +38089,36 @@ mod advert_tests {
         assert_eq!(response.headers().get(ETAG), Some(&etag));
     }
 
-    #[tokio::test]
-    async fn transparency_readback_limit_query_bounds_response_arrays() {
-        let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
-        {
-            let entries = index
-                .get_mut("entries")
-                .and_then(Value::as_array_mut)
-                .expect("entries array");
-            let mut duplicate = entries[5].clone();
-            let duplicate = duplicate.as_object_mut().expect("duplicate entry object");
-            duplicate.insert("position".into(), Value::from(6_u64));
-            duplicate.insert("published_at_unix".into(), Value::from(1_800_000_306_u64));
-            let labels = duplicate
-                .get_mut("labels")
-                .and_then(Value::as_object_mut)
-                .expect("proof-token labels");
-            labels.insert("token_id_hex".into(), Value::from("71".repeat(16)));
-            labels.insert("signer_key_hex".into(), Value::from("72".repeat(32)));
-            duplicate.insert("json_blake3".into(), Value::from("73".repeat(32)));
-            set_canonical_publication_entry_paths(duplicate);
-            entries.push(Value::Object(duplicate.clone()));
-        }
-        let index_object = index.as_object_mut().expect("index object");
-        index_object.insert("entry_count".into(), Value::from(7_u64));
-        index_object
-            .get_mut("payload_kind_counts")
+    #[test]
+    fn transparency_readback_limit_bounds_validated_token_entries() {
+        let (app, _temp, _digest) = sorafs_app_state_with_governance_publish_index();
+        let index = read_publication_section_fixture(&app, "publish_index");
+        let mut entries = governance_publish_index_lookup_entries(
+            &index,
+            "by_payload_kind",
+            PROOF_TOKEN_ISSUANCE_KIND,
+        )
+        .expect("load typed proof-token entries");
+        assert_eq!(entries.len(), 1);
+        let mut duplicate = entries[0].clone();
+        let duplicate = duplicate
+            .as_object_mut()
+            .expect("duplicate proof-token entry");
+        let labels = duplicate
+            .get_mut("labels")
             .and_then(Value::as_object_mut)
-            .expect("payload kind counts")
-            .insert(PROOF_TOKEN_ISSUANCE_KIND.into(), Value::from(2_u64));
-        index_object
-            .get_mut("by_payload_kind")
-            .and_then(Value::as_object_mut)
-            .and_then(|lookup| lookup.get_mut(PROOF_TOKEN_ISSUANCE_KIND))
-            .and_then(Value::as_array_mut)
-            .expect("proof-token lookup")
-            .push(Value::from(6_u64));
-        write_publish_index_fixture(&governance_dir, index);
+            .expect("proof-token labels");
+        labels.insert("token_id_hex".into(), Value::from("71".repeat(16)));
+        labels.insert("signer_key_hex".into(), Value::from("72".repeat(32)));
+        entries.push(Value::Object(duplicate.clone()));
 
-        let response = handle_get_sorafs_transparency_token_issuances(
-            State(app.clone()),
-            HeaderMap::new(),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect limited token issuance body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode limited token issuance body");
-        assert_eq!(
-            value.get("published_token_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value.get("returned_token_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            value.get("entries").and_then(Value::as_array).map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("distinct_token_count").and_then(Value::as_u64),
-            Some(2)
-        );
-
-        let response = handle_get_sorafs_transparency_explorer(
-            State(app.clone()),
-            HeaderMap::new(),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect limited explorer body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode limited explorer body");
-        assert_eq!(
-            value
-                .get("proof_token_issuance_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value
-                .get("returned_proof_token_issuance_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value
-                .get("truncated_proof_token_issuances")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let response = handle_get_sorafs_transparency_token_issuances(
-            State(app),
-            HeaderMap::new(),
-            axum::extract::RawQuery(Some("limit=bad".to_owned())),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let summary =
+            proof_token_issuance_publish_summary(&entries).expect("summarize typed token entries");
+        assert_eq!(summary.distinct_token_count, 2);
+        assert_eq!(summary.distinct_signer_count, 2);
+        let (limited, truncated) = limit_governance_readback_values(entries, 1);
+        assert_eq!(limited.len(), 1);
+        assert!(truncated);
     }
 
     #[tokio::test]
@@ -38835,53 +38400,39 @@ mod advert_tests {
         assert_eq!(response.headers().get(ETAG), Some(&etag));
     }
 
-    #[tokio::test]
-    async fn derived_governance_list_validates_labels_before_not_modified() {
-        let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
-        let report = index
-            .get_mut("entries")
-            .and_then(Value::as_array_mut)
-            .and_then(|entries| {
-                entries.iter_mut().find(|entry| {
-                    entry.get("payload_kind").and_then(Value::as_str)
-                        == Some(APPEAL_FINANCE_REPORT_KIND)
-                })
-            })
-            .expect("appeal finance report entry");
-        report
+    #[test]
+    fn derived_governance_list_validates_labels_before_not_modified() {
+        let (app, _temp, _digest) = sorafs_app_state_with_governance_publish_index();
+        let index = read_publication_section_fixture(&app, "publish_index");
+        let mut reports = governance_publish_index_lookup_entries(
+            &index,
+            "by_payload_kind",
+            APPEAL_FINANCE_REPORT_KIND,
+        )
+        .expect("load typed appeal-finance reports");
+        reports[0]
             .get_mut("labels")
             .and_then(Value::as_object_mut)
-            .expect("appeal finance report labels")
+            .expect("appeal-finance report labels")
             .insert("deposit_xor".into(), Value::from("not-a-quantity"));
-        write_publish_index_fixture(&governance_dir, index);
+        let response = appeal_finance_report_publish_summary(&reports)
+            .expect_err("invalid route-specific labels must fail");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-        let authority_bytes = fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE))
-            .expect("read tampered publication state");
-        let base_etag = format!("\"{}\"", encode(blake3_hash(&authority_bytes).as_bytes()));
-        let limit_component = DEFAULT_LIST_LIMIT.to_string();
-        let etag = governance_dag_representation_etag(
-            &base_etag,
-            "appeal-finance-reports",
-            &[limit_component.as_str()],
-        );
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            IF_NONE_MATCH,
-            HeaderValue::from_str(&etag).expect("valid derived ETag"),
-        );
-
-        let response = handle_get_sorafs_appeal_finance_reports(
-            State(app),
-            headers,
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "conditional requests must not bypass route-specific label validation"
+        let source = include_str!("api.rs");
+        let start = source
+            .find("fn appeal_finance_reports_response(")
+            .expect("appeal-finance response implementation");
+        let tail = &source[start..];
+        let validation = tail
+            .find("appeal_finance_report_publish_summary(&entries)")
+            .expect("route-specific summary validation");
+        let conditional = tail
+            .find("governance_dag_not_modified_response(&headers, &etag)")
+            .expect("conditional response check");
+        assert!(
+            validation < conditional,
+            "route-specific validation must run before a conditional 304"
         );
     }
 
@@ -39076,145 +38627,49 @@ mod advert_tests {
         assert_eq!(response.headers().get(ETAG), Some(&etag));
     }
 
-    #[tokio::test]
-    async fn appeal_finance_dashboards_limit_query_bounds_response_arrays() {
-        let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
-        {
-            let entries = index
-                .get_mut("entries")
-                .and_then(Value::as_array_mut)
-                .expect("entries array");
-            for (source_position, duplicate_position, published_at_unix) in [
-                (2_usize, 6_u64, 1_800_000_306_u64),
-                (3_usize, 7_u64, 1_800_000_307_u64),
-                (4_usize, 8_u64, 1_800_000_308_u64),
-            ] {
-                let mut duplicate = entries[source_position].clone();
-                let duplicate_object = duplicate.as_object_mut().expect("duplicate entry object");
-                duplicate_object.insert("position".into(), Value::from(duplicate_position));
-                duplicate_object.insert("published_at_unix".into(), Value::from(published_at_unix));
-                duplicate_object.insert(
-                    "json_blake3".into(),
-                    Value::from(format!("{:02x}", 0x70_u8 + source_position as u8).repeat(32)),
-                );
-                set_canonical_publication_entry_paths(duplicate_object);
-                entries.push(duplicate);
-            }
-        }
-        let index_object = index.as_object_mut().expect("index object");
-        index_object.insert("entry_count".into(), Value::from(9_u64));
-        let payload_counts = index_object
-            .get_mut("payload_kind_counts")
-            .and_then(Value::as_object_mut)
-            .expect("payload kind counts");
-        payload_counts.insert(APPEAL_FINANCE_REPORT_KIND.into(), Value::from(2_u64));
-        payload_counts.insert(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND.into(), Value::from(2_u64));
-        payload_counts.insert(
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND.into(),
-            Value::from(2_u64),
-        );
-        let by_payload_kind = index_object
-            .get_mut("by_payload_kind")
-            .and_then(Value::as_object_mut)
-            .expect("by_payload_kind lookup");
-        by_payload_kind
-            .get_mut(APPEAL_FINANCE_REPORT_KIND)
-            .and_then(Value::as_array_mut)
-            .expect("report lookup")
-            .push(Value::from(6_u64));
-        by_payload_kind
-            .get_mut(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
-            .and_then(Value::as_array_mut)
-            .expect("rollup lookup")
-            .push(Value::from(7_u64));
-        by_payload_kind
-            .get_mut(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND)
-            .and_then(Value::as_array_mut)
-            .expect("settlement receipt lookup")
-            .push(Value::from(8_u64));
-        write_publish_index_fixture(&governance_dir, index);
+    #[test]
+    fn appeal_finance_limit_bounds_route_specific_validated_entries() {
+        let (app, _temp, _digest) = sorafs_app_state_with_governance_publish_index();
+        let index = read_publication_section_fixture(&app, "publish_index");
 
-        let response = handle_get_sorafs_appeal_finance_reports(
-            State(app.clone()),
-            HeaderMap::new(),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        let mut reports = governance_publish_index_lookup_entries(
+            &index,
+            "by_payload_kind",
+            APPEAL_FINANCE_REPORT_KIND,
         )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect limited reports body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode limited reports");
-        assert_eq!(
-            value.get("published_report_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value.get("returned_report_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            value.get("entries").and_then(Value::as_array).map(Vec::len),
-            Some(1)
-        );
+        .expect("load typed appeal-finance reports");
+        reports.push(reports[0].clone());
+        appeal_finance_report_publish_summary(&reports)
+            .expect("validate report labels before limiting");
+        let (limited, truncated) = limit_governance_readback_values(reports, 1);
+        assert_eq!(limited.len(), 1);
+        assert!(truncated);
 
-        let response = handle_get_sorafs_appeal_finance_weekly_rollups(
-            State(app.clone()),
-            HeaderMap::new(),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        let mut rollups = governance_publish_index_lookup_entries(
+            &index,
+            "by_payload_kind",
+            APPEAL_FINANCE_WEEKLY_ROLLUP_KIND,
         )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect limited weekly rollups body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode limited weekly rollups");
-        assert_eq!(
-            value.get("published_rollup_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value.get("returned_rollup_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            value.get("entries").and_then(Value::as_array).map(Vec::len),
-            Some(1)
-        );
+        .expect("load typed appeal-finance rollups");
+        rollups.push(rollups[0].clone());
+        let summary = appeal_finance_weekly_rollup_publish_summary(&rollups);
+        assert_eq!(summary.cycles.len(), 1);
+        let (limited, truncated) = limit_governance_readback_values(rollups, 1);
+        assert_eq!(limited.len(), 1);
+        assert!(truncated);
 
-        let response = handle_get_sorafs_appeal_finance_settlement_receipts(
-            State(app),
-            HeaderMap::new(),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        let mut receipts = governance_publish_index_lookup_entries(
+            &index,
+            "by_payload_kind",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND,
         )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect limited settlement receipts body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode limited settlement receipts");
-        assert_eq!(
-            value.get("published_receipt_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value.get("returned_receipt_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            value.get("entries").and_then(Value::as_array).map(Vec::len),
-            Some(1)
-        );
+        .expect("load typed appeal-finance receipts");
+        receipts.push(receipts[0].clone());
+        appeal_finance_settlement_receipt_publish_summary(&receipts)
+            .expect("validate settlement labels before limiting");
+        let (limited, truncated) = limit_governance_readback_values(receipts, 1);
+        assert_eq!(limited.len(), 1);
+        assert!(truncated);
     }
 
     #[test]
@@ -39322,106 +38777,39 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    #[tokio::test]
-    async fn governance_dag_publish_index_rejects_stale_reconstructed_lookup() {
-        let (app, temp_dir, digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
+    #[test]
+    fn governance_dag_publish_index_rejects_stale_reconstructed_lookup() {
+        let (app, _temp_dir, digest_hex) = sorafs_app_state_with_governance_publish_index();
+        let mut index = read_publication_section_fixture(&app, "publish_index");
         index
             .get_mut("by_encoded_blake3")
             .and_then(Value::as_object_mut)
             .expect("publish digest lookup")
             .remove(&digest_hex);
-        write_publish_index_fixture(&governance_dir, index);
 
-        let response = handle_get_sorafs_governance_dag_publish_index(
-            State(app),
-            HeaderMap::new(),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = validate_governance_dag_publish_index(&index)
+            .expect_err("stale reconstructed lookup must fail");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[tokio::test]
-    async fn governance_dag_publish_index_rejects_legacy_separate_authority() {
+    #[test]
+    fn governance_dag_publish_index_rejects_absolute_root_metadata() {
         let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        fs::write(
-            temp_dir
-                .path()
-                .join("governance")
-                .join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE),
-            b"{}",
-        )
-        .expect("write legacy separate publish-index authority");
-
-        let response = handle_get_sorafs_governance_dag_publish_index(
-            State(app),
-            HeaderMap::new(),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[tokio::test]
-    async fn governance_dag_publish_index_rejects_oversized_state_before_decode() {
-        let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let forbidden_root = temp_dir.path().display().to_string();
-        let index_path = temp_dir
-            .path()
-            .join("governance")
-            .join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE);
-        fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(&index_path)
-            .expect("open governance publish index fixture")
-            .set_len(GOVERNANCE_DAG_PUBLICATION_STATE_MAX_BYTES + 1)
-            .expect("extend governance publication state fixture");
-
-        let response = handle_get_sorafs_governance_dag_publish_index(
-            State(app),
-            HeaderMap::new(),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect oversized publish-index error");
-        let rendered = String::from_utf8_lossy(&body_bytes);
-        assert!(
-            !rendered.contains(&forbidden_root),
-            "public read errors must not disclose the retained host root"
-        );
-    }
-
-    #[tokio::test]
-    async fn governance_dag_publish_index_rejects_absolute_root_metadata() {
-        let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
+        let mut index = read_publication_section_fixture(&app, "publish_index");
         index.as_object_mut().expect("publish index object").insert(
             "root".into(),
             Value::from(temp_dir.path().join("governance").display().to_string()),
         );
-        write_publish_index_fixture(&governance_dir, index);
 
-        let response = handle_get_sorafs_governance_dag_publish_index(
-            State(app),
-            HeaderMap::new(),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = validate_governance_dag_publish_index(&index)
+            .expect_err("absolute retained root must fail");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[tokio::test]
-    async fn governance_dag_publish_index_rejects_escaping_payload_path() {
-        let (app, temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
+    #[test]
+    fn governance_dag_publish_index_rejects_escaping_payload_path() {
+        let (app, _temp_dir, _digest_hex) = sorafs_app_state_with_governance_publish_index();
+        let mut index = read_publication_section_fixture(&app, "publish_index");
         index
             .get_mut("entries")
             .and_then(Value::as_array_mut)
@@ -39429,14 +38817,9 @@ mod advert_tests {
             .and_then(Value::as_object_mut)
             .expect("first governance publish index entry")
             .insert("encoded_path".into(), Value::from("../outside.to"));
-        write_publish_index_fixture(&governance_dir, index);
 
-        let response = handle_get_sorafs_governance_dag_publish_index(
-            State(app),
-            HeaderMap::new(),
-            axum::extract::RawQuery(None),
-        )
-        .await;
+        let response = validate_governance_dag_publish_index(&index)
+            .expect_err("escaping payload path must fail");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -39447,7 +38830,7 @@ mod advert_tests {
             sorafs_app_state_with_transparency_publication();
         let governance_dir = temp_dir.path().join("governance");
         let encoded_path = governance_dir.join(
-            read_publication_section_fixture(&governance_dir, "publish_index")
+            read_publication_section_fixture(&app, "publish_index")
                 .get("entries")
                 .and_then(Value::as_array)
                 .and_then(|entries| entries.first())
@@ -39470,195 +38853,37 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[tokio::test]
-    async fn governance_dag_lookup_limit_query_bounds_matching_arrays() {
-        let (publish_app, publish_dir, _digest_hex) =
+    #[test]
+    fn governance_dag_lookup_limit_bounds_validated_arrays() {
+        let (publish_app, _temp_dir, _digest_hex) =
             sorafs_app_state_with_governance_publish_index();
-        let publish_governance_dir = publish_dir.path().join("governance");
-        let mut publish_index =
-            read_publication_section_fixture(&publish_governance_dir, "publish_index");
-        let publish_map = publish_index
-            .as_object_mut()
-            .expect("publish index object fixture");
-        let entries = publish_map
-            .get_mut("entries")
-            .and_then(Value::as_array_mut)
-            .expect("publish entries");
-        let mut duplicate = entries.first().cloned().expect("repair audit entry");
-        if let Value::Object(entry) = &mut duplicate {
-            entry.insert("position".into(), Value::from(6_u64));
-            entry.insert("encoded_blake3".into(), Value::from("77".repeat(32)));
-            set_canonical_publication_entry_paths(entry);
-        }
-        entries.push(duplicate);
-        publish_map.insert("entry_count".into(), Value::from(7_u64));
-        publish_map
-            .get_mut("payload_kind_counts")
-            .and_then(Value::as_object_mut)
-            .expect("payload kind counts")
-            .insert("repair_audit".into(), Value::from(2_u64));
-        publish_map
-            .get_mut("by_payload_kind")
-            .and_then(Value::as_object_mut)
-            .expect("publish by payload kind")
-            .insert(
-                "repair_audit".into(),
-                Value::Array(vec![Value::from(0_u64), Value::from(6_u64)]),
-            );
-        publish_map
-            .get_mut("by_encoded_blake3")
-            .and_then(Value::as_object_mut)
-            .expect("publish by encoded digest")
-            .insert("77".repeat(32), Value::Array(vec![Value::from(6_u64)]));
-        write_publish_index_fixture(&publish_governance_dir, publish_index);
-
-        let response = handle_get_sorafs_governance_dag_publish_kind(
-            State(publish_app),
-            HeaderMap::new(),
-            Path("repair_audit".to_owned()),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        let publish_index = read_publication_section_fixture(&publish_app, "publish_index");
+        validate_governance_dag_publish_index(&publish_index)
+            .expect("typed publish index remains valid");
+        let mut entries = governance_publish_index_lookup_entries(
+            &publish_index,
+            "by_payload_kind",
+            "repair_audit",
         )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect publish lookup body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode publish lookup");
-        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
-        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            value.get("entries").and_then(Value::as_array).map(Vec::len),
-            Some(1)
-        );
+        .expect("resolve typed publish entries");
+        assert_eq!(entries.len(), 1);
+        entries.push(entries[0].clone());
+        let (entries, truncated) = limit_governance_readback_values(entries, 1);
+        assert_eq!(entries.len(), 1);
+        assert!(truncated);
 
-        let (car_app, car_dir, _digest_hex, _car_archive_hex) =
+        let (car_app, _temp_dir, _digest_hex, _car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();
-        let car_governance_dir = car_dir.path().join("governance");
-        let mut car_queue = read_publication_section_fixture(&car_governance_dir, "car_queue");
-        let car_map = car_queue.as_object_mut().expect("CAR queue object fixture");
-        let segments = car_map
-            .get_mut("segments")
-            .and_then(Value::as_array_mut)
-            .expect("CAR queue segments");
-        let mut duplicate = segments.first().cloned().expect("repair segment");
-        if let Value::Object(segment) = &mut duplicate {
-            segment.insert("queue_position".into(), Value::from(2_u64));
-            segment.insert("encoded_blake3".into(), Value::from("78".repeat(32)));
-            segment.insert("car_archive_blake3".into(), Value::from("79".repeat(32)));
-            segment
-                .get_mut("files")
-                .and_then(Value::as_array_mut)
-                .and_then(|files| {
-                    files
-                        .iter_mut()
-                        .find(|file| file.get("role").and_then(Value::as_str) == Some("encoded"))
-                })
-                .and_then(Value::as_object_mut)
-                .expect("duplicated CAR encoded source record")
-                .insert("blake3".into(), Value::from("78".repeat(32)));
-        }
-        segments.push(duplicate);
-        car_map.insert("segment_count".into(), Value::from(3_u64));
-        car_map.insert("assembled_count".into(), Value::from(3_u64));
-        car_map
-            .get_mut("by_encoded_blake3")
-            .and_then(Value::as_object_mut)
-            .expect("CAR queue by encoded digest")
-            .insert("78".repeat(32), Value::Array(vec![Value::from(2_u64)]));
-        car_map
-            .get_mut("by_payload_kind")
-            .and_then(Value::as_object_mut)
-            .expect("CAR queue by payload kind")
-            .insert(
-                "repair_audit".into(),
-                Value::Array(vec![Value::from(0_u64), Value::from(2_u64)]),
-            );
-        car_map
-            .get_mut("by_car_archive_blake3")
-            .and_then(Value::as_object_mut)
-            .expect("CAR queue by CAR archive digest")
-            .insert("79".repeat(32), Value::Array(vec![Value::from(2_u64)]));
-        write_car_queue_fixture(&car_governance_dir, car_queue);
-
-        let response = handle_get_sorafs_governance_dag_car_queue_kind(
-            State(car_app),
-            HeaderMap::new(),
-            Path("repair_audit".to_owned()),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect CAR queue lookup body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode CAR queue lookup");
-        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
-        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            value
-                .get("segments")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let (runtime_app, _runtime_dir, _digest_hex, _block_cid_hex, _node_cid_hex) =
-            sorafs_app_state_with_governance_runtime_index();
-        let runtime_path = runtime_app
-            .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured governance dir")
-            .join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE);
-        let mut runtime_index: Value =
-            norito::json::from_slice(&fs::read(&runtime_path).expect("read runtime index fixture"))
-                .expect("decode runtime index fixture");
-        let runtime_map = runtime_index
-            .as_object_mut()
-            .expect("runtime index object fixture");
-        let blocks = runtime_map
-            .get_mut("blocks")
-            .and_then(Value::as_array_mut)
-            .expect("runtime blocks");
-        let mut duplicate = blocks
-            .first()
-            .cloned()
-            .expect("appeal finance report block");
-        if let Value::Object(block) = &mut duplicate {
-            block.insert("position".into(), Value::from(2_u64));
-            block.insert("sequence".into(), Value::from(2_u64));
-            block.insert("encoded_blake3".into(), Value::from("79".repeat(32)));
-            block.insert("block_cid_hex".into(), Value::from("7a".repeat(32)));
-            block.insert("node_cid_hex".into(), Value::from("7b".repeat(32)));
-        }
-        blocks.push(duplicate);
-        runtime_map.insert("block_count".into(), Value::from(3_u64));
-        runtime_map
-            .get_mut("by_payload_kind")
-            .and_then(Value::as_object_mut)
-            .expect("runtime by payload kind")
-            .insert(
-                APPEAL_FINANCE_REPORT_KIND.into(),
-                Value::Array(vec![Value::from(0_u64), Value::from(2_u64)]),
-            );
-        fs::write(
-            &runtime_path,
-            norito::json::to_vec(&runtime_index).expect("encode runtime index fixture"),
-        )
-        .expect("write runtime index fixture");
-
-        let response = handle_get_sorafs_governance_dag_runtime_kind(
-            State(runtime_app),
-            HeaderMap::new(),
-            Path(APPEAL_FINANCE_REPORT_KIND.to_owned()),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let car_queue = read_publication_section_fixture(&car_app, "car_queue");
+        validate_governance_dag_car_queue(&car_queue).expect("typed CAR queue remains valid");
+        let mut segments =
+            governance_car_queue_lookup_segments(&car_queue, "by_payload_kind", "repair_audit")
+                .expect("resolve typed CAR segments");
+        assert_eq!(segments.len(), 1);
+        segments.push(segments[0].clone());
+        let (segments, truncated) = limit_governance_readback_values(segments, 1);
+        assert_eq!(segments.len(), 1);
+        assert!(truncated);
     }
 
     #[tokio::test]
@@ -39685,10 +38910,7 @@ mod advert_tests {
             value.get("schema").and_then(Value::as_str),
             Some("sorafs.governance_dag.car_queue.v1")
         );
-        assert_eq!(
-            value.get("source_path").and_then(Value::as_str),
-            Some(GOVERNANCE_DAG_PUBLICATION_STATE_FILE)
-        );
+        assert_governance_source_metadata(&value, GOVERNANCE_DAG_PUBLICATION_SOURCE_V1, false);
         assert_eq!(
             value
                 .get("queue")
@@ -39769,7 +38991,7 @@ mod advert_tests {
         let (app, temp_dir, _digest, _block_cid, _node_cid) =
             sorafs_app_state_with_governance_runtime_index();
         let governance_dir = temp_dir.path().join("governance");
-        let queue = read_publication_section_fixture(&governance_dir, "car_queue");
+        let queue = read_publication_section_fixture(&app, "car_queue");
         let segment = queue
             .get("segments")
             .and_then(Value::as_array)
@@ -39826,126 +39048,28 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[tokio::test]
-    async fn governance_dag_car_archive_lookup_rejects_noncanonical_retained_car() {
-        let (app, temp_dir, _digest, _block_cid, _node_cid) =
-            sorafs_app_state_with_governance_runtime_index();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut state = read_publication_state_fixture(&governance_dir);
-        let (old_archive_digest, car_path, manifest_path) = state
-            .get("car_queue")
-            .and_then(|queue| queue.get("segments"))
-            .and_then(Value::as_array)
-            .and_then(|segments| segments.first())
-            .map(|segment| {
-                (
-                    segment
-                        .get("car_archive_blake3")
-                        .and_then(Value::as_str)
-                        .expect("producer CAR archive digest")
-                        .to_owned(),
-                    segment
-                        .get("car_path")
-                        .and_then(Value::as_str)
-                        .expect("producer CAR path")
-                        .to_owned(),
-                    segment
-                        .get("manifest_path")
-                        .and_then(Value::as_str)
-                        .expect("producer CAR manifest path")
-                        .to_owned(),
-                )
-            })
-            .expect("producer CAR segment");
-
-        let retained_car_path = governance_dir.join(&car_path);
-        let mut retained_car = fs::read(&retained_car_path).expect("read retained producer CAR");
-        let last = retained_car.last_mut().expect("producer CAR is nonempty");
-        *last ^= 0x01;
-        fs::write(&retained_car_path, &retained_car).expect("tamper retained producer CAR");
-        let new_archive_digest = encode(blake3_hash(&retained_car).as_bytes());
-        fs::write(
-            governance_dir.join(format!("{car_path}.blake3")),
-            format!("{new_archive_digest}\n"),
-        )
-        .expect("rewrite retained CAR digest sidecar");
-
-        let queue = publication_state_section_mut(&mut state, "car_queue")
-            .as_object_mut()
-            .expect("producer CAR queue");
-        let manifest = {
-            let segment = queue
-                .get_mut("segments")
-                .and_then(Value::as_array_mut)
-                .and_then(|segments| segments.first_mut())
-                .and_then(Value::as_object_mut)
-                .expect("producer CAR segment");
-            segment.insert(
-                "car_archive_blake3".into(),
-                Value::from(new_archive_digest.clone()),
-            );
-            let mut manifest = segment.clone();
-            manifest.remove("queue_position");
-            Value::Object(manifest)
-        };
-        let archive_lookup = queue
-            .get_mut("by_car_archive_blake3")
-            .and_then(Value::as_object_mut)
-            .expect("producer CAR archive lookup");
-        let positions = archive_lookup
-            .remove(&old_archive_digest)
-            .expect("old producer CAR archive lookup");
-        archive_lookup.insert(new_archive_digest.clone(), positions);
-
-        let manifest_bytes =
-            norito::json::to_vec(&manifest).expect("encode rewritten producer CAR manifest");
-        fs::write(governance_dir.join(&manifest_path), &manifest_bytes)
-            .expect("rewrite producer CAR manifest");
-        fs::write(
-            governance_dir.join(format!("{manifest_path}.blake3")),
-            format!("{}\n", encode(blake3_hash(&manifest_bytes).as_bytes())),
-        )
-        .expect("rewrite producer CAR manifest digest sidecar");
-        write_publication_state_value(&governance_dir, &state);
-
-        let response = handle_get_sorafs_governance_dag_car_queue_archive(
-            State(app),
-            HeaderMap::new(),
-            Path(new_archive_digest),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[tokio::test]
-    async fn governance_dag_car_queue_rejects_stale_archive_index() {
-        let (app, temp_dir, _digest_hex, car_archive_hex) =
+    #[test]
+    fn governance_dag_car_queue_rejects_stale_archive_index() {
+        let (app, _temp_dir, _digest_hex, car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut queue = read_publication_section_fixture(&governance_dir, "car_queue");
+        let mut queue = read_publication_section_fixture(&app, "car_queue");
         queue
             .get_mut("by_car_archive_blake3")
             .and_then(Value::as_object_mut)
             .expect("CAR archive index")
             .remove(&car_archive_hex);
-        write_car_queue_fixture(&governance_dir, queue);
 
-        let response = handle_get_sorafs_governance_dag_car_queue_archive(
-            State(app),
-            HeaderMap::new(),
-            Path(car_archive_hex),
-        )
-        .await;
+        let response = validate_governance_dag_car_queue(&queue)
+            .expect_err("stale CAR archive lookup must fail");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[tokio::test]
-    async fn governance_dag_car_queue_rejects_noncanonical_artifact_paths() {
-        let (app, temp_dir, _digest_hex, _car_archive_hex) =
+    #[test]
+    fn governance_dag_car_queue_rejects_noncanonical_artifact_paths() {
+        let (app, _temp_dir, _digest_hex, _car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();
-        let governance_dir = temp_dir.path().join("governance");
-        let mut state = read_publication_state_fixture(&governance_dir);
-        publication_state_section_mut(&mut state, "car_queue")
+        let mut queue = read_publication_section_fixture(&app, "car_queue");
+        queue
             .get_mut("segments")
             .and_then(Value::as_array_mut)
             .and_then(|segments| segments.first_mut())
@@ -39955,10 +39079,9 @@ mod advert_tests {
                 "car_path".into(),
                 Value::from("car-segments/00000000000000000000_substituted.car"),
             );
-        write_publication_state_value(&governance_dir, &state);
 
-        let response =
-            handle_get_sorafs_governance_dag_car_queue(State(app), HeaderMap::new()).await;
+        let response = validate_governance_dag_car_queue(&queue)
+            .expect_err("substituted CAR artifact path must fail");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -40035,10 +39158,7 @@ mod advert_tests {
             value.get("schema").and_then(Value::as_str),
             Some("sorafs.governance_dag.runtime_index.v1")
         );
-        assert_eq!(
-            value.get("source_path").and_then(Value::as_str),
-            Some(GOVERNANCE_DAG_RUNTIME_INDEX_FILE)
-        );
+        assert_governance_source_metadata(&value, GOVERNANCE_DAG_RUNTIME_SOURCE_V1, true);
         assert_eq!(
             value
                 .get("index")
@@ -40212,20 +39332,17 @@ mod advert_tests {
         );
     }
 
-    #[tokio::test]
-    async fn governance_dag_runtime_rejects_unsigned_provenance_substitution() {
-        let (app, _temp_dir, _digest_hex, block_cid_hex, _node_cid_hex) =
+    #[test]
+    fn governance_dag_runtime_rejects_unsigned_provenance_substitution() {
+        let (app, _temp_dir, _digest_hex, _block_cid_hex, _node_cid_hex) =
             sorafs_app_state_with_governance_runtime_index();
-        let governance_dir = app
+        let snapshot = app
             .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured governance dir");
-        let runtime_path = governance_dir.join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE);
-        let mut runtime: Value = norito::json::from_slice(
-            &fs::read(&runtime_path).expect("read governance runtime index"),
-        )
-        .expect("decode governance runtime index");
+            .governance_dag_runtime_snapshot()
+            .expect("read typed runtime fixture")
+            .expect("published runtime fixture");
+        let mut runtime: Value =
+            json::from_slice(snapshot.index_bytes()).expect("decode typed runtime fixture");
         runtime
             .get_mut("blocks")
             .and_then(Value::as_array_mut)
@@ -40236,18 +39353,15 @@ mod advert_tests {
                 "submission_origin".into(),
                 Value::from("appeal_finance_weekly_rollup"),
             );
-        fs::write(
-            &runtime_path,
-            norito::json::to_vec(&runtime).expect("encode tampered governance runtime index"),
-        )
-        .expect("write tampered governance runtime index");
 
-        let response = handle_get_sorafs_governance_dag_runtime_block(
-            State(app),
-            HeaderMap::new(),
-            Path(block_cid_hex),
-        )
-        .await;
+        let response = match verify_and_bind_governance_dag_runtime_index(
+            &app,
+            &mut runtime,
+            snapshot.head_bytes(),
+        ) {
+            Err(response) => response,
+            Ok(_) => panic!("substituted unsigned provenance must fail"),
+        };
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -40255,12 +39369,6 @@ mod advert_tests {
     async fn governance_dag_runtime_rejects_bad_missing_and_malformed_lookups() {
         let (app, _temp_dir, _digest_hex, _block_cid_hex, _node_cid_hex) =
             sorafs_app_state_with_governance_runtime_index();
-        let governance_dir = app
-            .sorafs_node
-            .config()
-            .governance_dir()
-            .expect("configured governance dir")
-            .clone();
 
         let response = handle_get_sorafs_governance_dag_runtime_digest(
             State(app.clone()),
@@ -40288,12 +39396,25 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-        fs::write(
-            governance_dir.join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE),
-            br#"{"schema":"sorafs.governance_dag.wrong","blocks":[]}"#,
-        )
-        .expect("write malformed runtime index");
-        let response = handle_get_sorafs_governance_dag_runtime(State(app), HeaderMap::new()).await;
+        let snapshot = app
+            .sorafs_node
+            .governance_dag_runtime_snapshot()
+            .expect("read typed runtime fixture")
+            .expect("published runtime fixture");
+        let mut malformed: Value =
+            json::from_slice(snapshot.index_bytes()).expect("decode typed runtime fixture");
+        malformed
+            .as_object_mut()
+            .expect("runtime index object")
+            .remove("blocks");
+        let response = match verify_and_bind_governance_dag_runtime_index(
+            &app,
+            &mut malformed,
+            snapshot.head_bytes(),
+        ) {
+            Err(response) => response,
+            Ok(_) => panic!("malformed runtime index must fail"),
+        };
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -41135,12 +40256,12 @@ mod advert_tests {
     }
 
     fn assert_governance_publish_provenance(
-        governance_dir: &StdPath,
+        app: &SharedAppState,
         payload_kind: &str,
         publisher_account: &AccountId,
         origin: &str,
     ) {
-        let index = read_publication_section_fixture(governance_dir, "publish_index");
+        let index = read_publication_section_fixture(app, "publish_index");
         let labels = index
             .get("entries")
             .and_then(Value::as_array)
@@ -42994,6 +42115,7 @@ mod advert_tests {
             expected.escrow_id.as_hash().to_string(),
         );
         let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+        let authority_reader = Arc::clone(&app);
 
         let response =
             post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
@@ -43165,17 +42287,21 @@ mod advert_tests {
         );
 
         let governance_dir = temp_dir.path().join("governance");
-        let state_path = governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE);
-        if state_path.exists() {
-            let index = read_publication_section_fixture(&governance_dir, "publish_index");
-            assert!(
-                index
-                    .get("by_payload_kind")
-                    .and_then(|value| value.get("appeal_finance_settlement_receipt"))
-                    .and_then(Value::as_array)
-                    .is_none_or(Vec::is_empty)
-            );
-        }
+        let snapshot = authority_reader
+            .sorafs_node
+            .governance_dag_publication_snapshot()
+            .expect("read typed publication authority")
+            .expect("configured publisher has an initialized authority");
+        let authority: Value = norito::json::from_slice(snapshot.canonical_bytes())
+            .expect("decode typed publication authority");
+        assert!(
+            authority
+                .get("publish_index")
+                .and_then(|index| index.get("by_payload_kind"))
+                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        );
         assert!(
             !governance_dir
                 .join(GOVERNANCE_DAG_PUBLICATION_SOURCES_DIR)
@@ -43466,11 +42592,11 @@ mod advert_tests {
 
     #[tokio::test]
     async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
-        let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
         let report = appeal_finance_report_fixture();
         let body = appeal_finance_report_body(report.clone());
 
-        let response = post_appeal_finance_report(app, &auth.provider, body).await;
+        let response = post_appeal_finance_report(app.clone(), &auth.provider, body).await;
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = body::to_bytes(response.into_body(), usize::MAX)
@@ -43491,13 +42617,12 @@ mod advert_tests {
             Some(report_id_hex.as_str())
         );
 
-        let governance_dir = temp_dir.path().join("governance");
-        let sources = publication_source_paths_fixture(&governance_dir, APPEAL_FINANCE_REPORT_KIND);
+        let sources = publication_source_paths_fixture(&app, APPEAL_FINANCE_REPORT_KIND);
         assert_eq!(sources.len(), 1);
         assert!(sources[0].0.exists());
         assert!(sources[0].1.exists());
 
-        let index = read_publication_section_fixture(&governance_dir, "publish_index");
+        let index = read_publication_section_fixture(&app, "publish_index");
         assert_eq!(
             index
                 .get("by_payload_kind")
@@ -43507,7 +42632,7 @@ mod advert_tests {
             Some(1)
         );
         assert_governance_publish_provenance(
-            &governance_dir,
+            &app,
             APPEAL_FINANCE_REPORT_KIND,
             &auth.provider.account,
             "appeal_finance_report",
@@ -43677,7 +42802,7 @@ mod advert_tests {
 
     #[tokio::test]
     async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
-        let (app, temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
+        let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
         let source_body = privacy_aggregate_source_event_body(
             privacy_aggregate_source_event_request_at("privacy-event-a", 110),
         );
@@ -43739,7 +42864,7 @@ mod advert_tests {
                 .is_some_and(|hash| hash.len() == 64)
         );
         assert_governance_publish_provenance(
-            &temp_dir.path().join("governance"),
+            &app,
             TRANSPARENCY_LEDGER_PUBLICATION_KIND,
             &auth.provider.account,
             "privacy_aggregate_publish_due",
@@ -43790,11 +42915,11 @@ mod advert_tests {
 
     #[tokio::test]
     async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
-        let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
         let rollup = appeal_finance_weekly_rollup_fixture();
         let body = appeal_finance_weekly_rollup_body(rollup.clone());
 
-        let response = post_appeal_finance_weekly_rollup(app, &auth.provider, body).await;
+        let response = post_appeal_finance_weekly_rollup(app.clone(), &auth.provider, body).await;
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = body::to_bytes(response.into_body(), usize::MAX)
@@ -43815,14 +42940,12 @@ mod advert_tests {
             Some(1)
         );
 
-        let governance_dir = temp_dir.path().join("governance");
-        let sources =
-            publication_source_paths_fixture(&governance_dir, APPEAL_FINANCE_WEEKLY_ROLLUP_KIND);
+        let sources = publication_source_paths_fixture(&app, APPEAL_FINANCE_WEEKLY_ROLLUP_KIND);
         assert_eq!(sources.len(), 1);
         assert!(sources[0].0.exists());
         assert!(sources[0].1.exists());
 
-        let index = read_publication_section_fixture(&governance_dir, "publish_index");
+        let index = read_publication_section_fixture(&app, "publish_index");
         assert_eq!(
             index
                 .get("by_payload_kind")
@@ -43832,7 +42955,7 @@ mod advert_tests {
             Some(1)
         );
         assert_governance_publish_provenance(
-            &governance_dir,
+            &app,
             APPEAL_FINANCE_WEEKLY_ROLLUP_KIND,
             &auth.provider.account,
             "appeal_finance_weekly_rollup",
