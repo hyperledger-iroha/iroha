@@ -13564,8 +13564,7 @@ mod tests {
             unreachable!("proposal helper returns a proposal")
         };
         let manifest = proposal.manifest;
-        let (_, validated) =
-            validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+        let (_, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let decision = wire::QuorumCertificate {
             round: manifest.round,
             proposal_round: manifest.round,

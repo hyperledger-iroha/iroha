@@ -26684,8 +26684,7 @@ mod tests {
         };
         let mut prepare_certificate = certificate.clone();
         prepare_certificate.phase = wire::GlobalPhase::Prepare;
-        let prepare_qc =
-            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_certificate);
+        let prepare_qc = wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_certificate);
         let commit_qc = wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone());
         let timeout_vote = wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
             round,
@@ -26693,12 +26692,11 @@ mod tests {
             signer: 0,
             signature: vec![1],
         });
-        let timeout_certificate = wire::ConsensusMessageV2Payload::TimeoutCertificate(
-            wire::TimeoutCertificate {
+        let timeout_certificate =
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
                 round,
                 groups: Vec::new(),
-            },
-        );
+            });
         let commit_response = wire::ConsensusMessageV2Payload::CommitCertificateResponse(
             wire::CommitCertificateResponse {
                 request_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime commit request")),
