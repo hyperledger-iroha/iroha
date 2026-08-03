@@ -234,9 +234,9 @@ async fn wait_for_commit_certificate_height(
 fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
     init_instruction_registry();
 
-    // Start a 5-peer validator network
+    // Start the second-smallest admissible revision-4 validator committee.
     let Some((network, rt)) = start_network(
-        || NetworkBuilder::new().with_peers(5),
+        || NetworkBuilder::new().with_peers(7),
         stringify!(rotation_signer_indices_match_expected_set_a),
     )?
     else {

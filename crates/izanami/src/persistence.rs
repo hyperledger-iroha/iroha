@@ -469,7 +469,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 5,
+            peers: 7,
             faulty: 1,
             duration: Duration::from_secs(90),
             pipeline_time: Some(Duration::from_millis(250)),
@@ -564,7 +564,7 @@ mod tests {
 
         let legacy = StoredArgsLegacy {
             peers: 4,
-            faulty: 2,
+            faulty: 1,
             duration_ms: 30_000,
             seed: Some(9),
             tps: 8.5,

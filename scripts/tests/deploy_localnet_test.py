@@ -52,6 +52,12 @@ class DeployLocalnetShellSafetyTest(unittest.TestCase):
         self.assertIn("KURA_BLOCKS_IN_MEMORY=32", text)
         self.assertIn("blocks_in_memory = \" blocks", text)
 
+    def test_peer_count_fails_closed_to_revision4_geometry(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("PEERS < 4 || PEERS > 31", text)
+        self.assertIn("(PEERS - 1) % 3 != 0", text)
+        self.assertIn("exact revision-4 3f + 1 committee", text)
+
 
 if __name__ == "__main__":
     unittest.main()

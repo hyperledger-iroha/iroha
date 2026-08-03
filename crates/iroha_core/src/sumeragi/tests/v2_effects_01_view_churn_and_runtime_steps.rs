@@ -350,12 +350,17 @@
             .expect("persist exact deterministic-validation marker");
         drop(store);
 
-        let reopened = V2BodyStore::open_with_policy(
+        let mut reopened = V2BodyStore::open_with_policy(
             directory.path(),
             fixture.context.clone(),
             BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
         )
         .expect("reopen recovery body store");
+        reopened
+            .revalidate_recovered_markers(|_| {
+                Ok::<_, String>(validated_receipt.execution_commitment())
+            })
+            .expect("semantically replay recovered validation marker");
         let recovered = reopened.recovery_catalog().expect("recovery catalog");
         let recovered_validations = reopened.validated_recovery_catalog();
         let commit = fixture.qc(wire::GlobalPhase::Commit);

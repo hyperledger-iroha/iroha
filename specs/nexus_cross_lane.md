@@ -440,12 +440,13 @@ failure:
   full intent/certificate/later-retirement cycle, a certified elastic-lane merge
   with one offline/missing-sidecar peer, WSV/query proof convergence, and
   repeated restart idempotency;
-- twelve-peer cross-dataspace/native-AMX/autonomous integration with at least
+- 13-peer global cross-dataspace/native-AMX/autonomous integration, with twelve
+  lane-validator assignments across at least
   three independent four-validator dataspaces, 10/10 fresh deterministic
   seeds, rotating outages/restarts, scale-out/drain/scale-in/same-ID
   recreation, full convergence, and zero lost, rejected-after-acceptance, or
   duplicate transactions;
-- a separate two-hour twelve-peer fault soak;
+- a separate two-hour 13-peer global fault soak;
 - five paired pinned-hardware one-versus-four-lane runs demonstrating at least
   1.5× median committed throughput and no worse than 1.25× p95 latency at
   matched offered load, within all configured resource bounds;
@@ -457,7 +458,7 @@ failure:
   formatting, and legacy-codec guard.
 
 This architecture description records current behavior, not a claim that the
-four-peer, twelve-peer, soak, scaling, or full-workspace release evidence has
+four-peer, 13-peer global, soak, scaling, or full-workspace release evidence has
 already passed.
 
 Primary code lives in `crates/iroha_core/src/state.rs`,

@@ -39,10 +39,10 @@ fn tx_limit_for_payload(payload_bytes: usize) -> NonZeroU64 {
     .expect("payload-driven transaction limit must be non-zero")
 }
 
-fn large_da_network_builder() -> NetworkBuilder {
+fn large_da_network_builder(peers: usize) -> NetworkBuilder {
     let tx_limit = tx_limit_for_payload(LARGE_PAYLOAD_BYTES);
     NetworkBuilder::new()
-        .with_peers(4)
+        .with_peers(peers)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
@@ -105,15 +105,14 @@ fn fetch_v2_status(client: Client) -> Result<SumeragiV2Status> {
         .wrap_err("fetch canonical Sumeragi v2 status")
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn large_da_payload_commits_with_consistent_v2_subject() -> Result<()> {
+async fn large_da_payload_commits_with_consistent_v2_subject_for_committee(
+    peers: usize,
+    scenario: &str,
+) -> Result<()> {
     init_instruction_registry();
 
-    let Some(network) = sandbox::start_network_async_or_skip(
-        large_da_network_builder(),
-        stringify!(large_da_payload_commits_with_consistent_v2_subject),
-    )
-    .await?
+    let Some(network) =
+        sandbox::start_network_async_or_skip(large_da_network_builder(peers), scenario).await?
     else {
         return Ok(());
     };
@@ -167,6 +166,24 @@ async fn large_da_payload_commits_with_consistent_v2_subject() -> Result<()> {
 
     network.shutdown().await;
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn large_da_payload_commits_with_consistent_v2_subject_four_peers() -> Result<()> {
+    large_da_payload_commits_with_consistent_v2_subject_for_committee(
+        4,
+        stringify!(large_da_payload_commits_with_consistent_v2_subject_four_peers),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn large_da_payload_commits_with_consistent_v2_subject_seven_peers() -> Result<()> {
+    large_da_payload_commits_with_consistent_v2_subject_for_committee(
+        7,
+        stringify!(large_da_payload_commits_with_consistent_v2_subject_seven_peers),
+    )
+    .await
 }
 
 #[test]

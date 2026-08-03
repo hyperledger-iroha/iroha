@@ -441,7 +441,8 @@ temporary/stable/partial-unlink prune crash stage.
 
 Those implementation and focused-test statements are not release evidence. All
 multilane gates remain open until the focused/adversarial, source-bound formal,
-cross-SDK, fresh unskipped four-peer, 10/10 twelve-peer corridor, two-hour fault
+cross-SDK, fresh unskipped four-peer, 10/10 13-peer global corridor (twelve
+lane validators), two-hour fault
 soak, pinned-hardware one-versus-four-lane scaling, and prescribed
 full-workspace build/test/strict-Clippy checks have passed and their artifacts
 have been archived.

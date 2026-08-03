@@ -112,7 +112,8 @@ Proposal planning now defers lanes with unapplied artifacts/certified blocks,
 Kura can rebuild missing lane-block artifact sidecars from local canonical block
 bodies, and lane-payload ownership status preserves unrelated lanes by
 lane/dataspace upsert. The remaining open work is the DvP lane-block
-application liveness gap: under the 12-peer localnet, route probes can still
+application liveness gap: under the 13-peer global localnet (twelve lane
+validators), route probes can still
 stall before committed/applied lane-block convergence, with one DS lane split
 between executable-payload wait and canonical application while the other DS
 lane has no committed lane-block row. The default 10-iteration soak must be
@@ -7186,7 +7187,8 @@ redistributable schemas, and official trust/revocation bundles.
   adversarial boundary: tampered pending transition metadata, survivor catalog
   rows, preserved retired-lane catalogs, and derived lane configs all abort
   before retired-lane Kura/tiered storage or committed catalog publication.
-  The 12-peer cross-dataspace localnet route-probe corridor now also requires
+  The 13-peer global cross-dataspace localnet route-probe corridor (twelve lane
+  validators) now also requires
   observable replayable lane-payload ownership for DS1 and DS2 with exact
   dataspace IDs, the expected four-validator lane committee, and the
   deterministic three-vote quorum. The route-probe parser now requires those

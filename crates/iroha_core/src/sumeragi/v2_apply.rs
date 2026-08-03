@@ -887,6 +887,35 @@ pub(crate) struct V2ApplyService {
     fail_after_reputation_archive_capture: std::sync::atomic::AtomicBool,
 }
 
+/// Opaque proof that Kura authenticated the sole finalized subject for recovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VerifiedRecoveredFinalitySubject {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    subject: wire::BlockSubject,
+}
+
+impl VerifiedRecoveredFinalitySubject {
+    /// Return the cryptographically authenticated finalized subject.
+    pub(crate) const fn subject(self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Return whether this proof belongs to the exact body-store context.
+    pub(crate) fn authorizes_context(self, context: &wire::HeightContext) -> bool {
+        self.context_id == context.id() && self.height == context.height
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(context: &wire::HeightContext, subject: wire::BlockSubject) -> Self {
+        Self {
+            context_id: context.id(),
+            height: context.height,
+            subject,
+        }
+    }
+}
+
 impl V2ApplyService {
     fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
@@ -1423,6 +1452,63 @@ impl V2ApplyService {
             .map_err(V2ApplyError::ExecutionCommitment)?;
         crate::sumeragi::exec::execution_commitment_from_witness(&witness, &native_amx_manifest)
             .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
+    }
+
+    /// Revalidate one checksummed restart marker before it can restore vote authority.
+    ///
+    /// An unfinished height re-executes the ordinary deterministic candidate
+    /// validator. If Kura already crossed finality, replaying against the
+    /// advanced world state would be both incorrect and needlessly expensive;
+    /// the cryptographically verified finality artifact instead authenticates
+    /// the exact proposal subject and execution commitment.
+    pub(crate) fn revalidate_recovered_candidate(
+        &self,
+        context: &wire::HeightContext,
+        body: &SignedBlock,
+    ) -> Result<wire::ExecutionCommitment, V2ApplyError> {
+        if let Some(artifact) = self.kura.v2_finality_artifact(context.height)? {
+            if artifact.height_context != *context || !body.is_resultless_proposal() {
+                return Err(V2ApplyError::Validation(
+                    "recovered candidate differs from its verified finality context".to_owned(),
+                ));
+            }
+            let canonical_wire = body
+                .encode_wire()
+                .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
+            let subject = wire::BlockSubject {
+                parent_block_hash: body.header().prev_block_hash(),
+                block_hash: body.hash(),
+                payload_hash: Hash::new(canonical_wire),
+            };
+            if artifact.subject != subject {
+                return Err(V2ApplyError::Validation(
+                    "recovered candidate differs from its verified finality subject".to_owned(),
+                ));
+            }
+            artifact.commit_qc.execution_commitment.validate()?;
+            return Ok(artifact.commit_qc.execution_commitment);
+        }
+        self.validate_candidate(context, body)
+    }
+
+    /// Return the sole subject allowed to recover marker authority after finality.
+    pub(crate) fn recovered_finality_subject(
+        &self,
+        context: &wire::HeightContext,
+    ) -> Result<Option<VerifiedRecoveredFinalitySubject>, V2ApplyError> {
+        let Some(artifact) = self.kura.v2_finality_artifact(context.height)? else {
+            return Ok(None);
+        };
+        if artifact.height_context != *context {
+            return Err(V2ApplyError::Validation(
+                "verified finality differs from the recovered height context".to_owned(),
+            ));
+        }
+        Ok(Some(VerifiedRecoveredFinalitySubject {
+            context_id: context.id(),
+            height: context.height,
+            subject: artifact.subject,
+        }))
     }
 
     fn validate_and_apply(
@@ -5233,6 +5319,20 @@ mod tests {
 
             drop(store);
             let mut reopened = fixture.reopen_body_store();
+            let recovered_finality = fixture
+                .service
+                .recovered_finality_subject(&fixture.context)
+                .expect("read verified recovery finality")
+                .expect("verified recovery finality exists");
+            assert!(recovered_finality.authorizes_context(&fixture.context));
+            assert_eq!(recovered_finality.subject(), fixture.manifest.subject);
+            reopened
+                .revalidate_recovered_markers(|body| {
+                    fixture
+                        .service
+                        .revalidate_recovered_candidate(&fixture.context, body)
+                })
+                .expect("verified finality reauthenticates the restart marker");
             assert!(
                 reopened
                     .validated_recovery_catalog()
@@ -6057,6 +6157,30 @@ mod tests {
                 .expect("read finality")
                 .expect("finality exists");
 
+            drop(store);
+            let mut store = fixture.reopen_body_store();
+            let decided = fixture
+                .service
+                .recovered_finality_subject(&fixture.context)
+                .expect("read authenticated finality after WSV publication")
+                .expect("complete height has finality authority");
+            assert!(decided.authorizes_context(&fixture.context));
+            assert_eq!(decided.subject(), fixture.manifest.subject);
+            store
+                .retain_recovered_markers_for_subject(decided)
+                .expect("finality capability binds the advanced-state body store");
+            store
+                .revalidate_recovered_markers(|body| {
+                    fixture
+                        .service
+                        .revalidate_recovered_candidate(&fixture.context, body)
+                })
+                .expect("verified finality reauthenticates without replaying advanced WSV");
+            assert!(
+                store
+                    .validated_recovery_catalog()
+                    .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
+            );
             fixture.execute(&mut store).expect("idempotent replay");
             fixture.assert_complete();
             assert_eq!(

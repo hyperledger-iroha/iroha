@@ -1,0 +1,60 @@
+version: "3.9"
+services:
+  iroha-iroha3-dev-0:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+    ports:
+      - "8080:8080"
+      - "1337:1337"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.10
+  iroha-iroha3-dev-1:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-1.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+    ports:
+      - "8081:8081"
+      - "1338:1338"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.11
+  iroha-iroha3-dev-2:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-2.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+    ports:
+      - "8082:8082"
+      - "1339:1339"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.12
+  iroha-iroha3-dev-3:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-3.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+    ports:
+      - "8083:8083"
+      - "1340:1340"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.13
+
+networks:
+  profile:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

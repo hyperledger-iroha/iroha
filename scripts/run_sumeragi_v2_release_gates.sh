@@ -3535,9 +3535,11 @@ if [[ "$profile" == "--release" ]]; then
 fi
 
 # G-12P is a distinct real-network gate from the reducer seed matrix above.
-# Its launcher starts ten fresh 12-peer networks, uses one canonical seed per
-# process, forbids retries, and validates each Cargo transcript as exactly one
-# scheduled/passing test before publishing completion accounting.
+# The stable identifier counts twelve lane-validator assignments. Its launcher
+# starts ten fresh exact 13-peer global committees, keeps the final voter out of
+# every lane committee, uses one canonical seed per process, forbids retries,
+# and validates each Cargo transcript as exactly one scheduled/passing test
+# before publishing completion accounting.
 nexus_cross_completion_path_file="${IROHA_RELEASE_HOST_ROOT:-${repo_root}/target}/nexus-cross-dataspace-completion-path"
 rm -f -- "$nexus_cross_completion_path_file"
 nexus_cross_args=(

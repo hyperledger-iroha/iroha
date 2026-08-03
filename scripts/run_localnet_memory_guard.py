@@ -109,7 +109,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Repository root containing scripts/deploy_localnet.sh.",
     )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
-    parser.add_argument("--peers", type=int, default=DEFAULT_PEERS)
+    parser.add_argument(
+        "--peers",
+        type=int,
+        default=DEFAULT_PEERS,
+        help="Exact revision-4 committee size: 4, 7, ..., 31.",
+    )
     parser.add_argument("--count", type=int, default=DEFAULT_COUNT)
     parser.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -181,8 +186,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Optional JSON report path. Defaults to <out-dir>/memory_guard_report.json.",
     )
     args = parser.parse_args(argv)
-    if args.peers < 4:
-        parser.error("--peers must be at least 4 for representative localnet consensus")
+    if args.peers < 4 or args.peers > 31 or (args.peers - 1) % 3 != 0:
+        parser.error(
+            "--peers must be an exact revision-4 3f + 1 committee: 4, 7, ..., 31"
+        )
     if args.count <= 0:
         parser.error("--count must be greater than zero")
     if args.parallel <= 0:

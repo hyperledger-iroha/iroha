@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Run the Sumeragi NPoS stress scenarios across a multi-peer soak matrix.
 
-The helper iterates over a set of (peers, collectors_k, redundant_send_r)
-combinations, executes ``scripts/run_sumeragi_stress.py`` for each, renders a
-per-scenario Markdown summary, and records an aggregate matrix report.  The
-generated directory can optionally be packed into a ZIP archive that operators
-attach to their sign-off notes.
+The helper iterates over exact revision-4 committee sizes, executes
+``scripts/run_sumeragi_stress.py`` for each, renders a per-scenario Markdown
+summary, and records an aggregate matrix report. The generated directory can
+optionally be packed into a ZIP archive that operators attach to their sign-off
+notes.
 
 Example:
 
@@ -14,9 +14,8 @@ Example:
         --pack artifacts/sumeragi-soak-$(date +%Y%m%d-%H%M)/signoff.zip
 
 Use ``--scenario`` to override the default matrix.  Each scenario must be
-specified as a comma-separated ``key=value`` list containing at least
-``name`` and ``peers`` (for example:
-``--scenario name=peers10_k3_r3,peers=10,collectors_k=3,redundant_send_r=3``).
+specified as a comma-separated ``key=value`` list containing exactly ``name``
+and ``peers`` (for example: ``--scenario name=peers10,peers=10``).
 """
 
 from __future__ import annotations
@@ -32,9 +31,9 @@ from typing import Iterable, List, Optional
 
 
 DEFAULT_MATRIX: List[dict[str, int | str]] = [
-    {"name": "peers4_k2_r2", "peers": 4, "collectors_k": 2, "redundant_send_r": 2},
-    {"name": "peers6_k3_r2", "peers": 6, "collectors_k": 3, "redundant_send_r": 2},
-    {"name": "peers8_k3_r3", "peers": 8, "collectors_k": 3, "redundant_send_r": 3},
+    {"name": "peers4", "peers": 4},
+    {"name": "peers7", "peers": 7},
+    {"name": "peers10", "peers": 10},
 ]
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -42,12 +41,16 @@ RUN_STRESS = SCRIPTS_DIR / "run_sumeragi_stress.py"
 RENDER_STRESS = SCRIPTS_DIR / "render_sumeragi_stress_report.py"
 
 ENV_PEERS = "SUMERAGI_NPOS_STRESS_PEERS"
-ENV_COLLECTORS_K = "SUMERAGI_NPOS_STRESS_COLLECTORS_K"
-ENV_REDUNDANT = "SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R"
 
 
 class ScenarioParseError(ValueError):
     """Raised when a custom scenario specification is invalid."""
+
+
+def is_revision4_committee_size(peers: int) -> bool:
+    """Return whether ``peers`` is an admissible revision-4 ``3f + 1`` size."""
+
+    return 4 <= peers <= 31 and (peers - 1) % 3 == 0
 
 
 def parse_scenario(spec: str) -> dict[str, int | str]:
@@ -67,26 +70,24 @@ def parse_scenario(spec: str) -> dict[str, int | str]:
         raise ScenarioParseError("scenario requires a 'name' field")
     if "peers" not in entries:
         raise ScenarioParseError("scenario requires a 'peers' field")
+    unknown = sorted(set(entries) - {"name", "peers"})
+    if unknown:
+        raise ScenarioParseError(
+            "unsupported revision-4 scenario field(s): " + ", ".join(unknown)
+        )
 
     try:
         peers = int(entries["peers"])
     except ValueError as exc:  # pragma: no cover - defensive
         raise ScenarioParseError(f"invalid peers value: {entries['peers']}") from exc
-    if peers < 4:
-        raise ScenarioParseError("peer count must be at least 4")
-
-    collectors_k = int(entries.get("collectors_k", 2))
-    if collectors_k < 1:
-        raise ScenarioParseError("collectors_k must be >= 1")
-    redundant_send_r = int(entries.get("redundant_send_r", 2))
-    if redundant_send_r < 0:
-        raise ScenarioParseError("redundant_send_r must be >= 0")
+    if not is_revision4_committee_size(peers):
+        raise ScenarioParseError(
+            "peer count must be an exact revision-4 3f+1 committee in 4..=31"
+        )
 
     return {
         "name": entries["name"],
         "peers": peers,
-        "collectors_k": collectors_k,
-        "redundant_send_r": redundant_send_r,
     }
 
 
@@ -103,7 +104,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         action="append",
         help=(
             "Custom scenario specification "
-            "(e.g. 'name=peers10,peers=10,collectors_k=3,redundant_send_r=3'). "
+            "(e.g. 'name=peers10,peers=10'). "
             "When provided, the default matrix is replaced."
         ),
     )
@@ -143,8 +144,6 @@ def run_stress_for_scenario(
 
     env = os.environ.copy()
     env[ENV_PEERS] = str(scenario["peers"])
-    env[ENV_COLLECTORS_K] = str(scenario["collectors_k"])
-    env[ENV_REDUNDANT] = str(scenario["redundant_send_r"])
 
     cmd = [
         sys.executable,
@@ -174,8 +173,6 @@ def run_stress_for_scenario(
     return {
         "scenario": scenario["name"],
         "peers": scenario["peers"],
-        "collectors_k": scenario["collectors_k"],
-        "redundant_send_r": scenario["redundant_send_r"],
         "summary": summary_path.as_posix(),
         "report": (scenario_dir / "README.md").as_posix(),
         "status": status,
@@ -192,8 +189,8 @@ def write_matrix_reports(
         "",
         f"Artifacts directory: `{artifacts_root}`",
         "",
-        "| Scenario | Peers | Collectors K | Redundant r | Result | Summary | Report |",
-        "|----------|-------|--------------|-------------|--------|---------|--------|",
+        "| Scenario | Peers | Result | Summary | Report |",
+        "|----------|-------|--------|---------|--------|",
     ]
     for entry in entries:
         summary_link = (
@@ -207,11 +204,9 @@ def write_matrix_reports(
             else "-"
         )
         lines.append(
-            "| `{scenario}` | {peers} | {collectors_k} | {redundant} | {status} | {summary} | {report} |".format(
+            "| `{scenario}` | {peers} | {status} | {summary} | {report} |".format(
                 scenario=entry["scenario"],
                 peers=entry["peers"],
-                collectors_k=entry["collectors_k"],
-                redundant=entry["redundant_send_r"],
                 status=entry["status"],
                 summary=summary_link,
                 report=report_link,
@@ -297,8 +292,7 @@ def main(argv: Iterable[str]) -> int:
     for scenario in matrix:
         print(
             f"[run_sumeragi_soak_matrix] Running scenario {scenario['name']} "
-            f"(peers={scenario['peers']}, collectors_k={scenario['collectors_k']}, "
-            f"redundant_send_r={scenario['redundant_send_r']})"
+            f"(peers={scenario['peers']})"
         )
         entry = run_stress_for_scenario(
             scenario,

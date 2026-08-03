@@ -23254,13 +23254,18 @@ pub(super) mod tests {
         )
         .expect("construct replay runtime");
         let output_guard = ConsensusOutputGuard::isolated();
-        let (mut executor, reopened_body_store) = V2EffectExecutor::open(
+        let mut reopened_body_store =
+            V2BodyStore::open_with_policy(&body_root, context.clone(), signature_policy)
+                .expect("reopen exact body store for semantic replay");
+        reopened_body_store
+            .revalidate_recovered_markers(|_| Ok::<_, String>(validation_commitment))
+            .expect("semantically replay the recovered validation marker");
+        let (mut executor, reopened_body_store) = V2EffectExecutor::open_with_body_store(
             runtime,
-            &body_root,
+            reopened_body_store,
             context.clone(),
             service.local_peer.clone(),
             Some(local_validator),
-            signature_policy,
             Arc::clone(&output_guard),
             EffectQueueConfig::default(),
         )

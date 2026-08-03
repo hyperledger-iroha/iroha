@@ -15,6 +15,7 @@ use eyre::{Context as _, Result, bail, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
     Level,
+    block::consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
     isi::{Log, SetParameter},
     parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
     prelude::TransactionBuilder,
@@ -31,7 +32,7 @@ const BLOCK_TIME_MS: u64 = 1_000;
 const SAMPLE_BLOCKS: u64 = 12;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 // This is a bounded-progress guard for contended full-workspace runs, not the
-// nominal 1s latency target. Six-peer NPoS baselines under full telemetry can
+// nominal 1s latency target. Seven-peer NPoS baselines under full telemetry can
 // absorb multiple quorum-timeout recoveries while still producing useful
 // samples; the phase EMA assertions below keep the latency checks strict.
 const BASELINE_BLOCK_SPACING_MAX_MS: f64 = 15_000.0;
@@ -83,7 +84,12 @@ where
 }
 
 fn stress_peer_count(default: usize) -> usize {
-    env_parse::<usize>(STRESS_PEERS_ENV).map_or(default, |peers| peers.max(4))
+    let peers = env_parse::<usize>(STRESS_PEERS_ENV).unwrap_or(default);
+    assert!(
+        is_valid_committee_size(peers),
+        "{STRESS_PEERS_ENV} must be an exact revision-4 3f+1 committee in 4..={MAX_VALIDATORS_PER_HEIGHT}, got {peers}"
+    );
+    peers
 }
 
 fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
@@ -230,6 +236,16 @@ fn min_connected_peers_for_submit_keeps_quorum_margin() {
 }
 
 #[test]
+fn revision4_stress_committees_require_exact_bounded_three_f_plus_one() {
+    for peers in [4, 7, 10, 13, 16, 19, 22, 25, 28, 31] {
+        assert!(is_valid_committee_size(peers), "{peers} must be valid");
+    }
+    for peers in [0, 1, 2, 3, 5, 6, 8, 30, 32, usize::MAX] {
+        assert!(!is_valid_committee_size(peers), "{peers} must be rejected");
+    }
+}
+
+#[test]
 fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
     let totals = [7, 11, 11, 3];
 
@@ -303,7 +319,7 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     let npos_params = SumeragiNposParameters::default();
 
     let builder = NetworkBuilder::new()
-        .with_peers(6)
+        .with_peers(7)
         .with_base_seed(BASE_SEED)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(Duration::from_millis(BLOCK_TIME_MS))

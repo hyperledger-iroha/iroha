@@ -9,16 +9,23 @@ Completed history lives in [`status.md`](./status.md).
 
 Revision-4 implementation facts are recorded in `status.md`. Older Sumeragi
 V1/revision-3 checkpoint lists elsewhere in this file are historical and do
-not add release gates. The outstanding revision-4 work is limited to:
+not add release gates. Guarded formatting, explicit production `iroha_core`
+library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
+regressions, generated-artifact determinism, exact profile-config admission,
+and public consensus wire roundtrips are complete. The outstanding revision-4
+work is limited to:
 
-- Run the final source through guarded formatting, focused and workspace
-  compilation/tests, strict Clippy, Norito roundtrips/codec checks, and the
-  revision-4 formal syntax, invariant, and mutation corridor. Focused consensus
-  validation must include pre-Decision cache rejection, disjoint-roster
-  historical lane signing/recovery, exact-predecessor sidecar reservation under
-  outsider pressure, DA resource-cap boundaries, volatile shard reacquisition
-  followed by one durable canonical-body boundary, restart hydration, fresh
-  generated four-peer genesis startup, and nonblocking cleanup saturation.
+- Repair or isolate the unrelated committed `iroha_core`, `iroha_data_model`,
+  and daemon test-harness compilation failures, and extend the host guard
+  allowlist to the reviewed Python and pinned Java/TLC formal commands. Then
+  run the remaining focused and workspace tests, strict Clippy, codec checks,
+  and the revision-4 formal syntax, invariant, and mutation corridor. Focused
+  consensus validation must include pre-Decision cache rejection,
+  disjoint-roster historical lane signing/recovery, exact-predecessor sidecar
+  reservation under outsider pressure, DA resource-cap boundaries, volatile
+  shard reacquisition followed by one durable canonical-body boundary, restart
+  hydration, fresh generated four-peer genesis startup, and nonblocking cleanup
+  saturation.
 - Run unskipped chaos on representative networks of at least four validators,
   covering faulty/withholding leaders and proxy tails, Set A and Set B loss,
   asymmetric partitions, RS16 reconstruction, restart, and catch-up.
@@ -28,6 +35,7 @@ not add release gates. The outstanding revision-4 work is limited to:
 - Preserve the performance SLO: one-second block cadence, 10,000 TPS target,
   permissioned p95/p99 finality at or below 1.5/2 seconds, and NPoS p95/p99 at
   or below 2/3 seconds.
+
 ## Musubi first-release registry and developer ecosystem reset
 
 The V1 contract, typed registry/Core storage, Cargo-style developer path,
@@ -181,9 +189,12 @@ metadata, and hash-tree artifacts have been regenerated from the current
 113-entry schema. Focused data-model, Core, IVM, bridge, fixture, and SDK parity
 execution remains required before this audit item can close.
 The validator-only, prepared-bundle Compose redesign passes its focused
-`iroha_swarm` suite (24 tests). Its Kagami positive/mismatch regressions,
-daemon config-digest checks, and generated-Compose consistency still need
-execution once the shared serialized Cargo/rustc lane is free.
+`iroha_swarm` suite (24 tests) and all four Kagami positive/mismatch
+regressions. The zero-chain genesis, three generated Compose manifests, and
+dev/Taira profile bundles are refreshed and deterministic; exact generated
+profile configs also pass runtime admission. Daemon config-digest execution
+remains blocked by the unrelated Bootle-Lantern lib-test compile error.
+
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
 
@@ -437,7 +448,8 @@ The remaining work is evidence-driven and must stay in order:
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
-  fault soak. The source-side correction and bounded stage diagnostics for the
+  fault soak on its 13-peer global committee (twelve lane validators plus one
+  global-only lane observer). The source-side correction and bounded stage diagnostics for the
   former recovery-to-application stall are not a substitute for this evidence.
 - Produce the pinned-hardware `G-SCALE` five-pair one-lane versus four-lane
   result, then run the source-sealed full workspace build, test, strict Clippy,

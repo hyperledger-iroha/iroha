@@ -38,7 +38,10 @@ pub use config::chain_id;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
-use iroha::data_model::block::consensus_v2::{QuorumCertificateRef, SumeragiV2Status};
+use iroha::data_model::block::consensus_v2::{
+    MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, QuorumCertificateRef, SumeragiV2Status,
+    is_valid_committee_size,
+};
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_config::base::{
     ParameterOrigin,
@@ -46,8 +49,11 @@ use iroha_config::base::{
     read::ConfigReader,
     toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
 };
-use iroha_core::sumeragi::consensus::{
-    NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
+use iroha_core::sumeragi::{
+    consensus::{
+        NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
+    },
+    signed_genesis_voting_peers,
 };
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey, sha256,
@@ -476,6 +482,26 @@ const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 type GenesisBuilderFn = Arc<
     dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
 >;
+
+fn revision4_committee_at_least(min_peers: usize) -> Option<usize> {
+    (MIN_VALIDATORS_PER_HEIGHT..=MAX_VALIDATORS_PER_HEIGHT)
+        .step_by(3)
+        .find(|peers| *peers >= min_peers)
+}
+
+fn assert_genesis_voting_roster_matches_network(genesis: &GenesisBlock, expected_peers: &[PeerId]) {
+    let actual = signed_genesis_voting_peers(genesis)
+        .unwrap_or_else(|error| {
+            panic!("test-network genesis has an invalid voting roster: {error}")
+        })
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let expected = expected_peers.iter().cloned().collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual, expected,
+        "signed test-network genesis voting roster must exactly match the guarded validator topology"
+    );
+}
 
 fn read_env_duration(var: &str, default: Duration) -> Duration {
     if let Ok(val) = std::env::var(var) {
@@ -3318,28 +3344,6 @@ impl Network {
         );
     }
 
-    /// Add a validator peer to the network and its genesis topology.
-    pub fn add_peer(&mut self, peer: &NetworkPeer) {
-        self.peers.push(peer.clone());
-        if let Some(pop) = peer.genesis_pop() {
-            self.topology_entries.push(pop);
-        }
-        self.cached_genesis = OnceLock::new();
-        self.cached_genesis_augmented = OnceLock::new();
-    }
-
-    /// Remove a validator peer from the network and its genesis topology.
-    pub fn remove_peer(&mut self, peer: &NetworkPeer) {
-        self.peers.retain(|x| x != peer);
-        if let Some(bls_pk) = peer.bls_public_key() {
-            let bls_pk = bls_pk.clone();
-            self.topology_entries
-                .retain(|entry| entry.peer.public_key != bls_pk);
-        }
-        self.cached_genesis = OnceLock::new();
-        self.cached_genesis_augmented = OnceLock::new();
-    }
-
     /// Access voting validator peers.
     ///
     /// This preserves the pre-observer meaning of `peers()`: callers may use
@@ -4035,8 +4039,12 @@ impl Network {
     ///
     /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`],
     /// post-topology bootstrap instructions, and the network peer topology.
+    /// The signed voting roster is rechecked against the guarded validator
+    /// topology before any cached or newly generated block is returned.
     pub fn genesis(&self) -> GenesisBlock {
+        let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
         if let Some(augmented) = self.cached_genesis_augmented.get() {
+            assert_genesis_voting_roster_matches_network(augmented, &peer_topology);
             return augmented.clone();
         }
         let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
@@ -4059,7 +4067,6 @@ impl Network {
         ));
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
         let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());
-        let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
         let recompute_staged_hashes = |block: &GenesisBlock| {
             config::staged_genesis_policy_hashes(
                 block,
@@ -4101,6 +4108,7 @@ impl Network {
                 cached_genesis,
                 &consensus_handshake_meta,
             ) {
+                assert_genesis_voting_roster_matches_network(cached_genesis, &peer_topology);
                 assert_signed_staged_hashes(recompute_staged_hashes(cached_genesis));
                 return cached_genesis.clone();
             }
@@ -4129,6 +4137,7 @@ impl Network {
                 zk_config.as_ref(),
                 actual_config.as_ref(),
             );
+            assert_genesis_voting_roster_matches_network(&augmented, &peer_topology);
             assert_signed_staged_hashes(recompute_staged_hashes(&augmented));
             let _ = self.cached_genesis_augmented.set(augmented.clone());
             return augmented;
@@ -4152,6 +4161,7 @@ impl Network {
                 None,
                 confidential_policy_hash,
             );
+        assert_genesis_voting_roster_matches_network(&genesis, &peer_topology);
         assert_signed_staged_hashes(staged_hash);
         let _ = self.cached_genesis.set(genesis.clone());
         genesis
@@ -6602,11 +6612,15 @@ impl NetworkBuilder {
         builder
     }
 
-    /// Set the number of peers in the network.
+    /// Set the exact revision-4 `3f + 1` validator count for the network.
     ///
-    /// One by default.
+    /// Four by default. Invalid or out-of-range committee sizes panic before
+    /// any peer, signed genesis, or runtime configuration is constructed.
     pub fn with_peers(mut self, n_peers: usize) -> Self {
-        assert_ne!(n_peers, 0);
+        assert!(
+            is_valid_committee_size(n_peers),
+            "validator peer count must be an exact revision-4 3f + 1 committee in {MIN_VALIDATORS_PER_HEIGHT}..={MAX_VALIDATORS_PER_HEIGHT}, got {n_peers}"
+        );
         if let Some(bootstrap) = self.observer_p2p_bootstrap {
             bootstrap
                 .validate_for_validators(n_peers, ObserverP2pBootstrap::connection_capacity())
@@ -6686,20 +6700,29 @@ impl NetworkBuilder {
         self
     }
 
-    /// Ensure the network has at least `min_peers` peers.
+    /// Ensure the network has the smallest revision-4 committee with at least `min_peers` peers.
     ///
-    /// If the current peer count is below `min_peers`, it is raised to that value.
+    /// Values between valid committee sizes round up. A zero minimum or a
+    /// minimum above the protocol ceiling panics before construction.
     pub fn with_min_peers(mut self, min_peers: usize) -> Self {
         assert_ne!(min_peers, 0);
-        if self.n_peers < min_peers {
+        let target_peers = revision4_committee_at_least(min_peers).unwrap_or_else(|| {
+            panic!(
+                "minimum validator peer count must not exceed revision-4 ceiling {MAX_VALIDATORS_PER_HEIGHT}, got {min_peers}"
+            )
+        });
+        if self.n_peers < target_peers {
             if let Some(bootstrap) = self.observer_p2p_bootstrap {
                 bootstrap
-                    .validate_for_validators(min_peers, ObserverP2pBootstrap::connection_capacity())
+                    .validate_for_validators(
+                        target_peers,
+                        ObserverP2pBootstrap::connection_capacity(),
+                    )
                     .unwrap_or_else(|error| {
                         panic!("invalid observer bootstrap after minimum peer change: {error}")
                     });
             }
-            self.n_peers = min_peers;
+            self.n_peers = target_peers;
         }
         self
     }
@@ -6907,7 +6930,9 @@ impl NetworkBuilder {
     /// re-signs the affected transactions and block with the configured genesis
     /// key, and pre-executes under the exact final pipeline, Nexus, and ZK runtime
     /// configuration. It then binds the staged Nexus/AMX context and caches the
-    /// identical final bytes supplied to every peer.
+    /// identical final bytes supplied to every peer. A custom block whose signed
+    /// voting roster differs from the guarded builder topology is rejected before
+    /// consensus parameters are derived.
     pub fn with_genesis_block<F>(mut self, build: F) -> Self
     where
         F: Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
@@ -7133,6 +7158,9 @@ impl NetworkBuilder {
         let custom_genesis_block = custom_genesis
             .as_ref()
             .map(|builder_fn| builder_fn(peer_ids.clone(), topology_entries.clone()));
+        if let Some(custom) = custom_genesis_block.as_ref() {
+            assert_genesis_voting_roster_matches_network(custom, &peer_topology);
+        }
         let cached_genesis = OnceLock::new();
         let cached_genesis_augmented = OnceLock::new();
 
@@ -7449,18 +7477,19 @@ impl NetworkBuilder {
         let zk_config = resolved_genesis_config
             .as_ref()
             .map(|config| config.zk.clone());
-        let (mut parameter_state, preview_staged_policy_hashes) =
-            match custom_genesis_block.as_ref() {
-                Some(custom) => (
-                    consensus_parameters_from_genesis_with_overrides(
-                        custom,
-                        &genesis_isi,
-                        &genesis_post_topology_isi,
-                    ),
-                    None,
+        let (mut parameter_state, preview_staged_policy_hashes) = match custom_genesis_block
+            .as_ref()
+        {
+            Some(custom) => (
+                consensus_parameters_from_genesis_with_overrides(
+                    custom,
+                    &genesis_isi,
+                    &genesis_post_topology_isi,
                 ),
-                None => {
-                    let (preview_genesis, staged_hash) =
+                None,
+            ),
+            None => {
+                let (preview_genesis, staged_hash) =
                     config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
                         genesis_isi.clone(),
                         genesis_post_topology_isi.clone(),
@@ -7481,12 +7510,13 @@ impl NetworkBuilder {
                         }),
                         confidential_policy_hash,
                     );
-                    (
-                        consensus_parameters_from_genesis(&preview_genesis),
-                        Some(staged_hash),
-                    )
-                }
-            };
+                assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
+                (
+                    consensus_parameters_from_genesis(&preview_genesis),
+                    Some(staged_hash),
+                )
+            }
+        };
         parameter_state.sumeragi.block_cadence_ms = std::num::NonZeroU64::new(
             u64::try_from(block_cadence.as_millis())
                 .expect("signed block cadence fits into u64 milliseconds"),
@@ -11849,7 +11879,7 @@ mod tests {
 
     #[test]
     fn trusted_peers_use_addr_literals() {
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(2));
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let mut layers = network.config_layers();
         let base_layer = layers
             .next()
@@ -11881,14 +11911,72 @@ mod tests {
     }
 
     #[test]
-    fn with_min_peers_clamps_builder() {
-        let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(2).with_min_peers(4));
+    fn with_min_peers_rounds_up_to_revision4_committee() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_min_peers(2));
         assert_eq!(network.peers().len(), 4);
 
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_min_peers(5));
+        assert_eq!(network.peers().len(), 7);
+
         let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(5).with_min_peers(4));
-        assert_eq!(network.peers().len(), 5);
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(7).with_min_peers(4));
+        assert_eq!(network.peers().len(), 7);
+    }
+
+    #[test]
+    fn revision4_committee_rounding_covers_protocol_bounds() {
+        for (minimum, expected) in [
+            (1, Some(4)),
+            (4, Some(4)),
+            (5, Some(7)),
+            (7, Some(7)),
+            (8, Some(10)),
+            (30, Some(31)),
+            (31, Some(31)),
+            (32, None),
+            (usize::MAX, None),
+        ] {
+            assert_eq!(revision4_committee_at_least(minimum), expected);
+        }
+
+        for minimum in [0, MAX_VALIDATORS_PER_HEIGHT + 1, usize::MAX] {
+            assert!(
+                std::panic::catch_unwind(|| NetworkBuilder::new().with_min_peers(minimum)).is_err(),
+                "invalid minimum {minimum} must panic before construction"
+            );
+        }
+    }
+
+    #[test]
+    fn with_peers_rejects_non_revision4_validator_counts() {
+        for peers in [0, 1, 2, 3, 5, 6, 8, 30, 32, usize::MAX] {
+            assert!(
+                std::panic::catch_unwind(|| NetworkBuilder::new().with_peers(peers)).is_err(),
+                "invalid {peers}-peer validator committee must panic before construction"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_genesis_roster_must_match_guarded_network_topology() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let genesis = network.genesis();
+        let expected = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+
+        assert_genesis_voting_roster_matches_network(&genesis, &expected);
+
+        let incomplete = expected[..expected.len() - 1].to_vec();
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_genesis_voting_roster_matches_network(&genesis, &incomplete);
+            })
+            .is_err(),
+            "a custom signed roster that differs from the guarded topology must fail closed"
+        );
     }
 
     #[test]
@@ -13771,12 +13859,12 @@ exit 0
             }
         }
 
-        let default_network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let default_network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         assert_trusted_entries(&default_network);
 
         let explicit_network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(2)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers(),
         );
         assert_trusted_entries(&explicit_network);
@@ -13784,7 +13872,7 @@ exit 0
 
     #[test]
     fn config_layers_with_additional_peers_include_pop() {
-        let network = NetworkBuilder::new().with_peers(1).build();
+        let network = NetworkBuilder::new().with_peers(4).build();
         let extra_peer = NetworkPeerBuilder::new().build(network.env());
 
         let mut layers = network.config_layers_with_additional_peers([&extra_peer]);
@@ -14057,17 +14145,25 @@ exit 0
                 capacity,
             })
         );
+        let exact_cap_observers = capacity
+            .checked_sub(MAX_VALIDATORS_PER_HEIGHT - 1)
+            .expect("connection cap accommodates the maximum revision-4 committee");
+        let exact_cap_bootstrap =
+            ObserverP2pBootstrap::new(exact_cap_observers).expect("exact-cap observer recipe");
         assert!(
             NetworkBuilder::new()
-                .with_peers(capacity)
-                .with_observer_p2p_bootstrap(bootstrap)
+                .with_peers(MAX_VALIDATORS_PER_HEIGHT)
+                .with_observer_p2p_bootstrap(exact_cap_bootstrap)
                 .is_ok(),
-            "one validator-facing connection at the exact cap remains valid"
+            "maximum revision-4 committee plus exact-cap observers remains valid"
         );
+
+        let over_cap_bootstrap = ObserverP2pBootstrap::new(exact_cap_observers + 1)
+            .expect("one-over-fanout observer count remains below the raw observer cap");
         assert!(
             NetworkBuilder::new()
-                .with_peers(above_capacity)
-                .with_observer_p2p_bootstrap(bootstrap)
+                .with_peers(MAX_VALIDATORS_PER_HEIGHT)
+                .with_observer_p2p_bootstrap(over_cap_bootstrap)
                 .is_err(),
             "one participant above the full-fanout cap must be rejected"
         );
@@ -14496,7 +14592,7 @@ exit 0
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .without_auto_populated_trusted_peers()
-                .with_peers(2),
+                .with_peers(4),
         );
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
@@ -14724,7 +14820,7 @@ exit 0
         init_instruction_registry();
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
-            .with_peers(2)
+            .with_peers(4)
             .with_auto_populated_trusted_peers()
             .with_npos_genesis_bootstrap(stake_amount)
             .build();
@@ -14767,7 +14863,7 @@ exit 0
         init_instruction_registry();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(2)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers()
                 .with_npos_consensus(),
         );
@@ -14805,7 +14901,7 @@ exit 0
         init_instruction_registry();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(2)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers()
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap(),
@@ -14846,7 +14942,7 @@ exit 0
             DomainId::try_new("post_topology_test", "universal").expect("domain");
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(1)
+                .with_peers(4)
                 .with_genesis_post_topology_isi(vec![
                     Register::domain(Domain::new(domain_id.clone())).into(),
                 ]),
@@ -14886,7 +14982,7 @@ exit 0
         let expected = npos_params.min_self_bond.clone();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(1)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers()
                 .with_genesis_instruction(SetParameter::new(Parameter::Custom(
                     npos_params.into_custom_parameter(),
@@ -14976,7 +15072,7 @@ exit 0
     fn npos_bootstrap_overrides_stake_accounts_in_config() {
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
-            .with_peers(1)
+            .with_peers(4)
             .with_auto_populated_trusted_peers()
             .with_npos_genesis_bootstrap(stake_amount)
             .build();
@@ -15008,7 +15104,7 @@ exit 0
     fn npos_bootstrap_seeds_default_fee_asset_for_runtime_signers() {
         init_instruction_registry();
         let network = NetworkBuilder::new()
-            .with_peers(2)
+            .with_peers(4)
             .with_auto_populated_trusted_peers()
             .with_npos_consensus()
             .build();
@@ -15073,7 +15169,7 @@ exit 0
         init_instruction_registry();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(2)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers(),
         );
         let genesis = network.genesis();
@@ -15571,7 +15667,7 @@ exit 0
 
     #[test]
     fn network_torii_urls_match_peers() {
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let urls = network.torii_urls();
         assert_eq!(urls.len(), network.peers().len());
         for (peer, url) in network.peers().iter().zip(urls.iter()) {
@@ -15584,13 +15680,13 @@ exit 0
 
     #[test]
     fn network_peer_round_robins_deterministically() {
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let peers = network.peers();
         let expected = [
             peers[0].api_address(),
             peers[1].api_address(),
             peers[2].api_address(),
-            peers[0].api_address(),
+            peers[3].api_address(),
         ];
         let actual = [
             network.peer().api_address(),
@@ -15604,7 +15700,7 @@ exit 0
 
     #[test]
     fn network_client_uses_first_peer() {
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let expected = network
             .peers()
             .first()
@@ -15710,7 +15806,7 @@ exit 0
         let callback_pops = Arc::clone(&seen_pops);
 
         let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(2).with_genesis_block(
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_genesis_block(
                 move |topology, pops| {
                     *callback_topology
                         .lock()
@@ -15742,6 +15838,31 @@ exit 0
         );
         let expected_handshake = consensus_handshake_parameter(&network.consensus_profile);
         assert_exactly_one_consensus_handshake(&produced, &expected_handshake);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "signed test-network genesis voting roster must exactly match the guarded validator topology"
+    )]
+    fn with_genesis_block_rejects_a_different_signed_voting_roster() {
+        init_instruction_registry();
+
+        let _ = build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_genesis_block(
+            |mut topology, mut topology_entries| {
+                for index in 0..3 {
+                    let key_pair = checked_key_pair_from_seed(
+                        format!("foreign-custom-genesis-voter-{index}"),
+                        Algorithm::BlsNormal,
+                    );
+                    let peer = PeerId::new(key_pair.public_key().clone());
+                    let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                        .expect("derive foreign custom-genesis voter PoP");
+                    let _ = topology.push(peer.clone());
+                    topology_entries.push(GenesisTopologyEntry::new(peer, pop));
+                }
+                genesis_factory(Vec::new(), topology, topology_entries)
+            },
+        ));
     }
 
     #[test]

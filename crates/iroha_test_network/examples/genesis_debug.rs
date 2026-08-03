@@ -24,7 +24,7 @@ fn main() {
         return;
     }
 
-    let network = NetworkBuilder::new().with_peers(1).build();
+    let network = NetworkBuilder::new().with_peers(4).build();
     let genesis = network.genesis();
 
     inspect_transactions(&genesis.0);

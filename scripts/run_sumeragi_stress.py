@@ -11,9 +11,9 @@ Example:
 
 The script does not replace the full baseline harness (see
 `scripts/run_sumeragi_baseline.py`) but focuses on fault-injection cases the
-roadmap tracks for Milestone A6 (queue backpressure, RBC overflow, redundant
-fan-out, jitter, chunk loss). It purposely runs each scenario separately so a
-failure is easier to diagnose.
+revision-4 release gate tracks (baseline finality, queue backpressure, DA/RBC
+store pressure, and chunk loss). It purposely runs each scenario separately so
+a failure is easier to diagnose.
 
 NOTE: The scenarios are resource intensive; run them on a dedicated machine and
     expect the entire suite to take several minutes. Nothing in this helper
@@ -33,11 +33,10 @@ from typing import Iterable
 
 
 DEFAULT_TESTS = (
+    "npos_baseline_1s_captures_metrics",
     "npos_queue_backpressure_triggers_metrics",
     "npos_rbc_store_backpressure_records_metrics",
     "npos_rbc_chunk_loss_fault_reports_backlog",
-    "npos_redundant_send_retries_update_metrics",
-    "npos_pacemaker_jitter_within_band",
 )
 
 
