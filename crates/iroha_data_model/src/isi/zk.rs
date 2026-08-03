@@ -69,9 +69,7 @@ impl PruneProofs {
     iroha_schema::IntoSchema,
 )]
 pub enum ZkAssetMode {
-    /// Only shielded ledger (no public account balances).
-    ZkNative,
-    /// Hybrid: public balances plus shielded ledger; allows shield/unshield when policy permits.
+    /// Public balances plus the proof-bound Kagemusha confidential ledger.
     Hybrid,
 }
 
@@ -79,7 +77,6 @@ pub enum ZkAssetMode {
 impl norito::json::JsonSerialize for ZkAssetMode {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
-            ZkAssetMode::ZkNative => "ZkNative",
             ZkAssetMode::Hybrid => "Hybrid",
         };
         norito::json::write_json_string(label, out);
@@ -93,7 +90,6 @@ impl norito::json::JsonDeserialize for ZkAssetMode {
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
         match value.as_str() {
-            "ZkNative" => Ok(ZkAssetMode::ZkNative),
             "Hybrid" => Ok(ZkAssetMode::Hybrid),
             other => Err(norito::json::Error::unknown_field(other.to_owned())),
         }
@@ -115,8 +111,6 @@ isi! {
         pub allow_shield: bool,
         /// Allow unshielding from shielded to public.
         pub allow_unshield: bool,
-        /// Verifying key for shielded transfers.
-        pub vk_transfer: Option<crate::proof::VerifyingKeyId>,
         /// Verifying key for unshield proofs.
         pub vk_unshield: Option<crate::proof::VerifyingKeyId>,
         /// Canonical Kagemusha top-up shield verifying key.
@@ -132,7 +126,6 @@ impl RegisterZkAsset {
         mode: ZkAssetMode,
         allow_shield: bool,
         allow_unshield: bool,
-        vk_transfer: Option<crate::proof::VerifyingKeyId>,
         vk_unshield: Option<crate::proof::VerifyingKeyId>,
         vk_shield: Option<crate::proof::VerifyingKeyId>,
     ) -> Self {
@@ -141,7 +134,6 @@ impl RegisterZkAsset {
             mode,
             allow_shield,
             allow_unshield,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         }
@@ -422,7 +414,6 @@ impl_zk_decode_from_slice!(RegisterZkAsset {
     mode: ZkAssetMode,
     allow_shield: bool,
     allow_unshield: bool,
-    vk_transfer: Option<crate::proof::VerifyingKeyId>,
     vk_unshield: Option<crate::proof::VerifyingKeyId>,
     vk_shield: Option<crate::proof::VerifyingKeyId>,
 });
@@ -590,7 +581,6 @@ mod tests {
             ZkAssetMode::Hybrid,
             true,
             true,
-            Some(verifying_key("transfer")),
             Some(verifying_key("unshield")),
             Some(verifying_key("shield")),
         ));
@@ -648,10 +638,9 @@ mod tests {
             std::any::type_name::<RegisterZkAsset>(),
             RegisterZkAsset::new(
                 asset.clone(),
-                ZkAssetMode::ZkNative,
+                ZkAssetMode::Hybrid,
                 false,
                 false,
-                Some(verifying_key("transfer")),
                 None,
                 None,
             ),
@@ -674,6 +663,20 @@ mod tests {
                 asset.clone(),
                 Hash::new("policy-transition-stable"),
             ),
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn zk_asset_mode_rejects_retired_native_mode() {
+        assert_eq!(
+            norito::json::from_str::<ZkAssetMode>("\"Hybrid\"")
+                .expect("decode first-release mode"),
+            ZkAssetMode::Hybrid
+        );
+        assert!(
+            norito::json::from_str::<ZkAssetMode>("\"ZkNative\"").is_err(),
+            "the first-release wire must reject the unusable native-only mode"
         );
     }
 }

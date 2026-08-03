@@ -7378,7 +7378,6 @@ class VerifiedCommittedTransaction:
             "External",
             "SealedCommitment",
             "SealedReveal",
-            "PrivateKaigi",
             "Time",
         }:
             raise ValueError("verified transaction entrypoint_kind is not recognized")

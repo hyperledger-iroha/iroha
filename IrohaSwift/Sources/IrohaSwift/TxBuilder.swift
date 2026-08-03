@@ -436,8 +436,7 @@ public struct VerifyingKeyIdReference: Equatable, Sendable {
 }
 
 public enum ZkAssetMode: UInt8, Sendable {
-    case zkNative = 0
-    case hybrid = 1
+    case hybrid = 0
 }
 
 public struct RegisterZkAssetRequest {
@@ -447,7 +446,6 @@ public struct RegisterZkAssetRequest {
     public let mode: ZkAssetMode
     public let allowShield: Bool
     public let allowUnshield: Bool
-    public let transferVerifyingKey: VerifyingKeyIdReference?
     public let unshieldVerifyingKey: VerifyingKeyIdReference?
     public let shieldVerifyingKey: VerifyingKeyIdReference?
     public let feePayment: FeePaymentIntent
@@ -459,7 +457,6 @@ public struct RegisterZkAssetRequest {
                 mode: ZkAssetMode = .hybrid,
                 allowShield: Bool = true,
                 allowUnshield: Bool = true,
-                transferVerifyingKey: VerifyingKeyIdReference? = nil,
                 unshieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 shieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 feePayment: FeePaymentIntent,
@@ -470,7 +467,6 @@ public struct RegisterZkAssetRequest {
         self.mode = mode
         self.allowShield = allowShield
         self.allowUnshield = allowUnshield
-        self.transferVerifyingKey = transferVerifyingKey
         self.unshieldVerifyingKey = unshieldVerifyingKey
         self.shieldVerifyingKey = shieldVerifyingKey
         self.feePayment = feePayment

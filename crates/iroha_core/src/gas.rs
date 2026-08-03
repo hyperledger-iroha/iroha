@@ -209,41 +209,6 @@ fn gas_for_proof_attachment(
     gas
 }
 
-fn anonymous_escrow_proof_gas(any: &dyn std::any::Any) -> Option<u64> {
-    if let Some(open) = any.downcast_ref::<dm_isi::escrow::OpenAnonymousAssetEscrow>() {
-        return Some(gas_for_proof_attachment(
-            &open.proof,
-            open.funding_nullifiers.len(),
-            1,
-        ));
-    }
-    if let Some(release) = any.downcast_ref::<dm_isi::escrow::ReleaseAnonymousAssetEscrow>() {
-        return Some(gas_for_proof_attachment(
-            &release.proof,
-            release.escrow_nullifiers.len(),
-            release.buyer_output_commitments.len(),
-        ));
-    }
-    if let Some(cancel) = any.downcast_ref::<dm_isi::escrow::CancelAnonymousAssetEscrow>() {
-        return Some(gas_for_proof_attachment(
-            &cancel.proof,
-            cancel.escrow_nullifiers.len(),
-            cancel.seller_output_commitments.len(),
-        ));
-    }
-    if let Some(resolve) = any.downcast_ref::<dm_isi::escrow::ResolveAnonymousEscrowDispute>() {
-        return Some(gas_for_proof_attachment(
-            &resolve.proof,
-            resolve.escrow_nullifiers.len(),
-            resolve
-                .buyer_output_commitments
-                .len()
-                .saturating_add(resolve.seller_output_commitments.len()),
-        ));
-    }
-    None
-}
-
 fn gas_for_recursive_kagemusha_topup_v4(topup: &dm_isi::offline::TopUpKagemushaRecursiveV4) -> u64 {
     gas_for_proof_attachment(&topup.request.shield_evidence.proof, 0, 1)
 }
@@ -427,9 +392,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         }
         return BASE_KAIGI_USAGE;
     }
-    if let Some(gas) = anonymous_escrow_proof_gas(any) {
-        return gas;
-    }
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
@@ -467,9 +429,6 @@ pub fn meter_instructions(is: &[InstructionBox]) -> u64 {
 #[must_use]
 pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     let any = instr.as_any();
-    if let Some(gas) = anonymous_escrow_proof_gas(any) {
-        return gas;
-    }
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
@@ -753,117 +712,9 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_escrow_gas_accounts_for_native_transfer_shape() {
-        let _gas_lock = super::lock_confidential_gas_for_tests();
-        use iroha_crypto::Hash;
-        use iroha_data_model::{
-            escrow::EscrowId,
-            isi::escrow::{
-                CancelAnonymousAssetEscrow, OpenAnonymousAssetEscrow, ReleaseAnonymousAssetEscrow,
-                ResolveAnonymousEscrowDispute,
-            },
-            prelude::AssetDefinitionId,
-            proof::VerifyingKeyId,
-        };
-
-        super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
-        let fixture = halo2_fixture_envelope("halo2/ipa:anonymous-escrow-gas", [0u8; 32]);
-        let proof_box = fixture.proof_box("halo2/ipa");
-        let attachment = ProofAttachment::new_ref(
-            proof_box.backend.clone(),
-            proof_box,
-            VerifyingKeyId::new("halo2/ipa", "vk-anonymous-escrow"),
-        );
-        let asset: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("domain", "universal").unwrap(),
-                "shield".parse().unwrap(),
-            );
-        let root_hint = Some([0xFE; 32]);
-
-        let assert_native_transfer_cost =
-            |instr: InstructionBox, nullifiers: Vec<[u8; 32]>, outputs: Vec<[u8; 32]>| {
-                let expected =
-                    gas_for_proof_attachment(&attachment, nullifiers.len(), outputs.len());
-                assert_eq!(meter_instruction(&instr), expected);
-                assert_eq!(confidential_gas_cost(&instr), expected);
-            };
-
-        let funding_nullifiers = vec![[0xA1; 32], [0xA2; 32]];
-        let escrow_commitment = [0xB1; 32];
-        assert_native_transfer_cost(
-            OpenAnonymousAssetEscrow::new(
-                EscrowId::new(Hash::new("gas-open-anonymous")),
-                asset.clone(),
-                funding_nullifiers.clone(),
-                escrow_commitment,
-                attachment.clone(),
-                root_hint,
-            )
-            .into(),
-            funding_nullifiers,
-            vec![escrow_commitment],
-        );
-
-        let release_nullifiers = vec![[0xC1; 32]];
-        let buyer_outputs = vec![[0xD1; 32], [0xD2; 32]];
-        assert_native_transfer_cost(
-            ReleaseAnonymousAssetEscrow::new(
-                EscrowId::new(Hash::new("gas-release-anonymous")),
-                release_nullifiers.clone(),
-                buyer_outputs.clone(),
-                attachment.clone(),
-                root_hint,
-            )
-            .into(),
-            release_nullifiers,
-            buyer_outputs,
-        );
-
-        let cancel_nullifiers = vec![[0xC2; 32]];
-        let seller_outputs = vec![[0xE1; 32]];
-        assert_native_transfer_cost(
-            CancelAnonymousAssetEscrow::new(
-                EscrowId::new(Hash::new("gas-cancel-anonymous")),
-                cancel_nullifiers.clone(),
-                seller_outputs.clone(),
-                attachment.clone(),
-                root_hint,
-            )
-            .into(),
-            cancel_nullifiers,
-            seller_outputs,
-        );
-
-        let resolve_nullifiers = vec![[0xC3; 32]];
-        let resolution_buyer_outputs = vec![[0xF1; 32]];
-        let resolution_seller_outputs = vec![[0xF2; 32]];
-        let mut resolution_outputs = resolution_buyer_outputs.clone();
-        resolution_outputs.extend(resolution_seller_outputs.iter().copied());
-        assert_native_transfer_cost(
-            ResolveAnonymousEscrowDispute::new(
-                EscrowId::new(Hash::new("gas-resolve-anonymous")),
-                resolve_nullifiers.clone(),
-                resolution_buyer_outputs,
-                resolution_seller_outputs,
-                attachment.clone(),
-                root_hint,
-            )
-            .into(),
-            resolve_nullifiers,
-            resolution_outputs,
-        );
-    }
-
-    #[test]
     fn state_configured_gas_schedule_updates_metering() {
         let _gas_lock = super::lock_confidential_gas_for_tests();
-        use iroha_crypto::Hash;
-        use iroha_data_model::{
-            escrow::EscrowId,
-            isi::{escrow::OpenAnonymousAssetEscrow, zk::VerifyProof},
-            proof::VerifyingKeyId,
-        };
+        use iroha_data_model::{isi::zk::VerifyProof, proof::VerifyingKeyId};
 
         configure_confidential_gas(ConfidentialGasSchedule::default());
 
@@ -923,31 +774,6 @@ mod tests {
             + zk_cfg.gas.per_public_input.saturating_mul(public_inputs)
             + zk_cfg.gas.per_proof_byte.saturating_mul(proof_bytes);
         assert_eq!(verify_gas, expected_verify);
-
-        let asset: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("domain", "universal").unwrap(),
-                "shield".parse().unwrap(),
-            );
-        let nullifiers = vec![[0xAA; 32], [0xBB; 32]];
-        let commitment = [0xCC; 32];
-        let transfer_instr: InstructionBox = OpenAnonymousAssetEscrow::new(
-            EscrowId::new(Hash::new("configured-gas-native-escrow")),
-            asset,
-            nullifiers.clone(),
-            commitment,
-            attachment,
-            None,
-        )
-        .into();
-        let transfer_gas = meter_instruction(&transfer_instr);
-        let expected_transfer = expected_verify
-            + zk_cfg
-                .gas
-                .per_nullifier
-                .saturating_mul(nullifiers.len() as u64)
-            + zk_cfg.gas.per_commitment;
-        assert_eq!(transfer_gas, expected_transfer);
 
         configure_confidential_gas(ConfidentialGasSchedule::default());
     }

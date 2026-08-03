@@ -1057,7 +1057,6 @@ pub(super) fn prepare_testnet_bootstrap_v4<T: std::io::Write>(
             ZkAssetMode::Hybrid,
             true,
             true,
-            Some(transfer_id),
             Some(unshield_id),
             Some(topup_id),
         )

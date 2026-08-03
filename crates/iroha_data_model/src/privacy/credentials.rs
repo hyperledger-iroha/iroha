@@ -860,6 +860,8 @@ pub struct ZkAcePqAuthorizationStatementV1 {
     pub destination: AccountId,
     /// Public transferred asset definition.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent balance partition authorized by the proof.
+    pub public_balance_scope: AssetBalanceScope,
     /// Atomic transfer amount.
     pub amount: u128,
     /// Ledger epoch used by authorization policy checks.

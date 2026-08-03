@@ -7,25 +7,17 @@ when validating confidential-asset flows. It complements the rotation playbook
 (`specs/confidential_assets_rotation.md`) and the calibration ledger
 (`specs/confidential_assets_calibration.md`).
 
-## 1. Selective Disclosure & Event Feeds
+## 1. Selective Disclosure & Audit Records
 
-- Native private transfers emit `ConfidentialEvent::Transferred`; the retired
-  generic deposit and withdrawal instructions have no public event variants.
-  The event payload and filter live in
-  `crates/iroha_data_model/src/events/data/events.rs` and
-  `crates/iroha_data_model/src/events/data/filters.rs`. Kagemusha top-up and
-  redemption use their typed, authenticated request flow, covered by the
-  Kagemusha tests in `crates/iroha_core/src/smartcontracts/isi/offline.rs`.
-- Torii exposes data events via the standard SSE/WebSocket pipeline. Auditors
-  subscribe to confidential transfers with `ConfidentialEventFilter`,
-  optionally scoping to one asset definition, and use `EscrowEventFilter` for
-  native escrow lifecycle events. The sealed anonymous-escrow transfer and its
-  authenticated event context are covered in
-  `crates/iroha_core/src/smartcontracts/isi/escrow.rs`. CLI example:
-
-  ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
-  ```
+- Confidential tree transitions do not have a public generic data-event or
+  event-filter wire. Kagemusha top-up and redemption expose their authenticated
+  request, anchor, drawdown, and receipt records through the protocol-specific
+  query surface, covered by the Kagemusha tests in
+  `crates/iroha_core/src/smartcontracts/isi/offline.rs`.
+- Torii exposes native escrow lifecycle events through the standard
+  SSE/WebSocket pipeline and `EscrowEventFilter`. Anonymous-escrow movement is
+  audited through its authenticated escrow records and confidential-tree query
+  state rather than a producerless generic confidential event feed.
 
 - Policy metadata and pending transitions are available through
   `GET /v1/confidential/assets/{definition_id}/transitions`
@@ -57,8 +49,8 @@ when validating confidential-asset flows. It complements the rotation playbook
   runbook owners and rehearsal expectations.
 - For production rehearsals or emergency windows, operators attach evidence to
   `status.md` entries (e.g., the multi-lane rehearsal log) and include:
-  `curl` proof of policy transitions, Grafana snapshots, and the relevant event
-  digests so auditors can reconstruct Kagemusha top-up→private
+  `curl` proof of policy transitions, Grafana snapshots, and the relevant
+  protocol receipts so auditors can reconstruct Kagemusha top-up→private
   transfer→redemption or anonymous-escrow open→close timelines.
 
 ## 4. External Review Cadence

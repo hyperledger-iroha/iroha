@@ -338,6 +338,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         source,
         destination,
         asset_definition_id,
+        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         amount,
         authorization_epoch: policy.authorization_epoch,
         replay_nullifier: iroha_data_model::privacy::PrivacyNullifierV1::new([0; 32]),
@@ -1199,6 +1200,7 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
         PrivacyIvmPrivateNotePoolBootstrapV1 {
             pool_id,
             asset_definition_id,
+            public_balance_scope: fixture.statement.public_balance_scope,
             reserve_account,
             program_id: fixture.statement.program_id,
             initial_note_commitments: input_commitments,

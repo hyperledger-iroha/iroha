@@ -1682,9 +1682,7 @@ impl Kura {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => return,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => return,
         };
         let transaction_authority = transaction.authority();
         for instruction in transaction.instructions().explicit_instructions() {

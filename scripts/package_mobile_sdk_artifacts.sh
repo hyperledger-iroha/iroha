@@ -854,7 +854,6 @@ package_android() {
   native_mode="$(resolve_android_native_mode "$client_aar")"
   generated_native_root="$client_build_root/generated/jniLibs/$native_mode"
   generated_native_provenance="$client_build_root/generated/nativeProvenance/$native_mode/iroha/native-build-provenance-v1.json"
-  rm -rf "$stage" "$android_zip"
   mkdir -p "$stage"
   : > "$stage_checksums"
 
@@ -904,7 +903,6 @@ publish_package_stage() {
     "$FINAL_OUT_DIR" "$FINAL_OUT_BASELINE" \
     "$PACKAGE_LOCK" "$PACKAGE_LOCK_FD" <<'PY'
 import ctypes
-import errno
 import fcntl
 import os
 from pathlib import Path

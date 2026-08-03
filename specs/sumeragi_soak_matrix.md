@@ -7,16 +7,21 @@ hand to SREs.
 
 ### Default Matrix
 
-| Scenario label | Peers | `collectors_k` | `redundant_send_r` | Purpose |
-|----------------|-------|----------------|--------------------|---------|
-| `peers4_k2_r2` | 4     | 2              | 2                  | Baseline 4-peer stress run (matches existing CI jobs). |
-| `peers6_k3_r2` | 6     | 3              | 2                  | Validates redundant fan-out and DA availability with an extra collector tier. |
-| `peers8_k3_r3` | 8     | 3              | 3                  | Exercises large-cluster gossip fallback and RBC backpressure. |
+| Scenario label | Peers | Purpose |
+|----------------|-------|---------|
+| `peers4` | 4 | Baseline `f = 1` finality, queue-pressure, and DA recovery run. |
+| `peers7` | 7 | Exercises Set A/B fallback and DA availability with `f = 2`. |
+| `peers10` | 10 | Exercises the larger proxy-tail/fallback path and DA/RBC pressure with `f = 3`. |
+
+Revision 4 admits only exact `3f + 1` validator counts from 4 through 31.
+The matrix runner rejects custom 5-, 6-, 8-, or otherwise nonconforming peer
+counts before starting Cargo or creating partial scenario evidence.
 
 The stress scenarios executed for each row map to
-`integration_tests/tests/sumeragi_npos_performance.rs` (queue backpressure, RBC
-store pressure, chunk loss, redundant send retries, and pacemaker jitter
-validation).
+`integration_tests/tests/sumeragi_npos_performance.rs` (baseline finality,
+queue backpressure, DA/RBC store pressure, and chunk loss). The runner names
+only tests that exist in the revision-4 harness; retired V1 collector-retry and
+pacemaker-jitter test names are rejected by omission.
 
 ### Running the Matrix
 
@@ -31,8 +36,8 @@ validation).
 
    - `--tests` allows running a subset of stress tests (forwarded to
      `run_sumeragi_stress.py`).
-   - `--scenario name=...,peers=...,collectors_k=...,redundant_send_r=...`
-     replaces the default rows; pass multiple flags to build a larger matrix.
+   - `--scenario name=...,peers=...` replaces the default rows; pass multiple
+     flags to build a larger matrix. Extra V1 collector fields fail closed.
 3. Review the per-scenario subdirectories:
    - `summary.json` + `README.md` (produced by `render_sumeragi_stress_report.py`)
      capture pass/fail status with direct links to stdout/stderr logs.
@@ -56,12 +61,11 @@ Include the following in the hand-off to operators:
 
 ### Customising the Matrix
 
-- **Peer counts / collector fan-out:** the integration tests honour the
-  environment variables `SUMERAGI_NPOS_STRESS_PEERS`,
-  `SUMERAGI_NPOS_STRESS_COLLECTORS_K`, and
-  `SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R`. The helper sets these automatically
-  per scenario; advanced users can export them manually before running
-  `run_sumeragi_stress.py`.
+- **Peer counts:** the integration tests honour
+  `SUMERAGI_NPOS_STRESS_PEERS`. The helper sets it automatically per scenario;
+  advanced users can export it manually before running
+  `run_sumeragi_stress.py`. Set A, Set B, and the proxy tail are derived from
+  the immutable revision-4 roster and are not tunable matrix dimensions.
 - **Additional scenarios:** use repeated `--scenario` flags or maintain a JSON
   list and feed it through your own wrapper. All scenarios are recorded in
   `matrix_report.json`.

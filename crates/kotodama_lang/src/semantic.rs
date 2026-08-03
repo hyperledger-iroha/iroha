@@ -9086,61 +9086,6 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
-        Builtin::AnonymousEscrowOpenOffer
-        | Builtin::AnonymousEscrowRelease
-        | Builtin::AnonymousEscrowCancel
-        | Builtin::AnonymousEscrowResolveDispute => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (bytes) Norito request payload"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AnonymousEscrowAccept | Builtin::AnonymousEscrowMarkPaymentSent => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (Name)"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AnonymousEscrowOpenDispute => {
-            if !(arg_typed.len() == 1 || arg_typed.len() == 2)
-                || arg_typed[0].ty != Type::Name
-                || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "anonymous_escrow_open_dispute expects (Name[, bytes evidence_hashes])"
-                            .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
         Builtin::Alloc => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {

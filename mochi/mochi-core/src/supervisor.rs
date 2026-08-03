@@ -21,8 +21,11 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, bls_normal_pop_prove};
+use iroha_crypto::{
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove,
+};
 use iroha_data_model::{
+    block::BlockHeader,
     parameter::system::SumeragiConsensusMode,
     peer::PeerId,
     prelude::{AccountId, ChainId},
@@ -52,6 +55,8 @@ const DEFAULT_TORII_BASE_PORT: u16 = 8080;
 const DEFAULT_P2P_BASE_PORT: u16 = 1337;
 const GENESIS_FILE_NAME: &str = "genesis.json";
 const GENESIS_SIGNED_FILE_NAME: &str = "genesis.signed.nrt";
+const GENESIS_EXPECTED_HASH_FILE_NAME: &str = "genesis.expected_hash";
+const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
 const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
@@ -62,6 +67,10 @@ const LOCAL_ONBOARDING_SIGNER_KEY_FILE: &str = "onboarding-signer.key";
 const LOCAL_ONBOARDING_TOKEN_FILE: &str = "onboarding.token";
 const LOCAL_ONBOARDING_CREDENTIAL_ID: &str = "local-dev";
 const LOCAL_ONBOARDING_DATASPACE: &str = "universal";
+const LOCAL_ONBOARDING_SIGNER_MAX_BYTES: usize = 1_024;
+const LOCAL_ONBOARDING_TOKEN_MIN_BYTES: usize = 32;
+const LOCAL_ONBOARDING_TOKEN_MAX_BYTES: usize = 256;
+const LOCAL_ONBOARDING_TOKEN_FILE_MAX_BYTES: usize = LOCAL_ONBOARDING_TOKEN_MAX_BYTES + 2;
 const LOCAL_MULTI_PEER_POW_TICKET_TTL_SECS: i64 = 300;
 // Mochi runs every validator on one developer machine. Keep the mandatory
 // SoraNet memory-hard admission proof enabled, but use the protocol's minimum
@@ -216,21 +225,60 @@ impl OnboardingRuntimeBundle {
         let token_file = runtime_dir.join(LOCAL_ONBOARDING_TOKEN_FILE);
         let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
         let signer_payload = Zeroizing::new(format!("{private_key}\n"));
-        write_owner_only_runtime_file(&private_key_file, signer_payload.as_bytes())?;
+        #[cfg(unix)]
+        let owner_uid = fs::metadata(&runtime_dir)?.uid();
+        #[cfg(not(unix))]
+        let owner_uid = 0;
+        let existing_signer = read_owner_only_runtime_file(
+            &private_key_file,
+            owner_uid,
+            LOCAL_ONBOARDING_SIGNER_MAX_BYTES,
+            "local onboarding signer",
+        )?;
+        let existing_token = read_owner_only_runtime_file(
+            &token_file,
+            owner_uid,
+            LOCAL_ONBOARDING_TOKEN_FILE_MAX_BYTES,
+            "local onboarding token",
+        )?;
 
-        let mut token_entropy = [0_u8; 32];
-        OsRng.try_fill_bytes(&mut token_entropy).map_err(|error| {
-            SupervisorError::Config(format!(
-                "failed to obtain OS entropy for the local onboarding token: {error}"
-            ))
-        })?;
-        let token = Zeroizing::new(format!(
-            "iroha-localnet-{}",
-            encode_hex(token_entropy.as_slice())
-        ));
-        token_entropy.zeroize();
-        let token_hash = *blake3::hash(token.as_bytes()).as_bytes();
-        write_owner_only_runtime_file(&token_file, token.as_bytes())?;
+        let token = match (existing_signer, existing_token) {
+            (Some(existing_signer), Some(existing_token)) => {
+                if !secret_bytes_equal(&existing_signer, signer_payload.as_bytes()) {
+                    return Err(SupervisorError::Config(
+                        "persisted local onboarding signer conflicts with the bundled localnet administrator"
+                            .to_owned(),
+                    ));
+                }
+                validated_local_onboarding_token(existing_token)?
+            }
+            (None, None) => {
+                let mut token_entropy = [0_u8; 32];
+                OsRng.try_fill_bytes(&mut token_entropy).map_err(|error| {
+                    SupervisorError::Config(format!(
+                        "failed to obtain OS entropy for the local onboarding token: {error}"
+                    ))
+                })?;
+                let token = Zeroizing::new(
+                    format!("iroha-localnet-{}", encode_hex(token_entropy.as_slice())).into_bytes(),
+                );
+                token_entropy.zeroize();
+
+                write_new_owner_only_runtime_file(&private_key_file, signer_payload.as_bytes())?;
+                if let Err(error) = write_new_owner_only_runtime_file(&token_file, &token) {
+                    let _ = fs::remove_file(&private_key_file);
+                    return Err(error);
+                }
+                token
+            }
+            _ => {
+                return Err(SupervisorError::Config(
+                    "local onboarding signer and token must either both exist or both be absent"
+                        .to_owned(),
+                ));
+            }
+        };
+        let token_hash = *blake3::hash(&token).as_bytes();
 
         Ok(Self {
             authority: authority.account_id().clone(),
@@ -295,6 +343,7 @@ fn prepare_owner_only_runtime_directory(path: &Path, trusted_root: &Path) -> Res
             if metadata.file_type().is_symlink()
                 || !metadata.is_dir()
                 || metadata.uid() != trusted_root_metadata.uid()
+                || metadata.permissions().mode() & 0o777 != 0o700
             {
                 return Err(SupervisorError::Config(format!(
                     "local onboarding runtime `{}` must be an owner-controlled non-symlink directory",
@@ -302,12 +351,14 @@ fn prepare_owner_only_runtime_directory(path: &Path, trusted_root: &Path) -> Res
                 )));
             }
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(path)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir(path)?;
+            let mut permissions = fs::metadata(path)?.permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(path, permissions)?;
+        }
         Err(error) => return Err(error.into()),
     }
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(path, permissions)?;
     let canonical = fs::canonicalize(path)?;
     if canonical.parent() != Some(trusted_root) {
         return Err(SupervisorError::Config(format!(
@@ -326,59 +377,157 @@ fn prepare_owner_only_runtime_directory(_path: &Path, _trusted_root: &Path) -> R
 }
 
 #[cfg(unix)]
-fn write_owner_only_runtime_file(path: &Path, payload: &[u8]) -> Result<()> {
+fn read_owner_only_runtime_file(
+    path: &Path,
+    owner_uid: u32,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    let initial = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    validate_owner_only_runtime_file_metadata(&initial, owner_uid, max_bytes, label)?;
+
+    let mut file = OpenOptions::new().read(true).open(path)?;
+    let opened = file.metadata()?;
+    validate_owner_only_runtime_file_metadata(&opened, owner_uid, max_bytes, label)?;
+    if initial.dev() != opened.dev() || initial.ino() != opened.ino() {
+        return Err(SupervisorError::Config(format!(
+            "{label} changed while it was opened"
+        )));
+    }
+
+    let mut payload = Zeroizing::new(Vec::with_capacity(opened.len() as usize));
+    Read::by_ref(&mut file)
+        .take((max_bytes + 1) as u64)
+        .read_to_end(&mut payload)?;
+    if payload.len() > max_bytes {
+        return Err(SupervisorError::Config(format!(
+            "{label} exceeds the reviewed size limit"
+        )));
+    }
+
+    let after = file.metadata()?;
+    let current = fs::symlink_metadata(path)?;
+    validate_owner_only_runtime_file_metadata(&after, owner_uid, max_bytes, label)?;
+    validate_owner_only_runtime_file_metadata(&current, owner_uid, max_bytes, label)?;
+    if !same_runtime_file_revision(&opened, &after) || !same_runtime_file_revision(&after, &current)
+    {
+        return Err(SupervisorError::Config(format!(
+            "{label} changed while it was read"
+        )));
+    }
+    Ok(Some(payload))
+}
+
+#[cfg(unix)]
+fn validate_owner_only_runtime_file_metadata(
+    metadata: &fs::Metadata,
+    owner_uid: u32,
+    max_bytes: usize,
+    label: &str,
+) -> Result<()> {
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.uid() != owner_uid
+        || metadata.permissions().mode() & 0o777 != 0o600
+        || metadata.nlink() != 1
+        || metadata.len() > max_bytes as u64
+    {
+        return Err(SupervisorError::Config(format!(
+            "{label} must be an owner-only 0600 regular single-link file"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_runtime_file_revision(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+fn secret_bytes_equal(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
+fn validated_local_onboarding_token(mut payload: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>> {
+    let token_len = if payload.ends_with(b"\r\n") {
+        payload.len().saturating_sub(2)
+    } else if payload.ends_with(b"\n") {
+        payload.len().saturating_sub(1)
+    } else {
+        payload.len()
+    };
+    payload.truncate(token_len);
+    if !(LOCAL_ONBOARDING_TOKEN_MIN_BYTES..=LOCAL_ONBOARDING_TOKEN_MAX_BYTES)
+        .contains(&payload.len())
+        || !payload.iter().all(|byte| (b'!'..=b'~').contains(byte))
+    {
+        return Err(SupervisorError::Config(
+            "local onboarding token must contain 32 through 256 printable non-whitespace ASCII bytes"
+                .to_owned(),
+        ));
+    }
+    Ok(payload)
+}
+
+#[cfg(unix)]
+fn write_new_owner_only_runtime_file(path: &Path, payload: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         SupervisorError::Config("local onboarding runtime file has no parent".to_owned())
     })?;
     let owner_uid = fs::metadata(parent)?.uid();
-    let file_name = path.file_name().and_then(OsStr::to_str).ok_or_else(|| {
-        SupervisorError::Config("local onboarding runtime file name is invalid".to_owned())
-    })?;
-    for attempt in 0_u8..32 {
-        let temporary = parent.join(format!(
-            ".{file_name}.tmp-{}-{}-{attempt}",
-            std::process::id(),
-            timestamp_ms()
-        ));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true).mode(0o600);
-        let mut file = match options.open(&temporary) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
-        };
-        let result = (|| -> io::Result<()> {
-            file.write_all(payload)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temporary, path)?;
-            let metadata = fs::symlink_metadata(path)?;
-            if !metadata.is_file()
-                || metadata.file_type().is_symlink()
-                || metadata.uid() != owner_uid
-                || metadata.nlink() != 1
-                || metadata.permissions().mode() & 0o777 != 0o600
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "local onboarding runtime file is not an owner-only regular file",
-                ));
-            }
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        return result.map_err(Into::into);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600);
+    let mut file = options.open(path)?;
+    let result = (|| -> Result<()> {
+        file.write_all(payload)?;
+        file.sync_all()?;
+        validate_owner_only_runtime_file_metadata(
+            &file.metadata()?,
+            owner_uid,
+            payload.len(),
+            "new local onboarding runtime file",
+        )?;
+        Ok(())
+    })();
+    if result.is_err() {
+        drop(file);
+        let _ = fs::remove_file(path);
     }
-    Err(SupervisorError::Config(format!(
-        "failed to allocate a private temporary file for `{}`",
-        path.display()
-    )))
+    result
 }
 
 #[cfg(not(unix))]
-fn write_owner_only_runtime_file(_path: &Path, _payload: &[u8]) -> Result<()> {
+fn read_owner_only_runtime_file(
+    _path: &Path,
+    _owner_uid: u32,
+    _max_bytes: usize,
+    _label: &str,
+) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    Err(SupervisorError::Config(
+        "local onboarding requires owner-only runtime file support".to_owned(),
+    ))
+}
+
+#[cfg(not(unix))]
+fn write_new_owner_only_runtime_file(_path: &Path, _payload: &[u8]) -> Result<()> {
     Err(SupervisorError::Config(
         "local onboarding requires owner-only runtime file support".to_owned(),
     ))
@@ -3685,6 +3834,19 @@ impl PeerSpec {
             "manifest_json".into(),
             toml::Value::String(genesis.manifest_path.display().to_string()),
         );
+        genesis_table.insert(
+            "expected_hash".into(),
+            toml::Value::String(
+                genesis
+                    .expected_hash
+                    .as_ref()
+                    .map(|hash| {
+                        let hash = hash.to_string().to_ascii_uppercase();
+                        norito::literal::format("hash", hash.as_str())
+                    })
+                    .unwrap_or_else(|| GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
+            ),
+        );
         root.insert("genesis".into(), toml::Value::Table(genesis_table));
 
         let mut kura = toml::Table::new();
@@ -3899,8 +4061,60 @@ impl PeerSpec {
         );
         let config_str = toml::to_string_pretty(&toml::Value::Table(root))?;
         let rendered = format!("{header}\n\n{config_str}");
-        fs::write(&self.config_path, rendered)?;
+        self.write_owner_only_config(rendered.as_bytes())?;
         Ok(())
+    }
+
+    #[cfg(unix)]
+    fn write_owner_only_config(&self, payload: &[u8]) -> Result<()> {
+        let parent = self.config_path.parent().ok_or_else(|| {
+            SupervisorError::Config("managed peer config has no parent directory".to_owned())
+        })?;
+        let owner_uid = fs::metadata(parent)?.uid();
+
+        if let Ok(existing) = fs::symlink_metadata(&self.config_path) {
+            if !existing.file_type().is_file()
+                || existing.file_type().is_symlink()
+                || existing.uid() != owner_uid
+                || existing.nlink() != 1
+            {
+                return Err(SupervisorError::Config(format!(
+                    "managed peer config `{}` must be an owner-owned regular single-link file",
+                    self.config_path.display()
+                )));
+            }
+        }
+
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).mode(0o600);
+        let mut file = options.open(&self.config_path)?;
+        let mut permissions = file.metadata()?.permissions();
+        permissions.set_mode(0o600);
+        file.set_permissions(permissions)?;
+
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != owner_uid
+            || metadata.nlink() != 1
+            || metadata.permissions().mode() & 0o777 != 0o600
+        {
+            return Err(SupervisorError::Config(format!(
+                "managed peer config `{}` could not be secured as an owner-only regular single-link file",
+                self.config_path.display()
+            )));
+        }
+
+        file.set_len(0)?;
+        file.write_all(payload)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn write_owner_only_config(&self, _payload: &[u8]) -> Result<()> {
+        Err(SupervisorError::Config(
+            "managed peer configs require owner-only file support".to_owned(),
+        ))
     }
 
     fn config_header(
@@ -3951,6 +4165,8 @@ struct GenesisMaterial {
     key_pair: KeyPair,
     manifest_path: PathBuf,
     block_path: PathBuf,
+    expected_hash_path: PathBuf,
+    expected_hash: Option<HashOf<BlockHeader>>,
     profile: Option<GenesisProfile>,
     vrf_seed_hex: Option<String>,
     verify_report: Option<KagamiVerifyReport>,
@@ -4053,6 +4269,7 @@ impl GenesisMaterial {
         fs::create_dir_all(&genesis_dir)?;
         let manifest_path = genesis_dir.join(GENESIS_FILE_NAME);
         let block_path = genesis_dir.join(GENESIS_SIGNED_FILE_NAME);
+        let expected_hash_path = genesis_dir.join(GENESIS_EXPECTED_HASH_FILE_NAME);
 
         let key_pair = KeyPair::random();
         let manifest = Self::generate_manifest(
@@ -4090,6 +4307,8 @@ impl GenesisMaterial {
             key_pair,
             manifest_path,
             block_path,
+            expected_hash_path,
+            expected_hash: None,
             profile: genesis_profile,
             vrf_seed_hex: vrf_seed_hex.map(|value| value.to_owned()),
             verify_report: None,
@@ -4105,11 +4324,12 @@ impl GenesisMaterial {
         // render the primary config once before signing, then let the caller
         // rewrite every peer config with the final bound fingerprint header.
         primary.write_config(chain_id, &material, peers, config_overrides, &[])?;
-        let manifest = material.sign_manifest_with_kagami(
+        let (manifest, expected_hash) = material.sign_manifest_with_kagami(
             binaries,
             primary.config_path.as_path(),
             consensus_mode,
         )?;
+        material.expected_hash = Some(expected_hash);
 
         let verify_report = if let Some(profile) = genesis_profile {
             Some(Self::verify_manifest_with_kagami(
@@ -4145,7 +4365,7 @@ impl GenesisMaterial {
         binaries: &mut BinaryPaths,
         config_path: &Path,
         consensus_mode: SumeragiConsensusMode,
-    ) -> Result<RawGenesisTransaction> {
+    ) -> Result<(RawGenesisTransaction, HashOf<BlockHeader>)> {
         let kagami = binaries.ensure_kagami_ready()?;
         let genesis_dir = self.manifest_path.parent().ok_or_else(|| {
             SupervisorError::Config(format!(
@@ -4164,6 +4384,8 @@ impl GenesisMaterial {
             .arg(&self.block_path)
             .arg("--bound-manifest-out")
             .arg(&self.manifest_path)
+            .arg("--expected-hash-out")
+            .arg(&self.expected_hash_path)
             .arg("--private-key-file")
             .arg(private_key_file.path())
             .arg("--config")
@@ -4203,7 +4425,44 @@ impl GenesisMaterial {
             )));
         }
 
-        RawGenesisTransaction::from_path(&self.manifest_path).map_err(Into::into)
+        let expected_hash_record =
+            fs::read_to_string(&self.expected_hash_path).map_err(|error| {
+                SupervisorError::KagamiInvocation(format!(
+                    "`kagami genesis sign` did not create exact genesis hash `{}`: {error}",
+                    self.expected_hash_path.display()
+                ))
+            })?;
+        let expected_hash_literal = expected_hash_record.strip_suffix('\n').ok_or_else(|| {
+            SupervisorError::KagamiInvocation(format!(
+                "`kagami genesis sign` produced a non-canonical exact genesis hash at `{}`",
+                self.expected_hash_path.display()
+            ))
+        })?;
+        if expected_hash_literal.is_empty()
+            || expected_hash_literal.chars().any(char::is_whitespace)
+        {
+            return Err(SupervisorError::KagamiInvocation(format!(
+                "`kagami genesis sign` produced a non-canonical exact genesis hash at `{}`",
+                self.expected_hash_path.display()
+            )));
+        }
+        let expected_hash = expected_hash_literal
+            .parse::<HashOf<BlockHeader>>()
+            .map_err(|error| {
+                SupervisorError::KagamiInvocation(format!(
+                    "failed to parse exact genesis hash `{}`: {error}",
+                    self.expected_hash_path.display()
+                ))
+            })?;
+        if expected_hash.to_string() != expected_hash_literal {
+            return Err(SupervisorError::KagamiInvocation(format!(
+                "`kagami genesis sign` produced a non-canonical exact genesis hash at `{}`",
+                self.expected_hash_path.display()
+            )));
+        }
+
+        let manifest = RawGenesisTransaction::from_path(&self.manifest_path)?;
+        Ok((manifest, expected_hash))
     }
 
     fn generate_manifest(
@@ -5042,6 +5301,10 @@ JSON
               bound_manifest_out="$2"
               shift 2
               ;;
+            --expected-hash-out)
+              expected_hash_out="$2"
+              shift 2
+              ;;
             --private-key-file)
               private_key_file="$2"
               shift 2
@@ -5057,7 +5320,11 @@ JSON
         done
         test -s "$private_key_file"
         test -s "$config_file"
+        config_mode="$(stat -f %Lp "$config_file" 2>/dev/null || stat -c %a "$config_file")"
+        test "$config_mode" = "600"
+        grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
         printf 'stub-signed-genesis' > "$out_file"
+        printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
         if [ "$bound_manifest_out" != "$manifest_path" ]; then
           cp "$manifest_path" "$bound_manifest_out"
         fi
@@ -5152,6 +5419,10 @@ JSON
               bound_manifest_out="$2"
               shift 2
               ;;
+            --expected-hash-out)
+              expected_hash_out="$2"
+              shift 2
+              ;;
             --private-key-file)
               private_key_file="$2"
               shift 2
@@ -5167,7 +5438,9 @@ JSON
         done
         test -s "$private_key_file"
         test -s "$config_file"
+        grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
         printf 'stub-signed-genesis' > "$out_file"
+        printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
         if [ "$bound_manifest_out" != "$manifest_path" ]; then
           cp "$manifest_path" "$bound_manifest_out"
         fi
@@ -5243,14 +5516,22 @@ esac
     fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
         let manifest_path = paths.genesis_dir().join(GENESIS_FILE_NAME);
         let block_path = paths.genesis_dir().join(GENESIS_SIGNED_FILE_NAME);
+        let expected_hash_path = paths.genesis_dir().join(GENESIS_EXPECTED_HASH_FILE_NAME);
+        let expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse::<HashOf<BlockHeader>>()
+            .expect("test genesis hash");
         fs::create_dir_all(paths.genesis_dir()).expect("genesis dir");
         fs::write(&manifest_path, b"{}").expect("write manifest");
         fs::write(&block_path, b"norito-wire-stub").expect("write signed genesis");
+        fs::write(&expected_hash_path, format!("{expected_hash}\n"))
+            .expect("write genesis expected hash");
 
         GenesisMaterial {
             key_pair: KeyPair::random(),
             manifest_path,
             block_path,
+            expected_hash_path,
+            expected_hash: Some(expected_hash),
             profile: None,
             vrf_seed_hex: None,
             verify_report: None,
@@ -5504,6 +5785,16 @@ esac
             );
         }
 
+        #[cfg(unix)]
+        for peer in supervisor.peers() {
+            let metadata = fs::symlink_metadata(peer.config_path()).expect("peer config metadata");
+            assert!(metadata.file_type().is_file());
+            assert!(!metadata.file_type().is_symlink());
+            assert_eq!(metadata.uid(), fs::metadata(temp.path()).unwrap().uid());
+            assert_eq!(metadata.nlink(), 1);
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        }
+
         let peer = &supervisor.peers()[0];
         let config_path = peer.config_path().to_path_buf();
         let contents = fs::read_to_string(config_path).expect("config readable");
@@ -5545,6 +5836,15 @@ esac
                     .as_str()
             )
         );
+        assert_eq!(
+            value
+                .get("genesis")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("expected_hash"))
+                .and_then(toml::Value::as_str),
+            Some("hash:0000000000000000000000000000000000000000000000000000000000000001#C50E")
+        );
+        assert!(!contents.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
         assert!(
             value
                 .get("sumeragi")
@@ -5789,6 +6089,16 @@ esac
         for peer in supervisor.peers() {
             assert!(peer.config_path().is_absolute());
             assert!(peer.config_path().is_file());
+            #[cfg(unix)]
+            assert_eq!(
+                fs::metadata(peer.config_path())
+                    .expect("peer config metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600,
+                "peer config contains private keys and must never be group/world-readable"
+            );
             assert!(peer.log_path().is_absolute());
             let peer_cwd = peer
                 .config_path()
@@ -8166,11 +8476,254 @@ esac
         assert!(contents.contains(&format!("# mochi.lane[1].merge_log = {lane1_merge}")));
     }
 
+    #[cfg(unix)]
+    fn onboarding_test_paths(root: &Path, name: &str) -> NetworkPaths {
+        let profile = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
+        let paths = NetworkPaths::from_root(root.join(name), &profile);
+        paths.ensure().expect("create onboarding test paths");
+        paths
+    }
+
+    #[cfg(unix)]
+    fn write_private_test_file(path: &Path, payload: &[u8]) {
+        fs::write(path, payload).expect("write private test file");
+        let mut permissions = fs::metadata(path)
+            .expect("private test file metadata")
+            .permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(path, permissions).expect("set private test file permissions");
+    }
+
     #[test]
     #[cfg(unix)]
-    fn four_peer_onboarding_bundle_is_private_identical_and_session_path_only() {
+    fn onboarding_bundle_reuses_existing_material_without_rotation() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let paths = onboarding_test_paths(temp.path(), "stable");
+        let authority = localnet_admin_signer().expect("localnet admin");
+        let first = OnboardingRuntimeBundle::create(&paths, authority)
+            .expect("create first onboarding bundle");
+        let signer_before = fs::read(&first.private_key_file).expect("read signer");
+        let token_before = fs::read(&first.token_file).expect("read token");
+        let signer_inode = fs::metadata(&first.private_key_file)
+            .expect("signer metadata")
+            .ino();
+        let token_inode = fs::metadata(&first.token_file)
+            .expect("token metadata")
+            .ino();
+
+        let second =
+            OnboardingRuntimeBundle::create(&paths, authority).expect("reuse onboarding bundle");
+
+        assert_eq!(second.token_hash, first.token_hash);
+        assert_eq!(second.private_key_file, first.private_key_file);
+        assert_eq!(second.token_file, first.token_file);
+        assert_eq!(fs::read(&second.private_key_file).unwrap(), signer_before);
+        assert_eq!(fs::read(&second.token_file).unwrap(), token_before);
+        assert_eq!(
+            fs::metadata(&second.private_key_file).unwrap().ino(),
+            signer_inode,
+            "valid signer must not be replaced"
+        );
+        assert_eq!(
+            fs::metadata(&second.token_file).unwrap().ino(),
+            token_inode,
+            "valid token must not be rotated or replaced"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onboarding_bundle_reuses_dpn_tokens_and_hashes_normalized_body() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let authority = localnet_admin_signer().expect("localnet admin");
+        let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
+        let signer_payload = format!("{private_key}\n");
+        let token_body = format!("nevo-local-{}", "A".repeat(48));
+
+        for (index, terminator) in [b"\n".as_slice(), b"\r\n".as_slice()]
+            .into_iter()
+            .enumerate()
+        {
+            let paths = onboarding_test_paths(temp.path(), &format!("dpn-{index}"));
+            let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
+            fs::create_dir(&runtime).expect("create runtime");
+            fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+                .expect("set runtime permissions");
+            let signer = runtime.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE);
+            let token = runtime.join(LOCAL_ONBOARDING_TOKEN_FILE);
+            write_private_test_file(&signer, signer_payload.as_bytes());
+            let mut persisted_token = token_body.as_bytes().to_vec();
+            persisted_token.extend_from_slice(terminator);
+            write_private_test_file(&token, &persisted_token);
+            let manifest = runtime.join("onboarding.json");
+            write_private_test_file(&manifest, b"legacy DPN-owned manifest\n");
+            let signer_inode = fs::metadata(&signer).unwrap().ino();
+            let token_inode = fs::metadata(&token).unwrap().ino();
+            let manifest_inode = fs::metadata(&manifest).unwrap().ino();
+
+            let bundle = OnboardingRuntimeBundle::create(&paths, authority)
+                .expect("reuse DPN onboarding material");
+
+            assert_eq!(
+                bundle.token_hash,
+                *blake3::hash(token_body.as_bytes()).as_bytes()
+            );
+            assert_eq!(fs::read(&signer).unwrap(), signer_payload.as_bytes());
+            assert_eq!(fs::read(&token).unwrap(), persisted_token);
+            assert_eq!(fs::metadata(&signer).unwrap().ino(), signer_inode);
+            assert_eq!(fs::metadata(&token).unwrap().ino(), token_inode);
+            assert_eq!(fs::read(&manifest).unwrap(), b"legacy DPN-owned manifest\n");
+            assert_eq!(fs::metadata(&manifest).unwrap().ino(), manifest_inode);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onboarding_bundle_rejects_conflicting_signer_without_mutation() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let paths = onboarding_test_paths(temp.path(), "conflict");
+        let authority = localnet_admin_signer().expect("localnet admin");
+        let first =
+            OnboardingRuntimeBundle::create(&paths, authority).expect("create onboarding bundle");
+        write_private_test_file(
+            &first.private_key_file,
+            b"802620ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n",
+        );
+        let signer_before = fs::read(&first.private_key_file).unwrap();
+        let token_before = fs::read(&first.token_file).unwrap();
+
+        let error = OnboardingRuntimeBundle::create(&paths, authority)
+            .expect_err("conflicting signer must fail");
+
+        assert!(matches!(
+            error,
+            SupervisorError::Config(message) if message.contains("signer conflicts")
+        ));
+        assert_eq!(fs::read(&first.private_key_file).unwrap(), signer_before);
+        assert_eq!(fs::read(&first.token_file).unwrap(), token_before);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onboarding_bundle_rejects_partial_material_without_completion() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let authority = localnet_admin_signer().expect("localnet admin");
+        let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
+        let signer_payload = format!("{private_key}\n");
+
+        for signer_only in [true, false] {
+            let paths = onboarding_test_paths(
+                temp.path(),
+                if signer_only {
+                    "partial-signer"
+                } else {
+                    "partial-token"
+                },
+            );
+            let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
+            fs::create_dir(&runtime).expect("create runtime");
+            fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+                .expect("set runtime permissions");
+            let signer = runtime.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE);
+            let token = runtime.join(LOCAL_ONBOARDING_TOKEN_FILE);
+            if signer_only {
+                write_private_test_file(&signer, signer_payload.as_bytes());
+            } else {
+                write_private_test_file(
+                    &token,
+                    b"nevo-local-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                );
+            }
+
+            let error = OnboardingRuntimeBundle::create(&paths, authority)
+                .expect_err("partial bundle must fail");
+            assert!(matches!(
+                error,
+                SupervisorError::Config(message) if message.contains("must either both exist or both be absent")
+            ));
+            assert_eq!(signer.exists(), signer_only);
+            assert_eq!(token.exists(), !signer_only);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onboarding_bundle_rejects_unsafe_private_file_modes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let authority = localnet_admin_signer().expect("localnet admin");
+
+        for target_signer in [true, false] {
+            let paths = onboarding_test_paths(
+                temp.path(),
+                if target_signer {
+                    "unsafe-signer"
+                } else {
+                    "unsafe-token"
+                },
+            );
+            let bundle = OnboardingRuntimeBundle::create(&paths, authority)
+                .expect("create onboarding bundle");
+            let target = if target_signer {
+                &bundle.private_key_file
+            } else {
+                &bundle.token_file
+            };
+            fs::set_permissions(target, fs::Permissions::from_mode(0o644))
+                .expect("make private file unsafe");
+
+            let error = OnboardingRuntimeBundle::create(&paths, authority)
+                .expect_err("unsafe private file must fail");
+            assert!(matches!(
+                error,
+                SupervisorError::Config(message) if message.contains("owner-only 0600")
+            ));
+            assert_eq!(
+                fs::metadata(target).unwrap().permissions().mode() & 0o777,
+                0o644,
+                "validation must not silently repair an unsafe file"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn onboarding_bundle_rejects_malformed_tokens() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let authority = localnet_admin_signer().expect("localnet admin");
+        let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
+        let signer_payload = format!("{private_key}\n");
+        let malformed_tokens = [
+            b"too-short".as_slice(),
+            b"nevo-local-AAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAA".as_slice(),
+            b"nevo-local-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n".as_slice(),
+        ];
+
+        for (index, malformed_token) in malformed_tokens.into_iter().enumerate() {
+            let paths = onboarding_test_paths(temp.path(), &format!("malformed-{index}"));
+            let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
+            fs::create_dir(&runtime).expect("create runtime");
+            fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+                .expect("set runtime permissions");
+            write_private_test_file(
+                &runtime.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE),
+                signer_payload.as_bytes(),
+            );
+            write_private_test_file(&runtime.join(LOCAL_ONBOARDING_TOKEN_FILE), malformed_token);
+
+            let error = OnboardingRuntimeBundle::create(&paths, authority)
+                .expect_err("malformed token must fail");
+            assert!(matches!(
+                error,
+                SupervisorError::Config(message) if message.contains("32 through 256 printable")
+            ));
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe() {
         if !ports_available(
-            "four_peer_onboarding_bundle_is_private_identical_and_session_path_only",
+            "four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe",
         ) {
             return;
         }

@@ -994,8 +994,6 @@ mod model {
         DefiOracleAttestation(Vec<crate::oracle::DefiOracleAttestation>),
         /// Batch of native asset escrow records.
         AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
-        /// Batch of native anonymous asset escrow records.
-        AnonymousAssetEscrowRecord(Vec<crate::escrow::AnonymousAssetEscrowRecord>),
         /// Batch of fee sponsor programs.
         FeeSponsorProgram(Vec<crate::nexus::FeeSponsorProgram>),
         /// Batch of fee sponsor program identifiers.
@@ -1043,8 +1041,6 @@ mod model {
         FindAssetDefinitionById(asset::prelude::FindAssetDefinitionById),
         /// Fetch a native asset escrow by identifier.
         FindAssetEscrowById(escrow::prelude::FindAssetEscrowById),
-        /// Fetch a native anonymous asset escrow by identifier.
-        FindAnonymousAssetEscrowById(escrow::prelude::FindAnonymousAssetEscrowById),
         /// Fetch a trigger by identifier.
         FindTriggerById(trigger::prelude::FindTriggerById),
         /// Fetch a Twitter binding record by hash.
@@ -1267,8 +1263,6 @@ mod model {
         AssetDefinition(crate::asset::definition::AssetDefinition),
         /// Native asset escrow payload.
         AssetEscrowRecord(crate::escrow::AssetEscrowRecord),
-        /// Native anonymous asset escrow payload.
-        AnonymousAssetEscrowRecord(crate::escrow::AnonymousAssetEscrowRecord),
         /// Trigger payload.
         Trigger(crate::trigger::Trigger),
         /// Twitter binding payload.
@@ -1582,10 +1576,6 @@ mod model {
                 try_build!(crate::oracle::TwitterBindingRecord, TwitterBindingRecord);
                 try_build!(crate::oracle::DefiOracleAttestation, DefiOracleAttestation);
                 try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
-                try_build!(
-                    crate::escrow::AnonymousAssetEscrowRecord,
-                    AnonymousAssetEscrowRecord
-                );
 
                 // Keep the infallible constructor API, but encode an unsupported erased type as a
                 // deliberately noncanonical envelope. All three byte components fail decoding,
@@ -1695,8 +1685,6 @@ mod model {
         Permission,
         /// Native asset escrow records.
         AssetEscrowRecord,
-        /// Native anonymous asset escrow records.
-        AnonymousAssetEscrowRecord,
         /// Fee sponsor policy records.
         FeeSponsorProgram,
         /// Fee sponsor program identifier records.
@@ -1872,12 +1860,6 @@ mod model {
     impl ItemKindTag for crate::escrow::AssetEscrowRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::AssetEscrowRecord
-        }
-    }
-    #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::escrow::AnonymousAssetEscrowRecord {
-        fn kind() -> QueryItemKind {
-            QueryItemKind::AnonymousAssetEscrowRecord
         }
     }
     #[cfg(feature = "fast_dsl")]
@@ -2590,9 +2572,6 @@ impl CommittedTransaction {
                     .signed_transaction
                     .inject_instructions(additions.clone());
             }
-            TransactionEntrypoint::PrivateKaigi(entrypoint) => {
-                entrypoint.inject_instructions(additions.clone());
-            }
             TransactionEntrypoint::Time(entrypoint) => {
                 let mut modified = entrypoint.instructions.0.clone().into_vec();
                 modified.extend(additions);
@@ -2680,9 +2659,6 @@ impl QueryOutputBatchBox {
             (Self::TwitterBindingRecord(v1), Self::TwitterBindingRecord(v2)) => v1.extend(v2),
             (Self::DefiOracleAttestation(v1), Self::DefiOracleAttestation(v2)) => v1.extend(v2),
             (Self::AssetEscrowRecord(v1), Self::AssetEscrowRecord(v2)) => v1.extend(v2),
-            (Self::AnonymousAssetEscrowRecord(v1), Self::AnonymousAssetEscrowRecord(v2)) => {
-                v1.extend(v2)
-            }
             (Self::FeeSponsorProgram(v1), Self::FeeSponsorProgram(v2)) => v1.extend(v2),
             (Self::FeeSponsorProgramId(v1), Self::FeeSponsorProgramId(v2)) => v1.extend(v2),
             _ => return Err(QueryOutputBatchBoxTypeMismatch),
@@ -2738,7 +2714,6 @@ impl QueryOutputBatchBox {
             Self::TwitterBindingRecord(v) => v.len(),
             Self::DefiOracleAttestation(v) => v.len(),
             Self::AssetEscrowRecord(v) => v.len(),
-            Self::AnonymousAssetEscrowRecord(v) => v.len(),
             Self::FeeSponsorProgram(v) => v.len(),
             Self::FeeSponsorProgramId(v) => v.len(),
         }
@@ -4257,10 +4232,6 @@ impl_iter_queries! {
     escrow::FindAssetEscrowsBySeller => crate::escrow::AssetEscrowRecord,
     escrow::FindAssetEscrowsByBuyer => crate::escrow::AssetEscrowRecord,
     escrow::FindAssetEscrowsByStatus => crate::escrow::AssetEscrowRecord,
-    escrow::FindAnonymousAssetEscrows => crate::escrow::AnonymousAssetEscrowRecord,
-    escrow::FindAnonymousAssetEscrowsBySeller => crate::escrow::AnonymousAssetEscrowRecord,
-    escrow::FindAnonymousAssetEscrowsByBuyer => crate::escrow::AnonymousAssetEscrowRecord,
-    escrow::FindAnonymousAssetEscrowsByStatus => crate::escrow::AnonymousAssetEscrowRecord,
     nexus::prelude::FindFeeSponsorPrograms => crate::nexus::FeeSponsorProgram,
     nexus::prelude::FindFeeSponsorProgramIds => crate::nexus::FeeSponsorProgramId,
     nexus::prelude::FindFeeSponsorProgramsBySponsor => crate::nexus::FeeSponsorProgram,
@@ -4294,7 +4265,6 @@ impl_singular_queries! {
     asset::prelude::FindAssetById => crate::asset::value::Asset,
     asset::prelude::FindAssetDefinitionById => crate::asset::definition::AssetDefinition,
     escrow::prelude::FindAssetEscrowById => crate::escrow::AssetEscrowRecord,
-    escrow::prelude::FindAnonymousAssetEscrowById => crate::escrow::AnonymousAssetEscrowRecord,
     trigger::prelude::FindTriggerById => crate::trigger::Trigger,
     oracle::FindTwitterBindingByHash => crate::oracle::TwitterBindingRecord,
     oracle::FindOracleFeedById => crate::oracle::FeedConfig,
@@ -4915,56 +4885,13 @@ pub mod escrow {
             pub status: AssetEscrowStatus,
         }
 
-        /// Find all native anonymous asset escrow records.
-        #[derive(Copy, Display)]
-        #[display("Find all anonymous asset escrows")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindAnonymousAssetEscrows;
-
-        /// Find a native anonymous asset escrow by identifier.
-        #[derive(Display)]
-        #[display("Find anonymous asset escrow `{escrow_id:?}`")]
-        #[repr(transparent)]
-        pub struct FindAnonymousAssetEscrowById {
-            /// Escrow identifier.
-            pub escrow_id: EscrowId,
-        }
-
-        /// Find native anonymous asset escrows opened by a seller.
-        #[derive(Display)]
-        #[display("Find anonymous asset escrows by seller `{seller}`")]
-        #[repr(transparent)]
-        pub struct FindAnonymousAssetEscrowsBySeller {
-            /// Seller account identifier.
-            pub seller: AccountId,
-        }
-
-        /// Find native anonymous asset escrows accepted by a buyer.
-        #[derive(Display)]
-        #[display("Find anonymous asset escrows by buyer `{buyer}`")]
-        #[repr(transparent)]
-        pub struct FindAnonymousAssetEscrowsByBuyer {
-            /// Buyer account identifier.
-            pub buyer: AccountId,
-        }
-
-        /// Find native anonymous asset escrows by lifecycle status.
-        #[derive(Display)]
-        #[display("Find anonymous asset escrows by status `{status:?}`")]
-        #[repr(transparent)]
-        pub struct FindAnonymousAssetEscrowsByStatus {
-            /// Lifecycle status filter.
-            pub status: AssetEscrowStatus,
-        }
     }
 
     pub mod prelude {
         //! Prelude re-exports for native asset escrow queries.
         pub use super::{
-            FindAnonymousAssetEscrowById, FindAnonymousAssetEscrows,
-            FindAnonymousAssetEscrowsByBuyer, FindAnonymousAssetEscrowsBySeller,
-            FindAnonymousAssetEscrowsByStatus, FindAssetEscrowById, FindAssetEscrows,
-            FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+            FindAssetEscrowById, FindAssetEscrows, FindAssetEscrowsByBuyer,
+            FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
         };
     }
 }
@@ -7893,7 +7820,6 @@ mod certified_merge_inclusion_tests {
 mod fault_injection_tests {
     use std::str::FromStr;
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{Hash, HashOf, MerkleProof};
 
     use super::*;
@@ -7901,15 +7827,7 @@ mod fault_injection_tests {
         AssetDefinitionId, Level,
         events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferOutcome},
         isi::{InstructionBox, Log},
-        kaigi::{
-            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-            KaigiRoomPolicy,
-        },
         prelude::{DataTriggerSequence, Quantity, TimeTriggerEntrypoint, TransactionResult},
-        transaction::{
-            PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
-            PrivateKaigiTemplate, PrivateKaigiTransaction,
-        },
         trigger::TriggerId,
     };
 
@@ -7927,69 +7845,6 @@ mod fault_injection_tests {
             )
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid authority"),
-        });
-
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        CommittedTransaction {
-            block_hash: zero_hash(),
-            entrypoint_hash: entry.hash(),
-            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
-            entrypoint: entry,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, vec![]),
-            result,
-            merge_inclusion: None,
-        }
-    }
-
-    fn make_private_committed_tx() -> CommittedTransaction {
-        let mut metadata = Metadata::default();
-        metadata.insert(Name::from_str("topic").expect("metadata key"), "private");
-        let entry = TransactionEntrypoint::PrivateKaigi(PrivateKaigiTransaction {
-            chain: "test-chain".parse().expect("chain"),
-            creation_time_ms: 42,
-            nonce: None,
-            metadata,
-            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
-                call: PrivateKaigiTemplate {
-                    id: KaigiId::new(
-                        DomainId::try_new("kaigi", "universal").expect("domain"),
-                        Name::from_str("private-room").expect("call"),
-                    ),
-                    title: Some("Private".to_owned()),
-                    description: None,
-                    max_participants: Some(2),
-                    gas_rate_per_minute: 5,
-                    metadata: Metadata::default(),
-                    scheduled_start_ms: None,
-                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-                    room_policy: KaigiRoomPolicy::Authenticated,
-                    relay_manifest: None,
-                },
-            }),
-            artifacts: PrivateKaigiArtifacts {
-                commitment: KaigiParticipantCommitment {
-                    commitment: Hash::new(b"commitment"),
-                    alias_tag: None,
-                },
-                nullifier: KaigiParticipantNullifier {
-                    digest: Hash::new(b"nullifier"),
-                    issued_at_ms: 42,
-                },
-                roster_root: Hash::new(b"root"),
-                proof: vec![1, 2, 3],
-            },
-            fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").expect("domain"),
-                    Name::from_str("xor").expect("name"),
-                ),
-                anchor_root: Hash::new(b"anchor"),
-                nullifiers: vec![[0x11; 32]],
-                output_commitments: vec![[0x22; 32]],
-                encrypted_change_payloads: vec![vec![0x33]],
-                proof: vec![0x44],
-            },
         });
 
         let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
@@ -8032,39 +7887,6 @@ mod fault_injection_tests {
     }
 
     #[test]
-    fn private_kaigi_entrypoint_injection_records_overlay() {
-        let mut tx = make_private_committed_tx();
-        let original_hash = tx.entrypoint_hash;
-        let injected: InstructionBox = Log {
-            level: Level::WARN,
-            msg: "private tamper".into(),
-        }
-        .into();
-
-        tx.inject_instructions([injected.clone()]);
-
-        assert_ne!(
-            tx.entrypoint_hash, original_hash,
-            "entrypoint hash must reflect injected instructions"
-        );
-
-        let overlay = match &tx.entrypoint {
-            TransactionEntrypoint::PrivateKaigi(entry) => {
-                crate::transaction::signed::SignedTransaction::fault_injection_overlay(
-                    &entry.metadata,
-                )
-                .unwrap_or_default()
-            }
-            _ => panic!("expected private Kaigi entrypoint"),
-        };
-        assert_eq!(overlay.len(), 1);
-        assert_eq!(
-            overlay[0],
-            BASE64_STANDARD.encode(norito::to_bytes(&injected).expect("encode overlay payload"))
-        );
-    }
-
-    #[test]
     fn result_swap_preserves_independent_batch_receipts() {
         let mut tx = make_time_committed_tx();
         let authority = match &tx.entrypoint {
@@ -8102,93 +7924,12 @@ mod fault_injection_tests {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use std::{num::NonZeroU64, str::FromStr};
+    use std::num::NonZeroU64;
 
-    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof};
+    use iroha_crypto::KeyPair;
     use norito::json;
 
     use super::*;
-    use crate::{
-        AssetDefinitionId,
-        domain::DomainId,
-        kaigi::{
-            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-            KaigiRoomPolicy,
-        },
-        name::Name,
-        transaction::{
-            PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
-            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint,
-            TransactionResult,
-        },
-    };
-
-    fn zero_hash<T>() -> HashOf<T> {
-        let zero = [0u8; 32];
-        HashOf::from_untyped_unchecked(Hash::prehashed(zero))
-    }
-
-    fn private_committed_tx() -> CommittedTransaction {
-        let mut metadata = Metadata::default();
-        metadata.insert(Name::from_str("topic").expect("metadata key"), "private");
-        let entrypoint = TransactionEntrypoint::PrivateKaigi(PrivateKaigiTransaction {
-            chain: "test-chain".parse().expect("chain"),
-            creation_time_ms: 42,
-            nonce: None,
-            metadata,
-            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
-                call: PrivateKaigiTemplate {
-                    id: KaigiId::new(
-                        DomainId::try_new("kaigi", "universal").expect("domain"),
-                        Name::from_str("private-room").expect("call"),
-                    ),
-                    title: Some("Private".to_owned()),
-                    description: None,
-                    max_participants: Some(2),
-                    gas_rate_per_minute: 5,
-                    metadata: Metadata::default(),
-                    scheduled_start_ms: None,
-                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-                    room_policy: KaigiRoomPolicy::Authenticated,
-                    relay_manifest: None,
-                },
-            }),
-            artifacts: PrivateKaigiArtifacts {
-                commitment: KaigiParticipantCommitment {
-                    commitment: Hash::new(b"commitment"),
-                    alias_tag: None,
-                },
-                nullifier: KaigiParticipantNullifier {
-                    digest: Hash::new(b"nullifier"),
-                    issued_at_ms: 42,
-                },
-                roster_root: Hash::new(b"root"),
-                proof: vec![1, 2, 3],
-            },
-            fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").expect("domain"),
-                    Name::from_str("xor").expect("name"),
-                ),
-                anchor_root: Hash::new(b"anchor"),
-                nullifiers: vec![[0x11; 32]],
-                output_commitments: vec![[0x22; 32]],
-                encrypted_change_payloads: vec![vec![0x33]],
-                proof: vec![0x44],
-            },
-        });
-        let result = TransactionResult::new(Ok(crate::trigger::DataTriggerSequence::default()));
-        CommittedTransaction {
-            block_hash: zero_hash(),
-            entrypoint_hash: entrypoint.hash(),
-            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
-            entrypoint: entrypoint.clone(),
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, vec![]),
-            result,
-            merge_inclusion: None,
-        }
-    }
 
     #[test]
     fn proof_backend_query_payload_roundtrips() {
@@ -8503,24 +8244,5 @@ mod tests {
             }
             other => panic!("expected object for iterable response, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn committed_tx_filters_treat_private_kaigi_authority_as_absent() {
-        let tx = private_committed_tx();
-
-        let filters = CommittedTxFilters {
-            authority_exists: Some(false),
-            ts_ge: Some(40),
-            ts_le: Some(50),
-            ..CommittedTxFilters::default()
-        };
-        assert!(filters.applies(&tx));
-
-        let authority_required = CommittedTxFilters {
-            authority_exists: Some(true),
-            ..CommittedTxFilters::default()
-        };
-        assert!(!authority_required.applies(&tx));
     }
 }

@@ -108,7 +108,7 @@ Gas enforcement (CoreHost)
 - Contract administration bridge syscalls charge `G_contract_admin + bytes`.
 - `CALL_CONTRACT` charges `G_call_contract + request bytes + return bytes` in
   the parent VM; child execution gas is consumed by the child VM.
-- Native and anonymous escrow bridge syscalls charge `G_escrow + bytes`.
+- Native asset escrow bridge syscalls charge `G_escrow + bytes`.
 - Soracloud runtime syscalls charge `G_soracloud + request bytes + response bytes`.
 - ZK verification uses the immutable `ZkGasScheduleV1` snapshot selected when
   the host is constructed: `proof_base` per proof, `per_public_input` per
@@ -421,13 +421,7 @@ Native asset escrow
 - 0xBC ESCROW_CANCEL — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `CancelAssetEscrow`; cancellation is rejected once payment is marked.
 - 0xBD ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenEscrowDispute` for the seller or accepted buyer.
 - 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&Quantity(buyer_amount)`, `r12=&Quantity(seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
-- 0xAA ANONYMOUS_ESCROW_OPEN_OFFER — Args: `r10=&NoritoBytes(OpenAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow opening ISI.
-- 0xAB ANONYMOUS_ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAnonymousAssetEscrow`.
-- 0xAC ANONYMOUS_ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkAnonymousEscrowPaymentSent`.
-- 0xAD ANONYMOUS_ESCROW_RELEASE — Args: `r10=&NoritoBytes(ReleaseAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow release ISI.
-- 0xAE ANONYMOUS_ESCROW_CANCEL — Args: `r10=&NoritoBytes(CancelAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow cancellation ISI.
-- 0xAF ANONYMOUS_ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAnonymousEscrowDispute`.
-- 0xBF ANONYMOUS_ESCROW_RESOLVE_DISPUTE — Args: `r10=&NoritoBytes(ResolveAnonymousEscrowDispute)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow dispute-resolution ISI.
+- IDs `0xAA` through `0xAF` and `0xBF` are unassigned holes and must report `UnknownSyscall`.
 - Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and `TRANSFER_ASSET_SCOPED` resolves the source balance scope from the asset definition policy, using `r14` only for dataspace-restricted definitions.
 
 Soracloud runtime host surface
@@ -637,12 +631,6 @@ node enforces that policy unconditionally.
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xA8 | CURRENT_TIME_MS | - | r10=unix_time_ms:u64 | asset:gas/G_sysvar@ivm.core/v2 |
 | 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&NoritoBytes(EntrypointArgumentRecordV1) or 0 | r10=ptr (&NoritoBytes(EntrypointReturnRecordV1)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
-| 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | r10=&NoritoBytes(OpenAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xAB | ANONYMOUS_ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xAD | ANONYMOUS_ESCROW_RELEASE | r10=&NoritoBytes(ReleaseAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xAE | ANONYMOUS_ESCROW_CANCEL | r10=&NoritoBytes(CancelAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xAF | ANONYMOUS_ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
@@ -655,7 +643,6 @@ node enforces that policy unconditionally.
 | 0xBC | ESCROW_CANCEL | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBD | ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&Quantity(buyer_amount), r12=&Quantity(seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
-| 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | r10=&NoritoBytes(ResolveAnonymousEscrowDispute) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
 | 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |
 | 0xC2 | SORACLOUD_EMIT_MAILBOX_MESSAGE | r10=&SoracloudRequest(EmitMailboxMessage) | r10=&SoracloudResponse(EmitMailboxMessage) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation | asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under SoracloudIvmHost) |

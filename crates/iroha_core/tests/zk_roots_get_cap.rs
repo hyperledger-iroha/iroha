@@ -155,7 +155,6 @@ fn zk_roots_get_respects_cap_and_max() {
             true,
             None,
             None,
-            None,
         )
         .into(),
     ] {

@@ -805,7 +805,6 @@ fn locate_instruction_box(
                         reveal.signed_transaction().clone()
                     }
                     TransactionEntrypoint::SealedCommitment(_)
-                    | TransactionEntrypoint::PrivateKaigi(_)
                     | TransactionEntrypoint::Time(_) => return Err(not_found()),
                 };
                 let instruction = tx

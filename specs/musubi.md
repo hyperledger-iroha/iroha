@@ -656,9 +656,12 @@ takedown rows require a new proof graph (and make `--locked` fail). The proof's
 snapshot must be a canonical finalized ancestor on the current chain, and its
 index revision must match the sparse finalized checkpoint for that ancestor.
 This permits replication and readback blocks to finalize without invalidating
-the operation. Core still revalidates every exact proof row, its nested storage
-and yank anchors, and fresh-selection state against current authoritative
-registry state when it executes the release claim.
+the operation. Core exposes this exact ancestor and revision-activation check
+as `validate_musubi_registry_snapshot_history_v1` so daemon-side finality
+readers consume one consistent state view and cannot drift from publication
+consensus. Core still revalidates every exact proof row, its nested storage and
+yank anchors, and fresh-selection state against current authoritative registry
+state when it executes the release claim.
 
 The operation journal contains no secrets and is safe to resume. `publish
 --detach` may return the operation id; ordinary `publish` succeeds only after

@@ -221,19 +221,15 @@ class ZkAssetInstructionsTest {
             .setMode(ZkAssetMode.HYBRID)
             .setAllowShield(true)
             .setAllowUnshield(false)
-            .setTransferVerifyingKey("halo2/ipa:transfer-v2")
             .build()
 
         assertEquals(InstructionKind.REGISTER, instruction.kind)
         assertEquals("Hybrid", instruction.arguments["mode"])
         assertEquals("false", instruction.arguments["allow_unshield"])
 
-        assertEquals(ZkAssetMode.ZK_NATIVE, ZkAssetMode.fromWireName("ZkNative"))
+        assertEquals(0, ZkAssetMode.HYBRID.bridgeCode)
         assertFailsWith<IllegalArgumentException> {
-            ZkAssetMode.fromWireName("zk-native")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            RegisterZkAssetInstruction.builder().setTransferVerifyingKey("halo2/ipa")
+            ZkAssetMode.fromWireName("ZkNative")
         }
     }
 
@@ -351,7 +347,6 @@ class ZkAssetInstructionsTest {
             .setMode(ZkAssetMode.HYBRID)
             .setAllowShield(true)
             .setAllowUnshield(false)
-            .setTransferVerifyingKey("halo2/ipa:transfer-v2")
             .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
             .build()
 
@@ -361,7 +356,6 @@ class ZkAssetInstructionsTest {
         assertEquals(original.mode, restored.mode)
         assertEquals(original.allowShield, restored.allowShield)
         assertEquals(original.allowUnshield, restored.allowUnshield)
-        assertEquals(original.transferVerifyingKey, restored.transferVerifyingKey)
         assertEquals(original.unshieldVerifyingKey, restored.unshieldVerifyingKey)
         assertEquals(original.shieldVerifyingKey, restored.shieldVerifyingKey)
         assertEquals(original.arguments, restored.arguments)
@@ -371,12 +365,11 @@ class ZkAssetInstructionsTest {
     fun registerZkAssetFromArgumentsOmitsBlankVerifyingKeys() {
         val original = RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
-            .setMode(ZkAssetMode.ZK_NATIVE)
+            .setMode(ZkAssetMode.HYBRID)
             .build()
 
         val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
 
-        assertEquals(null, restored.transferVerifyingKey)
         assertEquals(null, restored.unshieldVerifyingKey)
         assertEquals(null, restored.shieldVerifyingKey)
         assertEquals(original.arguments, restored.arguments)
@@ -410,9 +403,9 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun registerZkAssetFromArgumentsRejectsMalformedVerifyingKey() {
+    fun registerZkAssetFromArgumentsRejectsRetiredTransferVerifierField() {
         val arguments = validRegisterArguments().toMutableMap()
-        arguments["vk_transfer"] = "no-separator"
+        arguments["vk_transfer"] = "halo2/ipa:transfer-v2"
         assertFailsWith<IllegalArgumentException> {
             RegisterZkAssetInstruction.fromArguments(arguments)
         }

@@ -2205,25 +2205,19 @@ PY
           fail "NoritoBridge $slice exports forbidden first-release symbol $symbol"
         fi
       done
-      if ! run_isolated_checker_python - "$binary" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
-import subprocess
+      if ! run_isolated_checker_python - \
+        "$symbols" -- "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
 import sys
 
-binary = sys.argv[1]
-expected = set(sys.argv[2:])
-result = subprocess.run(
-    ["nm", "-gUj", binary],
-    check=False,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.DEVNULL,
-    text=True,
-)
+separator = sys.argv.index("--")
+captured = sys.argv[1]
+expected = set(sys.argv[separator + 1:])
 actual = {
     line.strip().removeprefix("_")
-    for line in result.stdout.splitlines()
+    for line in captured.splitlines()
     if line.strip().removeprefix("_").startswith("connect_norito_kagemusha_")
 }
-raise SystemExit(0 if result.returncode == 0 and actual == expected else 1)
+raise SystemExit(0 if actual == expected else 1)
 PY
       then
         fail "NoritoBridge $slice Kagemusha export inventory is not exact"

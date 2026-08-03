@@ -92,7 +92,6 @@ class NativeSignerBridge private constructor() {
             val chainBytes = textBytes(chainId, "chainId")
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
-            val transferBytes = optionalTextBytes(selected.transferVerifyingKey)
             val unshieldBytes = optionalTextBytes(selected.unshieldVerifyingKey)
             val shieldBytes = optionalTextBytes(selected.shieldVerifyingKey)
             val ttl = ttlValue(ttlMs)
@@ -111,8 +110,6 @@ class NativeSignerBridge private constructor() {
                     selected.mode.bridgeCode,
                     selected.allowShield,
                     selected.allowUnshield,
-                    transferBytes,
-                    selected.transferVerifyingKey != null,
                     unshieldBytes,
                     selected.unshieldVerifyingKey != null,
                     shieldBytes,
@@ -229,8 +226,6 @@ class NativeSignerBridge private constructor() {
             modeCode: Int,
             allowShield: Boolean,
             allowUnshield: Boolean,
-            transferVerifyingKey: ByteArray,
-            transferVerifyingKeyPresent: Boolean,
             unshieldVerifyingKey: ByteArray,
             unshieldVerifyingKeyPresent: Boolean,
             shieldVerifyingKey: ByteArray,

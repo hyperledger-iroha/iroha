@@ -773,7 +773,8 @@ LaneConfigEntry {
 
 - Integrate settlement router updates (NX-3) with the new geometry so XOR buffer debits and receipts are tagged by lane slug.
 - Close the still-open multilane release-evidence gates: fresh unskipped
-  four-peer suites; 10/10 fresh twelve-peer corridor seeds; the two-hour fault
+  four-peer suites; 10/10 fresh 13-peer global corridor seeds (twelve lane
+  validators); the two-hour fault
   soak; five pinned-hardware one-versus-four-lane pairs meeting the throughput,
   latency, and resource bounds; SDK/formal evidence; and the prescribed
   locked/offline full-workspace build, test, strict Clippy, formatting, and

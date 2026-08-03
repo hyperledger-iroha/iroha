@@ -24,10 +24,12 @@
 //! # Worker integration contract
 //!
 //! 1. Production opens [`V2BodyStore`] first, validates its recovery catalog
-//!    against the durable ingress gate, constructs the adapter/runtime, then
-//!    calls [`V2EffectExecutor::open_with_body_store`]. Tests and isolated
-//!    callers may use [`V2EffectExecutor::open`] as the combined wrapper. At
-//!    height one, retain the already-authenticated staged genesis with
+//!    against the durable ingress gate, filters and semantically revalidates
+//!    restart markers against authenticated WAL replay, constructs the
+//!    adapter/runtime, then calls [`V2EffectExecutor::open_with_body_store`].
+//!    There is deliberately no combined open wrapper which could skip that
+//!    preflight. At height one, retain the already-authenticated staged genesis
+//!    with
 //!    [`V2EffectExecutor::install_authenticated_genesis_body`] before
 //!    dispatching startup effects. Move the returned [`V2BodyStore`] to the
 //!    storage/validation service thread. If
@@ -71,7 +73,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
-    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -106,6 +107,8 @@ use iroha_data_model::{
 use norito::codec::Encode as _;
 
 #[cfg(test)]
+use super::v2_body_store::BlockSignaturePolicy;
+#[cfg(test)]
 use super::v2_runtime::bind_adapter_effect_batch_ownership;
 use super::{
     FairV2IngressOwnershipEvidence,
@@ -113,8 +116,8 @@ use super::{
     output_guard::ConsensusOutputGuard,
     v2::{AdapterEffect, AdapterError, SignRequest},
     v2_body_store::{
-        BlockSignaturePolicy, BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt,
-        V2BodyStore, ValidatedBodyReceipt,
+        BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt, V2BodyStore,
+        ValidatedBodyReceipt,
     },
     v2_chunks::{V2ChunkError, encode_payload},
     v2_recovery::PendingKuraApply,
@@ -122,8 +125,9 @@ use super::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
         LeaderWireRuntimeTerminal, NetworkIngressError, RetiredBodyPipelineCompletions,
         RuntimeCandidateAdmissionDisposition, RuntimeClockError, RuntimeEffectOwnership,
-        RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep,
-        SerializedV2Runtime, production_adapter_effect_candidate_admission_disposition,
+        RuntimeFetchAuthorityRelation, RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot,
+        RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
+        production_adapter_effect_candidate_admission_disposition,
         production_adapter_effect_candidate_semantic_identity,
         production_adapter_effect_candidate_trace_projection,
     },
@@ -3097,41 +3101,6 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
-    /// Open the exact-body store under an explicit signature-authority policy
-    /// and take ownership of the serialized runtime.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn open(
-        runtime: SerializedV2Runtime,
-        body_store_root: impl AsRef<Path>,
-        context: wire::HeightContext,
-        requester: PeerId,
-        local_validator: Option<wire::ValidatorIndex>,
-        signature_policy: BlockSignaturePolicy,
-        output_guard: Arc<ConsensusOutputGuard>,
-        config: EffectQueueConfig,
-    ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
-        let inner_output_guard = Arc::clone(&output_guard);
-        let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            EffectExecutorError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
-            )
-        })?;
-        let body_store =
-            V2BodyStore::open_with_policy(body_store_root, context.clone(), signature_policy)
-                .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
-        let opened = Self::open_with_body_store(
-            runtime,
-            body_store,
-            context,
-            requester,
-            local_validator,
-            inner_output_guard,
-            config,
-        )?;
-        construction.complete();
-        Ok(opened)
-    }
-
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the
@@ -3158,6 +3127,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 "pre-opened Sumeragi v2 body store changed its height context".to_owned(),
             ));
         }
+        body_store
+            .ensure_recovered_markers_revalidated()
+            .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
         let recovered_bodies = body_store
             .recovery_catalog()
             .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
@@ -4353,8 +4325,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// persistence continuations remain within the reducer-sized bound.
     fn retained_candidate_owners(
         &self,
-    ) -> Result<BTreeMap<Hash, RuntimeLifecycleOwner>, EffectExecutorError> {
-        let mut owners = BTreeMap::<Hash, RuntimeLifecycleOwner>::new();
+    ) -> Result<BTreeMap<Hash, RuntimeEffectOwnership>, EffectExecutorError> {
+        let mut owners = BTreeMap::<Hash, RuntimeEffectOwnership>::new();
         let mut insert = |ownership: &RuntimeEffectOwnership| {
             let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
                 EffectExecutorError::Contract(
@@ -4363,14 +4335,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })?;
             match owners.get(&identity) {
-                Some(existing) if existing != ownership.owner() => {
-                    Err(EffectExecutorError::Contract(
-                        "one semantic candidate lifecycle had conflicting exact owners".to_owned(),
-                    ))
-                }
+                Some(existing) if existing != ownership => Err(EffectExecutorError::Contract(
+                    "one semantic candidate lifecycle had conflicting exact owners".to_owned(),
+                )),
                 Some(_) => Ok(()),
                 None => {
-                    owners.insert(identity, ownership.owner().clone());
+                    owners.insert(identity, ownership.clone());
                     Ok(())
                 }
             }
@@ -4399,7 +4369,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn retain_effect_batch(
         &mut self,
         effects: Vec<AdapterEffect>,
-        ownership: Vec<RuntimeEffectOwnership>,
+        mut ownership: Vec<RuntimeEffectOwnership>,
     ) -> Result<(), EffectExecutorError> {
         if self.retained_effect_batch.is_some() {
             return Err(EffectExecutorError::Contract(
@@ -4443,9 +4413,30 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             )
         })?;
         let mut retained_candidate_owners = self.retained_candidate_owners()?;
+        // A body acquisition has one physical owner even as authenticated
+        // consensus evidence refines it from an ordinary Proposal fetch to a
+        // Prepare- or Commit-certified fetch. The route-neutral candidate
+        // identity deliberately includes phase and execution commitment, so
+        // retain a separate, strictly narrower lineage index for that one
+        // monotonic authority transition.
+        let mut retained_fetch_lineages = BTreeMap::<
+            (EventTag, wire::ConsensusRound, wire::BlockSubject),
+            RuntimeEffectOwnership,
+        >::new();
+        for pending in self.pending_fetches.values() {
+            let key = (pending.task.tag, pending.task.round, pending.task.subject);
+            if let Some(existing) =
+                retained_fetch_lineages.insert(key, pending.task.ownership().clone())
+                && existing != *pending.task.ownership()
+            {
+                return Err(EffectExecutorError::Contract(
+                    "one body-fetch lineage had conflicting exact owners".to_owned(),
+                ));
+            }
+        }
         let mut retain_effect = Vec::with_capacity(effects.len());
         let mut candidate_position = 0u8;
-        for (index, (effect, evidence)) in effects.iter().zip(&ownership).enumerate() {
+        for (index, (effect, evidence)) in effects.iter().zip(&mut ownership).enumerate() {
             let candidate = production_adapter_effect_candidate_semantic_identity(effect);
             if candidate.is_some() {
                 candidate_position = candidate_position.checked_add(1).ok_or_else(|| {
@@ -4460,24 +4451,40 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })?;
             let candidate_semantic_identity = evidence.candidate_semantic_identity();
-            if candidate_semantic_identity
+            let exact_incumbent = candidate_semantic_identity
                 .as_ref()
-                .is_some_and(|identity| {
-                    retained_candidate_owners
-                        .get(identity)
-                        .is_some_and(|existing| existing != evidence.owner())
-                })
+                .and_then(|identity| retained_candidate_owners.get(identity))
+                .cloned();
+            let fetch_key = match effect {
+                AdapterEffect::FetchBody {
+                    tag,
+                    round,
+                    subject,
+                    ..
+                } => Some((*tag, *round, *subject)),
+                _ => None,
+            };
+            let fetch_lineage_incumbent = fetch_key
+                .as_ref()
+                .and_then(|key| retained_fetch_lineages.get(key))
+                .cloned();
+            if let (Some(exact), Some(lineage)) = (&exact_incumbent, &fetch_lineage_incumbent)
+                && exact != lineage
             {
                 return Err(EffectExecutorError::Contract(
-                    "a coalesced adapter effect changed its exact lifecycle owner".to_owned(),
+                    "one body-fetch candidate disagreed with its physical lineage owner".to_owned(),
                 ));
             }
+            let lineage_only_incumbent = exact_incumbent
+                .is_none()
+                .then_some(fetch_lineage_incumbent)
+                .flatten();
             let candidate_owner_count_before =
                 candidate_semantic_identity.as_ref().map_or(0, |identity| {
                     u8::from(retained_candidate_owners.contains_key(identity))
                 });
             let candidate_owner_count_after = u8::from(candidate.is_some());
-            let admission = production_adapter_effect_candidate_admission_disposition(
+            let mut admission = production_adapter_effect_candidate_admission_disposition(
                 effect,
                 candidate_owner_count_before,
                 candidate_owner_count_after,
@@ -4503,9 +4510,74 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 })?;
             let _authorized_effect_candidate = checked.into_projection();
+            if let Some(incumbent) = exact_incumbent
+                && incumbent != *evidence
+            {
+                let adopted = incumbent
+                    .adopt_incumbent_candidate_for_retry(evidence, effect)
+                    .map_err(EffectExecutorError::Contract)?;
+                let adopted_projection = production_adapter_effect_candidate_trace_projection(
+                    effect,
+                    &adopted,
+                    effect_position,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                    candidate_owner_count_before,
+                    candidate_owner_count_after,
+                    true,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let _authorized_incumbent_retry =
+                    check_production_effect_to_candidate_transition(adopted_projection)
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "coalesced candidate retry failed its incumbent-owner refinement"
+                                    .to_owned(),
+                            )
+                        })?;
+                *evidence = adopted;
+            }
+            let mut fetch_authority_relation = None;
+            if let Some(incumbent) = lineage_only_incumbent {
+                let (adopted, relation) = incumbent
+                    .adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)
+                    .map_err(EffectExecutorError::Contract)?;
+                admission = production_adapter_effect_candidate_admission_disposition(
+                    effect,
+                    1,
+                    candidate_owner_count_after,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let adopted_projection = production_adapter_effect_candidate_trace_projection(
+                    effect,
+                    &adopted,
+                    effect_position,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                    1,
+                    candidate_owner_count_after,
+                    true,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let _authorized_fetch_refinement =
+                    check_production_effect_to_candidate_transition(adopted_projection)
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "coalesced body-fetch authority refinement failed its incumbent-owner refinement"
+                                    .to_owned(),
+                            )
+                        })?;
+                *evidence = adopted;
+                fetch_authority_relation = Some(relation);
+                if let Some(identity) = candidate_semantic_identity {
+                    retained_candidate_owners.insert(identity, evidence.clone());
+                }
+            }
             match (admission, candidate_semantic_identity) {
                 (RuntimeCandidateAdmissionDisposition::FirstAdmission, Some(identity)) => {
-                    retained_candidate_owners.insert(identity, evidence.owner().clone());
+                    retained_candidate_owners.insert(identity, evidence.clone());
                     retain_effect.push(true);
                 }
                 (RuntimeCandidateAdmissionDisposition::CoalescedRetry, Some(_)) => {
@@ -4517,8 +4589,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                             )
                         })?;
                     // Redispatched stages reach their idempotent handler with
-                    // the incumbent owner and task ID. Signing stutters while
-                    // the already-owned signature task remains outstanding.
+                    // the incumbent owner and task ID, including an
+                    // authenticated retry whose earlier physical command has
+                    // already drained. Signing stutters while the already-owned
+                    // signature task remains outstanding.
                     retain_effect.push(redispatch);
                 }
                 (RuntimeCandidateAdmissionDisposition::NonCandidate, None) => {
@@ -4534,6 +4608,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "candidate admission disposition disagreed with its bound identity"
                             .to_owned(),
                     ));
+                }
+            }
+            if let Some(key) = fetch_key {
+                match fetch_authority_relation {
+                    Some(RuntimeFetchAuthorityRelation::Stale) => {}
+                    Some(RuntimeFetchAuthorityRelation::Same)
+                    | Some(RuntimeFetchAuthorityRelation::Upgrade)
+                    | None => {
+                        retained_fetch_lineages.insert(key, evidence.clone());
+                    }
                 }
             }
         }
@@ -13518,6 +13602,15 @@ mod tests {
         assert_eq!(services.fetch_tasks.len(), service_tasks_before_upgrade + 1);
         assert_eq!(services.operation_calls.get("body-sign").copied(), Some(2));
         assert_eq!(
+            upgraded_b.ownership, ordinary_b.ownership,
+            "certifying an existing acquisition preserves its immutable owner"
+        );
+        assert_eq!(
+            upgraded_b.lifecycle_ordinal(),
+            ordinary_b.lifecycle_ordinal(),
+            "authority refinement cannot allocate a second Fetch lifecycle"
+        );
+        assert_eq!(
             fixture.executor.pending_fetches[&work_id_b].task,
             *upgraded_b
         );
@@ -14564,7 +14657,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_candidate_retry_coalesces_and_owner_replacement_fails_closed() {
+    fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -14587,11 +14680,9 @@ mod tests {
             vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 999)],
         )
         .expect("construct an independently owned mutation candidate");
-        assert!(matches!(
-            executor.retain_effect_batch(vec![effect.clone()], conflicting),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("changed its exact lifecycle owner")
-        ));
+        executor
+            .retain_effect_batch(vec![effect.clone()], conflicting)
+            .expect("an independently admitted exact Sign retry stutters");
         assert_eq!(executor.pending_signatures.len(), 1);
         assert_eq!(services.sign_tasks.len(), 1);
         assert!(executor.retained_effect_batch.is_none());
@@ -14604,56 +14695,85 @@ mod tests {
             )],
         )
         .expect("construct a local-incarnation owner replacement");
-        assert!(matches!(
-            executor.retain_effect_batch(vec![effect], reincarnated),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("changed its exact lifecycle owner")
-        ));
+        executor
+            .retain_effect_batch(vec![effect], reincarnated)
+            .expect("a later-incarnation exact Sign retry keeps the incumbent owner");
         assert_eq!(executor.pending_signatures.len(), 1);
         assert_eq!(services.sign_tasks.len(), 1);
         assert!(executor.retained_effect_batch.is_none());
 
-        let mut store_executor = fixture.executor(EffectQueueConfig::default());
-        let mut store_services = fixture.services();
-        store_executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut store_services,
-            )
-            .expect("admit one exact Store stage owner");
-        let store_effect = AdapterEffect::StoreBody {
+        let mut fetch_executor = fixture.executor(EffectQueueConfig::default());
+        let mut fetch_services = fixture.services();
+        let fetch_effect = AdapterEffect::FetchBody {
             tag: tag(0),
             round: fixture.manifest.round,
             subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
         };
-        let incumbent = store_executor
-            .pending_stores
+        fetch_executor
+            .consume_effects(vec![fetch_effect.clone()], &mut fetch_services)
+            .expect("admit one exact Fetch stage owner");
+        let incumbent = fetch_executor
+            .pending_fetches
             .values()
             .next()
-            .expect("local proposal retained Store work")
+            .expect("ordinary acquisition retained Fetch work")
             .task
             .ownership()
             .clone();
+        let retry_effects = vec![AdapterEffect::Broadcast(proposal(&fixture)), fetch_effect];
         let foreign = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&store_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 1_001)],
+            &retry_effects,
+            vec![
+                RuntimeEffectOwnership::fresh_for_test(tag(0), 1_001),
+                RuntimeEffectOwnership::fresh_for_test(tag(0), 1_002),
+            ],
         )
-        .expect("construct a foreign owner for the same stage statement");
+        .expect("construct a two-effect retry with a foreign Fetch owner");
         assert_eq!(
-            foreign[0].candidate_semantic_identity(),
+            foreign[1].candidate_semantic_identity(),
             incumbent.candidate_semantic_identity(),
             "the stage discriminator and six-coordinate statement are identical"
         );
-        assert_ne!(foreign[0].owner(), incumbent.owner());
-        assert!(matches!(
-            store_executor.retain_effect_batch(vec![store_effect], foreign),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("changed its exact lifecycle owner")
-        ));
-        assert_eq!(store_executor.pending_stores.len(), 1);
-        assert!(store_executor.retained_effect_batch.is_none());
+        let foreign_owner = foreign[1].owner().clone();
+        assert_ne!(foreign[1].owner(), incumbent.owner());
+        fetch_executor
+            .retain_effect_batch(retry_effects, foreign)
+            .expect("foreign Fetch retry adopts the incumbent owner at position two");
+        let retained = fetch_executor
+            .retained_effect_batch
+            .as_ref()
+            .expect("Broadcast and idempotent Fetch retry are redispatched");
+        assert_eq!(retained.effects.len(), 2);
+        assert_eq!(retained.effects[1].ownership, incumbent);
+        fetch_executor
+            .drain_retained_effect_batch(&mut fetch_services)
+            .expect("adopted Fetch retry reaches the incumbent task");
+        assert_eq!(fetch_executor.pending_fetches.len(), 1);
+        let retained_fetch = fetch_executor
+            .pending_fetches
+            .values()
+            .next()
+            .expect("the incumbent Fetch task remains live");
+        assert_eq!(retained_fetch.task.ownership(), &incumbent);
+        assert!(
+            fetch_services
+                .fetch_tasks
+                .iter()
+                .all(|task| task.ownership() == &incumbent),
+            "every physical Fetch call keeps the original task owner"
+        );
+        assert!(fetch_executor.retained_effect_batch.is_none());
+        let external = fetch_executor
+            .external_lifecycle_owners()
+            .expect("inspect external lifecycle ownership after coalescing");
+        assert!(
+            external.iter().all(|owner| owner != incumbent.owner()),
+            "passive network Fetch ownership is deliberately not runnable clock work"
+        );
+        assert!(external.iter().all(|owner| owner != &foreign_owner));
 
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -20723,12 +20843,15 @@ mod tests {
             .expect("persist exact validation marker");
         drop(store);
 
-        let reopened = V2BodyStore::open_with_policy(
+        let mut reopened = V2BodyStore::open_with_policy(
             directory.path(),
             fixture.context.clone(),
             BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
         )
         .expect("reopen exact body store");
+        reopened
+            .revalidate_recovered_markers(|_| Ok::<_, String>(fixture_execution_commitment()))
+            .expect("semantically replay recovered validation marker");
         let recovered_bodies = reopened.recovery_catalog().expect("recovery catalog");
         let recovered_validations = reopened.validated_recovery_catalog();
         let key = (fixture.manifest.round, fixture.manifest.subject);
@@ -20796,12 +20919,15 @@ mod tests {
             })
             .expect("persist validation marker");
         drop(store);
-        let reopened = V2BodyStore::open_with_policy(
+        let mut reopened = V2BodyStore::open_with_policy(
             directory.path(),
             fixture.context.clone(),
             BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
         )
         .expect("reopen exact body store");
+        reopened
+            .revalidate_recovered_markers(|_| Ok::<_, String>(validated.execution_commitment()))
+            .expect("semantically replay recovered validation marker");
         let recovered = reopened.recovery_catalog().expect("recovery catalog");
         let validations = reopened.validated_recovery_catalog();
         assert_eq!(

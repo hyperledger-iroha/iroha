@@ -77,7 +77,9 @@ do_check_swarm() {
     do_check "$cmd_base --out-file $target $extra" "$target"
 }
 
-cmd_genesis="${bin_kagami[@]} genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
+# The canonical zero-chain fixture historically uses the all-A5 NPoS seed.
+# Keep it explicit now that production NPoS generation rejects implicit seeds.
+cmd_genesis="${bin_kagami[@]} genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 --vrf-seed-hex A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5"
 cmd_schema="${bin_kagami[@]} advanced schema"
 cmd_iroha_help="${bin_iroha[@]} tools markdown-help"
 cmd_kagami_help="${bin_kagami[@]} advanced markdown-help"

@@ -29,7 +29,6 @@ pub use self::model::*;
 use super::{
     error,
     executable::{Executable, ExecutableBatchItem, IvmBytecode},
-    private_kaigi::PrivateKaigiTransaction,
 };
 use crate::{
     ChainId,
@@ -381,8 +380,6 @@ mod model {
         SealedCommitment(SignedSealedTransactionCommitment),
         /// Reveal of a previously committed sealed transaction.
         SealedReveal(SealedTransactionReveal),
-        /// Authority-free private Kaigi request.
-        PrivateKaigi(PrivateKaigiTransaction),
         /// Scheduled time trigger that initiates a transaction.
         Time(TimeTriggerEntrypoint),
     }
@@ -1959,11 +1956,6 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(reveal, out);
             }
-            TransactionEntrypoint::PrivateKaigi(tx) => {
-                norito::json::write_json_string("PrivateKaigi", out);
-                out.push(':');
-                norito::json::JsonSerialize::json_serialize(tx, out);
-            }
             TransactionEntrypoint::Time(trigger) => {
                 norito::json::write_json_string("Time", out);
                 out.push(':');
@@ -1994,10 +1986,6 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
             "SealedReveal" => {
                 let reveal = SealedTransactionReveal::json_deserialize(parser)?;
                 TransactionEntrypoint::SealedReveal(reveal)
-            }
-            "PrivateKaigi" => {
-                let tx = PrivateKaigiTransaction::json_deserialize(parser)?;
-                TransactionEntrypoint::PrivateKaigi(tx)
             }
             "Time" => {
                 let trigger = TimeTriggerEntrypoint::json_deserialize(parser)?;
@@ -2678,6 +2666,7 @@ mod tests {
                     source: authority.clone(),
                     destination: authority,
                     asset_definition_id: sample_fee_asset(),
+                    public_balance_scope: crate::asset::AssetBalanceScope::Global,
                     amount: 7,
                     authorization_epoch: 1,
                     replay_nullifier: PrivacyNullifierV1::new(privacy_test_bytes(0x74)),
@@ -2752,6 +2741,7 @@ mod tests {
             let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
                 context,
                 asset_definition_id: sample_fee_asset(),
+                public_balance_scope: crate::asset::AssetBalanceScope::Global,
                 pool_id: PrivacyPoolIdV1::new(privacy_test_bytes(0x91)),
                 program_id: PrivacyProgramIdV1::new(privacy_test_bytes(0x92)),
                 action_digest: PrivacyActionDigestV1::new([0; 32]),
@@ -5690,17 +5680,12 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 Some(entrypoint.signed_transaction().authority())
             }
-            TransactionEntrypoint::PrivateKaigi(_) => None,
             TransactionEntrypoint::Time(entrypoint) => Some(&entrypoint.authority),
         }
     }
 
     /// Account authorized to initiate this transaction.
     ///
-    /// # Panics
-    ///
-    /// Panics for authority-free private Kaigi entrypoints. Call
-    /// [`Self::authority_opt`] when the entrypoint kind is not known in advance.
     #[inline]
     pub fn authority(&self) -> &AccountId {
         match self {
@@ -5708,9 +5693,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedCommitment(entrypoint) => entrypoint.authority(),
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 entrypoint.signed_transaction().authority()
-            }
-            TransactionEntrypoint::PrivateKaigi(_) => {
-                panic!("private kaigi entrypoints do not carry a public authority")
             }
             TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
         }
@@ -5726,7 +5708,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 u64::try_from(entrypoint.signed_transaction().creation_time().as_millis()).ok()
             }
-            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(entrypoint.creation_time_ms),
             TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
@@ -5739,7 +5720,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 Some(entrypoint.signed_transaction().metadata())
             }
-            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(&entrypoint.metadata),
             TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
@@ -5749,10 +5729,7 @@ impl TransactionEntrypoint {
     pub fn hash(&self) -> HashOf<Self> {
         match self {
             Self::External(transaction) => transaction.hash_as_entrypoint(),
-            Self::SealedCommitment(_)
-            | Self::SealedReveal(_)
-            | Self::PrivateKaigi(_)
-            | Self::Time(_) => HashOf::new(self),
+            Self::SealedCommitment(_) | Self::SealedReveal(_) | Self::Time(_) => HashOf::new(self),
         }
     }
 }

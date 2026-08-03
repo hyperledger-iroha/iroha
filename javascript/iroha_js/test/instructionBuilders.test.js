@@ -3611,14 +3611,28 @@ test("buildCancelTwitterEscrowInstruction wraps keyed hash", () => {
 test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   const instruction = buildRegisterZkAssetInstruction({
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    mode: "zk-native",
-    transferVerifyingKey: "halo2/ipa:vk_transfer",
+    mode: "Hybrid",
     unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
   });
   const payload = encodeAndDecode(instruction).zk.RegisterZkAsset;
-  assert.equal(payload.mode, "ZkNative");
-  assert.deepEqual(payload.vk_transfer, { backend: "halo2/ipa", name: "vk_transfer" });
+  assert.equal(payload.mode, "Hybrid");
   assert.deepEqual(payload.vk_unshield, { backend: "halo2/ipa", name: "vk_unshield" });
+});
+
+test("buildRegisterZkAssetInstruction rejects retired native mode and transfer verifier", () => {
+  const base = { assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" };
+  assert.throws(
+    () => buildRegisterZkAssetInstruction({ ...base, mode: "ZkNative" }),
+    /must be 'Hybrid'/,
+  );
+  assert.throws(
+    () =>
+      buildRegisterZkAssetInstruction({
+        ...base,
+        transferVerifyingKey: "halo2\/ipa:vk_transfer",
+      }),
+    /is no longer supported/,
+  );
 });
 
 test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition metadata", () => {

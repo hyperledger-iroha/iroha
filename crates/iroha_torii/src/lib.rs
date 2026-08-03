@@ -19399,9 +19399,7 @@ fn signed_transaction_hash_for_entrypoint(
     match entrypoint {
         TransactionEntrypoint::External(signed) => Some(signed.hash()),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-        TransactionEntrypoint::SealedCommitment(_)
-        | TransactionEntrypoint::PrivateKaigi(_)
-        | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
 
@@ -22962,10 +22960,6 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::AssetEscrowRecord(right),
         ) => merge_variant!(left, right, AssetEscrowRecord),
         (
-            QueryOutputBatchBox::AnonymousAssetEscrowRecord(mut left),
-            QueryOutputBatchBox::AnonymousAssetEscrowRecord(right),
-        ) => merge_variant!(left, right, AnonymousAssetEscrowRecord),
-        (
             QueryOutputBatchBox::FeeSponsorProgram(mut left),
             QueryOutputBatchBox::FeeSponsorProgram(right),
         ) => merge_variant!(left, right, FeeSponsorProgram),
@@ -23091,9 +23085,6 @@ fn canonicalize_query_batch_box(
         }
         QueryOutputBatchBox::AssetEscrowRecord(items) => {
             canonicalize_variant!(items, AssetEscrowRecord)
-        }
-        QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) => {
-            canonicalize_variant!(items, AnonymousAssetEscrowRecord)
         }
         QueryOutputBatchBox::FeeSponsorProgram(items) => {
             canonicalize_variant!(items, FeeSponsorProgram)

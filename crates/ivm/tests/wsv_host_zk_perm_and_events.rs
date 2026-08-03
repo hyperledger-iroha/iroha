@@ -33,7 +33,6 @@ fn direct_zk_register_emits_policy_event() {
         ZkPolicyConfig {
             mode: ZkAssetMode::Hybrid,
             allow_unshield: true,
-            vk_transfer: None,
             vk_unshield: None,
         }
     ));

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.model.instructions;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.NativeSignedTransaction;
@@ -179,14 +180,17 @@ public final class ZkAssetInstructionsTest {
             .setMode(ZkAssetMode.HYBRID)
             .setAllowShield(true)
             .setAllowUnshield(false)
-            .setTransferVerifyingKey("halo2/ipa:transfer-v2")
             .build();
     assert instruction.kind() == InstructionKind.REGISTER;
     assert "Hybrid".equals(instruction.toArguments().get("mode"));
     assert "false".equals(instruction.toArguments().get("allow_unshield"));
-    assert ZkAssetMode.fromWireName("ZkNative") == ZkAssetMode.ZK_NATIVE;
-    expectThrows(() -> ZkAssetMode.fromWireName("zk-native"));
-    expectThrows(() -> RegisterZkAssetInstruction.builder().setTransferVerifyingKey("halo2/ipa"));
+    assert ZkAssetMode.HYBRID.bridgeCode() == 0;
+    expectThrows(() -> ZkAssetMode.fromWireName("ZkNative"));
+
+    final LinkedHashMap<String, String> retiredArguments =
+        new LinkedHashMap<>(instruction.toArguments());
+    retiredArguments.put("vk_transfer", "halo2/ipa:transfer-v2");
+    expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
   }
 
   private static void nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch() {

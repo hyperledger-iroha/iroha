@@ -643,42 +643,6 @@ ret = "r10=ptr (&NoritoBytes(EntrypointReturnRecordV1)) or 0"
 gas = "G_call_contract + request bytes + return bytes + child gas"
 
 [[syscall]]
-number = "0xAA"
-args = "r10=&NoritoBytes(OpenAnonymousAssetEscrow)"
-ret = "u64=0"
-gas = "G_escrow + bytes"
-
-[[syscall]]
-number = "0xAB"
-args = "r10=&Name(escrow)"
-ret = "u64=0"
-gas = "G_escrow + bytes"
-
-[[syscall]]
-number = "0xAC"
-args = "r10=&Name(escrow)"
-ret = "u64=0"
-gas = "G_escrow + bytes"
-
-[[syscall]]
-number = "0xAD"
-args = "r10=&NoritoBytes(ReleaseAnonymousAssetEscrow)"
-ret = "u64=0"
-gas = "G_escrow + bytes"
-
-[[syscall]]
-number = "0xAE"
-args = "r10=&NoritoBytes(CancelAnonymousAssetEscrow)"
-ret = "u64=0"
-gas = "G_escrow + bytes"
-
-[[syscall]]
-number = "0xAF"
-args = "r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0"
-ret = "u64=0"
-gas = "G_escrow + bytes"
-
-[[syscall]]
 number = "0xB0"
 args = "r10=&AxtDescriptor"
 ret = "u64=0"
@@ -747,12 +711,6 @@ gas = "G_escrow + bytes"
 [[syscall]]
 number = "0xBE"
 args = "r10=&Name(escrow), r11=&Quantity(buyer_amount), r12=&Quantity(seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0"
-ret = "u64=0"
-gas = "G_escrow + bytes"
-
-[[syscall]]
-number = "0xBF"
-args = "r10=&NoritoBytes(ResolveAnonymousEscrowDispute)"
 ret = "u64=0"
 gas = "G_escrow + bytes"
 

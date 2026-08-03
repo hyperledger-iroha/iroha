@@ -114,13 +114,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<escrow::DrawdownAssetLock>,
     InstructionRegistry::register_slice::<escrow::CancelAssetLock>,
     InstructionRegistry::register_slice::<escrow::ExpireAssetLock>,
-    InstructionRegistry::register_slice::<escrow::OpenAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::AcceptAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::MarkAnonymousEscrowPaymentSent>,
-    InstructionRegistry::register_slice::<escrow::ReleaseAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::CancelAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::OpenAnonymousEscrowDispute>,
-    InstructionRegistry::register_slice::<escrow::ResolveAnonymousEscrowDispute>,
     InstructionRegistry::register_slice::<vpn::OpenVpnLeaseEscrow>,
     InstructionRegistry::register_slice::<vpn::SettleVpnLease>,
     InstructionRegistry::register_slice::<vpn::RefundExpiredVpnLease>,
@@ -2142,32 +2135,70 @@ mod tests {
     }
 
     #[test]
-    fn default_registry_excludes_generic_confidential_instructions() {
-        const RETIRED_GENERIC: &[&str] = &[
-            "iroha_data_model::isi::zk::Shield",
-            "iroha_data_model::isi::zk::ZkTransfer",
-            "iroha_data_model::isi::zk::Unshield",
+    fn default_registry_excludes_retired_confidential_instructions() {
+        let retired_wires = [
+            ["iroha_data_model::isi::zk::", "Shield"].concat(),
+            ["iroha_data_model::isi::zk::", "ZkTransfer"].concat(),
+            ["iroha_data_model::isi::zk::", "Unshield"].concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "OpenAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "AcceptAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "MarkAnonymous",
+                "EscrowPaymentSent",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "ReleaseAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "CancelAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "OpenAnonymous",
+                "EscrowDispute",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "ResolveAnonymous",
+                "EscrowDispute",
+            ]
+            .concat(),
         ];
         let registry = default();
 
-        for retired in RETIRED_GENERIC {
+        for retired in &retired_wires {
             assert!(
                 !registry.contains(retired),
-                "retired generic confidential wire must not be registered: {retired}"
+                "retired confidential wire must not be registered: {retired}"
             );
             assert!(
                 registry.decode(retired, &[]).is_none(),
-                "retired generic confidential wire must not be dispatchable: {retired}"
+                "retired confidential wire must not be dispatchable: {retired}"
             );
         }
 
         for specialized in [
             std::any::type_name::<offline::TopUpKagemushaRecursiveV4>(),
             std::any::type_name::<offline::RedeemKagemushaRecursiveV4>(),
-            std::any::type_name::<escrow::OpenAnonymousAssetEscrow>(),
-            std::any::type_name::<escrow::ReleaseAnonymousAssetEscrow>(),
-            std::any::type_name::<escrow::CancelAnonymousAssetEscrow>(),
-            std::any::type_name::<escrow::ResolveAnonymousEscrowDispute>(),
         ] {
             assert!(
                 registry.contains(specialized),
@@ -2179,11 +2210,22 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn structured_json_rejects_generic_confidential_dispatch() {
-        for name in ["Shield", "ZkTransfer", "Unshield"] {
+    fn structured_json_rejects_retired_confidential_dispatch() {
+        for name in [
+            "Shield".to_owned(),
+            "ZkTransfer".to_owned(),
+            "Unshield".to_owned(),
+            ["OpenAnonymous", "AssetEscrow"].concat(),
+            ["AcceptAnonymous", "AssetEscrow"].concat(),
+            ["MarkAnonymous", "EscrowPaymentSent"].concat(),
+            ["ReleaseAnonymous", "AssetEscrow"].concat(),
+            ["CancelAnonymous", "AssetEscrow"].concat(),
+            ["OpenAnonymous", "EscrowDispute"].concat(),
+            ["ResolveAnonymous", "EscrowDispute"].concat(),
+        ] {
             let retired = format!(r#"{{"name":"{name}","params":{{}}}}"#);
             norito::json::from_str::<InstructionBox>(&retired)
-                .expect_err("retired generic confidential JSON must not dispatch");
+                .expect_err("retired confidential JSON must not dispatch");
         }
     }
 

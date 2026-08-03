@@ -444,18 +444,7 @@ pub const SYSCALL_RESOLVE_ACCOUNT_ALIAS: u32 = 0xA7;
 pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
 /// Call a deployed ABI v1 contract synchronously by contract-address literal.
 pub const SYSCALL_CALL_CONTRACT: u32 = 0xA9;
-/// Open and fund a native anonymous asset escrow with shielded proof material.
-pub const SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER: u32 = 0xAA;
-/// Accept an open native anonymous asset escrow.
-pub const SYSCALL_ANONYMOUS_ESCROW_ACCEPT: u32 = 0xAB;
-/// Mark accepted native anonymous escrow off-chain payment as sent.
-pub const SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT: u32 = 0xAC;
-/// Release a paid native anonymous escrow to the buyer with shielded outputs.
-pub const SYSCALL_ANONYMOUS_ESCROW_RELEASE: u32 = 0xAD;
-/// Cancel and refund a native anonymous escrow with shielded outputs.
-pub const SYSCALL_ANONYMOUS_ESCROW_CANCEL: u32 = 0xAE;
-/// Open a dispute for native anonymous escrow court moderation.
-pub const SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE: u32 = 0xAF;
+// IDs 0xAA through 0xAF are intentionally unassigned.
 /// Begin an atomic cross-transaction (AXT) envelope.
 pub const SYSCALL_AXT_BEGIN: u32 = 0xB0;
 /// Declare a DS touch within an active AXT.
@@ -499,8 +488,7 @@ pub const SYSCALL_ESCROW_CANCEL: u32 = 0xBC;
 pub const SYSCALL_ESCROW_OPEN_DISPUTE: u32 = 0xBD;
 /// Resolve a disputed escrow with a buyer/seller split.
 pub const SYSCALL_ESCROW_RESOLVE_DISPUTE: u32 = 0xBE;
-/// Resolve a disputed native anonymous escrow with shielded buyer/seller outputs.
-pub const SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE: u32 = 0xBF;
+// ID 0xBF is intentionally unassigned.
 
 /// Soracloud runtime host surface.
 /// Read committed service-state metadata for handler-local execution.
@@ -977,13 +965,6 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_AXT_COMMIT
             | SYSCALL_VERIFY_DS_PROOF
             | SYSCALL_USE_ASSET_HANDLE
-            | SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-            | SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-            | SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-            | SYSCALL_ANONYMOUS_ESCROW_RELEASE
-            | SYSCALL_ANONYMOUS_ESCROW_CANCEL
-            | SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
-            | SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
             | SYSCALL_ESCROW_OPEN_OFFER
             | SYSCALL_ESCROW_ACCEPT
             | SYSCALL_ESCROW_MARK_PAYMENT_SENT
@@ -1357,14 +1338,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_VERIFY_DS_PROOF,
             SYSCALL_USE_ASSET_HANDLE,
         ]);
-        // Native asset escrow
+        // Native asset escrow. IDs 0xAA..=0xAF and 0xBF remain holes.
         v.extend_from_slice(&[
-            SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
-            SYSCALL_ANONYMOUS_ESCROW_ACCEPT,
-            SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
-            SYSCALL_ANONYMOUS_ESCROW_RELEASE,
-            SYSCALL_ANONYMOUS_ESCROW_CANCEL,
-            SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
             SYSCALL_ESCROW_OPEN_OFFER,
             SYSCALL_ESCROW_ACCEPT,
             SYSCALL_ESCROW_MARK_PAYMENT_SENT,
@@ -1372,7 +1347,6 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_ESCROW_CANCEL,
             SYSCALL_ESCROW_OPEN_DISPUTE,
             SYSCALL_ESCROW_RESOLVE_DISPUTE,
-            SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
         ]);
         // Soracloud runtime host surface
         v.extend_from_slice(&[
@@ -1620,12 +1594,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_ACCOUNT_RECOVERY_APPROVE => "ACCOUNT_RECOVERY_APPROVE",
         SYSCALL_ACCOUNT_RECOVERY_CANCEL => "ACCOUNT_RECOVERY_CANCEL",
         SYSCALL_ACCOUNT_RECOVERY_FINALIZE => "ACCOUNT_RECOVERY_FINALIZE",
-        SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => "ANONYMOUS_ESCROW_OPEN_OFFER",
-        SYSCALL_ANONYMOUS_ESCROW_ACCEPT => "ANONYMOUS_ESCROW_ACCEPT",
-        SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => "ANONYMOUS_ESCROW_MARK_PAYMENT_SENT",
-        SYSCALL_ANONYMOUS_ESCROW_RELEASE => "ANONYMOUS_ESCROW_RELEASE",
-        SYSCALL_ANONYMOUS_ESCROW_CANCEL => "ANONYMOUS_ESCROW_CANCEL",
-        SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE => "ANONYMOUS_ESCROW_OPEN_DISPUTE",
         SYSCALL_AXT_BEGIN => "AXT_BEGIN",
         SYSCALL_AXT_TOUCH => "AXT_TOUCH",
         SYSCALL_AXT_COMMIT => "AXT_COMMIT",
@@ -1638,7 +1606,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_ESCROW_CANCEL => "ESCROW_CANCEL",
         SYSCALL_ESCROW_OPEN_DISPUTE => "ESCROW_OPEN_DISPUTE",
         SYSCALL_ESCROW_RESOLVE_DISPUTE => "ESCROW_RESOLVE_DISPUTE",
-        SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => "ANONYMOUS_ESCROW_RESOLVE_DISPUTE",
         SYSCALL_SORACLOUD_READ_COMMITTED_STATE => "SORACLOUD_READ_COMMITTED_STATE",
         SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => "SORACLOUD_EMIT_STATE_MUTATION",
         SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => "SORACLOUD_EMIT_MAILBOX_MESSAGE",
@@ -3932,10 +3899,10 @@ mod tests {
     }
 
     #[test]
-    fn removed_direct_helper_numbers_are_unknown() {
+    fn removed_syscall_numbers_are_unknown() {
         let removed = [
-            0x85, 0x86, 0x87, 0x88, 0x89, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0xD0, 0xD1, 0x01_0163,
-            0x01_0164, 0x01_0165,
+            0x85, 0x86, 0x87, 0x88, 0x89, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0xAA, 0xAB, 0xAC, 0xAD,
+            0xAE, 0xAF, 0xBF, 0xD0, 0xD1, 0x01_0163, 0x01_0164, 0x01_0165,
         ];
 
         for number in removed {
@@ -4035,12 +4002,7 @@ mod tests {
         ] {
             assert!(is_axt_syscall(syscall));
         }
-        for syscall in [
-            SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
-            SYSCALL_ESCROW_OPEN_OFFER,
-            SYSCALL_STATE_GET,
-            u32::MAX,
-        ] {
+        for syscall in [SYSCALL_ESCROW_OPEN_OFFER, SYSCALL_STATE_GET, u32::MAX] {
             assert!(!is_axt_syscall(syscall));
         }
     }

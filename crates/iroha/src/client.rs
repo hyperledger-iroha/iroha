@@ -14111,8 +14111,7 @@ impl Client {
                 reveal.signed_transaction().hash() == target
             }
             crate::data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
-            | crate::data_model::transaction::TransactionEntrypoint::Time(_)
-            | crate::data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => false,
+            | crate::data_model::transaction::TransactionEntrypoint::Time(_) => false,
         }
     }
 

@@ -59,11 +59,8 @@ use iroha_data_model::{
         RemoveSignatory, SetAccountQuorum, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
         TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister, UnregisterBox,
         escrow::{
-            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
-            CancelAssetEscrow, MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent,
-            OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute, OpenAssetEscrow,
-            OpenEscrowDispute, ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow,
-            ResolveAnonymousEscrowDispute, ResolveEscrowDispute,
+            AcceptAssetEscrow, CancelAssetEscrow, MarkEscrowPaymentSent, OpenAssetEscrow,
+            OpenEscrowDispute, ReleaseAssetEscrow, ResolveEscrowDispute,
         },
         register::RegisterPeerWithPop,
         smart_contract_code as scode, zk as DMZk,
@@ -414,7 +411,7 @@ fn apply_sm_openssl_preview(_: bool) {}
 /// The host leaves collection disabled unless a benchmark explicitly enables
 /// it, so normal consensus execution does not maintain diagnostic state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CoreQueryMetrics {
+pub struct CoreQueryPageMetrics {
     /// Number of bounded host query-engine invocations.
     pub host_queries: u64,
     /// Number of typed projection payload decode attempts.
@@ -656,7 +653,7 @@ pub struct CoreHostImpl<QS> {
     // Live read-only state view used to execute queries during IVM runs.
     query_state: QS,
     // Optional counters enabled only by typed-query performance validation.
-    core_query_metrics: Option<CoreQueryMetrics>,
+    core_query_page_metrics: Option<CoreQueryPageMetrics>,
     // Simple counter for sample-generated NFT ids to guarantee uniqueness across calls.
     nft_seq: u64,
     // Optional trigger arguments for by-call entrypoints.
@@ -2819,7 +2816,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             bound_contract_records_by_subject: BTreeMap::new(),
             prepared_contract_cache: PreparedContractCache::default(),
             query_state: QS::default(),
-            core_query_metrics: None,
+            core_query_page_metrics: None,
             nft_seq: 0,
             args: None,
             entrypoint_argument_record: None,
@@ -2868,21 +2865,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Enable and reset typed-query performance counters.
     ///
     /// Counters are disabled by default and do not affect consensus execution.
-    pub fn enable_core_query_metrics(&mut self) {
-        self.core_query_metrics = Some(CoreQueryMetrics::default());
+    pub fn enable_core_query_page_metrics(&mut self) {
+        self.core_query_page_metrics = Some(CoreQueryPageMetrics::default());
     }
 
     /// Reset enabled typed-query performance counters.
-    pub fn reset_core_query_metrics(&mut self) {
-        if let Some(metrics) = &mut self.core_query_metrics {
-            *metrics = CoreQueryMetrics::default();
+    pub fn reset_core_query_page_metrics(&mut self) {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
+            *metrics = CoreQueryPageMetrics::default();
         }
     }
 
     /// Return enabled typed-query performance counters.
     #[must_use]
-    pub const fn core_query_metrics(&self) -> Option<CoreQueryMetrics> {
-        self.core_query_metrics
+    pub const fn core_query_page_metrics(&self) -> Option<CoreQueryPageMetrics> {
+        self.core_query_page_metrics
     }
 
     /// Construct a host from a state snapshot, hydrating config, ZK snapshots, and AXT policy.
@@ -2947,7 +2944,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             bound_contract_records_by_subject: BTreeMap::new(),
             prepared_contract_cache: PreparedContractCache::default(),
             query_state: QS::default(),
-            core_query_metrics: None,
+            core_query_page_metrics: None,
             nft_seq: 0,
             args: None,
             entrypoint_argument_record: None,
@@ -3028,7 +3025,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             bound_contract_records_by_subject: BTreeMap::new(),
             prepared_contract_cache: PreparedContractCache::default(),
             query_state: QS::default(),
-            core_query_metrics: None,
+            core_query_page_metrics: None,
             nft_seq: 0,
             args: Some(args),
             entrypoint_argument_record: None,
@@ -8476,7 +8473,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     where
         T: NoritoSerialize + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
     {
-        if let Some(metrics) = &mut self.core_query_metrics {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.projection_decodes = metrics.projection_decodes.saturating_add(1);
             metrics.projection_payload_bytes = u64::try_from(payload.len()).unwrap_or(u64::MAX);
         }
@@ -8492,7 +8489,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let leaf_tlv_bytes = prepared.as_ref().map_or(0, |words| {
             Self::prepared_query_leaf_bytes(std::slice::from_ref(words))
         });
-        if let Some(metrics) = &mut self.core_query_metrics {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.leaf_tlv_bytes = leaf_tlv_bytes;
         }
         let encoded_bytes = u64::try_from(payload.len())
@@ -8533,7 +8530,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     where
         T: NoritoSerialize + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
     {
-        if let Some(metrics) = &mut self.core_query_metrics {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.projection_decodes = metrics.projection_decodes.saturating_add(1);
             metrics.projection_payload_bytes = u64::try_from(payload.len()).unwrap_or(u64::MAX);
         }
@@ -8564,7 +8561,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             processed_bytes,
             encoded_bytes,
         )?;
-        if let Some(metrics) = &mut self.core_query_metrics {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.leaf_tlv_bytes = leaf_tlv_bytes;
         }
         let elements = elements
@@ -8686,7 +8683,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let Some(state_ref) = self.query_state.get() else {
             return Err(ivm::VMError::NotImplemented { syscall });
         };
-        if let Some(metrics) = &mut self.core_query_metrics {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.host_queries = metrics.host_queries.saturating_add(1);
         }
         let (output, stats) =
@@ -8830,7 +8827,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let Some(state_ref) = self.query_state.get() else {
             return Err(ivm::VMError::NotImplemented { syscall });
         };
-        if let Some(metrics) = &mut self.core_query_metrics {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
             metrics.host_queries = metrics.host_queries.saturating_add(1);
         }
         let query_result =
@@ -10559,14 +10556,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
@@ -10978,53 +10968,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
                 ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => {
                     self.apply_fastpq_batch_from_tlv(vm)
-                }
-                // ----------------- Native anonymous asset escrow ISIs via pointer-ABI -----------------
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => {
-                    let request: OpenAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(AcceptAnonymousAssetEscrow { escrow_id }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(MarkAnonymousEscrowPaymentSent { escrow_id }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE => {
-                    let request: ReleaseAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL => {
-                    let request: CancelAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    let evidence_hashes =
-                        Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(OpenAnonymousEscrowDispute {
-                            escrow_id,
-                            evidence_hashes,
-                        }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
-                    let request: ResolveAnonymousEscrowDispute =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
                 }
                 // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
@@ -15724,138 +15667,6 @@ seiyaku PrivilegedBinding {
     }
 
     #[test]
-    fn native_anonymous_escrow_syscalls_queue_expected_instructions() {
-        fn proof_attachment(tag: &str) -> ProofAttachment {
-            let backend: iroha_schema::Ident = "halo2/ipa/poly-open".into();
-            ProofAttachment::new_ref(
-                backend.clone(),
-                ProofBox::new(backend.clone(), tag.as_bytes().to_vec()),
-                VerifyingKeyId::new(backend.as_str(), tag),
-            )
-        }
-
-        let mut vm = ivm::IVM::new(2_000);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority);
-
-        let escrow_name = Name::from_str("anonymous_aitai_offer").expect("fixture escrow name");
-        let escrow_id = CoreHost::escrow_id_from_name(&escrow_name);
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
-        let evidence_hashes = vec![Hash::new("receipt"), Hash::new("judgement")];
-        let escrow_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&escrow_name));
-        let evidence_ptr = store_tlv(
-            &mut vm,
-            PointerType::NoritoBytes,
-            &norito_blob(&evidence_hashes),
-        );
-
-        let open = OpenAnonymousAssetEscrow::with_evidence_hashes(
-            escrow_id.clone(),
-            asset_definition,
-            vec![[0x11; 32]],
-            [0x22; 32],
-            proof_attachment("open"),
-            Some([0x33; 32]),
-            evidence_hashes.clone(),
-        );
-        let release = ReleaseAnonymousAssetEscrow::new(
-            escrow_id.clone(),
-            vec![[0x44; 32]],
-            vec![[0x55; 32]],
-            proof_attachment("release"),
-            Some([0x66; 32]),
-        );
-        let cancel = CancelAnonymousAssetEscrow::new(
-            escrow_id.clone(),
-            vec![[0x77; 32]],
-            vec![[0x88; 32]],
-            proof_attachment("cancel"),
-            None,
-        );
-        let resolve = ResolveAnonymousEscrowDispute::with_evidence_hashes(
-            escrow_id.clone(),
-            vec![[0x99; 32]],
-            vec![[0xAA; 32]],
-            vec![[0xBB; 32]],
-            proof_attachment("resolve"),
-            Some([0xCC; 32]),
-            evidence_hashes.clone(),
-        );
-
-        let open_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&open));
-        let release_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&release));
-        let cancel_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&cancel));
-        let resolve_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&resolve));
-
-        let assert_queued = |host: &mut CoreHost, res, expected: InstructionBox| {
-            let expected_gas = crate::gas::meter_instruction(&expected);
-            assert_eq!(res, Ok(expected_gas));
-            assert_eq!(host.queued, vec![expected]);
-            host.queued.clear();
-        };
-
-        vm.set_register(10, open_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(open));
-
-        vm.set_register(10, escrow_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT, &mut vm);
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(AcceptAnonymousAssetEscrow {
-                escrow_id: escrow_id.clone(),
-            }),
-        );
-
-        vm.set_register(10, escrow_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
-            &mut vm,
-        );
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(MarkAnonymousEscrowPaymentSent {
-                escrow_id: escrow_id.clone(),
-            }),
-        );
-
-        vm.set_register(10, release_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(release));
-
-        vm.set_register(10, cancel_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(cancel));
-
-        vm.set_register(10, escrow_ptr);
-        vm.set_register(11, evidence_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
-            &mut vm,
-        );
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(OpenAnonymousEscrowDispute {
-                escrow_id: escrow_id.clone(),
-                evidence_hashes,
-            }),
-        );
-
-        vm.set_register(10, resolve_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
-            &mut vm,
-        );
-        assert_queued(&mut host, res, InstructionBox::from(resolve));
-    }
-
-    #[test]
     fn register_peer_syscall_queues_instruction() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
@@ -18666,12 +18477,12 @@ seiyaku DedicatedQueryContract {
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
-        host.enable_core_query_metrics();
+        host.enable_core_query_page_metrics();
         let mut vm = IVM::new(1_000_000);
         macro_rules! assert_single_projection {
             ($tag:expr) => {{
                 let metrics = host
-                    .core_query_metrics()
+                    .core_query_page_metrics()
                     .expect("typed query metrics enabled");
                 assert_eq!(metrics.host_queries, 1, "{:?}", $tag);
                 assert_eq!(metrics.projection_decodes, 1, "{:?}", $tag);
@@ -18684,7 +18495,7 @@ seiyaku DedicatedQueryContract {
         }
 
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
-        host.reset_core_query_metrics();
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
         vm.set_register(11, account_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
@@ -18700,7 +18511,7 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, account_words[1], PointerType::Json);
 
         let asset_ptr = store_tlv(&mut vm, PointerType::AssetId, &norito_blob(&asset_id));
-        host.reset_core_query_metrics();
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Asset.as_u64());
         vm.set_register(11, asset_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
@@ -18719,7 +18530,7 @@ seiyaku DedicatedQueryContract {
             PointerType::AssetDefinitionId,
             &norito_blob(&asset_def_id),
         );
-        host.reset_core_query_metrics();
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::AssetDefinition.as_u64());
         vm.set_register(11, asset_def_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
@@ -18748,7 +18559,7 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, definition_words[5], PointerType::Json);
 
         let domain_ptr = store_tlv(&mut vm, PointerType::DomainId, &norito_blob(&domain_id));
-        host.reset_core_query_metrics();
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Domain.as_u64());
         vm.set_register(11, domain_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
@@ -18763,7 +18574,7 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, domain_words[2], PointerType::Json);
 
         let nft_ptr = store_tlv(&mut vm, PointerType::NftId, &norito_blob(&nft_id));
-        host.reset_core_query_metrics();
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Nft.as_u64());
         vm.set_register(11, nft_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
@@ -19089,7 +18900,7 @@ seiyaku DedicatedQueryContract {
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
-        host.enable_core_query_metrics();
+        host.enable_core_query_page_metrics();
         let mut vm = IVM::new(1_000_000);
 
         vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
@@ -19123,7 +18934,7 @@ seiyaku DedicatedQueryContract {
         )
         .expect("measure bounded query execution");
         let metrics = host
-            .core_query_metrics()
+            .core_query_page_metrics()
             .expect("typed page metrics enabled");
         assert_eq!(
             gas,
@@ -19272,7 +19083,7 @@ seiyaku DedicatedQueryContract {
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
-        host.enable_core_query_metrics();
+        host.enable_core_query_page_metrics();
         let mut vm = IVM::new(2_000_000);
 
         let mut account_ids = vec![authority, second_account];
@@ -19330,7 +19141,7 @@ seiyaku DedicatedQueryContract {
                 ivm::list::ListLayoutV1::try_new(QUERY_PAGE_CAPACITY_V1 as u64, words_per_item)
                     .expect("typed page list layout");
             for (offset, expected) in expected_ids.iter().enumerate() {
-                host.reset_core_query_metrics();
+                host.reset_core_query_page_metrics();
                 vm.set_register(10, tag.as_u64());
                 vm.set_register(11, u64::try_from(offset).expect("offset"));
                 vm.set_register(12, 1);
@@ -19347,7 +19158,7 @@ seiyaku DedicatedQueryContract {
                 assert_eq!(id.type_id, id_type, "{tag:?} page {offset}");
                 assert_eq!(id.payload, expected, "{tag:?} page {offset}");
                 let metrics = host
-                    .core_query_metrics()
+                    .core_query_page_metrics()
                     .expect("typed page metrics enabled");
                 assert_eq!(metrics.host_queries, 1, "{tag:?} page {offset}");
                 assert_eq!(metrics.projection_decodes, 1, "{tag:?} page {offset}");
@@ -19361,7 +19172,7 @@ seiyaku DedicatedQueryContract {
                     "{tag:?} next_offset at page {offset}"
                 );
 
-                host.reset_core_query_metrics();
+                host.reset_core_query_page_metrics();
                 let mut repeated_vm = IVM::new(2_000_000);
                 repeated_vm.set_register(10, tag.as_u64());
                 repeated_vm.set_register(11, u64::try_from(offset).expect("offset"));
@@ -19370,7 +19181,7 @@ seiyaku DedicatedQueryContract {
                     .syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut repeated_vm)
                     .unwrap_or_else(|error| panic!("repeated {tag:?} page {offset}: {error:?}"));
                 let repeated_metrics = host
-                    .core_query_metrics()
+                    .core_query_page_metrics()
                     .expect("typed page metrics enabled");
                 assert_eq!(
                     repeated_gas, gas,
@@ -20994,61 +20805,6 @@ seiyaku DedicatedQueryContract {
             "failed affordability must not consume the proof latch"
         );
         assert_eq!(vm.register(10), instruction_ptr);
-
-        let escrow_name = Name::from_str("extreme_gas_escrow").expect("escrow name");
-        let escrow = OpenAnonymousAssetEscrow::with_evidence_hashes(
-            CoreHost::escrow_id_from_name(&escrow_name),
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").expect("domain"),
-                "xor".parse().expect("asset name"),
-            ),
-            vec![[0x51; 32]],
-            [0x52; 32],
-            ProofAttachment::new_ref(
-                backend.clone(),
-                ProofBox::new(backend.clone(), vec![0x53]),
-                VerifyingKeyId::new(backend.as_str(), "extreme-gas-escrow"),
-            ),
-            Some([0x54; 32]),
-            Vec::new(),
-        );
-        let escrow_payload = norito::to_bytes(&escrow).expect("encode anonymous escrow");
-        let escrow_code = [
-            ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER).expect("syscall fits"),
-            )
-            .to_le_bytes(),
-            ivm::encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat();
-        let mut escrow_vm = IVM::new(10_000);
-        escrow_vm
-            .load_program(&build_authenticated_test_contract_program(
-                &escrow_code,
-                0,
-                true,
-            ))
-            .expect("load anonymous escrow program");
-        let escrow_ptr = store_tlv(&mut escrow_vm, PointerType::NoritoBytes, &escrow_payload);
-        escrow_vm.set_register(10, escrow_ptr);
-        let mut escrow_host = local_contract_host((*ALICE_ID).clone());
-
-        let error = escrow_vm
-            .run_with_host(&mut escrow_host)
-            .expect_err("extreme proof gas exceeds the escrow reserve");
-
-        assert_eq!(error, ivm::VMError::OutOfGas);
-        assert_eq!(
-            escrow_vm.remaining_gas(),
-            0,
-            "a state-dependent escrow failure consumes its fail-closed reserve"
-        );
-        assert!(
-            escrow_host.queued.is_empty(),
-            "unaffordable native proof instruction must not be queued"
-        );
-        assert_eq!(escrow_vm.register(10), escrow_ptr);
     }
 
     #[test]

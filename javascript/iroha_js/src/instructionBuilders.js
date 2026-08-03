@@ -1318,15 +1318,12 @@ function normalizeVerifyingKeyId(value, name) {
 function normalizeZkAssetMode(value, name) {
   const raw = value ?? "Hybrid";
   const normalized = String(raw).trim().toLowerCase();
-  if (normalized === "zknative" || normalized === "zk-native" || normalized === "zk_native") {
-    return "ZkNative";
-  }
   if (normalized === "hybrid") {
     return "Hybrid";
   }
   fail(
     ValidationErrorCode.INVALID_STRING,
-    `${name} must be 'ZkNative' or 'Hybrid'`,
+    `${name} must be 'Hybrid'`,
     name,
   );
 }
@@ -5759,6 +5756,15 @@ export function buildRemoveSmartContractBytesInstruction(options) {
  */
 export function buildRegisterZkAssetInstruction(options) {
   const source = assertPlainObject(options, "registerZkAsset");
+  for (const retiredField of ["transferVerifyingKey", "vkTransfer", "vk_transfer"]) {
+    if (Object.prototype.hasOwnProperty.call(source, retiredField)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `registerZkAsset.${retiredField} is no longer supported`,
+        `registerZkAsset.${retiredField}`,
+      );
+    }
+  }
   const asset =
     source.assetDefinitionId ??
     source.asset_definition_id ??
@@ -5769,10 +5775,6 @@ export function buildRegisterZkAssetInstruction(options) {
     mode: normalizeZkAssetMode(source.mode ?? source.assetMode, "registerZkAsset.mode"),
     allow_shield: Boolean(source.allowShield ?? source.allow_shield ?? true),
     allow_unshield: Boolean(source.allowUnshield ?? source.allow_unshield ?? true),
-    vk_transfer: normalizeVerifyingKeyId(
-      source.transferVerifyingKey ?? source.vkTransfer ?? source.vk_transfer,
-      "registerZkAsset.vkTransfer",
-    ),
     vk_unshield: normalizeVerifyingKeyId(
       source.unshieldVerifyingKey ?? source.vkUnshield ?? source.vk_unshield,
       "registerZkAsset.vkUnshield",

@@ -7681,10 +7681,9 @@ export interface PersistCouncilForEpochInstructionInput {
 
 export interface RegisterZkAssetInstructionInput {
   assetDefinitionId: string;
-  mode?: "ZkNative" | "Hybrid" | string;
+  mode?: "Hybrid";
   allowShield?: boolean;
   allowUnshield?: boolean;
-  transferVerifyingKey?: VerifyingKeyIdLike | null;
   unshieldVerifyingKey?: VerifyingKeyIdLike | null;
   shieldVerifyingKey?: VerifyingKeyIdLike | null;
 }
@@ -9569,30 +9568,6 @@ export interface EndKaigiTransactionInput {
   privateKeyAlgorithm?: string | null;
 }
 
-export interface PrivateKaigiEntrypointResult {
-  transactionEntrypoint: Buffer;
-  hash: Buffer;
-  actionHash: Buffer;
-}
-
-export interface PrivateKaigiFeeSpendResult {
-  asset_definition_id: string;
-  anchor_root: Buffer;
-  nullifiers: ReadonlyArray<Buffer>;
-  output_commitments: ReadonlyArray<Buffer>;
-  encrypted_change_payloads: ReadonlyArray<Buffer>;
-  proof: Buffer;
-}
-
-export interface PrivateKaigiFeeSpendInput {
-  chainId: string;
-  assetDefinitionId: string;
-  actionHash: BinaryLike;
-  anchorRootHex: string;
-  feeAmount: QuantityInput;
-  verifyingKey: Record<string, unknown>;
-}
-
 export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
   rhoHex?: string;
@@ -9635,37 +9610,6 @@ export interface ConfidentialUnshieldProofResultV3 {
   outputCommitments: ReadonlyArray<Buffer>;
   root: Buffer;
   proof: Buffer;
-}
-
-export interface PrivateCreateKaigiTransactionInput {
-  chainId: string;
-  call: Record<string, unknown>;
-  artifacts: Record<string, unknown>;
-  feeSpend: Record<string, unknown>;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  nonce?: number | null;
-}
-
-export interface PrivateJoinKaigiTransactionInput {
-  chainId: string;
-  callId: string;
-  artifacts: Record<string, unknown>;
-  feeSpend: Record<string, unknown>;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  nonce?: number | null;
-}
-
-export interface PrivateEndKaigiTransactionInput {
-  chainId: string;
-  callId: string;
-  endedAtMs?: number | null;
-  artifacts: Record<string, unknown>;
-  feeSpend: Record<string, unknown>;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  nonce?: number | null;
 }
 
 export interface RecordKaigiUsageTransactionInput {
@@ -12840,9 +12784,6 @@ export function buildPrecommitTriggerAction(
 export function buildCreateKaigiTransaction(
   input: CreateKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildPrivateKaigiFeeSpend(
-  input: PrivateKaigiFeeSpendInput,
-): PrivateKaigiFeeSpendResult;
 export function buildConfidentialTransferProofV2(input: {
   chainId: string;
   assetDefinitionId: string;
@@ -12874,24 +12815,15 @@ export function buildConfidentialUnshieldProofV3(input: {
   rootHintHex: string;
   verifyingKey: Record<string, unknown>;
 }): ConfidentialUnshieldProofResultV3;
-export function buildPrivateCreateKaigiTransaction(
-  input: PrivateCreateKaigiTransactionInput,
-): PrivateKaigiEntrypointResult;
 export function buildJoinKaigiTransaction(
   input: JoinKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildPrivateJoinKaigiTransaction(
-  input: PrivateJoinKaigiTransactionInput,
-): PrivateKaigiEntrypointResult;
 export function buildLeaveKaigiTransaction(
   input: LeaveKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildEndKaigiTransaction(
   input: EndKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildPrivateEndKaigiTransaction(
-  input: PrivateEndKaigiTransactionInput,
-): PrivateKaigiEntrypointResult;
 export function buildRecordKaigiUsageTransaction(
   input: RecordKaigiUsageTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;

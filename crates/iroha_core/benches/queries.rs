@@ -351,7 +351,7 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
     let view = state.view();
     let mut host = CoreHostImpl::new(authority);
     host.set_query_state(&view);
-    host.enable_core_query_metrics();
+    host.enable_core_query_page_metrics();
 
     for (family, raw_query_response_bytes) in TYPED_CORE_QUERY_FAMILIES
         .into_iter()
@@ -364,7 +364,7 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
         // Prove the performance contract on the exact production path before
         // Criterion samples it. Keeping these assertions outside the timed
         // loop prevents validation overhead from contaminating the result.
-        host.reset_core_query_metrics();
+        host.reset_core_query_page_metrics();
         let mut preflight_vm = IVM::new(u64::MAX);
         preflight_vm.set_register(10, family.tag.as_u64());
         preflight_vm.set_register(11, 0);
@@ -391,7 +391,7 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
             family.tag
         );
         let preflight_metrics = host
-            .core_query_metrics()
+            .core_query_page_metrics()
             .expect("typed page-query counters enabled");
         assert_eq!(
             preflight_metrics.host_queries, 1,
@@ -426,7 +426,7 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
                     vm
                 },
                 |mut vm| {
-                    host.reset_core_query_metrics();
+                    host.reset_core_query_page_metrics();
                     let gas = host
                         .syscall(ivm::syscalls::SYSCALL_CORE_QUERY_PAGE, &mut vm)
                         .unwrap_or_else(|error| {
@@ -443,7 +443,7 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
                         family.tag
                     );
                     let metrics = host
-                        .core_query_metrics()
+                        .core_query_page_metrics()
                         .expect("typed page-query counters enabled");
                     assert_eq!(
                         metrics.host_queries, 1,

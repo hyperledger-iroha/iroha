@@ -1588,9 +1588,9 @@ fn external_signed_transaction_results(
             let signed = match entrypoint {
                 TransactionEntrypoint::External(signed) => signed,
                 TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => return None,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    return None;
+                }
             };
             Some((entrypoint_hash, signed, result))
         })

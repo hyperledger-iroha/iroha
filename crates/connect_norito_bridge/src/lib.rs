@@ -1297,8 +1297,7 @@ fn parse_nonce(nonce: u32, present: bool) -> BridgeResult<Option<NonZeroU32>> {
 
 fn parse_zk_asset_mode(code: u8) -> BridgeResult<zk::ZkAssetMode> {
     match code {
-        0 => Ok(zk::ZkAssetMode::ZkNative),
-        1 => Ok(zk::ZkAssetMode::Hybrid),
+        0 => Ok(zk::ZkAssetMode::Hybrid),
         _ => Err(BridgeError::ZkAssetMode),
     }
 }
@@ -25000,9 +24999,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     mode_code: u8,
     allow_shield: c_uchar,
     allow_unshield: c_uchar,
-    vk_transfer_ptr: *const c_char,
-    vk_transfer_len: c_ulong,
-    vk_transfer_present: c_uchar,
     vk_unshield_ptr: *const c_char,
     vk_unshield_len: c_ulong,
     vk_unshield_present: c_uchar,
@@ -25035,9 +25031,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         let asset_definition = parse_asset_definition(asset_definition_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let mode = parse_zk_asset_mode(mode_code)?;
-        let vk_transfer = unsafe {
-            parse_optional_verifying_key_id(vk_transfer_ptr, vk_transfer_len, vk_transfer_present)
-        }?;
         let vk_unshield = unsafe {
             parse_optional_verifying_key_id(vk_unshield_ptr, vk_unshield_len, vk_unshield_present)
         }?;
@@ -25054,7 +25047,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             mode,
             allow_shield,
             allow_unshield,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         );
@@ -25096,9 +25088,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     mode_code: u8,
     allow_shield: c_uchar,
     allow_unshield: c_uchar,
-    vk_transfer_ptr: *const c_char,
-    vk_transfer_len: c_ulong,
-    vk_transfer_present: c_uchar,
     vk_unshield_ptr: *const c_char,
     vk_unshield_len: c_ulong,
     vk_unshield_present: c_uchar,
@@ -25133,9 +25122,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         let asset_definition = parse_asset_definition(asset_definition_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let mode = parse_zk_asset_mode(mode_code)?;
-        let vk_transfer = unsafe {
-            parse_optional_verifying_key_id(vk_transfer_ptr, vk_transfer_len, vk_transfer_present)
-        }?;
         let vk_unshield = unsafe {
             parse_optional_verifying_key_id(vk_unshield_ptr, vk_unshield_len, vk_unshield_present)
         }?;
@@ -25152,7 +25138,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             mode,
             allow_shield,
             allow_unshield,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         );
@@ -32287,8 +32272,6 @@ fn java_native_encode_register_zk_asset_signed_transaction(
     mode_code: jni::sys::jint,
     allow_shield: jni::sys::jboolean,
     allow_unshield: jni::sys::jboolean,
-    vk_transfer: jni::objects::JByteArray<'_>,
-    vk_transfer_present: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -32313,15 +32296,6 @@ fn java_native_encode_register_zk_asset_signed_transaction(
         let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
             .map_err(|_| "invalid asset".to_owned())?;
         let mode = java_zk_asset_mode_from_code(mode_code)?;
-        let vk_transfer = java_verifying_key_id(
-            java_optional_text_array(
-                env,
-                &vk_transfer,
-                vk_transfer_present,
-                "transferVerifyingKey",
-            )?,
-            "transferVerifyingKey",
-        )?;
         let vk_unshield = java_verifying_key_id(
             java_optional_text_array(
                 env,
@@ -32343,7 +32317,6 @@ fn java_native_encode_register_zk_asset_signed_transaction(
             mode,
             allow_shield != 0,
             allow_unshield != 0,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         );
@@ -38159,8 +38132,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     mode_code: jni::sys::jint,
     allow_shield: jni::sys::jboolean,
     allow_unshield: jni::sys::jboolean,
-    vk_transfer: jni::objects::JByteArray<'_>,
-    vk_transfer_present: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -38181,8 +38152,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         mode_code,
         allow_shield,
         allow_unshield,
-        vk_transfer,
-        vk_transfer_present,
         vk_unshield,
         vk_unshield_present,
         vk_shield,
@@ -38315,8 +38284,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     mode_code: jni::sys::jint,
     allow_shield: jni::sys::jboolean,
     allow_unshield: jni::sys::jboolean,
-    vk_transfer: jni::objects::JByteArray<'_>,
-    vk_transfer_present: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -38337,8 +38304,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         mode_code,
         allow_shield,
         allow_unshield,
-        vk_transfer,
-        vk_transfer_present,
         vk_unshield,
         vk_unshield_present,
         vk_shield,
@@ -47166,13 +47131,9 @@ mod tests {
 
         assert!(matches!(
             java_zk_asset_mode_from_code(0),
-            Ok(zk::ZkAssetMode::ZkNative)
-        ));
-        assert!(matches!(
-            java_zk_asset_mode_from_code(1),
             Ok(zk::ZkAssetMode::Hybrid)
         ));
-        for invalid in [-1, 256, 257] {
+        for invalid in [-1, 1, 256, 257] {
             assert!(
                 java_zk_asset_mode_from_code(invalid).is_err(),
                 "mode code {invalid} must not alias through u8"

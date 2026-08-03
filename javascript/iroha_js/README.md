@@ -3070,7 +3070,6 @@ const registerTx = buildRegisterZkAssetTransaction({
   registration: {
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     mode: "Hybrid",
-    transferVerifyingKey: "halo2/ipa:vk_transfer",
     unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
   },
   privateKey,

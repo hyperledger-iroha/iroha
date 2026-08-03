@@ -824,13 +824,8 @@ fn localnet_fee_sponsor_revision(
 }
 
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
-const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
 const LOCALNET_FEE_ASSET_SCALE: u32 = 9;
-
-fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
-    VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_TRANSFER_NAME)
-}
 
 fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_UNSHIELD_NAME)
@@ -838,10 +833,6 @@ fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
 
 fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
     match name {
-        LOCALNET_FEE_ZK_VK_TRANSFER_NAME => {
-            confidential_v2::confidential_transfer_v2_vk_record(name, version)
-                .map_err(|error| eyre!(error))
-        }
         LOCALNET_FEE_ZK_VK_UNSHIELD_NAME => {
             confidential_v2::confidential_unshield_v2_vk_record(name, version)
                 .map_err(|error| eyre!(error))
@@ -850,18 +841,12 @@ fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<Verif
     }
 }
 
-fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 2]>
+fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 1]>
 {
-    Ok([
-        (
-            localnet_fee_vk_transfer_id(),
-            localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_TRANSFER_NAME, 1)?,
-        ),
-        (
-            localnet_fee_vk_unshield_id(),
-            localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
-        ),
-    ])
+    Ok([(
+        localnet_fee_vk_unshield_id(),
+        localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
+    )])
 }
 
 fn localnet_sample_asset_literal() -> String {
@@ -3818,7 +3803,6 @@ fn append_localnet_npos_bootstrap_for_services(
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(fee_asset_id.clone());
     }
-    let fee_vk_transfer_id = localnet_fee_vk_transfer_id();
     let fee_vk_unshield_id = localnet_fee_vk_unshield_id();
     for (id, record) in localnet_confidential_fee_vk_registrations()? {
         if registrations.verifying_keys.insert(id.clone()) {
@@ -3832,7 +3816,6 @@ fn append_localnet_npos_bootstrap_for_services(
             iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
             true,
             true,
-            Some(fee_vk_transfer_id),
             Some(fee_vk_unshield_id),
             None,
         ));
@@ -9118,7 +9101,6 @@ mod tests {
             "generated fee asset must stay shield-capable for TAIRA wallet flows"
         );
 
-        let transfer_vk_id = localnet_fee_vk_transfer_id();
         let unshield_vk_id = localnet_fee_vk_unshield_id();
         let zk_registration = raw_genesis
             .instructions()
@@ -9134,11 +9116,6 @@ mod tests {
             "generated fee asset must emit a RegisterZkAsset instruction for shield flows"
         );
         assert_eq!(
-            zk_registration.vk_transfer(),
-            &Some(transfer_vk_id.clone()),
-            "generated fee asset must advertise a transfer verifier for shielded sends"
-        );
-        assert_eq!(
             zk_registration.vk_unshield(),
             &Some(unshield_vk_id.clone()),
             "generated fee asset must advertise an unshield verifier for withdrawals"
@@ -9152,17 +9129,6 @@ mod tests {
                     .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
             })
             .collect::<Vec<_>>();
-        assert!(
-            vk_registrations.iter().any(|register| {
-                register.id == transfer_vk_id
-                    && register.record.is_active()
-                    && register.record.key.is_some()
-                    && register.record.max_proof_bytes > 0
-                    && register.record.circuit_id
-                        == confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
-            }),
-            "generated fee asset must register an active confidential transfer verifier"
-        );
         assert!(
             vk_registrations.iter().any(|register| {
                 register.id == unshield_vk_id

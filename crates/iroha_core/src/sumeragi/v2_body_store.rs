@@ -7,7 +7,7 @@
 //! directory entry have been synchronised.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     mem::size_of,
@@ -22,7 +22,11 @@ use iroha_data_model::block::{
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
 
-use super::v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId};
+use super::{
+    v2::RecoveredValidationAuthority,
+    v2_apply::VerifiedRecoveredFinalitySubject,
+    v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId},
+};
 use crate::kura::KuraV2CommitReceipt;
 
 const STORE_MAGIC: &[u8; 8] = b"SUM2BODY";
@@ -305,6 +309,14 @@ pub(crate) struct V2BodyStore {
     directory: PathBuf,
     entries: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     manifests: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), wire::PayloadManifest>,
+    /// Structurally authenticated restart markers which have not yet crossed
+    /// deterministic candidate validation in this process.
+    ///
+    /// A checksum only detects accidental corruption; it is not authority to
+    /// vote. Production preflight must promote every entry through
+    /// [`Self::revalidate_recovered_markers`] before constructing the runtime.
+    pending_revalidation:
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     validated: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
 }
 
@@ -390,6 +402,7 @@ impl V2BodyStore {
             directory,
             entries: BTreeMap::new(),
             manifests: BTreeMap::new(),
+            pending_revalidation: BTreeMap::new(),
             validated: BTreeMap::new(),
         };
         let mut paths = fs::read_dir(&store.directory)
@@ -435,7 +448,7 @@ impl V2BodyStore {
             store.validate_marker(&marker, &receipt)?;
             store.ensure_execution_commitment_consistent(&receipt, marker.execution_commitment)?;
             if store
-                .validated
+                .pending_revalidation
                 .insert(
                     key,
                     ValidatedBodyReceipt {
@@ -525,7 +538,133 @@ impl V2BodyStore {
         Ok(catalog)
     }
 
-    /// Snapshot validation receipts reconstructed from durable marker files.
+    /// Re-run deterministic validation for every marker recovered from disk.
+    ///
+    /// Structurally valid marker bytes are deliberately quarantined while the
+    /// store opens. This method promotes them atomically only after the exact
+    /// durable bodies reproduce the persisted execution commitments. A typed
+    /// missing-certified-sidecar result retires the affected marker authority
+    /// without promoting it; the exact durable body remains available to the
+    /// ordinary bounded validation and sidecar-fetch pipeline. Every other
+    /// validation failure remains terminal. Bodies shared by several proposal
+    /// rounds are executed once because validation consumes the signed body and
+    /// immutable height context, not the manifest round; every round-local
+    /// marker remains checked against that result.
+    pub(crate) fn revalidate_recovered_markers<F, E>(
+        &mut self,
+        mut validator: F,
+    ) -> Result<(), V2BodyStoreError>
+    where
+        F: FnMut(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
+        E: BodyValidationError,
+    {
+        if self.pending_revalidation.is_empty() {
+            return Ok(());
+        }
+
+        let mut commitments = BTreeMap::<wire::BlockSubject, wire::ExecutionCommitment>::new();
+        let mut retired_missing_sidecar_subjects = BTreeSet::new();
+        let mut promoted = BTreeMap::new();
+        for (key, recovered) in &self.pending_revalidation {
+            let receipt = self
+                .entries
+                .get(key)
+                .ok_or(V2BodyStoreError::OrphanedValidationMarker)?;
+            if recovered.durable() != receipt {
+                return Err(V2BodyStoreError::ValidationMarkerMismatch);
+            }
+            if retired_missing_sidecar_subjects.contains(&key.1) {
+                continue;
+            }
+            let execution_commitment = if let Some(commitment) = commitments.get(&key.1) {
+                *commitment
+            } else {
+                let body = self.load(receipt)?;
+                let commitment = match validator(&body) {
+                    Ok(commitment) => commitment,
+                    Err(error) if error.missing_certified_merge_sidecar().is_some() => {
+                        retired_missing_sidecar_subjects.insert(key.1);
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(V2BodyStoreError::RecoveredValidationRejected(
+                            error.to_string(),
+                        ));
+                    }
+                };
+                commitment.validate()?;
+                commitments.insert(key.1, commitment);
+                commitment
+            };
+            if execution_commitment != recovered.execution_commitment() {
+                return Err(V2BodyStoreError::RecoveredValidationCommitmentMismatch);
+            }
+            promoted.insert(*key, recovered.clone());
+        }
+
+        self.validated.extend(promoted);
+        self.pending_revalidation.clear();
+        Ok(())
+    }
+
+    /// Retire restart vote authority for bodies other than a verified decision.
+    ///
+    /// Once Kura has a cryptographically verified finality artifact, losing
+    /// candidates cannot be re-executed against the now-advanced world state
+    /// and must never recover height-local vote authority. Their durable body
+    /// bytes remain available for bounded cleanup; their quarantined and
+    /// already-promoted marker capabilities are dropped from the in-memory
+    /// recovery catalogs.
+    pub(crate) fn retain_recovered_markers_for_subject(
+        &mut self,
+        decision: VerifiedRecoveredFinalitySubject,
+    ) -> Result<(), V2BodyStoreError> {
+        if !decision.authorizes_context(&self.context) {
+            return Err(V2BodyStoreError::RecoveredFinalityContextMismatch);
+        }
+        let subject = decision.subject();
+        self.pending_revalidation
+            .retain(|(_, candidate), _| *candidate == subject);
+        self.validated
+            .retain(|(_, candidate), _| *candidate == subject);
+        Ok(())
+    }
+
+    /// Retain only marker authority named by authenticated WAL replay.
+    ///
+    /// Superseded view-local markers remain on disk as checksummed diagnostics,
+    /// and their exact bodies remain available for certified serving or later
+    /// bounded validation. They are excluded from synchronous semantic replay
+    /// and cannot restore vote authority unless the live runtime validates the
+    /// body again.
+    pub(crate) fn retain_recovered_markers_for_authority(
+        &mut self,
+        authority: RecoveredValidationAuthority,
+    ) -> Result<(), V2BodyStoreError> {
+        if !authority.authorizes_context(&self.context) {
+            return Err(V2BodyStoreError::RecoveredValidationAuthorityContextMismatch);
+        }
+        self.pending_revalidation
+            .retain(|(round, subject), _| authority.authorizes(*round, *subject));
+        self.validated
+            .retain(|(round, subject), _| authority.authorizes(*round, *subject));
+        Ok(())
+    }
+
+    /// Require all restart markers to have crossed semantic revalidation.
+    ///
+    /// The serialized runtime calls this before restoring vote authority so a
+    /// caller cannot accidentally treat a checksummed local file as a trusted
+    /// validation receipt.
+    pub(crate) fn ensure_recovered_markers_revalidated(&self) -> Result<(), V2BodyStoreError> {
+        if self.pending_revalidation.is_empty() {
+            Ok(())
+        } else {
+            Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
+        }
+    }
+
+    /// Snapshot semantically revalidated recovery receipts.
     pub(crate) fn validated_recovery_catalog(
         &self,
     ) -> BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt> {
@@ -738,6 +877,17 @@ impl V2BodyStore {
             }
             return Ok(validated.clone());
         }
+        if let Some(recovered) = self.pending_revalidation.get(&key).cloned() {
+            if recovered.durable() != receipt {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            if recovered.execution_commitment() != execution_commitment {
+                return Err(V2BodyStoreError::RecoveredValidationCommitmentMismatch);
+            }
+            self.pending_revalidation.remove(&key);
+            self.validated.insert(key, recovered.clone());
+            return Ok(recovered);
+        }
         let validated = ValidatedBodyReceipt {
             durable: receipt.clone(),
             execution_commitment,
@@ -769,7 +919,14 @@ impl V2BodyStore {
                 && round.context_id == receipt.round.context_id
                 && round.height == receipt.round.height
                 && validated.execution_commitment() != execution_commitment
-        });
+        }) || self.pending_revalidation.iter().any(
+            |((round, subject), validated)| {
+                *subject == receipt.subject
+                    && round.context_id == receipt.round.context_id
+                    && round.height == receipt.round.height
+                    && validated.execution_commitment() != execution_commitment
+            },
+        );
         if conflicts {
             return Err(V2BodyStoreError::ConflictingValidationCommitment);
         }
@@ -1209,6 +1366,21 @@ pub(crate) enum V2BodyStoreError {
     /// Validation marker is not bound to the matching exact body frame.
     #[error("Sumeragi v2 validation marker differs from its durable body")]
     ValidationMarkerMismatch,
+    /// Recovered marker was not accepted by current deterministic validation.
+    #[error("recovered Sumeragi v2 validation marker failed semantic replay: {0}")]
+    RecoveredValidationRejected(String),
+    /// Recovered marker commitment differs from deterministic replay.
+    #[error("recovered Sumeragi v2 validation commitment differs from semantic replay")]
+    RecoveredValidationCommitmentMismatch,
+    /// Verified finality capability belongs to a different height context.
+    #[error("verified Sumeragi v2 recovery finality belongs to a different height context")]
+    RecoveredFinalityContextMismatch,
+    /// WAL replay authority belongs to a different immutable height context.
+    #[error("recovered Sumeragi v2 validation authority belongs to a different height context")]
+    RecoveredValidationAuthorityContextMismatch,
+    /// Runtime construction attempted to restore unvalidated local markers.
+    #[error("recovered Sumeragi v2 validation markers require semantic replay")]
+    UnrevalidatedValidationMarkers,
     /// Context directory contains an unrecognized final entry.
     #[error("unexpected Sumeragi v2 body-store entry: {}", .0.display())]
     UnexpectedEntry(PathBuf),
@@ -1247,7 +1419,10 @@ mod tests {
         write_validated_marker,
     };
 
-    use crate::sumeragi::{v2_chunks::encode_payload, v2_effects::BodyValidationTask};
+    use crate::sumeragi::{
+        v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
+        v2_chunks::encode_payload, v2_effects::BodyValidationTask,
+    };
 
     #[derive(Debug)]
     enum FixtureValidationError {
@@ -1477,13 +1652,22 @@ mod tests {
                 .hash(),
             receipt.subject().block_hash
         );
-        assert_eq!(
-            reopened
-                .validated_recovery_catalog()
-                .get(&(receipt.round(), receipt.subject()))
-                .map(ValidatedBodyReceipt::durable),
-            Some(&receipt),
-        );
+        assert!(reopened.validated_recovery_catalog().is_empty());
+        assert!(matches!(
+            reopened.ensure_recovered_markers_revalidated(),
+            Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
+        ));
+        let callback_ran = Cell::new(false);
+        let _validated = reopened
+            .validate(&receipt, |_| {
+                callback_ran.set(true);
+                Ok::<wire::ExecutionCommitment, &str>(execution_commitment)
+            })
+            .expect("durable validation marker resumes after semantic replay");
+        assert!(callback_ran.get());
+        reopened
+            .ensure_recovered_markers_revalidated()
+            .expect("recovered marker crossed semantic replay");
         assert_eq!(
             reopened
                 .validated_recovery_catalog()
@@ -1491,16 +1675,378 @@ mod tests {
                 .map(ValidatedBodyReceipt::execution_commitment),
             Some(execution_commitment),
         );
-        let callback_ran = Cell::new(false);
-        let _validated = reopened
-            .validate(&receipt, |_| {
-                callback_ran.set(true);
-                Err::<wire::ExecutionCommitment, _>(
-                    "persisted validation must bypass changed post-apply state",
-                )
+    }
+
+    #[test]
+    fn recovered_marker_cannot_restore_vote_authority_without_semantic_replay() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let expected = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        store
+            .persist_validated_receipt(&receipt, expected)
+            .expect("persist legitimate validation marker");
+
+        let forged = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"forged parent root"),
+            Hash::new(b"forged post root"),
+            Hash::new(b"forged ordinary writes"),
+            Hash::new(b"forged executed block"),
+        );
+        assert_ne!(expected, forged);
+        let marker = ValidatedBodyMarker {
+            version: STORE_VERSION,
+            context_id: receipt.context_id,
+            round: receipt.round,
+            subject: receipt.subject,
+            manifest_hash: receipt.manifest_hash,
+            body_frame_hash: receipt.frame_hash,
+            execution_commitment: forged,
+        };
+        write_validated_marker(
+            &store.validated_path_for(receipt.round(), receipt.subject()),
+            &marker,
+        )
+        .expect("substitute a checksum-valid local marker");
+        drop(store);
+
+        let mut reopened = V2BodyStore::open(directory.path(), context)
+            .expect("structurally read substituted marker");
+        assert!(reopened.validated_recovery_catalog().is_empty());
+        assert!(matches!(
+            reopened.revalidate_recovered_markers(|_| {
+                Ok::<wire::ExecutionCommitment, String>(expected)
+            }),
+            Err(V2BodyStoreError::RecoveredValidationCommitmentMismatch)
+        ));
+        assert!(reopened.validated_recovery_catalog().is_empty());
+        assert!(matches!(
+            reopened.ensure_recovered_markers_revalidated(),
+            Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
+        ));
+    }
+
+    #[test]
+    fn recovered_marker_missing_sidecar_retires_authority_without_losing_body() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store
+            .store(manifest.clone(), body)
+            .expect("store exact body");
+        let execution_commitment =
+            ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        store
+            .persist_validated_receipt(&receipt, execution_commitment)
+            .expect("persist validation marker");
+        drop(store);
+
+        let mut reopened = V2BodyStore::open(directory.path(), context).expect("reopen store");
+        assert!(matches!(
+            reopened.revalidate_recovered_markers(|_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "terminal recovered validation failure",
+                ))
+            }),
+            Err(V2BodyStoreError::RecoveredValidationRejected(reason))
+                if reason == "terminal recovered validation failure"
+        ));
+        assert!(matches!(
+            reopened.ensure_recovered_markers_revalidated(),
+            Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
+        ));
+
+        let reference = missing_merge_reference(&receipt);
+        reopened
+            .revalidate_recovered_markers(|_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
+                    reference.clone(),
+                ))
             })
-            .expect("durable validation marker resumes without revalidation");
-        assert!(!callback_ran.get());
+            .expect("missing sidecar retires marker authority without failing startup");
+        reopened
+            .ensure_recovered_markers_revalidated()
+            .expect("no untrusted marker authority survives startup");
+        assert!(reopened.validated_recovery_catalog().is_empty());
+        assert_eq!(
+            reopened
+                .recovered(manifest.round, manifest.subject)
+                .expect("inspect retained exact body"),
+            Some((manifest, receipt.clone()))
+        );
+
+        let task = BodyValidationTask::for_test(43, receipt.clone());
+        let deferred = reopened
+            .execute_validation_task(&task, |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
+                    reference.clone(),
+                ))
+            })
+            .expect("ordinary validation defers on the exact missing sidecar");
+        assert!(matches!(
+            deferred,
+            BodyValidationCompletion::DeferredMergeSidecar {
+                reference: deferred_reference,
+                ..
+            } if deferred_reference == reference
+        ));
+        assert!(reopened.validated_recovery_catalog().is_empty());
+
+        let validated = reopened
+            .execute_validation_task(&task, |_| {
+                Ok::<_, FixtureValidationError>(execution_commitment)
+            })
+            .expect("ordinary bounded retry validates after sidecar recovery");
+        assert_eq!(
+            validated
+                .validated_receipt()
+                .map(ValidatedBodyReceipt::execution_commitment),
+            Some(execution_commitment)
+        );
+    }
+
+    #[test]
+    fn wal_frontier_bounds_many_view_restart_validation_work() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let mut receipts = Vec::new();
+        for view in 0_u64..32 {
+            let leader = context.leader(view);
+            let leader_index = usize::try_from(leader).expect("leader index");
+            let (body, manifest) = body_and_manifest_with_signature_and_views(
+                &context,
+                &keys[leader_index],
+                u64::from(leader),
+                view,
+                view,
+            );
+            let receipt = store.store(manifest, body).expect("store view candidate");
+            let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+            store
+                .persist_validated_receipt(&receipt, commitment)
+                .expect("persist view validation marker");
+            receipts.push((receipt, commitment));
+        }
+        drop(store);
+
+        let mut reopened =
+            V2BodyStore::open(directory.path(), context.clone()).expect("reopen view catalog");
+        let selected = [receipts[7].0.clone(), receipts[31].0.clone()];
+        let authority = RecoveredValidationAuthority::for_test(
+            &context,
+            selected
+                .iter()
+                .map(|receipt| (receipt.round(), receipt.subject())),
+        );
+        assert_eq!(authority.len(), 2);
+        reopened
+            .retain_recovered_markers_for_authority(authority)
+            .expect("WAL frontier belongs to the exact body context");
+
+        let callback_count = Cell::new(0_usize);
+        reopened
+            .revalidate_recovered_markers(|block| {
+                callback_count.set(callback_count.get().saturating_add(1));
+                receipts
+                    .iter()
+                    .find_map(|(receipt, commitment)| {
+                        (receipt.subject().block_hash == block.hash()).then_some(*commitment)
+                    })
+                    .ok_or_else(|| "replayed an unauthorized body".to_owned())
+            })
+            .expect("revalidate only the authenticated WAL frontier");
+        assert_eq!(callback_count.get(), 2);
+        assert_eq!(reopened.validated_recovery_catalog().len(), 2);
+        assert_eq!(
+            reopened
+                .recovery_catalog()
+                .expect("retained body catalog")
+                .len(),
+            32,
+            "superseded markers lose authority without deleting DA body evidence"
+        );
+    }
+
+    #[test]
+    fn wal_frontier_capability_cannot_cross_height_contexts() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        store
+            .persist_validated_receipt(&receipt, commitment)
+            .expect("persist validation marker");
+        drop(store);
+
+        let mut reopened =
+            V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
+        let pending_before = reopened.pending_revalidation.clone();
+        let validated_before = reopened.validated.clone();
+        let mut foreign_context = context;
+        foreign_context.leader_seed[0] ^= 0x40;
+        let foreign_round = wire::ConsensusRound {
+            context_id: foreign_context.id(),
+            height: foreign_context.height,
+            view: receipt.round().view,
+        };
+        let authority = RecoveredValidationAuthority::for_test(
+            &foreign_context,
+            [(foreign_round, receipt.subject())],
+        );
+
+        assert!(matches!(
+            reopened.retain_recovered_markers_for_authority(authority),
+            Err(V2BodyStoreError::RecoveredValidationAuthorityContextMismatch)
+        ));
+        assert_eq!(reopened.pending_revalidation, pending_before);
+        assert_eq!(reopened.validated, validated_before);
+    }
+
+    #[test]
+    fn verified_decision_retires_losing_restart_marker_authority() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let mut receipts = Vec::new();
+        for view in [0_u64, 1] {
+            let leader = context.leader(view);
+            let leader_index = usize::try_from(leader).expect("leader index");
+            let (body, manifest) = body_and_manifest_with_signature_and_views(
+                &context,
+                &keys[leader_index],
+                u64::from(leader),
+                view,
+                view,
+            );
+            let receipt = store.store(manifest, body).expect("store candidate body");
+            let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+            store
+                .persist_validated_receipt(&receipt, commitment)
+                .expect("persist candidate validation marker");
+            receipts.push((receipt, commitment));
+        }
+        assert_ne!(receipts[0].0.subject(), receipts[1].0.subject());
+        drop(store);
+
+        let mut reopened =
+            V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
+        reopened
+            .retain_recovered_markers_for_subject(VerifiedRecoveredFinalitySubject::for_test(
+                &context,
+                receipts[0].0.subject(),
+            ))
+            .expect("verified decision belongs to the recovered context");
+        reopened
+            .revalidate_recovered_markers(|_| {
+                Ok::<wire::ExecutionCommitment, String>(receipts[0].1)
+            })
+            .expect("revalidate only the verified decision");
+        reopened
+            .ensure_recovered_markers_revalidated()
+            .expect("losing marker authority was retired");
+        let catalog = reopened.validated_recovery_catalog();
+        assert!(catalog.contains_key(&(receipts[0].0.round(), receipts[0].0.subject())));
+        assert!(!catalog.contains_key(&(receipts[1].0.round(), receipts[1].0.subject())));
+    }
+
+    #[test]
+    fn verified_decision_capability_cannot_cross_height_contexts() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("store candidate body");
+        let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        store
+            .persist_validated_receipt(&receipt, commitment)
+            .expect("persist candidate validation marker");
+        drop(store);
+
+        let mut reopened =
+            V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
+        let pending_before = reopened.pending_revalidation.clone();
+        let validated_before = reopened.validated.clone();
+        let mut foreign_context = context.clone();
+        foreign_context.leader_seed[0] ^= 0x80;
+        assert_ne!(foreign_context.id(), context.id());
+
+        let error = reopened
+            .retain_recovered_markers_for_subject(VerifiedRecoveredFinalitySubject::for_test(
+                &foreign_context,
+                receipt.subject(),
+            ))
+            .expect_err("foreign finality capability must fail closed");
+        assert!(matches!(
+            error,
+            V2BodyStoreError::RecoveredFinalityContextMismatch
+        ));
+        assert_eq!(reopened.pending_revalidation, pending_before);
+        assert_eq!(reopened.validated, validated_before);
+    }
+
+    #[test]
+    fn verified_decision_retires_already_promoted_losing_marker_authority() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let mut receipts = Vec::new();
+        for view in [0_u64, 1] {
+            let leader = context.leader(view);
+            let leader_index = usize::try_from(leader).expect("leader index");
+            let (body, manifest) = body_and_manifest_with_signature_and_views(
+                &context,
+                &keys[leader_index],
+                u64::from(leader),
+                view,
+                view,
+            );
+            let receipt = store.store(manifest, body).expect("store candidate body");
+            let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+            store
+                .persist_validated_receipt(&receipt, commitment)
+                .expect("persist candidate validation marker");
+            receipts.push((receipt, commitment));
+        }
+        assert_ne!(receipts[0].0.subject(), receipts[1].0.subject());
+        drop(store);
+
+        let mut reopened =
+            V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
+        reopened
+            .validate(&receipts[1].0, |_| {
+                Ok::<wire::ExecutionCommitment, &str>(receipts[1].1)
+            })
+            .expect("promote the losing recovered marker before finality filtering");
+        assert!(
+            reopened
+                .validated_recovery_catalog()
+                .contains_key(&(receipts[1].0.round(), receipts[1].0.subject()))
+        );
+
+        reopened
+            .retain_recovered_markers_for_subject(VerifiedRecoveredFinalitySubject::for_test(
+                &context,
+                receipts[0].0.subject(),
+            ))
+            .expect("verified decision belongs to the recovered context");
+        assert!(reopened.validated_recovery_catalog().is_empty());
+        reopened
+            .revalidate_recovered_markers(|_| {
+                Ok::<wire::ExecutionCommitment, String>(receipts[0].1)
+            })
+            .expect("revalidate only the verified decision");
+        reopened
+            .ensure_recovered_markers_revalidated()
+            .expect("all losing marker authority was retired");
+        let catalog = reopened.validated_recovery_catalog();
+        assert!(catalog.contains_key(&(receipts[0].0.round(), receipts[0].0.subject())));
+        assert!(!catalog.contains_key(&(receipts[1].0.round(), receipts[1].0.subject())));
     }
 
     #[test]
@@ -1534,6 +2080,11 @@ mod tests {
         drop(store);
         let mut store = V2BodyStore::open(directory.path(), context.clone())
             .expect("recover the exact origin-view validation marker");
+        store
+            .revalidate_recovered_markers(|_| {
+                Ok::<wire::ExecutionCommitment, String>(execution_commitment)
+            })
+            .expect("semantically replay the recovered origin marker");
 
         let later_round = wire::ConsensusRound {
             context_id: context.id(),

@@ -1796,9 +1796,6 @@ pub struct ZkRegisterAssetArgs {
     /// Allow unshielding from shielded to public (default: true)
     #[arg(long, default_value_t = true)]
     allow_unshield: bool,
-    /// Verifying key id for private transfers (format: `<backend>:<name>`, e.g., `halo2/ipa:vk_transfer`)
-    #[arg(long, value_name = "BACKEND:NAME")]
-    vk_transfer: Option<String>,
     /// Verifying key id for unshield proofs (format: `<backend>:<name>`)
     #[arg(long, value_name = "BACKEND:NAME")]
     vk_unshield: Option<String>,
@@ -1829,10 +1826,6 @@ impl Run for ZkRegisterAssetArgs {
         use iroha::data_model::prelude::{AssetDefinitionId, InstructionBox};
 
         let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
-        let vk_transfer = match self.vk_transfer {
-            Some(s) => Some(parse_vk_id_pair(&s)?),
-            None => None,
-        };
         let vk_unshield = match self.vk_unshield {
             Some(s) => Some(parse_vk_id_pair(&s)?),
             None => None,
@@ -1846,7 +1839,6 @@ impl Run for ZkRegisterAssetArgs {
             ZkAssetMode::Hybrid,
             self.allow_shield,
             self.allow_unshield,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         )

@@ -300,15 +300,17 @@ def validate(
 
     def test_check_and_external_output_are_the_only_supported_modes(self) -> None:
         preimage = self.loader.read_bytes()
+        help_result = self.run_owner("--help")
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("--check", help_result.stdout)
+        self.assertIn("--output OUTPUT", help_result.stdout)
+        self.assertNotIn("--write", help_result.stdout)
+
         stale = self.run_owner("--check")
         self.assertNotEqual(stale.returncode, 0)
         self.assertIn("pins are stale", stale.stderr)
 
-        retired = self.run_owner(
-            "--write",
-            "--expected-preimage-sha256",
-            hashlib.sha256(preimage).hexdigest(),
-        )
+        retired = self.run_owner("--check", "--write")
         self.assertNotEqual(retired.returncode, 0)
         self.assertIn("unrecognized arguments: --write", retired.stderr)
         self.assertEqual(self.loader.read_bytes(), preimage)
@@ -347,6 +349,19 @@ def validate(
         self.assertIn("outside the repository", confined.stderr)
         self.assertFalse(repository_output.exists())
 
+        symbolic_parent = self.temporary_root / "symbolic-output"
+        symbolic_parent.symlink_to(self.output_root, target_is_directory=True)
+        symbolic_output = symbolic_parent / "symbolic-prospective.swift"
+        symbolic = self.run_owner(
+            "--output",
+            str(symbolic_output),
+            "--expected-preimage-sha256",
+            hashlib.sha256(preimage).hexdigest(),
+        )
+        self.assertNotEqual(symbolic.returncode, 0)
+        self.assertIn("non-symbolic canonical directory", symbolic.stderr)
+        self.assertFalse(symbolic_output.exists())
+
     def test_late_output_competitor_is_preserved(self) -> None:
         output = self.output_root / "prospective.swift"
         retained = self.output_root / "owner-output.retained"
@@ -370,19 +385,6 @@ def validate(
         self.assertTrue(swapped)
         self.assertEqual(output.read_bytes(), competitor)
         self.assertEqual(retained.read_bytes(), projected)
-
-        symbolic_parent = self.temporary_root / "symbolic-output"
-        symbolic_parent.symlink_to(self.output_root, target_is_directory=True)
-        symbolic_output = symbolic_parent / "symbolic-prospective.swift"
-        symbolic = self.run_owner(
-            "--output",
-            str(symbolic_output),
-            "--expected-preimage-sha256",
-            hashlib.sha256(preimage).hexdigest(),
-        )
-        self.assertNotEqual(symbolic.returncode, 0)
-        self.assertIn("non-symbolic canonical directory", symbolic.stderr)
-        self.assertFalse(symbolic_output.exists())
 
     def test_artifact_lock_and_repository_provenance_are_mandatory(self) -> None:
         lock_path = self.artifact / ".NoritoBridge.publish.lockfile"

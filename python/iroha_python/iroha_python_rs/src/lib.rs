@@ -17924,7 +17924,6 @@ fn verify_committed_transaction_inclusion_json_py(
         TransactionEntrypoint::External(_) => "External",
         TransactionEntrypoint::SealedCommitment(_) => "SealedCommitment",
         TransactionEntrypoint::SealedReveal(_) => "SealedReveal",
-        TransactionEntrypoint::PrivateKaigi(_) => "PrivateKaigi",
         TransactionEntrypoint::Time(_) => "Time",
     };
     let external_transaction = match &committed.entrypoint {

@@ -4689,7 +4689,6 @@ function decodeZkInstructionPayload(wireId, payload) {
         "mode",
         "allow_shield",
         "allow_unshield",
-        "vk_transfer",
         "vk_unshield",
         "vk_shield",
       ]);
@@ -4705,11 +4704,6 @@ function decodeZkInstructionPayload(wireId, payload) {
             allow_unshield: decodeBoolValue(
               fields.allow_unshield,
               "zk.RegisterZkAsset.allow_unshield",
-            ),
-            vk_transfer: decodeOptionValue(
-              fields.vk_transfer,
-              decodeVerifyingKeyIdValue,
-              "zk.RegisterZkAsset.vk_transfer",
             ),
             vk_unshield: decodeOptionValue(
               fields.vk_unshield,
@@ -6711,7 +6705,6 @@ function encodeRegisterZkAssetPayload(value) {
     [encodeZkAssetModeValue(value.mode, "zk.RegisterZkAsset.mode")],
     [encodeBoolValue(value.allow_shield, "zk.RegisterZkAsset.allow_shield")],
     [encodeBoolValue(value.allow_unshield, "zk.RegisterZkAsset.allow_unshield")],
-    [encodeOptionValue(value.vk_transfer, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_transfer")],
     [encodeOptionValue(value.vk_unshield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_unshield")],
     [encodeOptionValue(value.vk_shield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_shield")],
   ]);
@@ -8007,13 +8000,10 @@ function decodeKaigiRoomPolicyValue(payload, context) {
 
 function encodeZkAssetModeValue(value, context) {
   const normalized = assertNonEmptyString(value, context).toLowerCase();
-  if (normalized === "zknative") {
+  if (normalized === "hybrid") {
     return encodeEnumTagValue(0);
   }
-  if (normalized === "hybrid") {
-    return encodeEnumTagValue(1);
-  }
-  throw new Error(`${context} must be ZkNative or Hybrid`);
+  throw new Error(`${context} must be Hybrid`);
 }
 
 function decodeZkAssetModeValue(payload, context) {
@@ -8022,8 +8012,6 @@ function decodeZkAssetModeValue(payload, context) {
   reader.assertEof();
   switch (tag) {
     case 0:
-      return "ZkNative";
-    case 1:
       return "Hybrid";
     default:
       throw new Error(`${context} uses unsupported zk asset mode ${tag}`);

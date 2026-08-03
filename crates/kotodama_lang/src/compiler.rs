@@ -114,7 +114,6 @@ const HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE: &str =
 const ACCOUNT_WILDCARD_KEY: &str = "account:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
-const ZK_ASSET_WILDCARD_KEY: &str = "zk_asset:*";
 const NFT_COARSE_KEY: &str = "nft";
 const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 const AUTHORITY_PLACEHOLDER: &str = "$authority";
@@ -4098,81 +4097,6 @@ kotoage fn main() authorize("CompilerFixture") {
     }
 
     #[test]
-    fn native_anonymous_escrow_builtins_emit_escrow_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("CompilerFixture") {
-  let request = b"00";
-  let evidence = b"01";
-  ledger::escrow::anonymous::open_offer(request);
-  ledger::escrow::anonymous::accept(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::release(request);
-  ledger::escrow::anonymous::cancel(request);
-  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer"), evidence);
-  ledger::escrow::anonymous::resolve_dispute(request);
-  ledger::escrow::anonymous::open_offer(request);
-  ledger::escrow::anonymous::accept(Name::parse("shielded_offer_call"));
-  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer_call"));
-  ledger::escrow::anonymous::release(request);
-  ledger::escrow::anonymous::cancel(request);
-  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer_call"), evidence);
-  ledger::escrow::anonymous::resolve_dispute(request);
-}
-
-}
-"#;
-        let compiler = test_mode_compiler();
-        let bytes = compiler
-            .compile_source(src)
-            .expect("compile native anonymous escrow builtins");
-        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-        let code = &bytes[parsed.code_offset..];
-
-        for (syscall, label) in [
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
-                "ANONYMOUS_ESCROW_OPEN_OFFER",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT,
-                "ANONYMOUS_ESCROW_ACCEPT",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
-                "ANONYMOUS_ESCROW_MARK_PAYMENT_SENT",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE,
-                "ANONYMOUS_ESCROW_RELEASE",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL,
-                "ANONYMOUS_ESCROW_CANCEL",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
-                "ANONYMOUS_ESCROW_OPEN_DISPUTE",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
-                "ANONYMOUS_ESCROW_RESOLVE_DISPUTE",
-            ),
-        ] {
-            let needle = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(syscall).expect("anonymous escrow syscall id fits in u8"),
-            )
-            .to_le_bytes();
-            assert!(
-                code.windows(needle.len()).any(|window| window == needle),
-                "expected {label} syscall in compiled code"
-            );
-        }
-    }
-
-    #[test]
     fn native_escrow_builtins_report_literal_access_hints() {
         let asset_def = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
@@ -4222,122 +4146,6 @@ kotoage fn main() authorize("EscrowAdmin") {{
         }
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
-    }
-
-    #[test]
-    fn named_anonymous_escrow_builtins_report_literal_access_hints() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("EscrowAdmin") {
-  let evidence = b"01";
-  ledger::escrow::anonymous::accept(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer"), evidence);
-}
-
-}
-"#;
-        let compiler = Compiler::new();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
-            .expect("compile anonymous escrow access hints");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected anonymous escrow access hints");
-        let escrow_hash = kotodama_escrow_hex("shielded_offer");
-        for key in [
-            format!("escrow_id:{escrow_hash}"),
-            format!("anonymous_asset_escrow:{escrow_hash}"),
-        ] {
-            assert!(hints.read_keys.contains(&key), "missing read key {key}");
-            assert!(hints.write_keys.contains(&key), "missing write key {key}");
-        }
-
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
-    }
-
-    #[test]
-    fn literal_anonymous_escrow_request_reports_access_hints() {
-        use iroha_data_model::{
-            asset::AssetDefinitionId,
-            isi::escrow::OpenAnonymousAssetEscrow,
-            proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-        };
-
-        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
-            .parse()
-            .expect("asset definition");
-        let escrow_name: iroha_data_model::name::Name =
-            "shielded_offer".parse().expect("escrow name");
-        let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
-        let backend = "halo2/ipa/poly-open".to_string();
-        let proof = ProofAttachment::new_ref(
-            backend.clone(),
-            ProofBox::new(backend.clone(), vec![1, 2, 3]),
-            VerifyingKeyId::new(backend, "escrow_vk"),
-        );
-        let request = OpenAnonymousAssetEscrow::new(
-            escrow_id,
-            asset_def.clone(),
-            vec![[0x11; 32]],
-            [0x22; 32],
-            proof,
-            None,
-        );
-        let payload = norito::to_bytes(&request).expect("encode anonymous escrow request");
-        let payload_literal = kotodama_bytes_literal(&payload);
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-
-kotoage fn main() authorize("EscrowAdmin") {{
-  ledger::escrow::anonymous::open_offer(b"{payload_literal}");
-}}
-
-}}
-"#
-        );
-
-        let compiler = Compiler::new();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile literal anonymous escrow request");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected anonymous request access hints");
-        let escrow_hash = kotodama_escrow_hex("shielded_offer");
-        for key in [
-            format!("escrow_id:{escrow_hash}"),
-            format!("anonymous_asset_escrow:{escrow_hash}"),
-            format!("zk_asset:{asset_def}"),
-        ] {
-            assert!(hints.read_keys.contains(&key), "missing read key {key}");
-            assert!(hints.write_keys.contains(&key), "missing write key {key}");
-        }
-        let asset_def_key = format!("asset_def:{asset_def}");
-        assert!(
-            hints.read_keys.contains(&asset_def_key),
-            "missing read key {asset_def_key}"
-        );
-        assert!(
-            !hints.write_keys.contains(&asset_def_key),
-            "anonymous escrow open should not write asset definition key {asset_def_key}"
-        );
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
@@ -4406,42 +4214,6 @@ fn main() {
 }
 "#,
                 "ledger::escrow::resolve_dispute expects (Name, quantity, quantity[, bytes evidence_hashes])",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::anonymous::open_offer(Name::parse("deal"));
-}
-
-}
-"#,
-                "ledger::escrow::anonymous::open_offer expects (bytes) Norito request payload",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::anonymous::accept(1);
-}
-
-}
-"#,
-                "ledger::escrow::anonymous::accept expects (Name)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::anonymous::open_dispute(Name::parse("deal"), 1);
-}
-
-}
-"#,
-                "ledger::escrow::anonymous::open_dispute expects (Name[, bytes evidence_hashes])",
             ),
         ] {
             let parsed = parse(src).expect("parse invalid escrow source");
@@ -16635,100 +16407,6 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
-                        Instr::AnonymousEscrowOpenOffer { request }
-                        | Instr::AnonymousEscrowRelease { request }
-                        | Instr::AnonymousEscrowCancel { request }
-                        | Instr::AnonymousEscrowResolveDispute { request } => {
-                            if let Some(pstr) = string_map.get(&(func_idx, *request)) {
-                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &fixups, 10, key);
-                            } else {
-                                let r_request = src_reg(request, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_request, 0)?);
-                            }
-                            let pub_word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                            );
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            let syscall = match instr {
-                                Instr::AnonymousEscrowOpenOffer { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-                                }
-                                Instr::AnonymousEscrowRelease { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
-                                }
-                                Instr::AnonymousEscrowCancel { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
-                                }
-                                Instr::AnonymousEscrowResolveDispute { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
-                                }
-                                _ => unreachable!(),
-                            };
-                            push_syscall(&mut code, syscall);
-                        }
-                        Instr::AnonymousEscrowAccept { escrow }
-                        | Instr::AnonymousEscrowMarkPaymentSent { escrow } => {
-                            if let Some(escrow_str) = string_map
-                                .get(&(func_idx, *escrow))
-                                .map(|s| DataKey(DataKind::Name, s.clone()))
-                            {
-                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
-                            } else {
-                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
-                            }
-                            let pub_word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                            );
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            let syscall = match instr {
-                                Instr::AnonymousEscrowAccept { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-                                }
-                                Instr::AnonymousEscrowMarkPaymentSent { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-                                }
-                                _ => unreachable!(),
-                            };
-                            push_syscall(&mut code, syscall);
-                        }
-                        Instr::AnonymousEscrowOpenDispute {
-                            escrow,
-                            evidence_hashes,
-                        } => {
-                            if let Some(escrow_str) = string_map
-                                .get(&(func_idx, *escrow))
-                                .map(|s| DataKey(DataKind::Name, s.clone()))
-                            {
-                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
-                            } else {
-                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
-                            }
-                            let pub_word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                            );
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            if let Some(evidence_hashes) = evidence_hashes {
-                                push_word(&mut code, encode_addi(14, 10, 0)?);
-                                let r_evidence = src_reg(evidence_hashes, scratch2, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_evidence, 0)?);
-                                code.extend_from_slice(&pub_word.to_le_bytes());
-                                push_word(&mut code, encode_addi(11, 10, 0)?);
-                                push_word(&mut code, encode_addi(10, 14, 0)?);
-                            } else {
-                                push_word(&mut code, encode_addi(11, 0, 0)?);
-                            }
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
-                        }
                         Instr::TransferBatchBegin => {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -21839,70 +21517,6 @@ fn record_isi_access(
             };
             record_asset_escrow_close_access(access_set, &escrow_id);
         }
-        ir::Instr::AnonymousEscrowOpenOffer { request } => {
-            let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_anonymous_escrow_request_access(
-                raw,
-                AnonymousEscrowRequestKind::OpenOffer,
-                access_set,
-            )
-            .is_none()
-            {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            }
-        }
-        ir::Instr::AnonymousEscrowRelease { request } => {
-            let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_anonymous_escrow_request_access(
-                raw,
-                AnonymousEscrowRequestKind::Release,
-                access_set,
-            )
-            .is_none()
-            {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            }
-        }
-        ir::Instr::AnonymousEscrowCancel { request } => {
-            let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_anonymous_escrow_request_access(
-                raw,
-                AnonymousEscrowRequestKind::Cancel,
-                access_set,
-            )
-            .is_none()
-            {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            }
-        }
-        ir::Instr::AnonymousEscrowResolveDispute { request } => {
-            let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_anonymous_escrow_request_access(
-                raw,
-                AnonymousEscrowRequestKind::ResolveDispute,
-                access_set,
-            )
-            .is_none()
-            {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            }
-        }
-        ir::Instr::AnonymousEscrowAccept { escrow }
-        | ir::Instr::AnonymousEscrowMarkPaymentSent { escrow }
-        | ir::Instr::AnonymousEscrowOpenDispute { escrow, .. } => {
-            let Some(escrow_id) = escrow_id_from_name_temp(string_map, func_idx, *escrow) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            record_anonymous_asset_escrow_lifecycle_access(access_set, &escrow_id);
-        }
         ir::Instr::TransferAsset {
             from,
             to,
@@ -22383,50 +21997,6 @@ fn access_for_instruction_literal(raw: &str) -> Option<AccessSets> {
     Some(access)
 }
 
-enum AnonymousEscrowRequestKind {
-    OpenOffer,
-    Release,
-    Cancel,
-    ResolveDispute,
-}
-
-fn record_anonymous_escrow_request_access(
-    raw: &str,
-    kind: AnonymousEscrowRequestKind,
-    access_set: &mut AccessSets,
-) -> Option<()> {
-    use iroha_data_model::isi::escrow as DMEscrow;
-
-    let payload = decode_norito_literal_payload(raw)?;
-    match kind {
-        AnonymousEscrowRequestKind::OpenOffer => {
-            let request: DMEscrow::OpenAnonymousAssetEscrow =
-                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            record_anonymous_asset_escrow_open_access(
-                access_set,
-                &request.escrow_id,
-                &request.asset_definition,
-            );
-        }
-        AnonymousEscrowRequestKind::Release => {
-            let request: DMEscrow::ReleaseAnonymousAssetEscrow =
-                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
-        }
-        AnonymousEscrowRequestKind::Cancel => {
-            let request: DMEscrow::CancelAnonymousAssetEscrow =
-                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
-        }
-        AnonymousEscrowRequestKind::ResolveDispute => {
-            let request: DMEscrow::ResolveAnonymousEscrowDispute =
-                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
-        }
-    }
-    Some(())
-}
-
 fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
     let payload = decode_norito_literal_payload(raw)?;
     ivm_abi::codec::decode_canonical_norito(&payload).ok()
@@ -22808,38 +22378,6 @@ fn record_instruction_box_access(
         }
         if let Some(instr) = any.downcast_ref::<DMEscrow::ResolveEscrowDispute>() {
             record_asset_escrow_close_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAnonymousAssetEscrow>() {
-            record_anonymous_asset_escrow_open_access(
-                access_set,
-                &instr.escrow_id,
-                &instr.asset_definition,
-            );
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::AcceptAnonymousAssetEscrow>() {
-            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::MarkAnonymousEscrowPaymentSent>() {
-            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::ReleaseAnonymousAssetEscrow>() {
-            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::CancelAnonymousAssetEscrow>() {
-            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAnonymousEscrowDispute>() {
-            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::ResolveAnonymousEscrowDispute>() {
-            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
             return Some(());
         }
     }
@@ -23422,13 +22960,6 @@ fn key_asset_escrow(id: &EscrowId) -> String {
     format!("asset_escrow:{}", hex::encode(id.as_hash().as_ref()))
 }
 
-fn key_anonymous_asset_escrow(id: &EscrowId) -> String {
-    format!(
-        "anonymous_asset_escrow:{}",
-        hex::encode(id.as_hash().as_ref())
-    )
-}
-
 fn key_asset(id: &AssetId) -> String {
     format!("asset:{id}")
 }
@@ -23648,19 +23179,8 @@ fn add_asset_def_detail_rw(set: &mut AccessSets, id: &AssetDefinitionId, key: &N
     set.writes.insert(detail);
 }
 
-fn add_zk_asset_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
-    let key = key_zk_asset(id);
-    set.reads.insert(key.clone());
-    set.writes.insert(key);
-}
-
 fn add_zk_asset_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_zk_asset(id));
-}
-
-fn add_dynamic_zk_asset_rw(set: &mut AccessSets) {
-    set.reads.insert(ZK_ASSET_WILDCARD_KEY.to_string());
-    set.writes.insert(ZK_ASSET_WILDCARD_KEY.to_string());
 }
 
 fn add_escrow_id_rw(set: &mut AccessSets, id: &EscrowId) {
@@ -23672,13 +23192,6 @@ fn add_escrow_id_rw(set: &mut AccessSets, id: &EscrowId) {
 fn add_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
     add_escrow_id_rw(set, id);
     let key = key_asset_escrow(id);
-    set.reads.insert(key.clone());
-    set.writes.insert(key);
-}
-
-fn add_anonymous_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
-    add_escrow_id_rw(set, id);
-    let key = key_anonymous_asset_escrow(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
@@ -24035,26 +23548,6 @@ fn record_asset_escrow_close_access(set: &mut AccessSets, escrow_id: &EscrowId) 
     add_dynamic_asset_definition_rw(set);
 }
 
-fn record_anonymous_asset_escrow_open_access(
-    set: &mut AccessSets,
-    escrow_id: &EscrowId,
-    asset_definition: &AssetDefinitionId,
-) {
-    add_anonymous_asset_escrow_rw(set, escrow_id);
-    add_asset_definition_ownership_r(set, asset_definition);
-    add_asset_def_r(set, asset_definition);
-    add_zk_asset_rw(set, asset_definition);
-}
-
-fn record_anonymous_asset_escrow_lifecycle_access(set: &mut AccessSets, escrow_id: &EscrowId) {
-    add_anonymous_asset_escrow_rw(set, escrow_id);
-}
-
-fn record_anonymous_asset_escrow_close_access(set: &mut AccessSets, escrow_id: &EscrowId) {
-    add_anonymous_asset_escrow_rw(set, escrow_id);
-    add_dynamic_zk_asset_rw(set);
-}
-
 fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
     match instr {
         ir::Instr::Const { .. }
@@ -24170,27 +23663,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::EscrowOpenDispute { .. } => access_class_for_builtin(Builtin::EscrowOpenDispute),
         ir::Instr::EscrowResolveDispute { .. } => {
             access_class_for_builtin(Builtin::EscrowResolveDispute)
-        }
-        ir::Instr::AnonymousEscrowOpenOffer { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowOpenOffer)
-        }
-        ir::Instr::AnonymousEscrowAccept { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowAccept)
-        }
-        ir::Instr::AnonymousEscrowMarkPaymentSent { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowMarkPaymentSent)
-        }
-        ir::Instr::AnonymousEscrowRelease { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowRelease)
-        }
-        ir::Instr::AnonymousEscrowCancel { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowCancel)
-        }
-        ir::Instr::AnonymousEscrowOpenDispute { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowOpenDispute)
-        }
-        ir::Instr::AnonymousEscrowResolveDispute { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowResolveDispute)
         }
         ir::Instr::TransferBatchBegin => access_class_for_builtin(Builtin::TransferV1BatchBegin),
         ir::Instr::TransferBatchEnd => access_class_for_builtin(Builtin::TransferV1BatchEnd),

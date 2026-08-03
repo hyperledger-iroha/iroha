@@ -16,15 +16,14 @@ private val LOW_ORDER_X25519_CHECK_PRIVATE_KEY = ByteArray(32) { 1 }
 
 /** Shielded asset registration mode accepted by `zk::RegisterZkAsset`. */
 enum class ZkAssetMode(@JvmField val bridgeCode: Int, @JvmField val wireName: String) {
-    ZK_NATIVE(0, "ZkNative"),
-    HYBRID(1, "Hybrid");
+    HYBRID(0, "Hybrid");
 
     companion object {
         @JvmStatic
         fun fromWireName(value: String?): ZkAssetMode {
             val normalized = requireText(value, "mode")
             return entries.firstOrNull { it.wireName == normalized }
-                ?: throw IllegalArgumentException("mode must be ZkNative or Hybrid")
+                ?: throw IllegalArgumentException("mode must be Hybrid")
         }
     }
 }
@@ -396,7 +395,6 @@ class RegisterZkAssetInstruction private constructor(
     @JvmField val mode: ZkAssetMode,
     @JvmField val allowShield: Boolean,
     @JvmField val allowUnshield: Boolean,
-    @JvmField val transferVerifyingKey: String?,
     @JvmField val unshieldVerifyingKey: String?,
     @JvmField val shieldVerifyingKey: String?,
     override val arguments: Map<String, String>,
@@ -405,10 +403,9 @@ class RegisterZkAssetInstruction private constructor(
 
     class Builder internal constructor() {
         private var asset: String? = null
-        private var mode: ZkAssetMode = ZkAssetMode.ZK_NATIVE
+        private var mode: ZkAssetMode = ZkAssetMode.HYBRID
         private var allowShield: Boolean = true
         private var allowUnshield: Boolean = true
-        private var transferVerifyingKey: String? = null
         private var unshieldVerifyingKey: String? = null
         private var shieldVerifyingKey: String? = null
 
@@ -428,10 +425,6 @@ class RegisterZkAssetInstruction private constructor(
             this.allowUnshield = allowUnshield
         }
 
-        fun setTransferVerifyingKey(verifyingKey: String?) = apply {
-            this.transferVerifyingKey = optionalVerifyingKeyId(verifyingKey, "transferVerifyingKey")
-        }
-
         fun setUnshieldVerifyingKey(verifyingKey: String?) = apply {
             this.unshieldVerifyingKey = optionalVerifyingKeyId(verifyingKey, "unshieldVerifyingKey")
         }
@@ -447,7 +440,6 @@ class RegisterZkAssetInstruction private constructor(
                 mode,
                 allowShield,
                 allowUnshield,
-                transferVerifyingKey,
                 unshieldVerifyingKey,
                 shieldVerifyingKey,
                 linkedMapOf(
@@ -456,7 +448,6 @@ class RegisterZkAssetInstruction private constructor(
                     "mode" to mode.wireName,
                     "allow_shield" to allowShield.toString(),
                     "allow_unshield" to allowUnshield.toString(),
-                    "vk_transfer" to (transferVerifyingKey ?: ""),
                     "vk_unshield" to (unshieldVerifyingKey ?: ""),
                     "vk_shield" to (shieldVerifyingKey ?: ""),
                 ),
@@ -470,12 +461,14 @@ class RegisterZkAssetInstruction private constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterZkAssetInstruction {
+            require("vk_transfer" !in arguments) {
+                "Instruction argument 'vk_transfer' is no longer supported"
+            }
             val builder = builder()
                 .setAsset(requireArgument(arguments, "asset"))
                 .setMode(ZkAssetMode.fromWireName(requireArgument(arguments, "mode")))
                 .setAllowShield(parseBoolean(requireArgument(arguments, "allow_shield"), "allow_shield"))
                 .setAllowUnshield(parseBoolean(requireArgument(arguments, "allow_unshield"), "allow_unshield"))
-            optionalArgument(arguments, "vk_transfer")?.let { builder.setTransferVerifyingKey(it) }
             optionalArgument(arguments, "vk_unshield")?.let { builder.setUnshieldVerifyingKey(it) }
             optionalArgument(arguments, "vk_shield")?.let { builder.setShieldVerifyingKey(it) }
             return builder.build()

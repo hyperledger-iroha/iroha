@@ -1813,7 +1813,7 @@ mod tests {
         for index in 0..token.len() {
             let mut substituted = token.clone();
             substituted[index] ^= 1;
-            assert_eq!(
+            assert!(matches!(
                 backend.authenticate(
                     &substituted,
                     BootleLanternIssuanceActionV1::Authorize,
@@ -1821,14 +1821,14 @@ mod tests {
                     17,
                 ),
                 Err(BootleLanternIssuanceAuthenticationErrorV1::Denied)
-            );
+            ));
         }
         for substituted in [
             Vec::new(),
             token[..31].to_vec(),
             vec![0xA5; MAX_BEARER_TOKEN_BYTES_V1 + 1],
         ] {
-            assert_eq!(
+            assert!(matches!(
                 backend.authenticate(
                     &substituted,
                     BootleLanternIssuanceActionV1::Issue,
@@ -1836,9 +1836,9 @@ mod tests {
                     17,
                 ),
                 Err(BootleLanternIssuanceAuthenticationErrorV1::Denied)
-            );
+            ));
         }
-        assert_eq!(
+        assert!(matches!(
             backend.authenticate(
                 &token,
                 BootleLanternIssuanceActionV1::Authorize,
@@ -1846,8 +1846,8 @@ mod tests {
                 17,
             ),
             Err(BootleLanternIssuanceAuthenticationErrorV1::Denied)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             backend.authenticate(
                 &token,
                 BootleLanternIssuanceActionV1::Authorize,
@@ -1855,8 +1855,8 @@ mod tests {
                 0,
             ),
             Err(BootleLanternIssuanceAuthenticationErrorV1::Denied)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             backend.authenticate(
                 &token,
                 BootleLanternIssuanceActionV1::Authorize,
@@ -1864,7 +1864,7 @@ mod tests {
                 u64::MAX,
             ),
             Err(BootleLanternIssuanceAuthenticationErrorV1::Unavailable)
-        );
+        ));
     }
 
     #[test]
@@ -1878,7 +1878,7 @@ mod tests {
         wrong_context.chain_id = "substituted-chain"
             .parse()
             .expect("valid substituted chain");
-        assert_eq!(
+        assert!(matches!(
             backend.prepare_authorization(
                 &wrong_context,
                 genesis,
@@ -1888,8 +1888,8 @@ mod tests {
                 74,
             ),
             Err(BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             backend.prepare_authorization(
                 &context,
                 [0; 32],
@@ -1899,10 +1899,10 @@ mod tests {
                 74,
             ),
             Err(BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest)
-        );
+        ));
         let mut wrong_policy = backend.policy().clone();
         wrong_policy.required_disclosure_bitmap = 1;
-        assert_eq!(
+        assert!(matches!(
             backend.prepare_authorization(
                 &context,
                 genesis,
@@ -1912,7 +1912,7 @@ mod tests {
                 74,
             ),
             Err(BootleLanternIssuanceBrokerBackendErrorV1::PolicyMismatch)
-        );
+        ));
         for (principal, issued, expires) in [
             ([0; 32], 10, 74),
             (strong_32_v1(b"substituted-principal"), 10, 74),

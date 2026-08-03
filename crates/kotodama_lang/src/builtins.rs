@@ -396,13 +396,6 @@ pub enum Builtin {
     EscrowCancel,
     EscrowOpenDispute,
     EscrowResolveDispute,
-    AnonymousEscrowOpenOffer,
-    AnonymousEscrowAccept,
-    AnonymousEscrowMarkPaymentSent,
-    AnonymousEscrowRelease,
-    AnonymousEscrowCancel,
-    AnonymousEscrowOpenDispute,
-    AnonymousEscrowResolveDispute,
     GetPrivateInput,
     CommitOutput,
     CreateNftsForAllUsers,
@@ -670,13 +663,6 @@ impl Builtin {
             "escrow_cancel" => Self::EscrowCancel,
             "escrow_open_dispute" => Self::EscrowOpenDispute,
             "escrow_resolve_dispute" => Self::EscrowResolveDispute,
-            "anonymous_escrow_open_offer" => Self::AnonymousEscrowOpenOffer,
-            "anonymous_escrow_accept" => Self::AnonymousEscrowAccept,
-            "anonymous_escrow_mark_payment_sent" => Self::AnonymousEscrowMarkPaymentSent,
-            "anonymous_escrow_release" => Self::AnonymousEscrowRelease,
-            "anonymous_escrow_cancel" => Self::AnonymousEscrowCancel,
-            "anonymous_escrow_open_dispute" => Self::AnonymousEscrowOpenDispute,
-            "anonymous_escrow_resolve_dispute" => Self::AnonymousEscrowResolveDispute,
             "get_private_input" => Self::GetPrivateInput,
             "commit_output" => Self::CommitOutput,
             "create_nfts_for_all_users" => Self::CreateNftsForAllUsers,
@@ -914,13 +900,6 @@ impl Builtin {
             Self::EscrowCancel => "escrow_cancel",
             Self::EscrowOpenDispute => "escrow_open_dispute",
             Self::EscrowResolveDispute => "escrow_resolve_dispute",
-            Self::AnonymousEscrowOpenOffer => "anonymous_escrow_open_offer",
-            Self::AnonymousEscrowAccept => "anonymous_escrow_accept",
-            Self::AnonymousEscrowMarkPaymentSent => "anonymous_escrow_mark_payment_sent",
-            Self::AnonymousEscrowRelease => "anonymous_escrow_release",
-            Self::AnonymousEscrowCancel => "anonymous_escrow_cancel",
-            Self::AnonymousEscrowOpenDispute => "anonymous_escrow_open_dispute",
-            Self::AnonymousEscrowResolveDispute => "anonymous_escrow_resolve_dispute",
             Self::GetPrivateInput => "get_private_input",
             Self::CommitOutput => "commit_output",
             Self::CreateNftsForAllUsers => "create_nfts_for_all_users",
@@ -1187,13 +1166,6 @@ impl Builtin {
             Self::EscrowCancel => "ledger::escrow::cancel",
             Self::EscrowOpenDispute => "ledger::escrow::open_dispute",
             Self::EscrowResolveDispute => "ledger::escrow::resolve_dispute",
-            Self::AnonymousEscrowOpenOffer => "ledger::escrow::anonymous::open_offer",
-            Self::AnonymousEscrowAccept => "ledger::escrow::anonymous::accept",
-            Self::AnonymousEscrowMarkPaymentSent => "ledger::escrow::anonymous::mark_payment_sent",
-            Self::AnonymousEscrowRelease => "ledger::escrow::anonymous::release",
-            Self::AnonymousEscrowCancel => "ledger::escrow::anonymous::cancel",
-            Self::AnonymousEscrowOpenDispute => "ledger::escrow::anonymous::open_dispute",
-            Self::AnonymousEscrowResolveDispute => "ledger::escrow::anonymous::resolve_dispute",
             Self::SetExecutionDepth => "ledger::parameters::set_execution_depth",
             Self::TransferV1BatchBegin => "ledger::asset::batch::begin",
             Self::TransferV1BatchEnd => "ledger::asset::batch::end",
@@ -1429,13 +1401,6 @@ impl Builtin {
             | Self::EscrowCancel
             | Self::EscrowOpenDispute
             | Self::EscrowResolveDispute
-            | Self::AnonymousEscrowOpenOffer
-            | Self::AnonymousEscrowAccept
-            | Self::AnonymousEscrowMarkPaymentSent
-            | Self::AnonymousEscrowRelease
-            | Self::AnonymousEscrowCancel
-            | Self::AnonymousEscrowOpenDispute
-            | Self::AnonymousEscrowResolveDispute
             | Self::GetPrivateInput
             | Self::CommitOutput
             | Self::CreateNftsForAllUsers
@@ -1792,15 +1757,6 @@ impl Builtin {
             Self::EscrowCancel => &[s::SYSCALL_ESCROW_CANCEL],
             Self::EscrowOpenDispute => &[s::SYSCALL_ESCROW_OPEN_DISPUTE],
             Self::EscrowResolveDispute => &[s::SYSCALL_ESCROW_RESOLVE_DISPUTE],
-            Self::AnonymousEscrowOpenOffer => &[s::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER],
-            Self::AnonymousEscrowAccept => &[s::SYSCALL_ANONYMOUS_ESCROW_ACCEPT],
-            Self::AnonymousEscrowMarkPaymentSent => {
-                &[s::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT]
-            }
-            Self::AnonymousEscrowRelease => &[s::SYSCALL_ANONYMOUS_ESCROW_RELEASE],
-            Self::AnonymousEscrowCancel => &[s::SYSCALL_ANONYMOUS_ESCROW_CANCEL],
-            Self::AnonymousEscrowOpenDispute => &[s::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE],
-            Self::AnonymousEscrowResolveDispute => &[s::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE],
             Self::GetPrivateInput => &[s::SYSCALL_GET_PRIVATE_INPUT],
             Self::CommitOutput => &[s::SYSCALL_COMMIT_OUTPUT],
             Self::CreateNftsForAllUsers => &[s::SYSCALL_CREATE_NFTS_FOR_ALL_USERS],
@@ -2179,14 +2135,6 @@ impl Builtin {
             | Self::EscrowCancel => S::new(&["Name"], "()"),
             Self::EscrowOpenDispute => S::new(&["Name", "bytes?"], "()"),
             Self::EscrowResolveDispute => S::new(&["Name", "quantity", "quantity", "bytes?"], "()"),
-            Self::AnonymousEscrowOpenOffer
-            | Self::AnonymousEscrowRelease
-            | Self::AnonymousEscrowCancel
-            | Self::AnonymousEscrowResolveDispute => S::new(&["bytes"], "()"),
-            Self::AnonymousEscrowAccept | Self::AnonymousEscrowMarkPaymentSent => {
-                S::new(&["Name"], "()")
-            }
-            Self::AnonymousEscrowOpenDispute => S::new(&["Name", "bytes?"], "()"),
             Self::GetPrivateInput => S::new(&["int"], "contextual Secret<numeric>"),
             Self::CommitOutput | Self::CreateNftsForAllUsers => S::new(&[], "()"),
             Self::SetExecutionDepth => S::new(&["int"], "()"),
@@ -2431,9 +2379,7 @@ impl Builtin {
             Self::EscrowOpenOffer => {
                 signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
             }
-            Self::EscrowOpenDispute | Self::AnonymousEscrowOpenDispute => {
-                signature.with_names(&["offer", "evidence"])
-            }
+            Self::EscrowOpenDispute => signature.with_names(&["offer", "evidence"]),
             Self::EscrowResolveDispute => {
                 signature.with_names(&["offer", "buyer_amount", "seller_amount", "evidence"])
             }
@@ -3232,6 +3178,47 @@ mod tests {
             Builtin::from_source_name("crypto::valcom"),
             Some(Builtin::Valcom)
         );
+    }
+
+    #[test]
+    fn retired_anonymous_escrow_helpers_are_not_source_features() {
+        for (name, source_name) in [
+            (
+                "anonymous_escrow_open_offer",
+                "ledger::escrow::anonymous::open_offer",
+            ),
+            (
+                "anonymous_escrow_accept",
+                "ledger::escrow::anonymous::accept",
+            ),
+            (
+                "anonymous_escrow_mark_payment_sent",
+                "ledger::escrow::anonymous::mark_payment_sent",
+            ),
+            (
+                "anonymous_escrow_release",
+                "ledger::escrow::anonymous::release",
+            ),
+            (
+                "anonymous_escrow_cancel",
+                "ledger::escrow::anonymous::cancel",
+            ),
+            (
+                "anonymous_escrow_open_dispute",
+                "ledger::escrow::anonymous::open_dispute",
+            ),
+            (
+                "anonymous_escrow_resolve_dispute",
+                "ledger::escrow::anonymous::resolve_dispute",
+            ),
+        ] {
+            assert_eq!(Builtin::from_name(name), None, "{name}");
+            assert_eq!(
+                Builtin::from_source_name(source_name),
+                None,
+                "{source_name}"
+            );
+        }
     }
 
     #[test]

@@ -98,6 +98,7 @@ struct ConsensusCapsSnapshot {
 #[derive(Clone, Debug, Default)]
 struct PendingReplySourceAuthority {
     topology: Option<UpdateTopology>,
+    validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
     trusted: Option<UpdateTrustedPeers>,
     acl: Option<message::UpdateAcl>,
     consensus_caps: Option<ConsensusCapsSnapshot>,
@@ -106,10 +107,22 @@ struct PendingReplySourceAuthority {
 impl PendingReplySourceAuthority {
     fn is_empty(&self) -> bool {
         self.topology.is_none()
+            && self.validator_dial_roster.is_none()
             && self.trusted.is_none()
             && self.acl.is_none()
             && self.consensus_caps.is_none()
     }
+}
+
+/// Retained validator-dial authority updates.
+///
+/// Consensus topology changes use the coupled variant so a newly admitted
+/// validator can never be observed as an unmanaged eager-dial peer between two
+/// independently scheduled actor updates.
+#[derive(Clone, Debug)]
+enum ValidatorDialControlUpdate {
+    Roster(message::UpdateValidatorDialRoster),
+    Topology(message::UpdateValidatorTopology),
 }
 
 #[derive(Clone, Debug)]
@@ -7348,7 +7361,7 @@ pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     /// Latest [`UpdatePeers`] snapshot sender.
     update_peers_sender: ControlUpdateSender<UpdatePeers>,
     /// Latest configured-validator dial-roster snapshot sender.
-    update_validator_dial_roster_sender: ControlUpdateSender<message::UpdateValidatorDialRoster>,
+    update_validator_dial_roster_sender: ControlUpdateSender<ValidatorDialControlUpdate>,
     /// Latest [`UpdatePeerCapabilities`] snapshot sender.
     update_peer_capabilities_sender: ControlUpdateSender<message::UpdatePeerCapabilities>,
     /// Latest trusted-peers snapshot sender.
@@ -10018,7 +10031,21 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         send_control_update(
             &self.update_validator_dial_roster_sender,
             "validator dial roster",
-            roster,
+            ValidatorDialControlUpdate::Roster(roster),
+        );
+    }
+
+    /// Atomically replace the consensus topology and the configured-validator
+    /// subset governed by deterministic pairwise dial ownership.
+    ///
+    /// Publishing the two snapshots as one retained actor update prevents a
+    /// newly admitted validator from briefly entering the eager dynamic-peer
+    /// dial path before its ownership role is installed.
+    pub fn update_validator_topology(&self, update: message::UpdateValidatorTopology) {
+        send_control_update(
+            &self.update_validator_dial_roster_sender,
+            "validator topology",
+            ValidatorDialControlUpdate::Topology(update),
         );
     }
 
@@ -11016,7 +11043,7 @@ mod handle_update_tests {
     struct ControlUpdateReceivers {
         topology: ControlUpdateReceiver<message::UpdateTopology>,
         peers: ControlUpdateReceiver<message::UpdatePeers>,
-        validator_dial_roster: ControlUpdateReceiver<message::UpdateValidatorDialRoster>,
+        validator_dial_roster: ControlUpdateReceiver<ValidatorDialControlUpdate>,
         peer_capabilities: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
         trusted_peers: ControlUpdateReceiver<message::UpdateTrustedPeers>,
         acl: ControlUpdateReceiver<message::UpdateAcl>,
@@ -11521,6 +11548,39 @@ mod handle_update_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn validator_membership_and_dial_roster_share_one_retained_snapshot() {
+        let (handle, mut receivers) = handle_with_control_update_receivers();
+        let self_id = handle.self_id.clone();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let topology = HashSet::from([self_id.clone(), peer_id.clone()]);
+        let validator_dial_roster = topology.clone();
+
+        handle.update_validator_topology(message::UpdateValidatorTopology {
+            topology: topology.clone(),
+            validator_dial_roster: validator_dial_roster.clone(),
+        });
+
+        let ValidatorDialControlUpdate::Topology(message::UpdateValidatorTopology {
+            topology: actual_topology,
+            validator_dial_roster: actual_roster,
+        }) = receive_control_update(&mut receivers.validator_dial_roster)
+            .await
+            .expect("coupled validator topology update")
+        else {
+            panic!("expected coupled validator topology update");
+        };
+        assert_eq!(actual_topology, topology);
+        assert_eq!(actual_roster, validator_dial_roster);
+        assert!(
+            !receivers
+                .topology
+                .has_changed()
+                .expect("ordinary topology channel remains open"),
+            "membership must not race ownership through an independent topology snapshot"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn all_control_update_methods_keep_newest_category_snapshot() {
         let (handle, mut receivers) = handle_with_control_update_receivers();
         let newest_handle = handle.clone();
@@ -11626,10 +11686,14 @@ mod handle_update_tests {
             .expect("peer-address update");
         assert_eq!(peers, vec![(newest_peer.clone(), newest_addr)]);
 
-        let message::UpdateValidatorDialRoster(validator_dial_roster) =
-            receive_control_update(&mut receivers.validator_dial_roster)
-                .await
-                .expect("validator dial roster update");
+        let ValidatorDialControlUpdate::Roster(message::UpdateValidatorDialRoster(
+            validator_dial_roster,
+        )) = receive_control_update(&mut receivers.validator_dial_roster)
+            .await
+            .expect("validator dial roster update")
+        else {
+            panic!("expected standalone validator dial roster update");
+        };
         assert_eq!(validator_dial_roster, HashSet::from([newest_peer.clone()]));
 
         let message::UpdatePeerCapabilities(capabilities) =
@@ -15722,8 +15786,7 @@ struct NetworkBase<T: Pload, E: Enc> {
     /// Latest [`UpdatePeers`] snapshot receiver.
     update_peers_receiver: ControlUpdateReceiver<UpdatePeers>,
     /// Latest configured-validator dial-roster snapshot receiver.
-    update_validator_dial_roster_receiver:
-        ControlUpdateReceiver<message::UpdateValidatorDialRoster>,
+    update_validator_dial_roster_receiver: ControlUpdateReceiver<ValidatorDialControlUpdate>,
     /// Latest [`UpdatePeerCapabilities`] snapshot receiver.
     update_peer_capabilities_receiver: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
     /// Latest trusted-peers snapshot receiver.
@@ -16576,10 +16639,17 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 Some(update_peers) = receive_control_update(&mut self.update_peers_receiver) => {
                     self.set_current_peers_addresses(update_peers);
                 }
-                Some(update_validator_dial_roster) = receive_control_update(
+                Some(update_validator_dial_control) = receive_control_update(
                     &mut self.update_validator_dial_roster_receiver,
                 ) => {
-                    self.set_validator_dial_roster(update_validator_dial_roster);
+                    match update_validator_dial_control {
+                        ValidatorDialControlUpdate::Roster(roster) => {
+                            self.set_validator_dial_roster(roster);
+                        }
+                        ValidatorDialControlUpdate::Topology(topology) => {
+                            self.set_validator_topology(topology);
+                        }
+                    }
                 }
                 Some(update_capabilities) = receive_control_update(
                     &mut self.update_peer_capabilities_receiver,
@@ -17000,6 +17070,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if let Some(trusted) = pending.trusted {
             self.apply_reply_source_trusted(trusted);
         }
+        if let Some(message::UpdateValidatorDialRoster(roster)) = pending.validator_dial_roster {
+            self.validator_dial_scheduler
+                .replace_roster(roster, &self.self_id);
+        }
         if let Some(topology) = pending.topology {
             self.apply_current_topology(topology);
         } else {
@@ -17034,6 +17108,30 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     }
 
     fn set_current_topology(&mut self, update: UpdateTopology) {
+        self.stage_current_topology(update, None, "topology update");
+    }
+
+    fn set_validator_topology(
+        &mut self,
+        message::UpdateValidatorTopology {
+            topology,
+            mut validator_dial_roster,
+        }: message::UpdateValidatorTopology,
+    ) {
+        validator_dial_roster.retain(|peer_id| topology.contains(peer_id));
+        self.stage_current_topology(
+            UpdateTopology(topology),
+            Some(message::UpdateValidatorDialRoster(validator_dial_roster)),
+            "validator topology update",
+        );
+    }
+
+    fn stage_current_topology(
+        &mut self,
+        update: UpdateTopology,
+        validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
+        transition: &'static str,
+    ) {
         let logical_topology: HashSet<_> = update
             .0
             .iter()
@@ -17046,7 +17144,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
         let prior = self.pending_reply_source_authority.clone();
         self.pending_reply_source_authority.topology = Some(update);
-        self.accept_staged_reply_source_authority(prior, "topology update");
+        if let Some(validator_dial_roster) = validator_dial_roster {
+            self.pending_reply_source_authority.validator_dial_roster = Some(validator_dial_roster);
+        }
+        self.accept_staged_reply_source_authority(prior, transition);
     }
 
     fn apply_reply_source_acl(&mut self, acl: message::UpdateAcl) {
@@ -17253,16 +17354,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .collect();
     }
 
-    fn set_validator_dial_roster(
-        &mut self,
-        message::UpdateValidatorDialRoster(roster): message::UpdateValidatorDialRoster,
-    ) {
-        self.validator_dial_scheduler
-            .replace_roster(roster, &self.self_id);
-        // Existing authenticated sessions are deliberately retained. Missing
-        // sessions and already queued attempts are re-evaluated against the new
-        // preferred-owner/standby policy by the ordinary topology path.
-        self.update_topology();
+    fn set_validator_dial_roster(&mut self, roster: message::UpdateValidatorDialRoster) {
+        let prior = self.pending_reply_source_authority.clone();
+        self.pending_reply_source_authority.validator_dial_roster = Some(roster);
+        // Existing authenticated sessions are deliberately retained. The
+        // roster commits through the same authority transaction as topology so
+        // pending membership changes cannot expose an unmanaged validator.
+        self.accept_staged_reply_source_authority(prior, "validator dial roster update");
     }
 
     fn update_topology(&mut self) {
@@ -20405,6 +20503,47 @@ mod tests {
             scheduler.role(self_id, added),
             ValidatorDialRole::Unmanaged,
             "a configured validator added by authority enters pair ownership"
+        );
+    }
+
+    #[test]
+    fn live_validator_membership_commits_with_pair_ownership_and_prunes_outsiders() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let self_id = network.self_id.clone();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let outsider = PeerId::from(KeyPair::random().public_key().clone());
+        let configured = HashSet::from([self_id.clone(), peer_id.clone(), outsider.clone()]);
+        network.validator_dial_scheduler =
+            ValidatorDialScheduler::new(configured, Duration::from_secs(11));
+        network
+            .validator_dial_scheduler
+            .replace_roster(HashSet::from([self_id.clone()]), &self_id);
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &peer_id),
+            ValidatorDialRole::Unmanaged
+        );
+
+        network.set_validator_topology(message::UpdateValidatorTopology {
+            topology: HashSet::from([self_id.clone(), peer_id.clone()]),
+            validator_dial_roster: HashSet::from([
+                self_id.clone(),
+                peer_id.clone(),
+                outsider.clone(),
+            ]),
+        });
+
+        assert!(network.current_topology.contains(&peer_id));
+        assert_ne!(
+            network.validator_dial_scheduler.role(&self_id, &peer_id),
+            ValidatorDialRole::Unmanaged,
+            "membership must never commit without pair ownership"
+        );
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &outsider),
+            ValidatorDialRole::Unmanaged,
+            "an identity outside the same topology snapshot cannot gain dial authority"
         );
     }
 
@@ -24333,6 +24472,40 @@ mod tests {
             "a rejected topology snapshot must not partially clear assist state"
         );
         assert_eq!(network.reliable_actor_target_capacity(), 2);
+    }
+
+    #[test]
+    fn rejected_validator_topology_cannot_partially_promote_dial_ownership() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        network.max_total_connections = Some(2);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        let self_id = network.self_id.clone();
+        let candidate = PeerId::from(KeyPair::random().public_key().clone());
+        let configured = HashSet::from([self_id.clone(), candidate.clone()]);
+        network.validator_dial_scheduler =
+            ValidatorDialScheduler::new(configured, Duration::from_secs(7));
+        network
+            .validator_dial_scheduler
+            .replace_roster(HashSet::from([self_id.clone()]), &self_id);
+        let oversized = HashSet::from([
+            candidate.clone(),
+            PeerId::from(KeyPair::random().public_key().clone()),
+            PeerId::from(KeyPair::random().public_key().clone()),
+        ]);
+
+        network.set_validator_topology(message::UpdateValidatorTopology {
+            topology: oversized,
+            validator_dial_roster: HashSet::from([self_id.clone(), candidate.clone()]),
+        });
+
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &candidate),
+            ValidatorDialRole::Unmanaged,
+            "a rejected membership snapshot must roll back its ownership roster"
+        );
+        assert!(network.pending_reply_source_authority.is_empty());
     }
 
     #[test]
@@ -31627,6 +31800,19 @@ pub mod message {
     /// includes the local validator when it participates in the roster.
     #[derive(Clone, Debug)]
     pub struct UpdateValidatorDialRoster(pub HashSet<PeerId>);
+
+    /// One atomic consensus-topology and validator-dial-ownership snapshot.
+    ///
+    /// `validator_dial_roster` must be the locally authenticated configured
+    /// validator subset of `topology`; the network actor also intersects it
+    /// with the immutable startup authority before applying it.
+    #[derive(Clone, Debug)]
+    pub struct UpdateValidatorTopology {
+        /// Logical consensus topology, including the local peer when active.
+        pub topology: HashSet<PeerId>,
+        /// Configured validators governed by deterministic pairwise ownership.
+        pub validator_dial_roster: HashSet<PeerId>,
+    }
 
     /// Full latest-state snapshot of transport capabilities for peers.
     #[derive(Clone, Debug)]

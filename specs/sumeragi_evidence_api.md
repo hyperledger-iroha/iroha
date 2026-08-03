@@ -25,10 +25,12 @@ Sumeragi evidence audit endpoints.
 Evidence mutation is not an HTTP or CLI operation. Evidence enters through the
 authenticated consensus peer path and, for exact v2 equivocation proofs,
 through canonically ordered proof batches bound to signed blocks. Validators
-reverify the frozen height context, roster-ordered proofs of possession,
-signatures, referenced certificates, horizon, ordering, bounds, and durable
-deduplication key before admission. Torii and the SDKs expose only the two
-read-only audit endpoints above.
+anchor the frozen height context only to cryptographically verified committed
+v2 finality history (never the structural recovery context store), then reverify
+roster-ordered proofs of possession, both artifact signatures, referenced
+current-context certificates, the evidence horizon, canonical ordering, batch
+bounds, and the durable deduplication key before admission. Torii and the SDKs
+expose only the two read-only audit endpoints above.
 
 Additional consensus status and commit QC proofs
 

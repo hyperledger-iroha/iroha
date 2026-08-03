@@ -9042,8 +9042,8 @@ impl Iroha {
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
         mut runtime_deps: IrohaRuntimeDeps,
-        musubi_publication_deployment: Option<
-            musubi_publication_service::MusubiPublicationPrivateDeploymentV1,
+        musubi_publication_factory: Option<
+            Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
         >,
     ) -> ReportResult<
         (
@@ -11390,6 +11390,14 @@ impl Iroha {
         } else {
             None
         };
+        let musubi_publication_context =
+            musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(
+                config.common.chain.clone(),
+                *config.genesis.expected_hash.as_ref(),
+                Arc::clone(&state),
+                Arc::clone(&queue),
+                sorafs_node.clone(),
+            );
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
@@ -11640,11 +11648,17 @@ impl Iroha {
             .setup_shutdown_on_os_signals()
             .change_context(StartError::ListenOsSignal)?;
 
-        let (_availability, publication_child) =
-            musubi_publication_service::start_injected_musubi_publication_private_service_v1(
-                musubi_publication_deployment,
+        let (_availability, publication_child) = musubi_publication_service::
+            build_and_start_injected_musubi_publication_private_service_v1(
+                musubi_publication_factory,
+                musubi_publication_context,
                 supervisor.shutdown_signal(),
-            );
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to assemble private Musubi publication service: {error}"
+                ))
+            })?;
         if let Some(child) = publication_child {
             supervisor.monitor(child);
         }

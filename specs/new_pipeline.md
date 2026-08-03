@@ -2078,8 +2078,8 @@ instructions. Public settlement belongs exclusively to Kagemusha V4:
 - `RedeemKagemushaRecursiveV4` consumes the authenticated note and nullifier,
   allocates exact finalized-anchor drawdown, and transfers the public amount
   out of that escrow. It never mints against an escrow-backed note.
-- Native anonymous escrow and private Kaigi fees may use the confidential
-  transfer relation only through sealed, purpose-bound Core capabilities. No
+- Native anonymous escrow may use the confidential transfer relation only
+  through sealed, purpose-bound Core capabilities. No
   executor, IVM guest, Torii client, or SDK can construct a generic movement
   instruction.
 
@@ -2102,7 +2102,7 @@ a public instruction or a compatibility decoder.
 Conservation is enforced twice: circuits constrain note values, while the
 Kagemusha ledger independently caps aggregate public redemption by finalized
 top-up drawdown and pays by escrow transfer. Nullifiers are permanent spent-note
-identities for the asset. `ConfidentialEvent::Transferred` records only the
-authenticated confidential tree transition; Kagemusha anchors, drawdowns, and
-receipts provide the auditable public-settlement record. There is no generic
-deposit/withdrawal event wire in V1.
+identities for the asset. Kagemusha anchors, drawdowns, and receipts provide the
+auditable public-settlement record; authenticated tree state is available from
+the protocol-specific query surface. There is no generic confidential event
+wire in V1.

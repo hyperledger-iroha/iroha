@@ -162,7 +162,6 @@ fn seeded_zk_roots_state(
                 true,
                 None,
                 None,
-                None,
             )
             .into(),
         ];

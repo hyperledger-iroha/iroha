@@ -70,8 +70,15 @@ that workflow for local release verification.
    manual XCFramework fallback mode. Override only the recorded bridge version with
    `--bridge-version <version>` when needed. `--allow-dirty-source` is for local
    integration artifacts and must not be used for a release artifact.
+   `scripts/update_norito_bridge_swift_pins.py` has no in-place update mode: use
+   `--check` for a read-only repository verification or `--output` with the exact
+   `--expected-preimage-sha256` to exclusively create a reviewed projection in an
+   external directory. The owner never rewrites `NativeBridge.swift`; incorporate an
+   approved projection through the normal guarded source-edit workflow.
    The Cargo target, artifact, build, and archive-parent directories must already
-   exist as owned, writable, non-symbolic canonical directories. An existing
+   exist as owned, writable, non-symbolic canonical directories. The archive output
+   itself must be absent, and the external build directory used for retained archive
+   snapshots must be outside both the repository and archive-parent tree. An existing
    generation is accepted only
    with its embedded manifest and canonical public manifest symlink already in
    the first-release layout; the builder does not migrate an older layout.
@@ -84,19 +91,21 @@ that workflow for local release verification.
    zipinfo -1 "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
    ```
 
-   Before releasing its authenticated output lock, the builder invokes the sole
-   archive owner on the generation it just published. The owner also locks the
-   archive destination, snapshots and re-authenticates the exact ABI-21 inventory,
+   Before releasing its authenticated artifact-publication lock, the builder invokes
+   the sole archive owner on the generation it just published. The owner retains a
+   unique source snapshot and re-authenticates the exact ABI-21 inventory,
    recomputes source and tool provenance, verifies each Mach-O architecture and the
    required/forbidden export policy with the sealed Xcode toolchain, sorts entries,
    stores them without host-zlib variance, normalizes modes and ZIP timestamps from
-   `SOURCE_DATE_EPOCH`, fsyncs a temporary archive, and re-authenticates the exact
-   destination preimage immediately before publication. An initially absent output
-   uses an atomic no-replace rename; an existing output is replaced only when its
-   identity, metadata, and bytes still match the captured preimage. A concurrent
-   builder or archiver is rejected; do not invoke `ditto` or `zip` directly. CI also
-   feeds the published ZIP to a fresh local SwiftPM binary target and compiles a
-   consumer against `NoritoBridge`.
+   `SOURCE_DATE_EPOCH`, and fsyncs a temporary archive while retaining its open file
+   descriptor and authenticated inode identity. Publication uses one atomic
+   no-replace rename. The owner never creates or removes an archive-destination lock,
+   and any pre-existing or concurrently created destination is rejected and left
+   untouched. Failed runs retain their uniquely named snapshot and archive residue
+   for inspection instead of deleting a path that another process may have swapped.
+   A concurrent builder or archiver is rejected; do not invoke `ditto` or `zip`
+   directly. CI also feeds the published ZIP to a fresh local SwiftPM binary target
+   and compiles a consumer against `NoritoBridge`.
 
 3. Update the Swift package manifest (`IrohaSwift/Package.swift`) to point to the new
    version and checksum:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Own the exact three generated Swift fallback hashes for NoritoBridge."""
+"""Check or externally project the three generated NoritoBridge Swift hashes."""
 
 from __future__ import annotations
 
@@ -392,13 +392,24 @@ def _assert_loader_preimage(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--artifact-dir", required=True, type=Path)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--check", action="store_true")
-    mode.add_argument("--output", type=Path)
-    parser.add_argument("--expected-preimage-sha256")
+    mode.add_argument(
+        "--check",
+        action="store_true",
+        help="verify the repository loader without changing it",
+    )
+    mode.add_argument(
+        "--output",
+        type=Path,
+        help="exclusively create one projection outside the repository",
+    )
+    parser.add_argument(
+        "--expected-preimage-sha256",
+        help="required repository-loader preimage for --output",
+    )
     arguments = parser.parse_args()
     try:
         root = _canonical_root(arguments.root)

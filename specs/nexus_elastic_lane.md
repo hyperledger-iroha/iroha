@@ -441,7 +441,8 @@ The run can now be referenced inside Space Directory manifests and governance tr
 canonical NX-7 load test for the lane.
 
 This NX-7 onboarding/load packet is not the production multilane release
-packet. The fresh unskipped four-peer suites, 10/10 twelve-peer corridor, the
+packet. The fresh unskipped four-peer suites, 10/10 13-peer global corridor
+(twelve lane validators), the
 two-hour fault soak, pinned-hardware one-versus-four-lane scaling runs,
 SDK/formal evidence, and prescribed full-workspace build/test/strict-Clippy
 checks remain separate open gates until their own artifacts pass.

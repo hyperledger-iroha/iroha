@@ -120,7 +120,6 @@ public final class NativeSignerBridge {
     final byte[] chainBytes = textBytes(chainId, "chainId");
     final byte[] authorityBytes = textBytes(authority, "authority");
     final byte[] assetBytes = textBytes(instruction.asset(), "asset");
-    final byte[] transferBytes = optionalTextBytes(instruction.transferVerifyingKey());
     final byte[] unshieldBytes = optionalTextBytes(instruction.unshieldVerifyingKey());
     final byte[] shieldBytes = optionalTextBytes(instruction.shieldVerifyingKey());
     final byte[] feePaymentJson = feePaymentJson(feePayment);
@@ -140,8 +139,6 @@ public final class NativeSignerBridge {
             instruction.mode().bridgeCode(),
             instruction.allowShield(),
             instruction.allowUnshield(),
-            transferBytes,
-            instruction.transferVerifyingKey() != null,
             unshieldBytes,
             instruction.unshieldVerifyingKey() != null,
             shieldBytes,
@@ -261,8 +258,6 @@ public final class NativeSignerBridge {
       int modeCode,
       boolean allowShield,
       boolean allowUnshield,
-      byte[] transferVerifyingKey,
-      boolean transferVerifyingKeyPresent,
       byte[] unshieldVerifyingKey,
       boolean unshieldVerifyingKeyPresent,
       byte[] shieldVerifyingKey,

@@ -399,7 +399,6 @@ pub struct MockWorldStateView {
 pub struct ZkPolicyConfig {
     pub mode: ZkAssetMode,
     pub allow_unshield: bool,
-    pub vk_transfer: Option<VerifyingKeyId>,
     pub vk_unshield: Option<VerifyingKeyId>,
 }
 
@@ -629,10 +628,6 @@ impl MockWorldStateView {
         if !self.asset_definitions.contains_key(&asset) {
             return false;
         }
-        let vk_transfer_binding = policy
-            .vk_transfer
-            .as_ref()
-            .map(|id| self.binding_from_registry(id));
         let vk_unshield_binding = policy
             .vk_unshield
             .as_ref()
@@ -640,7 +635,6 @@ impl MockWorldStateView {
         let st = self.zk_assets.entry(asset.clone()).or_default();
         st.mode = policy.mode;
         st.allow_unshield = policy.allow_unshield;
-        st.vk_transfer = vk_transfer_binding;
         st.vk_unshield = vk_unshield_binding;
         // Emit a policy-updated event
         self.zk_events.push(ZkEvent::ZkPolicyUpdated {
@@ -1619,9 +1613,7 @@ use iroha_data_model::isi::{InstructionBox as DMInstructionBox, zk as DMZk};
 /// Shielded asset mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ZkAssetMode {
-    /// Only shielded ledger (no public account balances).
-    ZkNative,
-    /// Hybrid: public balances plus shielded ledger; allows shield/unshield when policy permits.
+    /// Public balances plus the proof-bound confidential ledger.
     #[default]
     Hybrid,
 }
@@ -1643,7 +1635,6 @@ pub struct ZkAssetState {
     pub commitments: Vec<[u8; 32]>,
     pub root_history: Vec<HashOf<iroha_crypto::MerkleTree<[u8; 32]>>>,
     pub nullifiers: HashSet<[u8; 32]>,
-    pub vk_transfer: Option<ZkAssetVerifierBinding>,
     pub vk_unshield: Option<ZkAssetVerifierBinding>,
 }
 

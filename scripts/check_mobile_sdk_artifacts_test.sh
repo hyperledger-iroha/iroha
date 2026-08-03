@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_SCRIPT="$SCRIPT_DIR/check_mobile_sdk_artifacts.sh"
 PACKAGE_SCRIPT="$SCRIPT_DIR/package_mobile_sdk_artifacts.sh"
-TMP_DIR="$(mktemp -d)"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mobile-sdk-artifacts-test.XXXXXXXX")"
+TMP_DIR="$(cd "$TMP_DIR" && pwd -P)"
 TEST_PYTHON_BINARY=""
 for trusted_python in \
   /opt/homebrew/bin/python3.12 \
@@ -31,7 +32,7 @@ export MOBILE_SDK_PYTHON_BINARY="$TEST_PYTHON_BINARY"
 export MOBILE_SDK_TEST_PYTHON_BINARY="$TEST_PYTHON_BINARY"
 
 cleanup() {
-  rm -rf "$TMP_DIR"
+  printf '[mobile-sdk-artifacts-test] retained fixture root: %s\n' "$TMP_DIR" >&2
 }
 trap cleanup EXIT
 
@@ -48,7 +49,8 @@ test_build_source_seal() {
   local bridge_build="$TMP_DIR/source-seal-bridge-build"
   local bridge_output="$TMP_DIR/source-seal-bridge-output"
   local exact_rustc exact_rustdoc
-  mkdir -p "$root/scripts" "$root/crates/connect_norito_bridge/src" \
+  mkdir -p "$root/scripts" "$root/IrohaSwift" \
+    "$root/crates/connect_norito_bridge/src" \
     "$root/crates/unrelated/src" "$cargo_target" "$bridge_build" "$bridge_output"
   cp "$SCRIPT_DIR/build_norito_xcframework.sh" \
     "$root/scripts/build_norito_xcframework.sh"
@@ -58,6 +60,8 @@ test_build_source_seal() {
     "$root/scripts/norito_bridge_source_seal.py"
   cp "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
     "$root/scripts/run_mobile_hermetic_command.py"
+  cp "$SCRIPT_DIR/../IrohaSwift/Package.resolved" \
+    "$root/IrohaSwift/Package.resolved"
   printf '[toolchain]\nchannel = "1.93.1"\n' >"$root/rust-toolchain.toml"
   printf '[workspace]\nmembers = ["crates/connect_norito_bridge", "crates/unrelated"]\nresolver = "2"\n' \
     >"$root/Cargo.toml"
@@ -408,7 +412,9 @@ manifest = {
     "build_environment": {
         "schema": "iroha.mobile-native-build-environment.v1",
         "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
-        "hermetic_runner_sha256": "1" * 64,
+        "hermetic_runner_sha256": hashlib.sha256(
+            (root / "scripts/run_mobile_hermetic_command.py").read_bytes()
+        ).hexdigest(),
         "environment_profile": "android-cargo",
         "environment_allowlist": [
             "ANDROID_NDK_HOME",
@@ -504,13 +510,39 @@ make_fixture() {
   local hash_b="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   local hash_c="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   local cargo_lock_hash
+  local hermetic_runner_hash
+  local kagemusha_roles_json
   local slice
+
+  kagemusha_roles_json="$(
+    "$TEST_PYTHON_BINARY" -I -S -B - \
+      "$SCRIPT_DIR/validate_norito_bridge_xcframework.py" <<'PY'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("mobile_sdk_fixture_validator", path)
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load mobile SDK fixture validator")
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+print(json.dumps(module.expected_kagemusha_roles(False), separators=(",", ":")))
+PY
+  )"
 
   mkdir -p "$root/scripts"
   cp "$SCRIPT_DIR/norito_bridge_source_seal.py" \
     "$root/scripts/norito_bridge_source_seal.py"
   cp "$SCRIPT_DIR/validate_norito_bridge_xcframework.py" \
     "$root/scripts/validate_norito_bridge_xcframework.py"
+  cp "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
+    "$root/scripts/run_mobile_hermetic_command.py"
+  hermetic_runner_hash="$(
+    shasum -a 256 "$root/scripts/run_mobile_hermetic_command.py" | awk '{print $1}'
+  )"
   mkdir -p "$root/IrohaSwift/Sources/IrohaSwift"
   cat >"$root/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift" <<'SWIFT'
 enum KagemushaRecursiveSpendV4Fixture {
@@ -532,6 +564,8 @@ enum KagemushaRecursiveSpendV4Fixture {
 SWIFT
   "$TEST_PYTHON_BINARY" -I -S -B - "$CHECK_SCRIPT" "$root" <<'PY'
 from pathlib import Path
+import hashlib
+import json
 import re
 import sys
 
@@ -646,6 +680,10 @@ java.write_text(
     encoding="utf-8",
 )
 PY
+  cp "$SCRIPT_DIR/../crates/connect_norito_bridge/include/NoritoBridge.h" \
+    "$root/crates/connect_norito_bridge/include/NoritoBridge.h"
+  cp "$SCRIPT_DIR/../crates/connect_norito_bridge/module.modulemap.template" \
+    "$root/crates/connect_norito_bridge/module.modulemap.template"
   cat >"$root/IrohaSwift/Package.swift" <<'SWIFT'
 // swift-tools-version:5.9
 import Foundation
@@ -715,9 +753,12 @@ PLIST
   for slice in ios-arm64 ios-arm64_x86_64-simulator macos-arm64; do
     mkdir -p "$root/dist/NoritoBridge.xcframework/$slice/Headers"
     printf 'fake static library for %s\n' "$slice" >"$root/dist/NoritoBridge.xcframework/$slice/libNoritoBridge.a"
-    printf 'void norito_%s(void);\n' "$slice" >"$root/dist/NoritoBridge.xcframework/$slice/Headers/NoritoBridge.h"
-    printf 'uint32_t connect_norito_bridge_abi_version(void);\n' >"$root/dist/NoritoBridge.xcframework/$slice/Headers/connect_norito_bridge.h"
-    printf 'module NoritoBridge {}\n' >"$root/dist/NoritoBridge.xcframework/$slice/Headers/module.modulemap"
+    cp "$root/crates/connect_norito_bridge/include/NoritoBridge.h" \
+      "$root/dist/NoritoBridge.xcframework/$slice/Headers/NoritoBridge.h"
+    cp "$root/crates/connect_norito_bridge/include/connect_norito_bridge.h" \
+      "$root/dist/NoritoBridge.xcframework/$slice/Headers/connect_norito_bridge.h"
+    cp "$root/crates/connect_norito_bridge/module.modulemap.template" \
+      "$root/dist/NoritoBridge.xcframework/$slice/Headers/module.modulemap"
   done
 
   hash_a="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a" | awk '{print $1}')"
@@ -760,7 +801,7 @@ SWIFT
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
-    "hermetic_runner_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "hermetic_runner_sha256": "$hermetic_runner_hash",
     "environment_profiles": {
       "apple-ios-device": [
         "CARGO", "CARGO_BUILD_JOBS", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
@@ -900,9 +941,7 @@ SWIFT
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
     "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
   ],
-  "kagemusha_mobile_artifact_roles": [
-    {"role": "native_bridge"}
-  ],
+  "kagemusha_mobile_artifact_roles": $kagemusha_roles_json,
   "hashes": {
     "ios-arm64": "$hash_a",
     "ios-arm64_x86_64-simulator": "$hash_b",
@@ -1016,6 +1055,8 @@ append_candidate_lab_header() {
   local root="$1"
   "$TEST_PYTHON_BINARY" -I -S -B - "$CHECK_SCRIPT" "$root" <<'PY'
 from pathlib import Path
+import hashlib
+import json
 import re
 import sys
 
@@ -1046,6 +1087,20 @@ header.write_text(
     header.read_text(encoding="utf-8") + "\n".join(block),
     encoding="utf-8",
 )
+header_bytes = header.read_bytes()
+xcframework = root / "dist/NoritoBridge.xcframework"
+for slice_name in (
+    "ios-arm64",
+    "ios-arm64_x86_64-simulator",
+    "macos-arm64",
+):
+    (xcframework / slice_name / "Headers/connect_norito_bridge.h").write_bytes(
+        header_bytes
+    )
+manifest_path = xcframework / "NoritoBridge.artifacts.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+manifest["bridge_header_sha256"] = hashlib.sha256(header_bytes).hexdigest()
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 }
 
@@ -1059,6 +1114,24 @@ run_expect_pass() {
       bash "$CHECK_SCRIPT" "$root" "$@" 2>&1)"; then
     printf '%s\n' "$output" >&2
     fail "expected validation to pass for $root"
+  fi
+}
+
+run_expect_single_apple_nm_projection() {
+  local root="$1"
+  local count_file="$TMP_DIR/apple-nm-invocations"
+  local output
+  : >"$count_file"
+  if ! output="$(PATH="$INSPECTION_TOOLS:$PATH" \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      MOBILE_SDK_TEST_NM_COUNT_FILE="$count_file" \
+      bash "$CHECK_SCRIPT" "$root" --apple-only 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected single-projection Apple validation to pass for $root"
+  fi
+  if [[ "$(wc -l <"$count_file" | tr -d '[:space:]')" != "3" \
+    || "$(sort -u "$count_file" | wc -l | tr -d '[:space:]')" != "3" ]]; then
+    fail "Apple validation must invoke nm exactly once for each of three slices"
   fi
 }
 
@@ -1101,6 +1174,9 @@ case "${1:-}" in
 esac
 nm_mode="$1"
 binary="${*: -1}"
+if [[ -n "${MOBILE_SDK_TEST_NM_COUNT_FILE:-}" ]]; then
+  printf '%s\n' "$binary" >>"$MOBILE_SDK_TEST_NM_COUNT_FILE"
+fi
 "${MOBILE_SDK_TEST_PYTHON_BINARY:?}" -I -S -B - \
   "${MOBILE_SDK_TEST_CHECK_SCRIPT:?}" "$binary" "$nm_mode" <<'PY'
 import os
@@ -1108,20 +1184,31 @@ import re
 import sys
 
 text = open(sys.argv[1], "r", encoding="utf-8").read()
-match = re.search(r"^REQUIRED_BRIDGE_SYMBOLS=\(\n(.*?)^\)$", text, re.MULTILINE | re.DOTALL)
-if match is None:
-    raise SystemExit("missing required-symbol fixture array")
-for symbol in (
-    line.strip()
-    for line in match.group(1).splitlines()
-    if line.strip() and not line.lstrip().startswith("#")
+
+def shell_array(name):
+    match = re.search(
+        rf"^{name}=\(\n(.*?)^\)$", text, re.MULTILINE | re.DOTALL
+    )
+    if match is None:
+        raise SystemExit(f"missing fixture array {name}")
+    return [
+        line.strip()
+        for line in match.group(1).splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+for name in (
+    "REQUIRED_BRIDGE_SYMBOLS",
+    "SORAFS_APPEAL_FINANCE_C_SYMBOLS",
+    "KAGEMUSHA_C_SYMBOLS",
 ):
-    if (
-        symbol == os.environ.get("MOBILE_SDK_TEST_REFERENCE_ONLY_SYMBOL")
-        and "U" in sys.argv[3]
-    ):
-        continue
-    print("_" + symbol)
+    for symbol in shell_array(name):
+        if (
+            symbol == os.environ.get("MOBILE_SDK_TEST_REFERENCE_ONLY_SYMBOL")
+            and "U" in sys.argv[3]
+        ):
+            continue
+        print("_" + symbol)
 if os.environ.get("MOBILE_SDK_TEST_EXTRA_KAGEMUSHA") == "1":
     print("_connect_norito_kagemusha_unexpected_v2")
 forbidden = os.environ.get("MOBILE_SDK_TEST_FORBIDDEN_SYMBOL")
@@ -1372,6 +1459,7 @@ make_android_inspection_tools "$INSPECTION_TOOLS"
 fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
+run_expect_single_apple_nm_projection "$fixture"
 
 retired_binary_bypass_output="$(
   MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \
@@ -1916,11 +2004,30 @@ done
 
 enabled_privacy="$TMP_DIR/enabled-privacy"
 make_fixture "$enabled_privacy"
-sed -i.bak \
-  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
-  -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
-  "$enabled_privacy/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
-rm -f "$enabled_privacy/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
+"$TEST_PYTHON_BINARY" -I -S -B - \
+  "$enabled_privacy" "$SCRIPT_DIR/validate_norito_bridge_xcframework.py" <<'PY'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+validator_path = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location(
+    "mobile_sdk_enabled_privacy_validator", validator_path
+)
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load enabled-privacy fixture validator")
+validator = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = validator
+spec.loader.exec_module(validator)
+manifest_path = root / "dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+manifest["privacy_production_enabled"] = True
+manifest["cargo_features"] = ["privacy-production-enabled"]
+manifest["kagemusha_mobile_artifact_roles"] = validator.expected_kagemusha_roles(True)
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
 touch "$enabled_privacy/dist/NoritoBridge.xcframework/.privacy-production-enabled"
 run_expect_pass "$enabled_privacy"
 
@@ -2210,7 +2317,7 @@ make_fixture "$missing_client_native_aar_entry"
 make_android_outputs "$missing_client_native_aar_entry" default x86_64
 run_expect_fail \
   "$missing_client_native_aar_entry" \
-  "release aar native bridge inventory is not exact" \
+  "release aar missing ZIP entry jni/x86_64/libconnect_norito_bridge.so" \
   --require-built-android
 
 with_android_outputs="$TMP_DIR/with-android-outputs"

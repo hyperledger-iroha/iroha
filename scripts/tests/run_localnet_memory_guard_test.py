@@ -31,13 +31,17 @@ def test_defaults_are_guarded_for_localnet_repro():
     assert args.diagnostic_timeout_seconds == 30.0
 
 
-def test_peer_count_below_four_is_rejected():
-    try:
-        MODULE.parse_args(["--peers", "1"])
-    except SystemExit as err:
-        assert err.code == 2
-    else:
-        raise AssertionError("expected --peers below 4 to be rejected")
+def test_peer_count_must_have_revision4_geometry():
+    for peers in (1, 5, 30, 32):
+        try:
+            MODULE.parse_args(["--peers", str(peers)])
+        except SystemExit as err:
+            assert err.code == 2
+        else:
+            raise AssertionError(f"expected invalid --peers={peers} to be rejected")
+
+    for peers in (4, 7, 10, 31):
+        assert MODULE.parse_args(["--peers", str(peers)]).peers == peers
 
 
 def test_tx_load_command_forwards_queue_limits(tmp_path):

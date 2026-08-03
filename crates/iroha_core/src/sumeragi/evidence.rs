@@ -1582,21 +1582,11 @@ mod tests {
 
     fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
-        let verified = super::super::v2::VerifiedHeightContext::genesis(
-            fixture.context.clone(),
-            fixture.proofs.clone(),
-        )
-        .expect("verified fixture height context");
-        let store =
-            super::super::v2_context_store::V2ContextStore::open(kura.sumeragi_v2_storage_root())
-                .expect("open fixture context store");
-        store
-            .persist(
-                &super::super::v2_context_store::PersistedHeightContext::from_verified(&verified),
-            )
-            .expect("persist fixture height context");
         let query = crate::query::store::LiveQueryStore::start_test();
-        State::new_with_chain_for_testing(world, kura, query, fixture.context.chain_id.clone())
+        let state =
+            State::new_with_chain_for_testing(world, kura, query, fixture.context.chain_id.clone());
+        install_v2_finality_for_fixture(&state, fixture);
+        state
     }
 
     struct V2EvidenceFixture {
@@ -2242,6 +2232,45 @@ mod tests {
     }
 
     #[test]
+    fn v2_admission_rejects_context_store_only_recovery_record() {
+        let fixture = V2EvidenceFixture::new();
+        let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x91, 0x92);
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let verified = super::super::v2::VerifiedHeightContext::genesis(
+            fixture.context.clone(),
+            fixture.proofs.clone(),
+        )
+        .expect("verified fixture height context");
+        let store =
+            super::super::v2_context_store::V2ContextStore::open(kura.sumeragi_v2_storage_root())
+                .expect("open fixture context store");
+        store
+            .persist(
+                &super::super::v2_context_store::PersistedHeightContext::from_verified(&verified),
+            )
+            .expect("persist fixture height context");
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain_for_testing(
+            World::default(),
+            kura,
+            query,
+            fixture.context.chain_id.clone(),
+        );
+
+        assert_eq!(
+            state
+                .sumeragi_v2_height_context(fixture.context.height)
+                .expect("inspect finality-only historical context"),
+            None,
+            "a checksummed recovery context is not committed authorization"
+        );
+        assert_eq!(
+            validate_v2_evidence_admissions(&state, 2, &[evidence]),
+            Err(EvidenceValidationError::V2AdmissionContextUnavailable)
+        );
+    }
+
+    #[test]
     fn v2_admission_rejects_noncanonical_duplicate_reordered_and_oversize_batches() {
         let fixture = V2EvidenceFixture::new();
         let state = test_state_for_v2_fixture(&fixture);
@@ -2354,8 +2383,6 @@ mod tests {
         let fixture = V2EvidenceFixture::new();
         let proposer = test_state_for_v2_fixture_with_slashing_delay(&fixture, 1);
         let follower = test_state_for_v2_fixture_with_slashing_delay(&fixture, 1);
-        install_v2_finality_for_fixture(&proposer, &fixture);
-        install_v2_finality_for_fixture(&follower, &fixture);
         let offender = fixture.context.roster[1].validator.clone();
         add_v2_penalty_validator(&proposer, &offender);
         add_v2_penalty_validator(&follower, &offender);

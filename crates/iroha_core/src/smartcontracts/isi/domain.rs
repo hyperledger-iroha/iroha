@@ -3754,6 +3754,7 @@ mod tests {
         let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
             PrivacyOrchardPoolBootstrapDigestV1::new([0xD2; 32]),
             asset_definition_id,
+            iroha_data_model::asset::AssetBalanceScope::Global,
             reserve_account,
         )
         .expect("canonical Orchard dependency-guard state");

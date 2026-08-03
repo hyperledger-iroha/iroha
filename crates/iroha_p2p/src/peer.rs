@@ -17623,6 +17623,55 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn soranet_handshake_accepts_bls_peer_identities() {
+        let soranet = Arc::new(SoranetHandshakeConfig::defaults());
+        let outbound_keys = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::BlsNormal)
+            .expect("derive outbound BLS peer identity");
+        let inbound_keys = KeyPair::try_from_seed(vec![0x82; 32], Algorithm::BlsNormal)
+            .expect("derive inbound BLS peer identity");
+        let inbound_transport_keys = KeyPair::try_from_seed(vec![0x83; 32], Algorithm::Ed25519)
+            .expect("derive inbound Ed25519 SoraNet transport identity");
+        let outbound_addr: SocketAddr = "127.0.0.1:10011".parse().unwrap();
+        let inbound_addr: SocketAddr = "127.0.0.1:10012".parse().unwrap();
+        let expected_inbound_id =
+            iroha_data_model::prelude::PeerId::from(inbound_keys.public_key().clone());
+
+        let (outbound_stream, inbound_stream) = tokio::io::duplex(64 * 1024);
+        let (outbound_read, outbound_write) = tokio::io::split(outbound_stream);
+        let (inbound_read, inbound_write) = tokio::io::split(inbound_stream);
+
+        let outbound = ConnectedTo::for_transport_delegation_test(
+            outbound_addr,
+            expected_inbound_id,
+            outbound_keys,
+            Connection::from_split(101, outbound_read, outbound_write),
+            iroha_data_model::ChainId::from("bls-soranet-test-chain"),
+            soranet.clone(),
+        );
+        let inbound = ConnectedFrom {
+            our_public_address: inbound_addr,
+            key_pair: inbound_keys,
+            soranet_transport_key_pair: inbound_transport_keys,
+            connection: Connection::from_split(102, inbound_read, inbound_write),
+            chain_id: iroha_data_model::ChainId::from("bls-soranet-test-chain"),
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            soranet_handshake: soranet,
+            local_scion_supported: true,
+            trust_gossip: true,
+            relay_role: RelayRole::Disabled,
+        };
+
+        let (outbound_result, inbound_result) = tokio::join!(
+            ConnectedTo::send_client_hello::<ChaCha20Poly1305>(outbound),
+            ConnectedFrom::read_client_hello::<ChaCha20Poly1305>(inbound),
+        );
+        outbound_result.expect("outbound BLS SoraNet handshake");
+        inbound_result.expect("inbound BLS SoraNet handshake");
+    }
+
     #[test]
     fn consensus_config_mismatch_rejects_execution_policy_drift() {
         let expected = sample_consensus_config_caps();

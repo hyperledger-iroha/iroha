@@ -1220,13 +1220,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_AXT_COMMIT
             | syscalls::SYSCALL_VERIFY_DS_PROOF
             | syscalls::SYSCALL_USE_ASSET_HANDLE
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
             | syscalls::SYSCALL_ESCROW_OPEN_OFFER
             | syscalls::SYSCALL_ESCROW_ACCEPT
             | syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT

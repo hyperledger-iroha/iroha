@@ -848,8 +848,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UInt8,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -866,8 +864,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UInt8,
         UInt8,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
         UInt8,
         UnsafePointer<CChar>?, UInt,
         UInt8,
@@ -4290,7 +4286,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         modeCode: UInt8,
         allowShield: Bool,
         allowUnshield: Bool,
-        transferVerifyingKey: String?,
         unshieldVerifyingKey: String?,
         shieldVerifyingKey: String?,
         feePaymentJSON: Data,
@@ -4328,9 +4323,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                 return -1
                             }
                             return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                withOptionalCString(transferVerifyingKey) { transferPtr, transferLen, transferFlag in
-                                    withOptionalCString(unshieldVerifyingKey) { unshieldPtr, unshieldLen, unshieldFlag in
-                                        withOptionalCString(shieldVerifyingKey) { shieldPtr, shieldLen, shieldFlag in
+                                withOptionalCString(unshieldVerifyingKey) { unshieldPtr, unshieldLen, unshieldFlag in
+                                    withOptionalCString(shieldVerifyingKey) { shieldPtr, shieldLen, shieldFlag in
                                             if useAlg, let encodeRegisterZkAssetWithAlgFn {
                                                 return encodeRegisterZkAssetWithAlgFn(
                                                     chainPtr, UInt(chainId.utf8.count),
@@ -4342,8 +4336,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     modeCode,
                                                     allowShieldFlag,
                                                     allowUnshieldFlag,
-                                                    transferPtr, transferLen,
-                                                    transferFlag,
                                                     unshieldPtr, unshieldLen,
                                                     unshieldFlag,
                                                     shieldPtr, shieldLen,
@@ -4367,8 +4359,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     modeCode,
                                                     allowShieldFlag,
                                                     allowUnshieldFlag,
-                                                    transferPtr, transferLen,
-                                                    transferFlag,
                                                     unshieldPtr, unshieldLen,
                                                     unshieldFlag,
                                                     shieldPtr, shieldLen,
@@ -4383,7 +4373,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             } else {
                                                 return -1
                                             }
-                                        }
                                     }
                                 }
                             }

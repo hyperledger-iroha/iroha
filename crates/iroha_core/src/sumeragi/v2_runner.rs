@@ -49,7 +49,7 @@ use super::{
         AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, LocalProposalDirective,
         ServicedCandidateCapacityGeometry, SignRequest, SumeragiV2Adapter,
     },
-    v2_apply::{V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
+    v2_apply::{V2ApplyService, V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
@@ -1140,7 +1140,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         // scheduler ordinal. Its independently reconstructed receipt catalog
         // is the authority for body-backed leader-wire terminals; the gate's
         // adjacent snapshot cannot validate itself after a crash.
-        let body_store = V2BodyStore::open_with_policy(
+        let mut body_store = V2BodyStore::open_with_policy(
             storage_root.join("bodies"),
             context.clone(),
             signature_policy,
@@ -1150,6 +1150,30 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 error.to_string(),
             ))
         })?;
+        let recovery_validator = V2ApplyService::new(
+            Arc::clone(&state),
+            Arc::clone(&queue),
+            Arc::clone(&kura),
+            provider_ingest_finalized_archive.clone(),
+            reputation_finalized_archive.clone(),
+            context.chain_id.clone(),
+            block_cadence,
+            genesis_account.clone(),
+            events_sender.clone(),
+            validator_set_pops.clone(),
+        );
+        if let Some(decided_subject) = recovery_validator
+            .recovered_finality_subject(&context)
+            .map_err(|error| V2RunnerError::Service(error.to_string()))?
+        {
+            body_store
+                .retain_recovered_markers_for_subject(decided_subject)
+                .map_err(|error| {
+                    V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
+                        error.to_string(),
+                    ))
+                })?;
+        }
         let recovered_body_catalog = body_store.recovery_catalog().map_err(|error| {
             V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
                 error.to_string(),
@@ -1168,7 +1192,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // adapter may escape the construction boundary early.
             SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(
                 wal_path.clone(),
-                verified_context,
+                verified_context.clone(),
                 local_validator,
                 Generation::INITIAL,
                 consensus_key_hash,
@@ -1179,7 +1203,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         } else {
             SumeragiV2Adapter::open_with_capacity_geometry(
                 wal_path.clone(),
-                verified_context,
+                verified_context.clone(),
                 local_validator,
                 Generation::INITIAL,
                 consensus_key_hash,
@@ -1240,6 +1264,28 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             context.id(),
             context.height,
         )?;
+        // The body directory may retain markers from arbitrarily many past
+        // views. WAL replay is the sole authority for deciding which bounded
+        // frontier can recover vote authority; re-execute only those exact
+        // identities before constructing the live serialized runtime.
+        let recovered_validation_authority =
+            adapter.recovered_validation_authority(&startup_effects)?;
+        body_store
+            .retain_recovered_markers_for_authority(recovered_validation_authority)
+            .map_err(|error| {
+                V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
+                    error.to_string(),
+                ))
+            })?;
+        body_store
+            .revalidate_recovered_markers(|body| {
+                recovery_validator.revalidate_recovered_candidate(&context, body)
+            })
+            .map_err(|error| {
+                V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
+                    error.to_string(),
+                ))
+            })?;
         adapter_construction.complete();
         let runtime_construction = output_guard
             .begin_fail_stop_operation()
@@ -1422,7 +1468,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             executor.durable_finality().is_some() && recovered_applied_height.is_some(),
             || {
                 V2LaneWorkAdapter::new_with_output_guard_and_transport(
-                    context.clone(),
+                    &verified_context,
                     local_peer.clone(),
                     common_config.key_pair.clone(),
                     config.role == NodeRole::Validator,

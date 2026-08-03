@@ -322,7 +322,6 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
 
         SingularQueryBox::FindProofRecordById(_)
         | SingularQueryBox::FindAssetEscrowById(_)
-        | SingularQueryBox::FindAnonymousAssetEscrowById(_)
         | SingularQueryBox::FindTriggerById(_)
         | SingularQueryBox::FindTwitterBindingByHash(_)
         | SingularQueryBox::FindOracleDisputeById(_)
@@ -625,32 +624,6 @@ fn native_iterable_query_access(
         }
         return Err(invalid_native_iterable_query());
     }
-    if let Some(payload) = payload_for!(
-        iroha_data_model::escrow::AnonymousAssetEscrowRecord,
-        AnonymousAssetEscrowRecord
-    ) {
-        if any_exact!(
-            payload;
-            data_model_query::escrow::prelude::FindAnonymousAssetEscrows,
-            data_model_query::escrow::prelude::FindAnonymousAssetEscrowsByStatus,
-        ) {
-            return Ok(NativeQueryAccess::AllLedger);
-        }
-        if let Some(query) = decode_native_iterable_payload_exact::<
-            data_model_query::escrow::prelude::FindAnonymousAssetEscrowsBySeller,
-        >(payload)
-        {
-            return Ok(NativeQueryAccess::Account(query.seller.clone()));
-        }
-        if let Some(query) = decode_native_iterable_payload_exact::<
-            data_model_query::escrow::prelude::FindAnonymousAssetEscrowsByBuyer,
-        >(payload)
-        {
-            return Ok(NativeQueryAccess::Account(query.buyer.clone()));
-        }
-        return Err(invalid_native_iterable_query());
-    }
-
     Err(invalid_native_iterable_query())
 }
 

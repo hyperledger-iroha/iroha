@@ -4252,17 +4252,32 @@ fn validate_publication_snapshot(
     publication: &MusubiPublicationV1,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let snapshot = &publication.resolution.snapshot;
-    let current_revision = state_transaction
-        .world
-        .musubi_resolver_index_revision
-        .get()
-        .get();
+    validate_musubi_registry_snapshot_history_v1(
+        &publication.resolution.snapshot,
+        state_transaction,
+    )
+}
+
+/// Require a canonical finalized Musubi registry ancestor whose resolver
+/// revision was active at the claimed height.
+///
+/// Daemon-side publication adapters should use this helper instead of
+/// duplicating the consensus-owned resolver-revision activation rules.
+///
+/// # Errors
+///
+/// Returns an instruction execution error when the snapshot is malformed, is
+/// not on the current finalized chain, or claims a resolver revision outside
+/// that revision's recorded activation interval.
+pub fn validate_musubi_registry_snapshot_history_v1(
+    snapshot: &MusubiRegistrySnapshotV1,
+    state_ro: &impl StateReadOnly,
+) -> Result<(), Error> {
     validate_publication_snapshot_history(
         snapshot,
-        state_transaction.world(),
-        state_transaction.block_hashes(),
-        current_revision,
+        state_ro.world(),
+        state_ro.block_hashes(),
+        state_ro.world().musubi_resolver_index_revision(),
     )
 }
 
@@ -5490,6 +5505,14 @@ mod tests {
         let block_hashes = canonical_block_hashes(9);
         let mut world = World::new();
         world.musubi_resolver_index_checkpoints.insert(
+            MusubiResolverIndexRevisionV1::new(1).expect("genesis revision"),
+            MusubiRegistrySnapshotV1 {
+                finalized_height: 1,
+                finalized_block_hash: [1; 32],
+                index_revision: 1,
+            },
+        );
+        world.musubi_resolver_index_checkpoints.insert(
             MusubiResolverIndexRevisionV1::new(7).expect("revision seven"),
             MusubiRegistrySnapshotV1 {
                 finalized_height: 2,
@@ -5505,29 +5528,59 @@ mod tests {
                 index_revision: 9,
             },
         );
-        let view = world.view();
+        world.musubi_resolver_index_revision =
+            Cell::new(MusubiResolverIndexRevisionV1::new(9).expect("revision nine"));
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut committed_hashes = state.block_hashes.block();
+            for hash in block_hashes {
+                committed_hashes.push_for_tests(hash);
+            }
+            committed_hashes.commit_for_tests();
+        }
+        let view = state.query_view();
 
-        validate_publication_snapshot_history(
+        validate_musubi_registry_snapshot_history_v1(
             &MusubiRegistrySnapshotV1 {
                 finalized_height: 5,
                 finalized_block_hash: [5; 32],
                 index_revision: 7,
             },
             &view,
-            &block_hashes,
-            9,
         )
         .expect("an unchanged block inside revision seven's activation interval is valid");
+
+        let wrong_hash = MusubiRegistrySnapshotV1 {
+            finalized_height: 5,
+            finalized_block_hash: [0xFF; 32],
+            index_revision: 7,
+        };
+        assert!(validate_musubi_registry_snapshot_history_v1(&wrong_hash, &view).is_err());
+
+        let future_height = MusubiRegistrySnapshotV1 {
+            finalized_height: 10,
+            finalized_block_hash: [10; 32],
+            index_revision: 7,
+        };
+        assert!(validate_musubi_registry_snapshot_history_v1(&future_height, &view).is_err());
+
+        let future_revision = MusubiRegistrySnapshotV1 {
+            finalized_height: 5,
+            finalized_block_hash: [5; 32],
+            index_revision: 10,
+        };
+        assert!(validate_musubi_registry_snapshot_history_v1(&future_revision, &view).is_err());
 
         let predates_activation = MusubiRegistrySnapshotV1 {
             finalized_height: 1,
             finalized_block_hash: [1; 32],
             index_revision: 7,
         };
-        assert!(
-            validate_publication_snapshot_history(&predates_activation, &view, &block_hashes, 9)
-                .is_err()
-        );
+        assert!(validate_musubi_registry_snapshot_history_v1(&predates_activation, &view).is_err());
 
         let successor_already_active = MusubiRegistrySnapshotV1 {
             finalized_height: 6,
@@ -5535,13 +5588,7 @@ mod tests {
             index_revision: 7,
         };
         assert!(
-            validate_publication_snapshot_history(
-                &successor_already_active,
-                &view,
-                &block_hashes,
-                9
-            )
-            .is_err()
+            validate_musubi_registry_snapshot_history_v1(&successor_already_active, &view).is_err()
         );
 
         let skipped_same_block_revision = MusubiRegistrySnapshotV1 {
@@ -5549,13 +5596,9 @@ mod tests {
             finalized_block_hash: [5; 32],
             index_revision: 8,
         };
-        let error = validate_publication_snapshot_history(
-            &skipped_same_block_revision,
-            &view,
-            &block_hashes,
-            9,
-        )
-        .expect_err("an intra-block revision without a checkpoint cannot be claimed");
+        let error =
+            validate_musubi_registry_snapshot_history_v1(&skipped_same_block_revision, &view)
+                .expect_err("an intra-block revision without a checkpoint cannot be claimed");
         assert!(
             error
                 .to_string()

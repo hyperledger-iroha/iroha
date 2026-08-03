@@ -2439,21 +2439,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         | EscrowMarkPaymentSent { escrow }
         | EscrowRelease { escrow }
         | EscrowCancel { escrow } => f(escrow),
-        AnonymousEscrowOpenOffer { request }
-        | AnonymousEscrowRelease { request }
-        | AnonymousEscrowCancel { request }
-        | AnonymousEscrowResolveDispute { request } => f(request),
-        AnonymousEscrowAccept { escrow } | AnonymousEscrowMarkPaymentSent { escrow } => f(escrow),
         EscrowOpenDispute {
-            escrow,
-            evidence_hashes,
-        } => {
-            f(escrow);
-            if let Some(evidence_hashes) = evidence_hashes {
-                f(evidence_hashes);
-            }
-        }
-        AnonymousEscrowOpenDispute {
             escrow,
             evidence_hashes,
         } => {
@@ -3009,13 +2995,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::EscrowCancel { .. }
         | ir::Instr::EscrowOpenDispute { .. }
         | ir::Instr::EscrowResolveDispute { .. }
-        | ir::Instr::AnonymousEscrowOpenOffer { .. }
-        | ir::Instr::AnonymousEscrowAccept { .. }
-        | ir::Instr::AnonymousEscrowMarkPaymentSent { .. }
-        | ir::Instr::AnonymousEscrowRelease { .. }
-        | ir::Instr::AnonymousEscrowCancel { .. }
-        | ir::Instr::AnonymousEscrowOpenDispute { .. }
-        | ir::Instr::AnonymousEscrowResolveDispute { .. }
         | ir::Instr::MintAsset { .. }
         | ir::Instr::BurnAsset { .. }
         | ir::Instr::CreateNft { .. }

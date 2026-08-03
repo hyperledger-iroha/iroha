@@ -314,7 +314,6 @@ final class TxBuilderTests: XCTestCase {
 
     private func makeRegisterZkAssetRequest(authority: String,
                                             ttlMs: UInt64? = 30) throws -> RegisterZkAssetRequest {
-        let transferVk = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_transfer")
         let unshieldVk = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_unshield")
         return RegisterZkAssetRequest(chainId: Self.fixtureChainId,
                                       authority: authority,
@@ -322,7 +321,6 @@ final class TxBuilderTests: XCTestCase {
                                       mode: .hybrid,
                                       allowShield: true,
                                       allowUnshield: true,
-                                      transferVerifyingKey: transferVk,
                                       unshieldVerifyingKey: unshieldVk,
                                       shieldVerifyingKey: nil,
                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),

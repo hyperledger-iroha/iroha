@@ -72,7 +72,7 @@ use iroha_data_model::{
         types::{BlobDigest, StorageTicketId},
     },
     error::ParseError,
-    escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
+    escrow::{AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     events::{
         EventBox, SharedDataEvent,
         data::{
@@ -920,10 +920,6 @@ macro_rules! build_world_block {
             asset_escrows_by_seller: $state.asset_escrows_by_seller.$method(),
             asset_escrows_by_buyer: $state.asset_escrows_by_buyer.$method(),
             asset_escrows_by_status: $state.asset_escrows_by_status.$method(),
-            anonymous_asset_escrows: $state.anonymous_asset_escrows.$method(),
-            anonymous_asset_escrows_by_seller: $state.anonymous_asset_escrows_by_seller.$method(),
-            anonymous_asset_escrows_by_buyer: $state.anonymous_asset_escrows_by_buyer.$method(),
-            anonymous_asset_escrows_by_status: $state.anonymous_asset_escrows_by_status.$method(),
             vpn_leases: $state.vpn_leases.$method(),
             vpn_active_lease_by_account: $state.vpn_active_lease_by_account.$method(),
             vpn_active_lease_by_address_slot: $state.vpn_active_lease_by_address_slot.$method(),
@@ -1200,14 +1196,6 @@ macro_rules! build_world_transaction {
             asset_escrows_by_seller: $state.asset_escrows_by_seller.transaction(),
             asset_escrows_by_buyer: $state.asset_escrows_by_buyer.transaction(),
             asset_escrows_by_status: $state.asset_escrows_by_status.transaction(),
-            anonymous_asset_escrows: $state.anonymous_asset_escrows.transaction(),
-            anonymous_asset_escrows_by_seller: $state
-                .anonymous_asset_escrows_by_seller
-                .transaction(),
-            anonymous_asset_escrows_by_buyer: $state.anonymous_asset_escrows_by_buyer.transaction(),
-            anonymous_asset_escrows_by_status: $state
-                .anonymous_asset_escrows_by_status
-                .transaction(),
             vpn_leases: $state.vpn_leases.transaction(),
             vpn_active_lease_by_account: $state.vpn_active_lease_by_account.transaction(),
             vpn_active_lease_by_address_slot: $state.vpn_active_lease_by_address_slot.transaction(),
@@ -4243,17 +4231,6 @@ pub struct World {
     /// Native asset escrows grouped by lifecycle status.
     #[norito(skip)]
     pub(crate) asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows keyed by escrow identifier.
-    pub(crate) anonymous_asset_escrows: Storage<EscrowId, AnonymousAssetEscrowRecord>,
-    /// Native anonymous asset escrows grouped by seller account.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_seller: Storage<AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by buyer account.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_buyer: Storage<AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by lifecycle status.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: Storage<[u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
@@ -4801,7 +4778,8 @@ pub struct WorldBlock<'world> {
     /// Alias lease metadata keyed by canonical contract address.
     pub(crate) contract_alias_bindings:
         StorageBlock<'world, ContractAddress, ContractAliasBindingRecord>,
-    /// Authoritative domain ownership context for canonical asset definition ids.
+    /// Derived index of explicit asset-definition owning domains.
+    #[norito(skip)]
     pub(crate) asset_definition_domains: StorageBlock<'world, AssetDefinitionId, DomainId>,
     /// Asset-definition index keyed by definition domain.
     #[norito(skip)]
@@ -4913,20 +4891,6 @@ pub struct WorldBlock<'world> {
     /// Native asset escrows grouped by lifecycle status.
     #[norito(skip)]
     pub(crate) asset_escrows_by_status: StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows keyed by escrow identifier.
-    pub(crate) anonymous_asset_escrows: StorageBlock<'world, EscrowId, AnonymousAssetEscrowRecord>,
-    /// Native anonymous asset escrows grouped by seller account.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_seller:
-        StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by buyer account.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_buyer:
-        StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by lifecycle status.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_status:
-        StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: StorageBlock<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
@@ -5775,10 +5739,6 @@ impl<'world> WorldBlock<'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
-            anonymous_asset_escrows,
-            anonymous_asset_escrows_by_seller,
-            anonymous_asset_escrows_by_buyer,
-            anonymous_asset_escrows_by_status,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -6134,18 +6094,6 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
     /// Native asset escrows grouped by lifecycle status.
     pub(crate) asset_escrows_by_status:
-        StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows keyed by escrow identifier.
-    pub(crate) anonymous_asset_escrows:
-        StorageTransaction<'block, 'world, EscrowId, AnonymousAssetEscrowRecord>,
-    /// Native anonymous asset escrows grouped by seller account.
-    pub(crate) anonymous_asset_escrows_by_seller:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by buyer account.
-    pub(crate) anonymous_asset_escrows_by_buyer:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by lifecycle status.
-    pub(crate) anonymous_asset_escrows_by_status:
         StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: StorageTransaction<'block, 'world, [u8; 32], VpnLeaseRecordV1>,
@@ -7695,65 +7643,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         previous
     }
 
-    /// Record an anonymous native asset escrow in all read-side indexes.
-    pub(crate) fn track_anonymous_asset_escrow_indexes(
-        &mut self,
-        record: &AnonymousAssetEscrowRecord,
-    ) {
-        Self::track_escrow_index(
-            &mut self.anonymous_asset_escrows_by_seller,
-            &record.seller,
-            record.id,
-        );
-        if let Some(buyer) = record.buyer.as_ref() {
-            Self::track_escrow_index(&mut self.anonymous_asset_escrows_by_buyer, buyer, record.id);
-        }
-        Self::track_escrow_index(
-            &mut self.anonymous_asset_escrows_by_status,
-            &record.status,
-            record.id,
-        );
-    }
-
-    /// Drop an anonymous native asset escrow from all read-side indexes.
-    pub(crate) fn untrack_anonymous_asset_escrow_indexes(
-        &mut self,
-        record: &AnonymousAssetEscrowRecord,
-    ) {
-        Self::untrack_escrow_index(
-            &mut self.anonymous_asset_escrows_by_seller,
-            &record.seller,
-            &record.id,
-        );
-        if let Some(buyer) = record.buyer.as_ref() {
-            Self::untrack_escrow_index(
-                &mut self.anonymous_asset_escrows_by_buyer,
-                buyer,
-                &record.id,
-            );
-        }
-        Self::untrack_escrow_index(
-            &mut self.anonymous_asset_escrows_by_status,
-            &record.status,
-            &record.id,
-        );
-    }
-
-    /// Insert an anonymous native asset escrow and keep derived indexes consistent.
-    pub(crate) fn insert_anonymous_asset_escrow_entry(
-        &mut self,
-        record: AnonymousAssetEscrowRecord,
-    ) -> Option<AnonymousAssetEscrowRecord> {
-        let previous = self
-            .anonymous_asset_escrows
-            .insert(record.id, record.clone());
-        if let Some(previous) = previous.as_ref() {
-            self.untrack_anonymous_asset_escrow_indexes(previous);
-        }
-        self.track_anonymous_asset_escrow_indexes(&record);
-        previous
-    }
-
     fn settled_vpn_lease_key(record: &VpnLeaseRecordV1) -> Option<(u64, [u8; 32])> {
         (record.status == VpnLeaseStatusV1::Settled)
             .then_some(record.settled_at_ms)
@@ -8339,16 +8228,6 @@ pub struct WorldView<'world> {
     pub(crate) asset_escrows_by_buyer: StorageView<'world, AccountId, BTreeSet<EscrowId>>,
     /// Native asset escrows grouped by lifecycle status.
     pub(crate) asset_escrows_by_status: StorageView<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows keyed by escrow identifier.
-    pub(crate) anonymous_asset_escrows: StorageView<'world, EscrowId, AnonymousAssetEscrowRecord>,
-    /// Native anonymous asset escrows grouped by seller account.
-    pub(crate) anonymous_asset_escrows_by_seller:
-        StorageView<'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by buyer account.
-    pub(crate) anonymous_asset_escrows_by_buyer: StorageView<'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by lifecycle status.
-    pub(crate) anonymous_asset_escrows_by_status:
-        StorageView<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: StorageView<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
@@ -8933,7 +8812,7 @@ pub struct ZkAssetState {
     pub tree_frontier: crate::zk::confidential_v2::ConfidentialTreeFrontierV2,
     /// Current root authenticated by the incremental frontier and retained history.
     pub persisted_root: [u8; 32],
-    /// Shielded asset policy: `ZkNative` mints/burns via ZK only; Hybrid allows public+shielded.
+    /// First-release public-plus-confidential asset mode.
     pub mode: iroha_data_model::isi::zk::ZkAssetMode,
     /// Whether authenticated public-to-confidential top-ups are permitted.
     pub allow_shield: bool,
@@ -8945,8 +8824,6 @@ pub struct ZkAssetState {
     pub root_history: Vec<[u8; 32]>,
     /// Set of consumed nullifiers to prevent double spends.
     pub nullifiers: std::collections::BTreeSet<[u8; 32]>,
-    /// Required verifying key for shielded transfers (if configured).
-    pub vk_transfer: Option<ZkAssetVerifierBinding>,
     /// Required verifying key for unshield proofs (if configured).
     pub vk_unshield: Option<ZkAssetVerifierBinding>,
     /// Required canonical Kagemusha top-up shield verifying key (if configured).
@@ -8962,13 +8839,12 @@ impl Default for ZkAssetState {
             tree_profile,
             tree_frontier: [None; crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2],
             persisted_root: tree_profile.empty_root(),
-            mode: iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
+            mode: iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
             allow_shield: false,
             allow_unshield: false,
             commitments: Vec::new(),
             root_history: Vec::new(),
             nullifiers: std::collections::BTreeSet::new(),
-            vk_transfer: None,
             vk_unshield: None,
             vk_shield: None,
             frontier_checkpoints: Vec::new(),
@@ -9668,7 +9544,6 @@ impl json::JsonDeserialize for ZkAssetState {
         let mut commitments = None;
         let mut root_history = None;
         let mut nullifiers = None;
-        let mut vk_transfer = None;
         let mut vk_unshield = None;
         let mut vk_shield = None;
         let mut frontier_checkpoints = None;
@@ -9694,7 +9569,6 @@ impl json::JsonDeserialize for ZkAssetState {
                 "commitments" => commitments = Some(visitor.parse_value()?),
                 "root_history" => root_history = Some(visitor.parse_value()?),
                 "nullifiers" => nullifiers = Some(visitor.parse_value()?),
-                "vk_transfer" => vk_transfer = Some(visitor.parse_value()?),
                 "vk_unshield" => vk_unshield = Some(visitor.parse_value()?),
                 "vk_shield" => vk_shield = Some(visitor.parse_value()?),
                 "frontier_checkpoints" => frontier_checkpoints = Some(visitor.parse_value()?),
@@ -9722,7 +9596,6 @@ impl json::JsonDeserialize for ZkAssetState {
             root_history: root_history
                 .ok_or_else(|| json::MapVisitor::missing_field("root_history"))?,
             nullifiers: nullifiers.ok_or_else(|| json::MapVisitor::missing_field("nullifiers"))?,
-            vk_transfer: vk_transfer.unwrap_or(None),
             vk_unshield: vk_unshield.unwrap_or(None),
             vk_shield: vk_shield.unwrap_or(None),
             frontier_checkpoints: frontier_checkpoints.unwrap_or_default(),
@@ -14098,8 +13971,9 @@ pub struct StateView<'state> {
 /// Lightweight state snapshot intended for query-heavy paths.
 ///
 /// Compared with [`StateView`], this snapshot avoids taking transaction-index
-/// views and the state-view generation retry loop, while still providing the
-/// [`StateReadOnly`] surface required by IVM/query execution.
+/// views and other full-snapshot components. It still uses the state-view
+/// generation retry to bind its world and block-hash journal atomically while
+/// providing the [`StateReadOnly`] surface required by IVM/query execution.
 pub struct StateQueryView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldView<'state>,
@@ -20793,29 +20667,6 @@ impl World {
         self.asset_escrows_by_seller = public_by_seller.into_iter().collect();
         self.asset_escrows_by_buyer = public_by_buyer.into_iter().collect();
         self.asset_escrows_by_status = public_by_status.into_iter().collect();
-
-        let mut anonymous_by_seller = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
-        let mut anonymous_by_buyer = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
-        let mut anonymous_by_status = BTreeMap::<AssetEscrowStatus, BTreeSet<EscrowId>>::new();
-        for (escrow_id, record) in self.anonymous_asset_escrows.view().iter() {
-            anonymous_by_seller
-                .entry(record.seller.clone())
-                .or_default()
-                .insert(*escrow_id);
-            if let Some(buyer) = record.buyer.as_ref() {
-                anonymous_by_buyer
-                    .entry(buyer.clone())
-                    .or_default()
-                    .insert(*escrow_id);
-            }
-            anonymous_by_status
-                .entry(record.status)
-                .or_default()
-                .insert(*escrow_id);
-        }
-        self.anonymous_asset_escrows_by_seller = anonymous_by_seller.into_iter().collect();
-        self.anonymous_asset_escrows_by_buyer = anonymous_by_buyer.into_iter().collect();
-        self.anonymous_asset_escrows_by_status = anonymous_by_status.into_iter().collect();
     }
 
     fn rebuild_vpn_lease_indexes(&mut self) -> Result<(), String> {
@@ -21095,10 +20946,6 @@ impl World {
             asset_escrows_by_seller: self.asset_escrows_by_seller.view(),
             asset_escrows_by_buyer: self.asset_escrows_by_buyer.view(),
             asset_escrows_by_status: self.asset_escrows_by_status.view(),
-            anonymous_asset_escrows: self.anonymous_asset_escrows.view(),
-            anonymous_asset_escrows_by_seller: self.anonymous_asset_escrows_by_seller.view(),
-            anonymous_asset_escrows_by_buyer: self.anonymous_asset_escrows_by_buyer.view(),
-            anonymous_asset_escrows_by_status: self.anonymous_asset_escrows_by_status.view(),
             vpn_leases: self.vpn_leases.view(),
             vpn_active_lease_by_account: self.vpn_active_lease_by_account.view(),
             vpn_active_lease_by_address_slot: self.vpn_active_lease_by_address_slot.view(),
@@ -21627,22 +21474,6 @@ pub trait WorldReadOnly {
     fn asset_escrows_by_buyer(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
     /// Native asset escrow ids grouped by lifecycle status.
     fn asset_escrows_by_status(
-        &self,
-    ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>>;
-    /// Native anonymous asset escrow records keyed by escrow identifier.
-    fn anonymous_asset_escrows(
-        &self,
-    ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord>;
-    /// Native anonymous asset escrow ids grouped by seller account.
-    fn anonymous_asset_escrows_by_seller(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
-    /// Native anonymous asset escrow ids grouped by buyer account.
-    fn anonymous_asset_escrows_by_buyer(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
-    /// Native anonymous asset escrow ids grouped by lifecycle status.
-    fn anonymous_asset_escrows_by_status(
         &self,
     ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>>;
     /// Native SoraNet VPN lease escrow records keyed by lease identifier.
@@ -23306,26 +23137,6 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>> {
                 &self.asset_escrows_by_status
             }
-            fn anonymous_asset_escrows(
-                &self,
-            ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord> {
-                &self.anonymous_asset_escrows
-            }
-            fn anonymous_asset_escrows_by_seller(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
-                &self.anonymous_asset_escrows_by_seller
-            }
-            fn anonymous_asset_escrows_by_buyer(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
-                &self.anonymous_asset_escrows_by_buyer
-            }
-            fn anonymous_asset_escrows_by_status(
-                &self,
-            ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>> {
-                &self.anonymous_asset_escrows_by_status
-            }
             fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1> {
                 &self.vpn_leases
             }
@@ -24441,10 +24252,6 @@ impl<'world> WorldBlock<'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
-            anonymous_asset_escrows,
-            anonymous_asset_escrows_by_seller,
-            anonymous_asset_escrows_by_buyer,
-            anonymous_asset_escrows_by_status,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -24773,10 +24580,6 @@ impl<'world> WorldBlock<'world> {
         asset_escrows_by_seller.commit();
         asset_escrows_by_buyer.commit();
         asset_escrows_by_status.commit();
-        anonymous_asset_escrows.commit();
-        anonymous_asset_escrows_by_seller.commit();
-        anonymous_asset_escrows_by_buyer.commit();
-        anonymous_asset_escrows_by_status.commit();
         vpn_leases.commit();
         vpn_active_lease_by_account.commit();
         vpn_active_lease_by_address_slot.commit();
@@ -26034,10 +25837,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
-            anonymous_asset_escrows,
-            anonymous_asset_escrows_by_seller,
-            anonymous_asset_escrows_by_buyer,
-            anonymous_asset_escrows_by_status,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -26376,10 +26175,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         asset_escrows_by_seller.apply();
         asset_escrows_by_buyer.apply();
         asset_escrows_by_status.apply();
-        anonymous_asset_escrows.apply();
-        anonymous_asset_escrows_by_seller.apply();
-        anonymous_asset_escrows_by_buyer.apply();
-        anonymous_asset_escrows_by_status.apply();
         vpn_leases.apply();
         vpn_active_lease_by_account.apply();
         vpn_active_lease_by_address_slot.apply();
@@ -32079,34 +31874,40 @@ impl State {
 
     /// Create a point-in-time snapshot tuned for query/IVM execution.
     ///
-    /// This avoids taking the transactions index view and generation-retry loop
-    /// used by [`State::view`] while still exposing the full
-    /// [`StateReadOnly`] interface needed by query paths.
+    /// This avoids taking the transactions index view and other full-snapshot
+    /// components used by [`State::view`]. Its generation retry still captures
+    /// the world and block-hash journal atomically because query cursors and
+    /// finalized registry proofs bind both.
     #[track_caller]
     pub fn query_view(&self) -> StateQueryView<'_> {
         const STATE_QUERY_VIEW_LOG_THRESHOLD: Duration = Duration::from_millis(10);
         let caller = core::panic::Location::caller();
         let total_start = Instant::now();
 
-        let block_hashes_start = Instant::now();
-        let block_hashes: Vec<HashOf<BlockHeader>> =
-            self.block_hashes.view().iter().copied().collect();
-        let block_hashes_wait = block_hashes_start.elapsed();
-
-        let (world, world_wait, sccp_registry) = loop {
+        let (world, block_hashes, block_hashes_wait, world_wait, sccp_registry) = loop {
             let generation_before = self.state_view_generation();
             if generation_before % 2 != 0 {
                 self.note_view_generation_contention(caller);
                 std::thread::yield_now();
                 continue;
             }
+            let block_hashes_start = Instant::now();
+            let block_hashes: Vec<HashOf<BlockHeader>> =
+                self.block_hashes.view().iter().copied().collect();
+            let block_hashes_wait = block_hashes_start.elapsed();
             let world_start = Instant::now();
             let world = self.world.view();
             let world_wait = world_start.elapsed();
             let sccp_registry = self.sccp_registry_snapshot_from_world(world.sccp_registry.get());
             let generation_after = self.state_view_generation();
             if is_stable_state_view_generation(generation_before, generation_after) {
-                break (world, world_wait, sccp_registry);
+                break (
+                    world,
+                    block_hashes,
+                    block_hashes_wait,
+                    world_wait,
+                    sccp_registry,
+                );
             }
             drop(world);
             self.note_view_generation_contention(caller);
@@ -32279,28 +32080,24 @@ impl State {
     /// Load the immutable Sumeragi v2 context which authenticated a historical
     /// consensus height.
     ///
-    /// The lookup is read-only and returns `None` when the deterministic
-    /// context history is absent. Consensus evidence admission treats absence
-    /// as a fail-closed validation error.
+    /// The lookup is read-only and returns `None` when cryptographically
+    /// verified finality history is absent. Consensus evidence admission
+    /// treats absence as a fail-closed validation error. The structural
+    /// context recovery store is intentionally not an authorization fallback:
+    /// its checksum cannot prove roster PoPs or committed-chain continuity.
     ///
     /// # Errors
     ///
-    /// Returns an error when the canonical finality artifact or context store
-    /// cannot be inspected, or when its immutable frame fails validation.
+    /// Returns an error when the canonical finality artifact cannot be
+    /// inspected or its immutable frame fails validation.
     pub(crate) fn sumeragi_v2_height_context(
         &self,
         height: u64,
     ) -> Result<Option<iroha_data_model::block::consensus_v2::HeightContext>> {
-        if let Some(artifact) = self.kura.v2_finality_artifact(height)? {
-            return Ok(Some(artifact.height_context));
-        }
-        let Some(store) = crate::sumeragi::v2_context_store::V2ContextStore::open_existing(
-            self.kura.sumeragi_v2_storage_root(),
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(store.load(height)?.map(|record| record.context().clone()))
+        Ok(self
+            .kura
+            .v2_finality_artifact(height)?
+            .map(|artifact| artifact.height_context))
     }
 
     /// Resolve a committed block height by block hash using Kura's index.
@@ -54622,9 +54419,9 @@ impl<'state> StateBlock<'state> {
             let tx = match entrypoint {
                 TransactionEntrypoint::External(tx) => tx,
                 TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => continue,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    continue;
+                }
             };
             if block.error(entrypoint_index).is_none() {
                 // Execute each transaction in its own transactional state
@@ -61620,9 +61417,7 @@ fn replay_blocks_from_kura_range_inner(
                 TransactionEntrypoint::SealedReveal(reveal) => {
                     Some((idx, reveal.signed_transaction().clone()))
                 }
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => None,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
             })
             .collect::<Vec<_>>();
         let tx_count = signed_entrypoints.len();
@@ -70828,7 +70623,6 @@ pub(crate) mod deserialize {
         let content_bundles = take_optional_default(&mut map, "content_bundles")?;
         let content_chunks = take_optional_default(&mut map, "content_chunks")?;
         let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
-        let anonymous_asset_escrows = take_optional_default(&mut map, "anonymous_asset_escrows")?;
         let vpn_leases = take_optional_default(&mut map, "vpn_leases")?;
         let merge_hint_roots: Cell<Vec<Hash>> =
             take_optional_default(&mut map, "merge_hint_roots")?;
@@ -70903,10 +70697,6 @@ pub(crate) mod deserialize {
             asset_escrows_by_seller: Storage::default(),
             asset_escrows_by_buyer: Storage::default(),
             asset_escrows_by_status: Storage::default(),
-            anonymous_asset_escrows,
-            anonymous_asset_escrows_by_seller: Storage::default(),
-            anonymous_asset_escrows_by_buyer: Storage::default(),
-            anonymous_asset_escrows_by_status: Storage::default(),
             vpn_leases,
             vpn_active_lease_by_account: Storage::default(),
             vpn_active_lease_by_address_slot: Storage::default(),

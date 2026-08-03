@@ -43,7 +43,32 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
     def _write_fixture(self) -> None:
         scripts = self.repository / "scripts"
         scripts.mkdir(parents=True)
-        shutil.copy2(PACKAGE_OWNER, scripts / PACKAGE_OWNER.name)
+        package_owner = scripts / PACKAGE_OWNER.name
+        shutil.copy2(PACKAGE_OWNER, package_owner)
+        owner_source = package_owner.read_text(encoding="utf-8")
+        publication = (
+            'no_replace_flag = 0x4 if sys.platform == "darwin" else 0x1\n'
+            "rename_with_flag(stage, final, no_replace_flag)"
+        )
+        fixture_publication = (
+            'no_replace_flag = 0x4 if sys.platform == "darwin" else 0x1\n'
+            'destination_race = final.parent / ".package-test-destination-race"\n'
+            'stage_race = final.parent / ".package-test-stage-race"\n'
+            "if destination_race.exists():\n"
+            "    final.mkdir()\n"
+            '    (final / "competitor.txt").write_bytes(b"late competitor\\n")\n'
+            "elif stage_race.exists():\n"
+            '    retained = stage.with_name(f"{stage.name}.owner-retained")\n'
+            "    stage.rename(retained)\n"
+            "    stage.mkdir()\n"
+            '    (stage / "competitor.txt").write_bytes(b"late competitor\\n")\n'
+            "rename_with_flag(stage, final, no_replace_flag)"
+        )
+        self.assertEqual(owner_source.count(publication), 1)
+        package_owner.write_text(
+            owner_source.replace(publication, fixture_publication),
+            encoding="utf-8",
+        )
         shutil.copy2(LOCK_RUNNER, scripts / LOCK_RUNNER.name)
         checker = scripts / "check_mobile_sdk_artifacts.sh"
         checker.write_text(
@@ -151,9 +176,13 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                 parser = argparse.ArgumentParser()
                 parser.add_argument("--xcframework", required=True)
                 parser.add_argument("--output", required=True)
+                parser.add_argument("--scratch-dir", required=True)
                 arguments = parser.parse_args()
                 source = Path(arguments.xcframework)
                 output = Path(arguments.output)
+                scratch = Path(arguments.scratch_dir)
+                if scratch != output.parent.parent:
+                    raise SystemExit("Apple archive scratch directory was not external")
                 required_seal_environment = {
                     "NORITO_BRIDGE_SEAL_HOME",
                     "NORITO_BRIDGE_SEAL_CARGO_HOME",
@@ -189,7 +218,6 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                 if os.environ.get("SOURCE_DATE_EPOCH") != "1700000000":
                     raise SystemExit("SOURCE_DATE_EPOCH was not forwarded")
                 output.parent.mkdir(parents=True, exist_ok=True)
-                (output.parent / ".NoritoBridge.archive.lockfile").write_bytes(b"")
                 payload = (source.parent / "NoritoBridge.artifacts.json").read_bytes()
                 with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
                     archive.writestr(
@@ -235,16 +263,17 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         sentinel.write_text("keep the last good package\n", encoding="utf-8")
         return sentinel
 
-    def _assert_no_stage(self) -> None:
-        stages = [
+    def _publish_stages(self) -> list[Path]:
+        return [
             path
             for path in self.output.parent.glob(".mobile-sdk.publish.*")
             if path.is_dir()
         ]
-        self.assertEqual(stages, [])
 
-    def test_held_parent_lock_rejects_without_touching_previous_release(self) -> None:
-        sentinel = self._seed_previous_release()
+    def _assert_no_publish_stage(self) -> None:
+        self.assertEqual(self._publish_stages(), [])
+
+    def test_held_parent_lock_rejects_before_creating_output(self) -> None:
         lock_path = self.output.parent / ".mobile-sdk.publish.lockfile"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -255,22 +284,28 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             os.close(descriptor)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("another process holds", result.stderr)
-        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep the last good package\n")
-        self._assert_no_stage()
+        self.assertFalse(self.output.exists())
+        self._assert_no_publish_stage()
 
-    def test_late_validation_failure_preserves_previous_release(self) -> None:
+    def test_preexisting_destination_is_rejected_without_replacement(self) -> None:
         sentinel = self._seed_previous_release()
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must not already exist", result.stderr)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep the last good package\n")
+        self._assert_no_publish_stage()
+
+    def test_late_validation_failure_retains_stage_and_leaves_output_absent(self) -> None:
         result = self._package(PACKAGE_TEST_CHECK_FAIL="1")
         self.assertEqual(result.returncode, 91, result.stderr)
         self.assertIn("forced late package validation failure", result.stderr)
-        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep the last good package\n")
-        self._assert_no_stage()
+        self.assertFalse(self.output.exists())
+        self.assertEqual(len(self._publish_stages()), 1)
+        self.assertIn("retained failed package stage", result.stderr)
 
-    def test_success_atomically_replaces_previous_release(self) -> None:
-        sentinel = self._seed_previous_release()
+    def test_success_publishes_only_to_absent_destination(self) -> None:
         result = self._package()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(sentinel.exists())
         archive = self.output / f"iroha-mobile-sdk-android-{VERSION}.zip"
         manifest = self.output / f"mobile-sdk-android-{VERSION}.artifacts.json"
         checksums = self.output / f"SHA256SUMS-android-{VERSION}.txt"
@@ -278,7 +313,12 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         self.assertTrue(manifest.is_file())
         self.assertTrue(checksums.is_file())
         self.assertFalse((self.output / ".NoritoBridge.archive.lockfile").exists())
-        self._assert_no_stage()
+        self._assert_no_publish_stage()
+        self.assertEqual(
+            len(list(self.output.parent.glob(".iroha-mobile-sdk-android-*.stage.*"))),
+            1,
+        )
+        self.assertIn("retained Android package stage", result.stderr)
 
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         self.assertEqual(payload["version"], VERSION)
@@ -293,16 +333,41 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             self.assertTrue(artifact.is_file(), relative)
             self.assertEqual(hashlib.sha256(artifact.read_bytes()).hexdigest(), expected)
 
+    def test_late_destination_competitor_is_preserved(self) -> None:
+        (self.output.parent / ".package-test-destination-race").write_bytes(b"")
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            (self.output / "competitor.txt").read_bytes(),
+            b"late competitor\n",
+        )
+        self.assertEqual(len(self._publish_stages()), 1)
+
+    def test_late_stage_swap_is_detected_without_removing_foreign_output(self) -> None:
+        (self.output.parent / ".package-test-stage-race").write_bytes(b"")
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match the authenticated stage inode", result.stderr)
+        self.assertEqual(
+            (self.output / "competitor.txt").read_bytes(),
+            b"late competitor\n",
+        )
+        retained = list(
+            self.output.parent.glob(".mobile-sdk.publish.*.owner-retained")
+        )
+        self.assertEqual(len(retained), 1)
+        self.assertTrue(
+            (retained[0] / f"mobile-sdk-android-{VERSION}.artifacts.json").is_file()
+        )
+
     def test_apple_checker_and_archiver_share_authenticated_source_lock(self) -> None:
         seal_environment = self._write_fake_apple_owner()
-        sentinel = self._seed_previous_release()
         result = self._package(
             mode="apple",
             SOURCE_DATE_EPOCH="1700000000",
             **seal_environment,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(sentinel.exists())
         self.assertTrue(
             (self.output / f"NoritoBridge-{VERSION}.xcframework.zip").is_file()
         )
@@ -310,7 +375,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             (self.output / f"NoritoBridge-{VERSION}.artifacts.json").is_file()
         )
         self.assertFalse((self.output / ".NoritoBridge.archive.lockfile").exists())
-        self._assert_no_stage()
+        self._assert_no_publish_stage()
 
     def test_repository_local_and_implicit_outputs_are_rejected(self) -> None:
         implicit_environment = self._environment()

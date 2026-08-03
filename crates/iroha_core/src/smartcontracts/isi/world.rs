@@ -81,7 +81,6 @@ pub mod isi {
         da::pin_intent::DaPinIntentWithLocation,
         escrow::AssetEscrowStatus,
         events::data::{
-            confidential::{ConfidentialEvent, ConfidentialTransferred},
             governance::{
                 GovernanceEvent, GovernanceParliamentApprovalRecorded,
                 GovernanceParliamentBallotRecorded, GovernanceReferendumClosed,
@@ -14228,8 +14227,6 @@ pub mod isi {
     struct PolicyMetadataContext {
         allow_shield: bool,
         allow_unshield: bool,
-        vk_transfer: Option<iroha_data_model::proof::VerifyingKeyId>,
-        vk_transfer_commitment: Option<[u8; 32]>,
         vk_unshield: Option<iroha_data_model::proof::VerifyingKeyId>,
         vk_unshield_commitment: Option<[u8; 32]>,
         vk_shield: Option<iroha_data_model::proof::VerifyingKeyId>,
@@ -14243,8 +14240,6 @@ pub mod isi {
             PolicyMetadataContext {
                 allow_shield: false,
                 allow_unshield: false,
-                vk_transfer: None,
-                vk_transfer_commitment: None,
                 vk_unshield: None,
                 vk_unshield_commitment: None,
                 vk_shield: None,
@@ -14253,8 +14248,6 @@ pub mod isi {
             |st| PolicyMetadataContext {
                 allow_shield: st.allow_shield,
                 allow_unshield: st.allow_unshield,
-                vk_transfer: st.vk_transfer.as_ref().map(|binding| binding.id.clone()),
-                vk_transfer_commitment: st.vk_transfer.as_ref().map(|binding| binding.commitment),
                 vk_unshield: st.vk_unshield.as_ref().map(|binding| binding.id.clone()),
                 vk_unshield_commitment: st.vk_unshield.as_ref().map(|binding| binding.commitment),
                 vk_shield: st.vk_shield.as_ref().map(|binding| binding.id.clone()),
@@ -14288,18 +14281,6 @@ pub mod isi {
                     norito::json::native::Value::from(format!("{}::{}", id.backend, id.name))
                 })
             };
-        policy_map.insert(
-            "vk_transfer".into(),
-            vk_to_value(context.vk_transfer.clone()),
-        );
-        policy_map.insert(
-            "vk_transfer_commitment".into(),
-            context
-                .vk_transfer_commitment
-                .map_or(norito::json::native::Value::Null, |commitment| {
-                    norito::json::native::Value::from(hex::encode(commitment))
-                }),
-        );
         policy_map.insert(
             "vk_unshield".into(),
             vk_to_value(context.vk_unshield.clone()),
@@ -14621,17 +14602,10 @@ pub mod isi {
                 ));
             }
             // Derive canonical confidential policy for asset definition.
-            let policy_mode = match self.mode() {
-                iroha_data_model::isi::zk::ZkAssetMode::ZkNative => {
-                    ConfidentialPolicyMode::ShieldedOnly
-                }
-                iroha_data_model::isi::zk::ZkAssetMode::Hybrid => {
-                    if !*self.allow_shield() && !*self.allow_unshield() {
-                        ConfidentialPolicyMode::TransparentOnly
-                    } else {
-                        ConfidentialPolicyMode::Convertible
-                    }
-                }
+            let policy_mode = if !*self.allow_shield() && !*self.allow_unshield() {
+                ConfidentialPolicyMode::TransparentOnly
+            } else {
+                ConfidentialPolicyMode::Convertible
             };
             let resolve_binding = |vk: &Option<iroha_data_model::proof::VerifyingKeyId>| -> Result<
                 Option<crate::state::ZkAssetVerifierBinding>,
@@ -14660,36 +14634,8 @@ pub mod isi {
                 }))
             };
 
-            let vk_transfer_binding = resolve_binding(self.vk_transfer())?;
             let vk_unshield_binding = resolve_binding(self.vk_unshield())?;
             let vk_shield_binding = resolve_binding(self.vk_shield())?;
-            if let Some(binding) = vk_transfer_binding.as_ref() {
-                let record = state_transaction
-                    .world
-                    .verifying_keys
-                    .get(&binding.id)
-                    .expect("binding was resolved from the verifying-key registry");
-                if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
-                    &record.circuit_id,
-                ) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "vk_transfer must name the confidential-transfer-v2 circuit".into(),
-                    ));
-                }
-                let vk_box = record.key.as_ref().ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "vk_transfer verifying key bytes are missing".into(),
-                    )
-                })?;
-                crate::zk::confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(
-                    vk_box,
-                )
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid vk_transfer verifying key: {err}").into(),
-                    )
-                })?;
-            }
             if let Some(binding) = vk_unshield_binding.as_ref() {
                 let record = state_transaction
                     .world
@@ -14758,7 +14704,6 @@ pub mod isi {
 
             let mut derived_tree_profile = None;
             for (role, binding) in [
-                ("vk_transfer", vk_transfer_binding.as_ref()),
                 ("vk_unshield", vk_unshield_binding.as_ref()),
                 ("vk_shield", vk_shield_binding.as_ref()),
             ] {
@@ -14811,7 +14756,6 @@ pub mod isi {
             st.tree_profile = derived_tree_profile;
 
             let mut vk_fingerprints: Vec<String> = [
-                self.vk_transfer().clone(),
                 self.vk_unshield().clone(),
                 self.vk_shield().clone(),
             ]
@@ -14843,10 +14787,6 @@ pub mod isi {
             let metadata_context = PolicyMetadataContext {
                 allow_shield: *self.allow_shield(),
                 allow_unshield: *self.allow_unshield(),
-                vk_transfer: self.vk_transfer().clone(),
-                vk_transfer_commitment: vk_transfer_binding
-                    .as_ref()
-                    .map(|binding| binding.commitment),
                 vk_unshield: self.vk_unshield().clone(),
                 vk_unshield_commitment: vk_unshield_binding
                     .as_ref()
@@ -14864,7 +14804,6 @@ pub mod isi {
             st.mode = *self.mode();
             st.allow_shield = *self.allow_shield();
             st.allow_unshield = *self.allow_unshield();
-            st.vk_transfer = vk_transfer_binding;
             st.vk_unshield = vk_unshield_binding;
             st.vk_shield = vk_shield_binding;
             state_transaction
@@ -14967,620 +14906,6 @@ pub mod isi {
             persist_policy_metadata(state_transaction, &asset_def_id, &policy, &context)?;
             Ok(())
         }
-    }
-
-    pub(in crate::smartcontracts::isi) fn emit_verified_native_confidential_transfer_event(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        asset_definition: AssetDefinitionId,
-        nullifiers: Vec<[u8; 32]>,
-        outputs: Vec<[u8; 32]>,
-        root_before: Option<[u8; 32]>,
-        root_after: [u8; 32],
-        proof_hash: [u8; 32],
-        envelope_hash: Option<[u8; 32]>,
-    ) {
-        let call_hash = state_transaction.tx_call_hash.as_ref().map(|hash| {
-            let mut bytes = [0_u8; 32];
-            bytes.copy_from_slice(hash.as_ref());
-            bytes
-        });
-        state_transaction.world.emit_events(Some(
-            iroha_data_model::events::data::DataEvent::Confidential(
-                ConfidentialEvent::Transferred(ConfidentialTransferred {
-                    asset_definition,
-                    nullifiers,
-                    outputs,
-                    root_before,
-                    root_after,
-                    proof_hash,
-                    envelope_hash,
-                    call_hash,
-                }),
-            ),
-        ));
-    }
-
-    /// Apply one confidential transfer admitted by the private Kaigi fee binding checks.
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn apply_verified_private_kaigi_fee_transfer(
-        authorization: crate::tx::VerifiedPrivateKaigiFeeTransfer,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let (asset_def_id, nullifiers, output_commitments, attachment, root_hint) =
-            authorization.into_parts();
-        let mut st = state_transaction
-            .world
-            .zk_assets
-            .get(&asset_def_id)
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "private Kaigi fee asset has no confidential state".into(),
-                )
-            })?;
-        state_transaction.register_nullifiers(nullifiers.len())?;
-        state_transaction.register_commitments(output_commitments.len())?;
-        if attachment.backend != attachment.proof.backend {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "proof backend mismatch".into(),
-            ));
-        }
-        let policy_mode = apply_policy_if_due(state_transaction, &asset_def_id)?.mode();
-        if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "private Kaigi fee transfer not permitted by policy".into(),
-            ));
-        }
-
-        let mut seen_nullifiers = BTreeSet::new();
-        for &nullifier in &nullifiers {
-            if !seen_nullifiers.insert(nullifier) || st.nullifiers.contains(&nullifier) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "duplicate nullifier".into(),
-                ));
-            }
-        }
-        if !st.root_history.iter().any(|root| root == &root_hint) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "stale or unknown Merkle root".into(),
-            ));
-        }
-
-        let (vk_box, vk_record) = resolve_bound_asset_vk(
-            "private Kaigi fee transfer",
-            state_transaction,
-            st.vk_transfer.as_ref(),
-            &attachment,
-        )?;
-        let proof_input_commitments = validate_confidential_transfer_v2_public_inputs(
-            &asset_def_id,
-            &nullifiers,
-            &output_commitments,
-            Some(root_hint),
-            &attachment,
-            state_transaction,
-            &vk_record,
-        )?;
-        let zero = [0_u8; 32];
-        let proof_inputs = proof_input_commitments
-            .iter()
-            .copied()
-            .filter(|commitment| commitment != &zero)
-            .collect::<Vec<_>>();
-        let consumes_active_escrow = state_transaction
-            .world
-            .anonymous_asset_escrows
-            .iter()
-            .filter(|(_, record)| {
-                record.asset_definition == asset_def_id
-                    && matches!(
-                        record.status,
-                        AssetEscrowStatus::Open
-                            | AssetEscrowStatus::Accepted
-                            | AssetEscrowStatus::PaymentSent
-                            | AssetEscrowStatus::Disputed
-                    )
-            })
-            .any(|(_, record)| proof_inputs.contains(&record.escrow_commitment));
-        if consumes_active_escrow {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "private Kaigi fee transfer cannot spend active anonymous escrow custody".into(),
-            ));
-        }
-
-        let proof_len = attachment.proof.bytes.len();
-        enforce_vk_max_proof_bytes("private Kaigi fee transfer", &vk_record, proof_len)?;
-        state_transaction.register_confidential_proof(proof_len)?;
-        let report = crate::zk::verify_backend_with_timing_checked(
-            attachment.backend.as_str(),
-            &attachment.proof,
-            Some(&vk_box),
-            &state_transaction.zk,
-        );
-        if !report.ok {
-            if state_transaction.trust_committed_execution_results {
-                iroha_logger::warn!(
-                    backend = attachment.backend.as_str(),
-                    proof_len,
-                    "replay rejected committed private Kaigi fee transfer after local proof verifier rejection"
-                );
-            }
-            return Err(InstructionExecutionError::InvariantViolation(
-                "invalid private Kaigi fee transfer proof".into(),
-            ));
-        }
-
-        for &nullifier in &nullifiers {
-            st.nullifiers.insert(nullifier);
-        }
-        let root_before = st.root_history.last().copied();
-        let root_before_hex = root_before.map_or_else(|| hex::encode([0_u8; 32]), hex::encode);
-        let authenticated_outputs = output_commitments;
-        #[cfg(feature = "telemetry")]
-        let root_history_before = st.root_history.len();
-        #[cfg(feature = "telemetry")]
-        let appended_outputs = authenticated_outputs.len();
-        let _ = push_confidential_commitments_for_asset(
-            &mut st,
-            &authenticated_outputs,
-            state_transaction,
-        )?;
-        let frontier_update = st
-            .record_frontier_checkpoint(
-                state_transaction.block_height(),
-                state_transaction.zk.tree_frontier_checkpoint_interval,
-                state_transaction.zk.reorg_depth_bound,
-            )
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("failed to checkpoint canonical confidential tree: {err}").into(),
-                )
-            })?;
-        #[cfg(feature = "telemetry")]
-        let frontier_evictions = frontier_update.evicted;
-        #[cfg(not(feature = "telemetry"))]
-        let _ = frontier_update;
-        let root_after = st.current_root().map_err(|err| {
-            InstructionExecutionError::InvariantViolation(
-                format!("failed to read canonical confidential root: {err}").into(),
-            )
-        })?;
-        let root_after_hex = hex::encode(root_after);
-        #[cfg(feature = "telemetry")]
-        let telemetry_stats = {
-            let root_evictions =
-                root_evictions_since(root_history_before, appended_outputs, st.root_history.len());
-            st.telemetry_stats(root_evictions, frontier_evictions)
-        };
-
-        let key: Name = "zk.transfer.last".parse().expect("static metadata key");
-        let proof_hash = crate::zk::hash_proof(&attachment.proof);
-        let call_hash_hex = state_transaction
-            .tx_call_hash
-            .as_ref()
-            .map(|hash| hex::encode(hash.as_ref()))
-            .unwrap_or_default();
-        let envelope_hash_hex = attachment
-            .envelope_hash
-            .as_ref()
-            .map(hex::encode)
-            .unwrap_or_default();
-        let mut summary_map = norito::json::native::Map::new();
-        summary_map.insert(
-            "inputs".into(),
-            norito::json::native::Value::from(nullifiers.len() as u64),
-        );
-        summary_map.insert(
-            "outputs".into(),
-            norito::json::native::Value::from(authenticated_outputs.len() as u64),
-        );
-        summary_map.insert(
-            "proof_hash".into(),
-            norito::json::native::Value::from(hex::encode(proof_hash)),
-        );
-        summary_map.insert(
-            "envelope_hash".into(),
-            norito::json::native::Value::from(envelope_hash_hex),
-        );
-        summary_map.insert(
-            "call_hash".into(),
-            norito::json::native::Value::from(call_hash_hex),
-        );
-        summary_map.insert(
-            "root_before".into(),
-            norito::json::native::Value::from(root_before_hex),
-        );
-        summary_map.insert(
-            "root_after".into(),
-            norito::json::native::Value::from(root_after_hex),
-        );
-        summary_map.insert(
-            "outputs_commitments".into(),
-            norito::json::native::Value::Array(
-                authenticated_outputs
-                    .iter()
-                    .map(|commitment| norito::json::native::Value::from(hex::encode(commitment)))
-                    .collect(),
-            ),
-        );
-        let summary =
-            iroha_primitives::json::Json::from(norito::json::native::Value::Object(summary_map));
-        state_transaction
-            .world
-            .asset_definition_mut(&asset_def_id)
-            .map_err(Error::from)
-            .map(|definition| {
-                definition
-                    .metadata_mut()
-                    .insert(key.clone(), summary.clone())
-            })?;
-        state_transaction.world.emit_events(Some(
-            iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
-                iroha_data_model::prelude::MetadataChanged {
-                    target: asset_def_id.clone(),
-                    key,
-                    value: summary,
-                },
-            ),
-        ));
-        state_transaction
-            .world
-            .zk_assets
-            .remove(asset_def_id.clone());
-        state_transaction
-            .world
-            .zk_assets
-            .insert(asset_def_id.clone(), st);
-        #[cfg(feature = "telemetry")]
-        state_transaction
-            .telemetry
-            .record_confidential_tree_stats(&asset_def_id, telemetry_stats);
-        emit_verified_native_confidential_transfer_event(
-            state_transaction,
-            asset_def_id,
-            nullifiers,
-            authenticated_outputs,
-            root_before,
-            root_after,
-            proof_hash,
-            attachment.envelope_hash,
-        );
-        Ok(())
-    }
-
-    /// Apply one transfer authorized by a sealed native anonymous-escrow capability.
-    #[allow(clippy::too_many_lines)]
-    pub(in crate::smartcontracts::isi) fn apply_verified_native_anonymous_escrow_transfer(
-        authorization: crate::smartcontracts::isi::escrow::VerifiedNativeAnonymousEscrowTransfer,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        use crate::smartcontracts::isi::escrow::VerifiedNativeAnonymousEscrowPurpose;
-
-        let (
-            purpose,
-            authority,
-            asset_def_id,
-            nullifiers,
-            output_commitments,
-            attachment,
-            root_hint,
-        ) = authorization.into_parts();
-
-        match &purpose {
-            VerifiedNativeAnonymousEscrowPurpose::Funding {
-                escrow_id,
-                escrow_commitment,
-            } => {
-                if state_transaction
-                    .world
-                    .asset_escrows
-                    .get(escrow_id)
-                    .is_some()
-                    || state_transaction
-                        .world
-                        .anonymous_asset_escrows
-                        .get(escrow_id)
-                        .is_some()
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "native anonymous escrow funding context already exists".into(),
-                    ));
-                }
-                if output_commitments.as_slice() != [*escrow_commitment] {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "native anonymous escrow funding must create its exact custody commitment"
-                            .into(),
-                    ));
-                }
-                state_transaction.world.account(&authority)?;
-            }
-            VerifiedNativeAnonymousEscrowPurpose::Closing {
-                escrow_id,
-                escrow_commitment,
-                expected_status,
-            } => {
-                let record = state_transaction
-                    .world
-                    .anonymous_asset_escrows
-                    .get(escrow_id)
-                    .ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "native anonymous escrow close context is missing".into(),
-                        )
-                    })?;
-                if record.asset_definition != asset_def_id
-                    || record.escrow_commitment != *escrow_commitment
-                    || record.status != *expected_status
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "native anonymous escrow close context changed before application".into(),
-                    ));
-                }
-                if !matches!(
-                    expected_status,
-                    AssetEscrowStatus::Open
-                        | AssetEscrowStatus::Accepted
-                        | AssetEscrowStatus::PaymentSent
-                        | AssetEscrowStatus::Disputed
-                ) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "native anonymous escrow close requires an active lifecycle state".into(),
-                    ));
-                }
-                if !matches!(expected_status, AssetEscrowStatus::Disputed)
-                    && record.seller != authority
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "native anonymous escrow close authority changed before application".into(),
-                    ));
-                }
-                if nullifiers.len() != 1 {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "native anonymous escrow close requires exactly one nullifier".into(),
-                    ));
-                }
-            }
-        }
-
-        // Consume nullifiers and append outputs in shielded ledger; no public balance change here.
-        // Emit a metadata pulse for observability under a reserved transient key.
-        let mut st = state_transaction
-            .world
-            .zk_assets
-            .get(&asset_def_id)
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "native anonymous escrow asset has no confidential state".into(),
-                )
-            })?;
-        state_transaction.register_nullifiers(nullifiers.len())?;
-        state_transaction.register_commitments(output_commitments.len())?;
-        if attachment.backend != attachment.proof.backend {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "proof backend mismatch".into(),
-            ));
-        }
-        let policy_mode = apply_policy_if_due(state_transaction, &asset_def_id)?.mode();
-        if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "transfer not permitted by policy".into(),
-            ));
-        }
-        // Reject both previously spent nullifiers and repeated inputs within this transfer.
-        let mut seen_nullifiers = std::collections::BTreeSet::new();
-        for &nullifier in &nullifiers {
-            if !seen_nullifiers.insert(nullifier) || st.nullifiers.contains(&nullifier) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "duplicate nullifier".into(),
-                ));
-            }
-        }
-        let root_hint = root_hint.ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "confidential transfer requires root_hint".into(),
-            )
-        })?;
-        if !st.root_history.iter().any(|root| root == &root_hint) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "stale or unknown Merkle root".into(),
-            ));
-        }
-        let (vk_box, vk_record) = resolve_bound_asset_vk(
-            "confidential transfer",
-            state_transaction,
-            st.vk_transfer.as_ref(),
-            &attachment,
-        )?;
-        let proof_input_commitments = validate_confidential_transfer_v2_public_inputs(
-            &asset_def_id,
-            &nullifiers,
-            &output_commitments,
-            Some(root_hint),
-            &attachment,
-            state_transaction,
-            &vk_record,
-        )?;
-        let zero = [0_u8; 32];
-        let proof_inputs = proof_input_commitments
-            .iter()
-            .copied()
-            .filter(|commitment| commitment != &zero)
-            .collect::<Vec<_>>();
-        match &purpose {
-            VerifiedNativeAnonymousEscrowPurpose::Funding { .. } => {
-                super::escrow::ensure_anonymous_escrow_funding_inputs_are_unreserved(
-                    &state_transaction.world,
-                    &asset_def_id,
-                    &proof_inputs,
-                )?;
-            }
-            VerifiedNativeAnonymousEscrowPurpose::Closing {
-                escrow_commitment, ..
-            } => {
-                if proof_inputs.as_slice() != [*escrow_commitment] {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                            "native anonymous escrow close proof must spend only its exact custody commitment"
-                                .into(),
-                        ));
-                }
-            }
-        }
-        let proof_len = attachment.proof.bytes.len();
-        enforce_vk_max_proof_bytes("native anonymous escrow transfer", &vk_record, proof_len)?;
-        state_transaction.register_confidential_proof(proof_len)?;
-        let report = crate::zk::verify_backend_with_timing_checked(
-            attachment.backend.as_str(),
-            &attachment.proof,
-            Some(&vk_box),
-            &state_transaction.zk,
-        );
-        if !report.ok {
-            if state_transaction.trust_committed_execution_results {
-                iroha_logger::warn!(
-                    backend = attachment.backend.as_str(),
-                    proof_len,
-                    "replay rejected committed native anonymous escrow transfer after local proof verifier rejection"
-                );
-            }
-            return Err(InstructionExecutionError::InvariantViolation(
-                "invalid native anonymous escrow transfer proof".into(),
-            ));
-        }
-        for &nullifier in &nullifiers {
-            st.nullifiers.insert(nullifier);
-        }
-        let root_before = st.root_history.last().copied();
-        let root_before_hex = root_before.map_or_else(|| hex::encode([0u8; 32]), hex::encode);
-        // Proof public inputs authenticate this exact order; append it unchanged.
-        let authenticated_outputs = output_commitments;
-        #[cfg(feature = "telemetry")]
-        let root_history_before = st.root_history.len();
-        #[cfg(feature = "telemetry")]
-        let appended_outputs = authenticated_outputs.len();
-        let _ = push_confidential_commitments_for_asset(
-            &mut st,
-            &authenticated_outputs,
-            state_transaction,
-        )?;
-        let frontier_update = st
-            .record_frontier_checkpoint(
-                state_transaction.block_height(),
-                state_transaction.zk.tree_frontier_checkpoint_interval,
-                state_transaction.zk.reorg_depth_bound,
-            )
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("failed to checkpoint canonical confidential tree: {err}").into(),
-                )
-            })?;
-        #[cfg(feature = "telemetry")]
-        let frontier_evictions = frontier_update.evicted;
-        #[cfg(not(feature = "telemetry"))]
-        let _ = frontier_update;
-        let root_after = st.current_root().map_err(|err| {
-            InstructionExecutionError::InvariantViolation(
-                format!("failed to read canonical confidential root: {err}").into(),
-            )
-        })?;
-        let root_after_hex = hex::encode(root_after);
-        #[cfg(feature = "telemetry")]
-        let telemetry_stats = {
-            let root_evictions =
-                root_evictions_since(root_history_before, appended_outputs, st.root_history.len());
-            st.telemetry_stats(root_evictions, frontier_evictions)
-        };
-        let key: Name = "zk.anonymous_escrow_transfer.last".parse().unwrap();
-        // Include envelope/proof hash for auditability
-        let proof_hash = crate::zk::hash_proof(&attachment.proof);
-        let proof_hash_hex = hex::encode(proof_hash);
-        let call_hash_hex = state_transaction
-            .tx_call_hash
-            .as_ref()
-            .map(|h| hex::encode(h.as_ref()))
-            .unwrap_or_default();
-        let env_hash_hex = attachment
-            .envelope_hash
-            .as_ref()
-            .map(hex::encode)
-            .unwrap_or_default();
-        let mut summary_map = norito::json::native::Map::new();
-        summary_map.insert(
-            "inputs".into(),
-            norito::json::native::Value::from(nullifiers.len() as u64),
-        );
-        summary_map.insert(
-            "outputs".into(),
-            norito::json::native::Value::from(authenticated_outputs.len() as u64),
-        );
-        summary_map.insert(
-            "proof_hash".into(),
-            norito::json::native::Value::from(proof_hash_hex),
-        );
-        summary_map.insert(
-            "envelope_hash".into(),
-            norito::json::native::Value::from(env_hash_hex),
-        );
-        summary_map.insert(
-            "call_hash".into(),
-            norito::json::native::Value::from(call_hash_hex),
-        );
-        summary_map.insert(
-            "root_before".into(),
-            norito::json::native::Value::from(root_before_hex),
-        );
-        summary_map.insert(
-            "root_after".into(),
-            norito::json::native::Value::from(root_after_hex),
-        );
-        let outputs_value = authenticated_outputs
-            .iter()
-            .map(|commitment| norito::json::native::Value::from(hex::encode(commitment)))
-            .collect();
-        summary_map.insert(
-            "outputs_commitments".into(),
-            norito::json::native::Value::Array(outputs_value),
-        );
-        let summary =
-            iroha_primitives::json::Json::from(norito::json::native::Value::Object(summary_map));
-        state_transaction
-            .world
-            .asset_definition_mut(&asset_def_id)
-            .map_err(Error::from)
-            .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
-        state_transaction.world.emit_events(Some(
-            iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
-                iroha_data_model::prelude::MetadataChanged {
-                    target: asset_def_id.clone(),
-                    key,
-                    value: summary,
-                },
-            ),
-        ));
-        // Write back updated ZK state
-        state_transaction
-            .world
-            .zk_assets
-            .remove(asset_def_id.clone());
-        state_transaction
-            .world
-            .zk_assets
-            .insert(asset_def_id.clone(), st);
-        #[cfg(feature = "telemetry")]
-        state_transaction
-            .telemetry
-            .record_confidential_tree_stats(&asset_def_id, telemetry_stats);
-        emit_verified_native_confidential_transfer_event(
-            state_transaction,
-            asset_def_id,
-            nullifiers,
-            authenticated_outputs,
-            root_before,
-            root_after,
-            proof_hash,
-            attachment.envelope_hash,
-        );
-        Ok(())
     }
 
     // --- ZK Voting ---
@@ -22929,7 +22254,6 @@ pub mod isi {
                 zk::ZkAssetMode::Hybrid,
                 true,
                 true,
-                None,
                 None,
                 None,
             );

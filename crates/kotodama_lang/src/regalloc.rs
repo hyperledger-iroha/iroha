@@ -2090,21 +2090,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | EscrowMarkPaymentSent { escrow }
         | EscrowRelease { escrow }
         | EscrowCancel { escrow } => f(*escrow),
-        AnonymousEscrowOpenOffer { request }
-        | AnonymousEscrowRelease { request }
-        | AnonymousEscrowCancel { request }
-        | AnonymousEscrowResolveDispute { request } => f(*request),
-        AnonymousEscrowAccept { escrow } | AnonymousEscrowMarkPaymentSent { escrow } => f(*escrow),
         EscrowOpenDispute {
-            escrow,
-            evidence_hashes,
-        } => {
-            f(*escrow);
-            if let Some(evidence_hashes) = evidence_hashes {
-                f(*evidence_hashes);
-            }
-        }
-        AnonymousEscrowOpenDispute {
             escrow,
             evidence_hashes,
         } => {
@@ -2671,13 +2657,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::EscrowCancel { .. }
         | Instr::EscrowOpenDispute { .. }
         | Instr::EscrowResolveDispute { .. }
-        | Instr::AnonymousEscrowOpenOffer { .. }
-        | Instr::AnonymousEscrowAccept { .. }
-        | Instr::AnonymousEscrowMarkPaymentSent { .. }
-        | Instr::AnonymousEscrowRelease { .. }
-        | Instr::AnonymousEscrowCancel { .. }
-        | Instr::AnonymousEscrowOpenDispute { .. }
-        | Instr::AnonymousEscrowResolveDispute { .. }
         | Instr::MintAsset { .. }
         | Instr::BurnAsset { .. }
         | Instr::CreateNft { .. }

@@ -17,16 +17,23 @@ Completed history lives in [`status.md`](./status.md).
 
 Revision-4 implementation facts are recorded in `status.md`. Older Sumeragi
 V1/revision-3 checkpoint lists elsewhere in this file are historical and do
-not add release gates. The outstanding revision-4 work is limited to:
+not add release gates. Guarded formatting, explicit production `iroha_core`
+library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
+regressions, generated-artifact determinism, exact profile-config admission,
+and public consensus wire roundtrips are complete. The outstanding revision-4
+work is limited to:
 
-- Run the final source through guarded formatting, focused and workspace
-  compilation/tests, strict Clippy, Norito roundtrips/codec checks, and the
-  revision-4 formal syntax, invariant, and mutation corridor. Focused consensus
-  validation must include pre-Decision cache rejection, disjoint-roster
-  historical lane signing/recovery, exact-predecessor sidecar reservation under
-  outsider pressure, DA resource-cap boundaries, volatile shard reacquisition
-  followed by one durable canonical-body boundary, restart hydration, fresh
-  generated four-peer genesis startup, and nonblocking cleanup saturation.
+- Repair or isolate the unrelated committed `iroha_core`, `iroha_data_model`,
+  and daemon test-harness compilation failures, and extend the host guard
+  allowlist to the reviewed Python and pinned Java/TLC formal commands. Then
+  run the remaining focused and workspace tests, strict Clippy, codec checks,
+  and the revision-4 formal syntax, invariant, and mutation corridor. Focused
+  consensus validation must include pre-Decision cache rejection,
+  disjoint-roster historical lane signing/recovery, exact-predecessor sidecar
+  reservation under outsider pressure, DA resource-cap boundaries, volatile
+  shard reacquisition followed by one durable canonical-body boundary, restart
+  hydration, fresh generated four-peer genesis startup, and nonblocking cleanup
+  saturation.
 - Run unskipped chaos on representative networks of at least four validators,
   covering faulty/withholding leaders and proxy tails, Set A and Set B loss,
   asymmetric partitions, RS16 reconstruction, restart, and catch-up.
@@ -36,6 +43,7 @@ not add release gates. The outstanding revision-4 work is limited to:
 - Preserve the performance SLO: one-second block cadence, 10,000 TPS target,
   permissioned p95/p99 finality at or below 1.5/2 seconds, and NPoS p95/p99 at
   or below 2/3 seconds.
+
 ## Musubi first-release registry and developer ecosystem reset
 
 The V1 contract, typed registry/Core storage, Cargo-style developer path,
@@ -128,10 +136,12 @@ Remaining release gates, in order, are:
   strictly advanced finalized location revision. Qualify the std-only path
   implementation with descriptor-relative primitives and crash injection.
   Retain as a release blocker the absent deployment-owned storage/finality
-  backend. The latest exact archive query can now reproduce the immutable
-  registration projection without a historical mutable WSV. Same-ID renewal
-  follows the current finalized pin, order, epochs, and exact provider
-  evidence. Exercise the real fee-quote/submission transport and crash
+  backend. Core now exposes its consensus-owned finalized snapshot-history
+  validator for that backend's future daemon reader, without exposing a route
+  or duplicating revision-activation rules. The latest exact archive query can
+  reproduce the immutable registration projection without a historical mutable
+  WSV. Same-ID renewal follows the current finalized pin, order, epochs, and
+  exact provider evidence. Exercise the real fee-quote/submission transport and crash
   boundaries before send, after registry commit, after authoritative-record
   persistence, after coordinator response, and after location commit, including
   concurrent resumes and receipt expiry.
@@ -284,9 +294,12 @@ already reconciled to this transport, ingress, retention, recovery, audit, and
 fresh-read contract; their focused Python and production-readiness contract
 tests pass.
 The validator-only, prepared-bundle Compose redesign passes its focused
-`iroha_swarm` suite (24 tests). Its Kagami positive/mismatch regressions,
-daemon config-digest checks, and generated-Compose consistency still need
-execution once the shared serialized Cargo/rustc lane is free.
+`iroha_swarm` suite (24 tests) and all four Kagami positive/mismatch
+regressions. The zero-chain genesis, three generated Compose manifests, and
+dev/Taira profile bundles are refreshed and deterministic; exact generated
+profile configs also pass runtime admission. Daemon config-digest execution
+remains blocked by the unrelated Bootle-Lantern lib-test compile error.
+
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
 
@@ -540,7 +553,8 @@ The remaining work is evidence-driven and must stay in order:
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
-  fault soak. The source-side correction and bounded stage diagnostics for the
+  fault soak on its 13-peer global committee (twelve lane validators plus one
+  global-only lane observer). The source-side correction and bounded stage diagnostics for the
   former recovery-to-application stall are not a substitute for this evidence.
 - Produce the pinned-hardware `G-SCALE` five-pair one-lane versus four-lane
   result, then run the source-sealed full workspace build, test, strict Clippy,
@@ -13823,10 +13837,7 @@ excluded from the first release.
   regressions consume them;
   SoraFS treasury payout account helpers now use checked deterministic Ed25519
   seed expansion before payout, reconciliation, and dispute regressions consume
-  them;
-  core Private Kaigi opaque account derivation now uses checked Ed25519 seed
-  expansion and propagates seed rejection as an instruction invariant error;
-  client transaction build/sign helpers now use `TransactionBuilder::try_sign`
+  them; client transaction build/sign helpers now use `TransactionBuilder::try_sign`
   and return contextual `eyre` errors from fallible construction/submission
   paths while retaining compatibility wrappers for existing infallible callers;
   test-network genesis consensus metadata overrides and cached-genesis
@@ -14288,9 +14299,8 @@ excluded from the first release.
 			  now use checked random key generation before emitting canonical
 			  instruction encodings; account-controller multisig member fixtures now
 			  use checked default and Secp256k1 random helpers while preserving the
-			  deterministic CTAP2 seed-vector coverage; the Private Kaigi sample
-			  relay-manifest account fixture now uses checked random public-key
-			  generation; account-address Secp256k1/ML-DSA controller fixtures,
+			  deterministic CTAP2 seed-vector coverage; account-address
+			  Secp256k1/ML-DSA controller fixtures,
 			  transparent event-filter account fixtures, smart-contract payload,
 			  contract-address, and manifest-signing fixtures, plus SoraNet VPN
 				  helper-ticket and usage-voucher fixtures now use checked random key
@@ -14309,9 +14319,7 @@ excluded from the first release.
   `MultisigRegister::from_spec` now also returns `Result` and generates its
   temporary registration anchor account through checked default key generation;
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
-  instead of drawing a runtime dummy key;
-  Private Kaigi fee-spend execution now derives its synthetic fee-payer account
-  through checked Ed25519 seed expansion from the action hash; SoraFS hybrid
+  instead of drawing a runtime dummy key; SoraFS hybrid
   KEM derived material now binds the recipient public keys and encapsulated
   public transcript components through length-prefixed HKDF input with checked
   capacity accounting, and SoraNet session-key HKDF extraction now
@@ -19047,11 +19055,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   matched adversarial coverage for blank circuit ids, empty or oversized public
   inputs, empty proof bytes, auxiliary metadata, verifier-key hashes, and active
   circuit indexes. ZK-ACE authorized-transfer admission runs it before
-  public-input decoding or STARK wrapper checks.
-  Private Kaigi fee admission validates its fee-binding auxiliary metadata at
-  the transaction boundary and then canonicalizes its protocol-private
-  confidential transfer proof to empty auxiliary bytes, while
-  anonymous escrow close prechecks validate the confidential-transfer-v2 proof
+  public-input decoding or STARK wrapper checks. Anonymous escrow close
+  prechecks validate the confidential-transfer-v2 proof
   envelope before trusting parsed input commitments. IVM-proved overlay
   admission now reuses the shared envelope validator with node and
   verifier-record proof-byte bounds before semantic replay or verifier dispatch.

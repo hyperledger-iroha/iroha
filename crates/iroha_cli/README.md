@@ -360,7 +360,6 @@ iroha app zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
 ```bash
 iroha app zk register-asset --asset <base58-asset-definition-id> \
   --allow-shield true --allow-unshield true \
-  --vk-transfer halo2/ipa:vk_transfer \
   --vk-unshield halo2/ipa:vk_unshield \
   --vk-shield <canonical-kagemusha-top-up-vk>
 ```
@@ -368,8 +367,8 @@ iroha app zk register-asset --asset <base58-asset-definition-id> \
 Register and inspect the referenced verifying keys with `iroha app zk vk register`,
 `iroha app zk vk update`, and `iroha app zk vk get`. The node rejects a `vk_shield`
 record that is not the canonical Kagemusha top-up circuit and schema. In the first-release
-surface, `vk_unshield` is the Kagemusha redemption verifier and `vk_transfer` is available only
-to the native anonymous-escrow engine; neither key exposes a generic transfer or withdrawal ISI.
+surface, `vk_unshield` is the Kagemusha redemption verifier; no asset-bound private-transfer
+verifier or generic transfer/withdrawal ISI exists.
 
 ### ZK verify batch
 

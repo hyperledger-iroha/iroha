@@ -27,9 +27,128 @@
 // public query response or publisher-supplied bytes as finality evidence, or revive the retired
 // public Torii upload path.
 
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_core::{queue::Queue, state::State};
+use iroha_data_model::ChainId;
+
+/// Live daemon-owned dependencies made available only after trusted startup replay.
+///
+/// The context carries handles rather than snapshots so a long-running publication backend can
+/// observe later finalized blocks and submit its signed registry transactions through the same
+/// queue as Torii. The independently validated genesis hash is included because a fresh node may
+/// still be waiting for Sumeragi to commit its staged genesis when this factory runs.
+pub struct MusubiPublicationPrivateServiceContextV1 {
+    chain_id: ChainId,
+    genesis_block_hash: [u8; 32],
+    state: Arc<State>,
+    queue: Arc<Queue>,
+    sorafs_node: sorafs_node::NodeHandle,
+}
+
+impl core::fmt::Debug for MusubiPublicationPrivateServiceContextV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("MusubiPublicationPrivateServiceContextV1")
+            .field("chain_id", &self.chain_id)
+            .field("genesis_block_hash", &self.genesis_block_hash)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MusubiPublicationPrivateServiceContextV1 {
+    pub(crate) fn new(
+        chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
+        state: Arc<State>,
+        queue: Arc<Queue>,
+        sorafs_node: sorafs_node::NodeHandle,
+    ) -> Self {
+        Self {
+            chain_id,
+            genesis_block_hash,
+            state,
+            queue,
+            sorafs_node,
+        }
+    }
+
+    /// Exact chain identity already validated by daemon startup.
+    #[must_use]
+    pub fn chain_id(&self) -> &ChainId {
+        &self.chain_id
+    }
+
+    /// Independently configured and authenticated genesis block hash.
+    #[must_use]
+    pub const fn genesis_block_hash(&self) -> [u8; 32] {
+        self.genesis_block_hash
+    }
+
+    /// Clone the live finalized-state handle.
+    #[must_use]
+    pub fn state(&self) -> Arc<State> {
+        Arc::clone(&self.state)
+    }
+
+    /// Clone the node's transaction-admission queue handle.
+    #[must_use]
+    pub fn queue(&self) -> Arc<Queue> {
+        Arc::clone(&self.queue)
+    }
+
+    /// Clone the embedded SoraFS node handle.
+    #[must_use]
+    pub fn sorafs_node(&self) -> sorafs_node::NodeHandle {
+        self.sorafs_node.clone()
+    }
+}
+
+/// Redacted failure while assembling an injected private publication deployment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MusubiPublicationPrivateServiceFactoryErrorV1 {
+    /// A deployment-owned signer, journal, listener, or backend is unavailable.
+    Unavailable,
+    /// A supplied dependency failed its deployment qualification or identity binding.
+    Unqualified,
+}
+
+impl core::fmt::Display for MusubiPublicationPrivateServiceFactoryErrorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Unavailable => "private Musubi publication factory is unavailable",
+            Self::Unqualified => "private Musubi publication factory is unqualified",
+        })
+    }
+}
+
+impl std::error::Error for MusubiPublicationPrivateServiceFactoryErrorV1 {}
+
+/// One-shot deployment-owned factory invoked after daemon handles are ready.
+///
+/// The factory may assemble the private HTTPS runner and its protocol core from the exact live
+/// daemon handles. It must keep credentials and signing material inside deployment-owned adapters;
+/// neither the context nor the returned error may contain secrets.
+pub trait MusubiPublicationPrivateServiceFactoryV1: Send + 'static {
+    /// Build one qualified private deployment from the exact daemon context.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted failure before any publication child is added to the supervisor.
+    fn build(
+        self: Box<Self>,
+        context: MusubiPublicationPrivateServiceContextV1,
+    ) -> Result<
+        MusubiPublicationPrivateDeploymentV1,
+        MusubiPublicationPrivateServiceFactoryErrorV1,
+    >;
+}
 
 /// Redacted terminal failure from a deployment-owned private HTTPS ingress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +251,37 @@ pub fn start_injected_musubi_publication_private_service_v1(
     }
 }
 
+/// Build and start an optional late-bound deployment.
+///
+/// `None` remains the stock fail-closed state. A factory failure is returned before a child can be
+/// monitored or any private route can become available.
+///
+/// # Errors
+///
+/// Returns a redacted deployment-factory failure.
+pub fn build_and_start_injected_musubi_publication_private_service_v1(
+    factory: Option<Box<dyn MusubiPublicationPrivateServiceFactoryV1>>,
+    context: MusubiPublicationPrivateServiceContextV1,
+    shutdown: ShutdownSignal,
+) -> Result<
+    (
+        MusubiPublicationPrivateServiceAvailabilityV1,
+        Option<Child>,
+    ),
+    MusubiPublicationPrivateServiceFactoryErrorV1,
+> {
+    let Some(factory) = factory else {
+        return Ok(start_injected_musubi_publication_private_service_v1(
+            None, shutdown,
+        ));
+    };
+    let deployment = factory.build(context)?;
+    Ok(start_injected_musubi_publication_private_service_v1(
+        Some(deployment),
+        shutdown,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -140,7 +290,14 @@ mod tests {
     };
 
     use super::*;
+    use iroha_config::parameters::actual::Queue as QueueConfig;
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_futures::supervisor::Supervisor;
+    use sorafs_node::config::StorageConfig;
 
     struct EarlyExitRunner;
 
@@ -170,6 +327,72 @@ mod tests {
         }
     }
 
+    fn factory_context() -> MusubiPublicationPrivateServiceContextV1 {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, query));
+        let (events, _) = tokio::sync::broadcast::channel(1);
+        let queue = Arc::new(Queue::from_config(QueueConfig::default(), events));
+        let sorafs_node = sorafs_node::NodeHandle::new(StorageConfig::default());
+        MusubiPublicationPrivateServiceContextV1::new(
+            ChainId::from("musubi-publication-factory-test"),
+            [0xA5; 32],
+            state,
+            queue,
+            sorafs_node,
+        )
+    }
+
+    struct RecordingFactory {
+        called: Arc<AtomicBool>,
+        expected_state: Arc<State>,
+        expected_queue: Arc<Queue>,
+        expected_capacity: Arc<sorafs_node::capacity::CapacityManager>,
+        runner_started: Arc<AtomicBool>,
+    }
+
+    impl MusubiPublicationPrivateServiceFactoryV1 for RecordingFactory {
+        fn build(
+            self: Box<Self>,
+            context: MusubiPublicationPrivateServiceContextV1,
+        ) -> Result<
+            MusubiPublicationPrivateDeploymentV1,
+            MusubiPublicationPrivateServiceFactoryErrorV1,
+        > {
+            assert!(!self.called.swap(true, Ordering::SeqCst));
+            assert_eq!(
+                context.chain_id(),
+                &ChainId::from("musubi-publication-factory-test")
+            );
+            assert_eq!(context.genesis_block_hash(), [0xA5; 32]);
+            assert!(Arc::ptr_eq(&context.state(), &self.expected_state));
+            assert!(Arc::ptr_eq(&context.queue(), &self.expected_queue));
+            assert!(Arc::ptr_eq(
+                &context.sorafs_node().capacity_manager(),
+                &self.expected_capacity,
+            ));
+            Ok(MusubiPublicationPrivateDeploymentV1::new(Box::new(
+                ShutdownAwareRunner {
+                    started: Arc::clone(&self.runner_started),
+                },
+            )))
+        }
+    }
+
+    struct FailingFactory;
+
+    impl MusubiPublicationPrivateServiceFactoryV1 for FailingFactory {
+        fn build(
+            self: Box<Self>,
+            _context: MusubiPublicationPrivateServiceContextV1,
+        ) -> Result<
+            MusubiPublicationPrivateDeploymentV1,
+            MusubiPublicationPrivateServiceFactoryErrorV1,
+        > {
+            Err(MusubiPublicationPrivateServiceFactoryErrorV1::Unqualified)
+        }
+    }
+
     #[test]
     fn stock_launch_is_fail_closed_and_starts_no_child() {
         let (availability, child) =
@@ -179,6 +402,69 @@ mod tests {
             MusubiPublicationPrivateServiceAvailabilityV1::Unavailable
         );
         assert!(child.is_none());
+    }
+
+    #[test]
+    fn absent_factory_is_fail_closed_and_starts_no_child() {
+        let (availability, child) =
+            build_and_start_injected_musubi_publication_private_service_v1(
+                None,
+                factory_context(),
+                ShutdownSignal::new(),
+            )
+            .expect("absent factory is not an error");
+        assert_eq!(
+            availability,
+            MusubiPublicationPrivateServiceAvailabilityV1::Unavailable
+        );
+        assert!(child.is_none());
+    }
+
+    #[test]
+    fn factory_failure_precedes_child_start() {
+        let error = build_and_start_injected_musubi_publication_private_service_v1(
+            Some(Box::new(FailingFactory)),
+            factory_context(),
+            ShutdownSignal::new(),
+        )
+        .expect_err("unqualified factory must fail closed");
+        assert_eq!(
+            error,
+            MusubiPublicationPrivateServiceFactoryErrorV1::Unqualified
+        );
+    }
+
+    #[tokio::test]
+    async fn factory_receives_exact_handles_once_and_joins_supervisor() {
+        let context = factory_context();
+        let called = Arc::new(AtomicBool::new(false));
+        let runner_started = Arc::new(AtomicBool::new(false));
+        let factory = RecordingFactory {
+            called: Arc::clone(&called),
+            expected_state: context.state(),
+            expected_queue: context.queue(),
+            expected_capacity: context.sorafs_node().capacity_manager(),
+            runner_started: Arc::clone(&runner_started),
+        };
+        let mut supervisor = Supervisor::new();
+        let shutdown = supervisor.shutdown_signal();
+        let (availability, child) =
+            build_and_start_injected_musubi_publication_private_service_v1(
+                Some(Box::new(factory)),
+                context,
+                shutdown.clone(),
+            )
+            .expect("qualified factory builds");
+        assert_eq!(
+            availability,
+            MusubiPublicationPrivateServiceAvailabilityV1::Supervised
+        );
+        assert!(called.load(Ordering::SeqCst));
+        supervisor.monitor(child.expect("factory-built deployment child"));
+
+        shutdown.send();
+        assert!(supervisor.start().await.is_ok());
+        assert!(runner_started.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

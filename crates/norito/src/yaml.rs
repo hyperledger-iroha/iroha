@@ -109,27 +109,27 @@ fn write_array<W: Write>(writer: &mut W, seq: &[Value], indent: usize) -> Result
 
     for value in seq {
         write_indent(writer, indent)?;
-        writer.write_all(b"- ")?;
         match value {
             Value::Object(map) if map.is_empty() => {
-                writer.write_all(b"{}\n")?;
+                writer.write_all(b"- {}\n")?;
             }
             Value::Object(map) => {
-                writer.write_all(b"\n")?;
+                writer.write_all(b"-\n")?;
                 write_object(writer, map, indent + INDENT)?;
             }
             Value::Array(nested) if nested.is_empty() => {
-                writer.write_all(b"[]\n")?;
+                writer.write_all(b"- []\n")?;
             }
             Value::Array(nested) => {
-                writer.write_all(b"\n")?;
+                writer.write_all(b"-\n")?;
                 write_array(writer, nested, indent + INDENT)?;
             }
             Value::String(s) if s.contains('\n') => {
-                writer.write_all(b"|-\n")?;
+                writer.write_all(b"- |-\n")?;
                 write_block_string(writer, s, indent + INDENT)?;
             }
             _ => {
+                writer.write_all(b"- ")?;
                 write_scalar(writer, value)?;
                 writer.write_all(b"\n")?;
             }
@@ -278,5 +278,29 @@ fn number_to_string(number: &json::Number) -> String {
             }
             s
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_sequence_items_have_no_trailing_whitespace() {
+        let value = crate::json!({
+            "items": [
+                {"key": "value"},
+                ["nested"],
+                "scalar",
+            ],
+        });
+
+        let rendered = to_string_from_value(&value).expect("serialize nested YAML sequence");
+
+        assert_eq!(
+            rendered,
+            "items:\n  -\n    key: value\n  -\n    - nested\n  - scalar\n"
+        );
+        assert!(rendered.lines().all(|line| line.trim_end() == line));
     }
 }

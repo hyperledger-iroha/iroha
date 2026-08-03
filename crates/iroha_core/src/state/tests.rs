@@ -73,7 +73,7 @@ use iroha_data_model::{
     query::{
         dsl::CompoundPredicate,
         error::FindError,
-        escrow::prelude::{FindAnonymousAssetEscrowsByStatus, FindAssetEscrowsByStatus},
+        escrow::prelude::FindAssetEscrowsByStatus,
         proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
     },
     sorafs::pin_registry::{ManifestDigest, ReplicationOrderId},
@@ -968,6 +968,68 @@ fn merge_write_set_encoder_mentions_every_persisted_world_block_field() {
         assert!(
             encoder.contains(field),
             "persisted WorldBlock field `{field}` is absent from the merge write-set encoder"
+        );
+    }
+}
+
+#[test]
+fn world_and_world_block_keep_snapshot_skip_annotations_in_sync() {
+    fn snapshot_skip_annotations(struct_body: &str) -> BTreeMap<&str, bool> {
+        let mut annotations = BTreeMap::new();
+        let mut skip = false;
+
+        for line in struct_body.lines() {
+            let trimmed = line.trim();
+            if trimmed == "#[norito(skip)]" {
+                skip = true;
+                continue;
+            }
+
+            let declaration = line
+                .strip_prefix("    pub(crate) ")
+                .or_else(|| line.strip_prefix("    pub "))
+                .or_else(|| line.strip_prefix("    "));
+            let Some((field, _)) = declaration.and_then(|line| line.split_once(':')) else {
+                continue;
+            };
+            if field
+                .chars()
+                .all(|character| character == '_' || character.is_ascii_alphanumeric())
+            {
+                annotations.insert(field, skip);
+                skip = false;
+            }
+        }
+
+        annotations
+    }
+
+    let source = include_str!("../state.rs");
+    let world = source
+        .split_once("pub struct World {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\n/// Struct for block's aggregated changes"))
+        .map(|(body, _)| body)
+        .expect("World declaration must remain discoverable");
+    let world_block = source
+        .split_once("pub struct WorldBlock<'world> {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nimpl<'world> WorldBlock"))
+        .map(|(body, _)| body)
+        .expect("WorldBlock declaration must remain discoverable");
+    let world_annotations = snapshot_skip_annotations(world);
+    let block_annotations = snapshot_skip_annotations(world_block);
+
+    for (field, world_skips) in &world_annotations {
+        if *field == "external_event_buf" {
+            // The staged canonical serializer deliberately substitutes the
+            // already-committed external event buffer for this block-local buffer.
+            continue;
+        }
+        let Some(block_skips) = block_annotations.get(field) else {
+            continue;
+        };
+        assert_eq!(
+            block_skips, world_skips,
+            "WorldBlock field `{field}` must match World's snapshot skip annotation"
         );
     }
 }
@@ -2264,6 +2326,18 @@ fn snapshot_state_with_numeric_asset() -> (State, AssetDefinitionId, AssetId) {
 #[test]
 fn state_snapshot_rejects_serialized_asset_definition_domain_index() {
     let (state, _, _) = snapshot_state_with_numeric_asset();
+    let block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let block_snapshot =
+        norito::json::to_value(&block.world).expect("serialize staged world snapshot");
+    let norito::json::Value::Object(block_world_object) = block_snapshot else {
+        panic!("staged world snapshot must be an object");
+    };
+    assert!(
+        !block_world_object.contains_key("asset_definition_domains"),
+        "staged snapshots must omit the same derived ownership index as committed snapshots"
+    );
+    drop(block);
+
     let mut snapshot = norito::json::to_value(&state).expect("serialize state");
     let norito::json::Value::Object(state_object) = &mut snapshot else {
         panic!("state snapshot must be an object");
@@ -2701,6 +2775,7 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
         bootstrap_digest,
         asset_definition_id.clone(),
+        iroha_data_model::asset::AssetBalanceScope::Global,
         reserve_account.clone(),
     )
     .expect("canonical Orchard pool state");
@@ -4311,7 +4386,7 @@ fn state_snapshot_rejects_malformed_contract_alias_lease_window() {
 }
 
 #[test]
-fn escrow_records_roundtrip_through_state_json() {
+fn asset_escrow_record_roundtrips_through_state_json() {
     let mut world = World::default();
     let seller = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let buyer = AccountId::new(crate::state::checked_keypair().public_key().clone());
@@ -4343,38 +4418,7 @@ fn escrow_records_roundtrip_through_state_json() {
         resolution: None,
     };
 
-    let anonymous_id = iroha_data_model::escrow::EscrowId::new(Hash::new("anonymous-escrow"));
-    let proof_record = iroha_data_model::escrow::AnonymousAssetEscrowProofRecord {
-        nullifiers: vec![[0x11; 32]],
-        output_commitments: vec![[0x22; 32]],
-        proof_hash: [0x33; 32],
-        envelope_hash: Some([0x44; 32]),
-        root_hint: Some([0x55; 32]),
-        recorded_at_ms: 4,
-    };
-    let anonymous_record = iroha_data_model::escrow::AnonymousAssetEscrowRecord {
-        id: anonymous_id,
-        seller: seller.clone(),
-        buyer: Some(buyer),
-        asset_definition,
-        escrow_commitment: [0x22; 32],
-        status: iroha_data_model::escrow::AssetEscrowStatus::Accepted,
-        evidence_hashes: vec![Hash::new("anonymous-evidence")],
-        opening: proof_record,
-        release: None,
-        cancellation: None,
-        created_at_ms: 4,
-        accepted_at_ms: Some(5),
-        payment_sent_at_ms: None,
-        disputed_at_ms: None,
-        closed_at_ms: None,
-        resolution: None,
-    };
-
     world.asset_escrows.insert(public_id, public_record.clone());
-    world
-        .anonymous_asset_escrows
-        .insert(anonymous_id, anonymous_record.clone());
 
     let state = State::new(
         world,
@@ -4397,13 +4441,6 @@ fn escrow_records_roundtrip_through_state_json() {
         view.asset_escrows().get(&public_id).expect("public escrow"),
         &public_record
     );
-    assert_eq!(
-        view.anonymous_asset_escrows()
-            .get(&anonymous_id)
-            .expect("anonymous escrow"),
-        &anonymous_record
-    );
-
     let state_view = restored.view();
     let restored_public_ids = FindAssetEscrowsByStatus {
         status: iroha_data_model::escrow::AssetEscrowStatus::PaymentSent,
@@ -4413,15 +4450,6 @@ fn escrow_records_roundtrip_through_state_json() {
     .map(|record| record.id)
     .collect::<Vec<_>>();
     assert_eq!(restored_public_ids, vec![public_id]);
-
-    let restored_anonymous_ids = FindAnonymousAssetEscrowsByStatus {
-        status: iroha_data_model::escrow::AssetEscrowStatus::Accepted,
-    }
-    .execute(CompoundPredicate::PASS, &state_view)
-    .expect("query restored anonymous escrow status index")
-    .map(|record| record.id)
-    .collect::<Vec<_>>();
-    assert_eq!(restored_anonymous_ids, vec![anonymous_id]);
 }
 
 #[test]
@@ -6825,6 +6853,53 @@ fn query_view_matches_basic_read_only_snapshot_fields() {
     assert_eq!(view.height(), 1);
     assert_eq!(view.latest_block_hash(), Some(block_hash));
     assert_eq!(view.world().domains().iter().count(), 0);
+}
+
+#[test]
+fn query_view_retries_world_and_block_hashes_as_one_generation() {
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    ));
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
+
+    let generation = state.begin_state_view_write();
+    let reader_state = Arc::clone(&state);
+    let reader = std::thread::spawn(move || {
+        let view = reader_state.query_view();
+        (
+            view.height(),
+            view.latest_block_hash(),
+            view.world().musubi_replication_shortfall_releases(),
+        )
+    });
+
+    let contention_deadline = Instant::now() + Duration::from_secs(5);
+    while state.view_lock_contention_log.lock().last_warn_at.is_none() {
+        assert!(
+            Instant::now() < contention_deadline,
+            "query view did not observe the active write generation"
+        );
+        std::thread::yield_now();
+    }
+
+    {
+        let mut shortfall = state.world.musubi_replication_shortfall_releases.block();
+        *shortfall.get_mut() = 7;
+        shortfall.commit();
+    }
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(block_hash);
+        block_hashes.commit_for_tests();
+    }
+    drop(generation);
+
+    let (height, latest_hash, shortfall) = reader.join().expect("query reader must not panic");
+    assert_eq!(height, 1);
+    assert_eq!(latest_hash, Some(block_hash));
+    assert_eq!(shortfall, 7);
 }
 
 #[test]

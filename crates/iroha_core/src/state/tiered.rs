@@ -3856,7 +3856,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.commitments.measured_bytes_extra());
             total = total.saturating_add(self.root_history.measured_bytes_extra());
             total = total.saturating_add(self.nullifiers.measured_bytes_extra());
-            total = total.saturating_add(self.vk_transfer.measured_bytes_extra());
             total = total.saturating_add(self.vk_unshield.measured_bytes_extra());
             total = total.saturating_add(self.vk_shield.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());

@@ -67,7 +67,6 @@ fn register_zk_asset_writes_policy_metadata() {
         true,
         None,
         None,
-        None,
     );
     let ib: InstructionBox = reg.into();
     stx.world
@@ -151,7 +150,6 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         false,
         false,
-        None,
         None,
         None,
     );
@@ -249,7 +247,6 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
         true,
         false,
         None,
-        None,
         Some(wrong_vk_id),
     );
     let error = stx
@@ -309,7 +306,6 @@ fn schedule_confidential_policy_transition_records_pending() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -418,7 +414,6 @@ fn confidential_policy_transition_applies_at_effective_height() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -539,7 +534,6 @@ fn cancel_confidential_policy_transition_clears_pending() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -732,7 +726,6 @@ fn zk_roots_are_bounded_in_world_state() {
             true,
             None,
             None,
-            None,
         )
         .into(),
     ] {
@@ -888,7 +881,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
                 true,
                 true,
-                None,
                 None,
                 None,
             )

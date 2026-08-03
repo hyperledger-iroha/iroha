@@ -145,7 +145,6 @@ impl TransactionRoutingView for AcceptedTransaction<'_> {
                 Some(reveal.signed_transaction().instructions())
             }
             iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
-            | iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(_)
             | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => None,
         }
     }
@@ -163,10 +162,6 @@ impl TransactionRoutingView for AcceptedTransaction<'_> {
                     reveal.signed_transaction().instructions(),
                     predicate,
                 )
-            }
-            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
-                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
-                    .is_ok_and(|instruction| predicate(&*instruction))
             }
             iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
             | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
@@ -13709,7 +13704,6 @@ mod tests {
             iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
             true,
             true,
-            None,
             None,
             None,
         ));

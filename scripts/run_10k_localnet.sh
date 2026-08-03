@@ -9,7 +9,7 @@ Spin up a 10k TPS perf-profile localnet and drive load via tx_load.py.
 
 Options:
   --mode <MODE>           permissioned, npos, or both (default: both)
-  --peers <N>             number of peers (default: 7)
+  --peers <N>             exact revision-4 committee: 4, 7, ..., 31 (default: 7)
   --count <N>             total ping transactions to submit (default: 100000)
   --parallel <N>          parallel ping workers (default: 256)
   --per-peer              treat --count/--parallel as per-peer values

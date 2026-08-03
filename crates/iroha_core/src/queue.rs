@@ -159,9 +159,7 @@ fn exact_signed_transaction_hash(
     match entrypoint {
         TransactionEntrypoint::External(signed) => Some(signed.hash()),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-        TransactionEntrypoint::SealedCommitment(_)
-        | TransactionEntrypoint::PrivateKaigi(_)
-        | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
 
@@ -1936,12 +1934,6 @@ pub(crate) enum ProposalGasCostError {
     /// An executable with runtime-dependent work omitted its signature-bound gas limit.
     #[error("runtime-dependent executable is missing its signed gas limit")]
     MissingSignedGasLimit,
-    /// A private Kaigi entrypoint could not be decoded into its metered instruction.
-    #[error("private Kaigi proposal gas derivation failed: {reason}")]
-    InvalidPrivateKaigi {
-        /// Exact deterministic decode failure.
-        reason: String,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6342,7 +6334,7 @@ impl Queue {
     /// # Errors
     ///
     /// Returns an error when an accepted runtime-dependent executable has no signed gas limit or
-    /// when a private entrypoint cannot be decoded into its metered instruction.
+    /// when gas accounting cannot derive a deterministic upper bound.
     pub(crate) fn compute_proposal_gas_cost(
         tx: &AcceptedTransaction<'_>,
     ) -> Result<u64, ProposalGasCostError> {
@@ -6355,13 +6347,6 @@ impl Queue {
             }
             iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
                 Self::signed_executable_proposal_gas_cost(reveal.signed_transaction())
-            }
-            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
-                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
-                    .map(|instruction| gas::meter_instruction(&instruction))
-                    .map_err(|error| ProposalGasCostError::InvalidPrivateKaigi {
-                        reason: error.to_string(),
-                    })
             }
             iroha_data_model::transaction::TransactionEntrypoint::Time(_) => Ok(0),
         }
@@ -13515,11 +13500,6 @@ impl Queue {
                     }
                     Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
                 }
-            }
-            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
-                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
-                    .map(|instruction| gas::meter_instruction(&instruction))
-                    .unwrap_or(0)
             }
             iroha_data_model::transaction::TransactionEntrypoint::Time(_) => 0,
         }

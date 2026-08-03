@@ -987,7 +987,6 @@ struct SwiftTransactionEncoder {
             throw TransactionInputError.emptyAssetDefinitionId
         }
         let privateKey = try privateKeyBytes(from: signingKey)
-        let transferVk = request.transferVerifyingKey?.encodedValue
         let unshieldVk = request.unshieldVerifyingKey?.encodedValue
         let shieldVk = request.shieldVerifyingKey?.encodedValue
         let native = try bridgeOrThrow {
@@ -1000,7 +999,6 @@ struct SwiftTransactionEncoder {
                 modeCode: request.mode.rawValue,
                 allowShield: request.allowShield,
                 allowUnshield: request.allowUnshield,
-                transferVerifyingKey: transferVk,
                 unshieldVerifyingKey: unshieldVk,
                 shieldVerifyingKey: shieldVk,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),

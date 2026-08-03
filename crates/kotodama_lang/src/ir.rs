@@ -541,35 +541,6 @@ pub enum Instr {
         seller_amount: Temp,
         evidence_hashes: Option<Temp>,
     },
-    /// Open and fund a native anonymous asset escrow from an opaque request payload.
-    AnonymousEscrowOpenOffer {
-        request: Temp,
-    },
-    /// Accept a native anonymous asset escrow.
-    AnonymousEscrowAccept {
-        escrow: Temp,
-    },
-    /// Mark anonymous escrow off-chain payment as sent.
-    AnonymousEscrowMarkPaymentSent {
-        escrow: Temp,
-    },
-    /// Release a paid anonymous escrow from an opaque request payload.
-    AnonymousEscrowRelease {
-        request: Temp,
-    },
-    /// Cancel an anonymous escrow from an opaque request payload.
-    AnonymousEscrowCancel {
-        request: Temp,
-    },
-    /// Open an anonymous escrow dispute.
-    AnonymousEscrowOpenDispute {
-        escrow: Temp,
-        evidence_hashes: Option<Temp>,
-    },
-    /// Resolve a disputed anonymous escrow from an opaque request payload.
-    AnonymousEscrowResolveDispute {
-        request: Temp,
-    },
     /// Begin a FASTPQ transfer batch scope.
     TransferBatchBegin,
     /// End the current FASTPQ transfer batch scope.
@@ -6672,59 +6643,6 @@ fn lower_surface_builtin_call(
                 seller_amount,
                 evidence_hashes,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowOpenOffer => {
-            let request = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowOpenOffer { request });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowAccept => {
-            let escrow = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowAccept { escrow });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowMarkPaymentSent => {
-            let escrow = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowMarkPaymentSent { escrow });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowRelease => {
-            let request = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowRelease { request });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowCancel => {
-            let request = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowCancel { request });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowOpenDispute => {
-            let escrow = lower_expr(ctx, &args[0], vars);
-            let evidence_hashes = args.get(1).map(|arg| lower_expr(ctx, arg, vars));
-            ctx.current_instr(Instr::AnonymousEscrowOpenDispute {
-                escrow,
-                evidence_hashes,
-            });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowResolveDispute => {
-            let request = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowResolveDispute { request });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t

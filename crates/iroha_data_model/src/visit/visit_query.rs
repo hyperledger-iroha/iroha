@@ -359,8 +359,7 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
         | query_mod::QueryItemKind::Rwa
         | query_mod::QueryItemKind::ProofRecord
         | query_mod::QueryItemKind::DefiOracleAttestation
-        | query_mod::QueryItemKind::AssetEscrowRecord
-        | query_mod::QueryItemKind::AnonymousAssetEscrowRecord => {}
+        | query_mod::QueryItemKind::AssetEscrowRecord => {}
     }
 }
 
@@ -709,7 +708,6 @@ mod tests {
             SingularQueryBox::FindAssetDefinitionById(_) => {}
             SingularQueryBox::FindNftById(_) => {}
             SingularQueryBox::FindAssetEscrowById(_) => {}
-            SingularQueryBox::FindAnonymousAssetEscrowById(_) => {}
             SingularQueryBox::FindTriggerById(_) => {}
             SingularQueryBox::FindOracleFeedById(_) => {}
             SingularQueryBox::FindOracleDisputeById(_) => {}

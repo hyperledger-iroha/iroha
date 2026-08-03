@@ -17,7 +17,7 @@ use iroha_data_model::peer::{Peer, PeerId};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{
     Broadcast, PeerTransportCapabilities, UpdatePeerCapabilities, UpdatePeers, UpdateTopology,
-    UpdateTrustedPeers, UpdateValidatorDialRoster,
+    UpdateTrustedPeers, UpdateValidatorTopology,
 };
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
 use norito::{NoritoDeserialize, NoritoSerialize, codec::Encode, core as ncore};
@@ -460,23 +460,18 @@ impl PeersGossiper {
             ),
             network,
         };
+        // Seed consensus membership and pairwise dial ownership as one actor
+        // transition so startup cannot expose validators as eager dynamic peers.
         gossiper
             .network
-            .update_validator_dial_roster(UpdateValidatorDialRoster(
-                gossiper
+            .update_validator_topology(UpdateValidatorTopology {
+                topology: initial_topology.iter().cloned().collect(),
+                validator_dial_roster: gossiper
                     .configured_validator_peers
                     .iter()
                     .cloned()
                     .collect(),
-            ));
-        // Seed the network with the initial topology so peers start dialing immediately.
-        if !initial_topology.is_empty() {
-            let topology_update: HashSet<_> =
-                initial_topology.iter().cloned().collect::<HashSet<_>>();
-            gossiper
-                .network
-                .update_topology(UpdateTopology(topology_update));
-        }
+            });
         gossiper
             .trust
             .seed(gossiper.trusted_peers.clone(), std::time::Instant::now());
@@ -636,9 +631,10 @@ impl PeersGossiper {
         // Keep the network dial set in sync with the current topology so removed peers
         // are disconnected promptly and new peers are contacted.
         self.network
-            .update_validator_dial_roster(UpdateValidatorDialRoster(validator_dial_roster));
-        self.network
-            .update_topology(UpdateTopology(new_topology.iter().cloned().collect()));
+            .update_validator_topology(UpdateValidatorTopology {
+                topology: new_topology.iter().cloned().collect(),
+                validator_dial_roster,
+            });
         self.network_update_peers_addresses();
         if capabilities_changed {
             self.network_update_peer_capabilities();

@@ -943,23 +943,30 @@ mod tests {
         let specs = gather_instruction_specs(&registry, None);
         assert_eq!(
             specs.len(),
-            110,
+            103,
             "first-release generated instruction count"
         );
 
         let retired = [
-            ["Sh", "ield"].concat(),
-            ["Zk", "Transfer"].concat(),
-            ["Un", "shield"].concat(),
+            ("zk", ["Sh", "ield"].concat()),
+            ("zk", ["Zk", "Transfer"].concat()),
+            ("zk", ["Un", "shield"].concat()),
+            ("escrow", ["OpenAnonymous", "AssetEscrow"].concat()),
+            ("escrow", ["AcceptAnonymous", "AssetEscrow"].concat()),
+            ("escrow", ["MarkAnonymous", "EscrowPaymentSent"].concat()),
+            ("escrow", ["ReleaseAnonymous", "AssetEscrow"].concat()),
+            ("escrow", ["CancelAnonymous", "AssetEscrow"].concat()),
+            ("escrow", ["OpenAnonymous", "EscrowDispute"].concat()),
+            ("escrow", ["ResolveAnonymous", "EscrowDispute"].concat()),
         ];
-        for type_name in retired {
+        for (module, type_name) in retired {
             assert!(
                 specs
                     .iter()
                     .all(|spec| { spec.type_name.rsplit("::").next() != Some(type_name.as_str()) }),
                 "retired generic privacy type must not be generated: {type_name}"
             );
-            let source_entry = format!("$macro!(iroha_data_model::isi::zk::{type_name})");
+            let source_entry = format!("$macro!(iroha_data_model::isi::{module}::{type_name})");
             assert!(
                 !include_str!("main.rs").contains(&source_entry),
                 "retired generic privacy type must not remain in exporter inventory: {type_name}"
@@ -969,8 +976,6 @@ mod tests {
         for specialized_type in [
             std::any::type_name::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(),
             std::any::type_name::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(),
-            std::any::type_name::<iroha_data_model::isi::escrow::OpenAnonymousAssetEscrow>(),
-            std::any::type_name::<iroha_data_model::isi::escrow::ReleaseAnonymousAssetEscrow>(),
         ] {
             assert!(
                 registry.contains(specialized_type),

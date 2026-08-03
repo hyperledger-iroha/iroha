@@ -1700,6 +1700,67 @@ impl RuntimeCandidateSemanticStatement {
         }
     }
 
+    /// Compare two carriers for the same physical body-fetch lineage.
+    ///
+    /// The candidate statement deliberately includes quorum authority, while
+    /// the physical fetch is keyed only by its immutable consensus coordinates.
+    /// This relation admits exactly the monotonic authority lattice used by
+    /// that physical task: ordinary, Prepare, then Commit. A weaker carrier
+    /// arriving after a stronger one is stale rather than an authority
+    /// downgrade; callers retain the stronger task state in that case.
+    fn fetch_authority_relation_to(self, incoming: Self) -> Option<RuntimeFetchAuthorityRelation> {
+        if !self.validate_exact()
+            || !incoming.validate_exact()
+            || self.context_id != incoming.context_id
+            || self.round != incoming.round
+            || self.proposal_round != incoming.proposal_round
+            || self.subject != incoming.subject
+        {
+            return None;
+        }
+
+        match (
+            self.phase,
+            self.execution_commitment,
+            incoming.phase,
+            incoming.execution_commitment,
+        ) {
+            (None, None, None, None) => Some(RuntimeFetchAuthorityRelation::Same),
+            (None, None, Some(wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit), Some(_)) => {
+                Some(RuntimeFetchAuthorityRelation::Upgrade)
+            }
+            (
+                Some(wire::GlobalPhase::Prepare),
+                Some(incumbent),
+                Some(wire::GlobalPhase::Prepare),
+                Some(successor),
+            ) if incumbent == successor => Some(RuntimeFetchAuthorityRelation::Same),
+            (
+                Some(wire::GlobalPhase::Prepare),
+                Some(incumbent),
+                Some(wire::GlobalPhase::Commit),
+                Some(successor),
+            ) if incumbent == successor => Some(RuntimeFetchAuthorityRelation::Upgrade),
+            (Some(wire::GlobalPhase::Prepare), Some(_), None, None) => {
+                Some(RuntimeFetchAuthorityRelation::Stale)
+            }
+            (
+                Some(wire::GlobalPhase::Commit),
+                Some(incumbent),
+                Some(wire::GlobalPhase::Commit | wire::GlobalPhase::Prepare),
+                Some(successor),
+            ) if incumbent == successor => Some(if incoming.phase == self.phase {
+                RuntimeFetchAuthorityRelation::Same
+            } else {
+                RuntimeFetchAuthorityRelation::Stale
+            }),
+            (Some(wire::GlobalPhase::Commit), Some(_), None, None) => {
+                Some(RuntimeFetchAuthorityRelation::Stale)
+            }
+            _ => None,
+        }
+    }
+
     fn semantic_identity(self) -> Vec<u8> {
         let mut identity = Vec::new();
         identity.extend_from_slice(b"iroha:sumeragi:v2:tla-candidate-semantic:v2");
@@ -1732,6 +1793,17 @@ enum RuntimeCandidateAuthorityRefinement {
     PromotePrepare,
     /// An exact Commit-authorized retry retained all six coordinates.
     RetainCommit,
+}
+
+/// Authority relation between two exact carriers for one physical FetchBody.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeFetchAuthorityRelation {
+    /// Both carriers have the same authority statement.
+    Same,
+    /// The incoming carrier monotonically strengthens the task authority.
+    Upgrade,
+    /// The incoming carrier is weaker and must not downgrade the task.
+    Stale,
 }
 
 /// Candidate bytes plus the independently retained typed statement which
@@ -2018,6 +2090,22 @@ impl RuntimeEffectOwnership {
 
     fn validate_bound_exact(&self) -> bool {
         self.validate_exact() && self.binding.is_some()
+    }
+
+    /// Return whether this non-forgeable sidecar names one exact production
+    /// adapter effect, including all of the effect's concrete coordinates.
+    fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
+        let Some(binding) = self.binding.as_ref() else {
+            return false;
+        };
+        let effect_kind = production_adapter_effect_kind(effect);
+        self.validate_bound_exact()
+            && binding.effect_kind == effect_kind
+            && binding.effect_identity
+                == runtime_effect_identity_hash(
+                    effect_kind,
+                    &production_adapter_effect_semantic_identity(effect),
+                )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2605,6 +2693,175 @@ impl RuntimeEffectOwnership {
                 candidate_count,
             )
             .map_err(|_| "Sumeragi v2 exact effect rebind failed closed".to_owned())
+    }
+
+    /// Bind a later, route-neutral retry to the exact incumbent async owner.
+    ///
+    /// Fair ingress deliberately gives an authenticated retransmission a new
+    /// lifecycle after the first physical command has drained.  The original
+    /// async candidate can still be live at that point.  Once both positional
+    /// bindings prove the same semantic candidate, the retry must retain the
+    /// incumbent task owner instead of replacing it or creating a second
+    /// physical task.  The retry's macro-step positions remain independently
+    /// checked and are copied into the adopted binding.
+    pub(crate) fn adopt_incumbent_candidate_for_retry(
+        &self,
+        incoming: &Self,
+        effect: &AdapterEffect,
+    ) -> Result<Self, String> {
+        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+            return Err(
+                "Sumeragi v2 candidate retry omitted an exact ownership binding".to_owned(),
+            );
+        }
+        let incumbent_identity = self.candidate_semantic_identity().ok_or_else(|| {
+            "Sumeragi v2 incumbent async owner omitted its candidate identity".to_owned()
+        })?;
+        if incoming.candidate_semantic_identity() != Some(incumbent_identity) {
+            return Err(
+                "Sumeragi v2 candidate retry changed its route-neutral identity".to_owned(),
+            );
+        }
+        let incoming_binding = incoming
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let inherited = self.candidate_semantic_statement();
+        let candidate = production_adapter_effect_candidate_binding(effect, inherited.as_ref())?
+            .ok_or_else(|| {
+                "Sumeragi v2 candidate retry rebound to a non-candidate effect".to_owned()
+            })?;
+        let rebound_identity =
+            runtime_effect_candidate_semantic_hash(candidate.kind, &candidate.semantic_identity);
+        if rebound_identity != incumbent_identity {
+            return Err(
+                "Sumeragi v2 candidate retry changed its incumbent semantic statement".to_owned(),
+            );
+        }
+        let ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => {
+                RuntimeEffectOwnership::inherited(self.owner.clone())
+            }
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                production_adapter_effect_kind(effect),
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 candidate retry could not retain its incumbent owner".to_owned()
+            })
+    }
+
+    /// Bind one exact FetchBody carrier under its incumbent physical owner.
+    ///
+    /// Fetch authority is part of the route-neutral candidate statement, so a
+    /// newly authenticated Prepare/Commit carrier has a different candidate
+    /// identity from an already-live ordinary fetch. The physical fetch task,
+    /// however, keeps one owner and advances authority monotonically. This
+    /// helper validates that narrow authority relation and retains the
+    /// incumbent owner/causality while copying the incoming macro-step
+    /// positions. A stale carrier is still bound exactly here; the returned
+    /// relation tells the task reducer to retain its stronger existing state.
+    pub(crate) fn adopt_incumbent_fetch_for_retry_or_authority(
+        &self,
+        incoming: &Self,
+        effect: &AdapterEffect,
+    ) -> Result<(Self, RuntimeFetchAuthorityRelation), String> {
+        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+            return Err(
+                "Sumeragi v2 body-fetch carrier omitted an exact ownership binding".to_owned(),
+            );
+        }
+        let incumbent_binding = self
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let incoming_binding = incoming
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        if incumbent_binding.effect_kind != RUNTIME_EFFECT_KIND_FETCH_BODY
+            || incoming_binding.effect_kind != RUNTIME_EFFECT_KIND_FETCH_BODY
+            || incumbent_binding.candidate_kind != RUNTIME_CANDIDATE_KIND_FETCH_BODY
+            || incoming_binding.candidate_kind != RUNTIME_CANDIDATE_KIND_FETCH_BODY
+        {
+            return Err(
+                "Sumeragi v2 body-fetch lineage changed its effect or candidate kind".to_owned(),
+            );
+        }
+        let incumbent_statement = incumbent_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 incumbent body-fetch omitted its authority statement".to_owned()
+        })?;
+        let incoming_statement = incoming_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 incoming body-fetch omitted its authority statement".to_owned()
+        })?;
+        let relation = incumbent_statement
+            .fetch_authority_relation_to(incoming_statement)
+            .ok_or_else(|| {
+                "Sumeragi v2 body-fetch carrier changed its coordinates or authority commitment"
+                    .to_owned()
+            })?;
+        let effect_kind = production_adapter_effect_kind(effect);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+        );
+        if effect_kind != RUNTIME_EFFECT_KIND_FETCH_BODY
+            || incoming_binding.effect_identity != effect_identity
+        {
+            return Err(
+                "Sumeragi v2 body-fetch carrier changed its exact incoming effect".to_owned(),
+            );
+        }
+        let candidate = production_adapter_effect_candidate_binding(effect, None)?
+            .filter(|candidate| candidate.kind == RUNTIME_CANDIDATE_KIND_FETCH_BODY)
+            .ok_or_else(|| {
+                "Sumeragi v2 body-fetch lineage rebound to a different effect kind".to_owned()
+            })?;
+        if candidate.statement != Some(incoming_statement) {
+            return Err(
+                "Sumeragi v2 body-fetch carrier disagreed with its incoming authority binding"
+                    .to_owned(),
+            );
+        }
+
+        let ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => {
+                RuntimeEffectOwnership::inherited(self.owner.clone())
+            }
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        let adopted = ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                effect_kind,
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 body-fetch carrier could not retain its incumbent owner".to_owned()
+            })?;
+        Ok((adopted, relation))
     }
 }
 
@@ -6950,6 +7207,16 @@ pub(crate) trait RuntimeDriver {
     ) -> RuntimeCommandAdmissionPreflight {
         RuntimeCommandAdmissionPreflight::Admit
     }
+    /// Prove that a current-tag monotone terminal consumes an exact async
+    /// effect owner rather than dropping an unrelated fresh lifecycle.
+    fn owned_terminal_completion_matches_effect(
+        &self,
+        _tag: EventTag,
+        _command: &Self::Command,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        false
+    }
     /// Look up a restart-dormant deterministic root by its recomputed causal
     /// lifecycle key without mutating adapter or scheduler state.
     fn dormant_producer_lifecycle(
@@ -7170,6 +7437,29 @@ impl RuntimeDriver for SumeragiV2Adapter {
         command: &Self::Command,
     ) -> RuntimeCommandAdmissionPreflight {
         self.preflight_runtime_command_admission(tag, command)
+    }
+
+    fn owned_terminal_completion_matches_effect(
+        &self,
+        tag: EventTag,
+        command: &Self::Command,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        let (round, subject) = match command {
+            AdapterCommand::ValidationSucceeded { round, subject, .. }
+            | AdapterCommand::ValidationFailed { round, subject } => (*round, *subject),
+            AdapterCommand::Authenticated(_)
+            | AdapterCommand::LocalProposalReady { .. }
+            | AdapterCommand::BodyAvailable { .. }
+            | AdapterCommand::BodyStored { .. }
+            | AdapterCommand::SignatureCompleted(_)
+            | AdapterCommand::ApplicationCompleted(_) => return false,
+        };
+        ownership.exactly_binds_adapter_effect(&AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        })
     }
 
     fn dormant_producer_lifecycle(
@@ -8616,6 +8906,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn owned_preflight_is_coalesced(
         &mut self,
         tag: EventTag,
+        command: &D::Command,
         preflight: RuntimeCommandAdmissionPreflight,
         ownership: &RuntimeEffectOwnership,
     ) -> Result<bool, EnqueueError> {
@@ -8636,6 +8927,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 Ok(true)
             }
             RuntimeCommandAdmissionPreflight::Coalesce if tag != self.driver.current_tag() => {
+                Ok(true)
+            }
+            RuntimeCommandAdmissionPreflight::Coalesce
+                if self
+                    .driver
+                    .owned_terminal_completion_matches_effect(tag, command, ownership) =>
+            {
                 Ok(true)
             }
             RuntimeCommandAdmissionPreflight::Coalesce => {
@@ -8756,7 +9054,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(EnqueueError::FailClosed);
         }
         let preflight = self.command_admission_preflight(tag, class, &command)?;
-        if self.owned_preflight_is_coalesced(tag, preflight, ownership)? {
+        if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {
             return Ok(());
         }
         let mut tagged = match preflight {
@@ -12016,7 +12314,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         };
         let preflight =
             self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
-        if self.owned_preflight_is_coalesced(tag, preflight, ownership)? {
+        if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {
             return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
         }
         let restored_owner = match preflight {
@@ -12637,7 +12935,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             };
             let preflight =
                 self.command_admission_preflight(*tag, CommandClass::Completion, &command)?;
-            if self.owned_preflight_is_coalesced(*tag, preflight, ownership)? {
+            if self.owned_preflight_is_coalesced(*tag, &command, preflight, ownership)? {
                 continue;
             }
             let restored_owner = match preflight {
@@ -13919,6 +14217,208 @@ mod tests {
             changed_commitment,
             changed_commitment_subject,
             "commitment drift",
+        );
+    }
+
+    #[test]
+    fn fetch_authority_relation_is_monotonic_and_recognizes_stale_carriers() {
+        let (context, keys) = authenticated_runtime_context();
+        let commit = signed_runtime_quorum_certificate(&context, &keys, 0x76);
+        let ordinary = RuntimeCandidateSemanticStatement::new(
+            commit.round,
+            commit.proposal_round,
+            Some(commit.subject),
+            None,
+            None,
+        );
+        let prepare = RuntimeCandidateSemanticStatement::new(
+            commit.round,
+            commit.proposal_round,
+            Some(commit.subject),
+            Some(wire::GlobalPhase::Prepare),
+            Some(commit.execution_commitment),
+        );
+        let committed = RuntimeCandidateSemanticStatement::new(
+            commit.round,
+            commit.proposal_round,
+            Some(commit.subject),
+            Some(wire::GlobalPhase::Commit),
+            Some(commit.execution_commitment),
+        );
+
+        for statement in [ordinary, prepare, committed] {
+            assert_eq!(
+                statement.fetch_authority_relation_to(statement),
+                Some(RuntimeFetchAuthorityRelation::Same)
+            );
+        }
+        assert_eq!(
+            ordinary.fetch_authority_relation_to(prepare),
+            Some(RuntimeFetchAuthorityRelation::Upgrade)
+        );
+        assert_eq!(
+            ordinary.fetch_authority_relation_to(committed),
+            Some(RuntimeFetchAuthorityRelation::Upgrade)
+        );
+        assert_eq!(
+            prepare.fetch_authority_relation_to(committed),
+            Some(RuntimeFetchAuthorityRelation::Upgrade)
+        );
+        assert_eq!(
+            prepare.fetch_authority_relation_to(ordinary),
+            Some(RuntimeFetchAuthorityRelation::Stale)
+        );
+        assert_eq!(
+            committed.fetch_authority_relation_to(prepare),
+            Some(RuntimeFetchAuthorityRelation::Stale)
+        );
+        assert_eq!(
+            committed.fetch_authority_relation_to(ordinary),
+            Some(RuntimeFetchAuthorityRelation::Stale)
+        );
+
+        let mut changed_commitment = prepare;
+        changed_commitment.execution_commitment = Some(wire::ExecutionCommitment::without_topups(
+            Hash::new(b"foreign fetch parent state"),
+            Hash::new(b"foreign fetch post state"),
+            Hash::new(b"foreign fetch writes"),
+            Hash::new(b"foreign fetch block"),
+        ));
+        assert_eq!(
+            prepare.fetch_authority_relation_to(changed_commitment),
+            None,
+            "same-phase commitment drift must fail closed"
+        );
+        assert_eq!(
+            committed.fetch_authority_relation_to(changed_commitment),
+            None,
+            "reverse-phase commitment drift is not a stale carrier"
+        );
+
+        let mut changed_round = committed;
+        changed_round.round.view += 1;
+        assert_eq!(
+            ordinary.fetch_authority_relation_to(changed_round),
+            None,
+            "consensus-coordinate drift must fail closed"
+        );
+        let mut changed_subject = committed;
+        changed_subject.subject = Some(wire::BlockSubject {
+            payload_hash: Hash::new(b"foreign fetch payload"),
+            ..commit.subject
+        });
+        assert_eq!(
+            ordinary.fetch_authority_relation_to(changed_subject),
+            None,
+            "subject drift must fail closed"
+        );
+    }
+
+    #[test]
+    fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
+        let (context, keys) = authenticated_runtime_context();
+        let commit = signed_runtime_quorum_certificate(&context, &keys, 0x77);
+        let tag = EventTag::new(context.height, commit.round.view, Generation::new(5));
+        let bytes = vec![0x77; 4];
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            commit.proposal_round,
+            commit.subject,
+            u64::try_from(bytes.len()).expect("small authority fixture"),
+            &[bytes],
+        )
+        .expect("ordinary fetch manifest matches its physical lineage");
+        let ordinary_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: commit.proposal_round,
+            subject: commit.subject,
+            manifest: Some(manifest),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let ordinary = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&ordinary_fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 4_201)],
+        )
+        .expect("ordinary fetch has one exact owner")
+        .pop()
+        .expect("one ordinary fetch owner");
+
+        let mut prepare_certificate = commit.clone();
+        prepare_certificate.phase = wire::GlobalPhase::Prepare;
+        let prepare_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: prepare_certificate.proposal_round,
+            subject: prepare_certificate.subject,
+            manifest: None,
+            certified_sources: Vec::new(),
+            certificate: Some(prepare_certificate),
+        };
+        let prefix = AdapterEffect::StoreBody {
+            tag,
+            round: commit.proposal_round,
+            subject: commit.subject,
+        };
+        let incoming = bind_adapter_effect_batch_ownership(
+            &[prefix.clone(), prepare_fetch.clone()],
+            vec![
+                RuntimeEffectOwnership::fresh_for_test(tag, 4_202),
+                RuntimeEffectOwnership::fresh_for_test(tag, 4_203),
+            ],
+        )
+        .expect("Prepare carrier retains its two-effect macro-step positions")
+        .pop()
+        .expect("Prepare fetch is the final effect");
+
+        let (adopted, relation) = ordinary
+            .adopt_incumbent_fetch_for_retry_or_authority(&incoming, &prepare_fetch)
+            .expect("ordinary fetch adopts authenticated Prepare authority");
+        assert_eq!(relation, RuntimeFetchAuthorityRelation::Upgrade);
+        assert_eq!(adopted.owner(), ordinary.owner());
+        assert_eq!(adopted.causality(), ordinary.causality());
+        let adopted_binding = adopted.binding().expect("adopted carrier is bound");
+        let incoming_binding = incoming.binding().expect("incoming carrier is bound");
+        assert_eq!(
+            adopted_binding.effect_position,
+            incoming_binding.effect_position
+        );
+        assert_eq!(adopted_binding.effect_count, incoming_binding.effect_count);
+        assert_eq!(
+            adopted_binding.candidate_position,
+            incoming_binding.candidate_position
+        );
+        assert_eq!(
+            adopted_binding.candidate_count,
+            incoming_binding.candidate_count
+        );
+        assert_eq!(
+            adopted.candidate_semantic_statement(),
+            incoming.candidate_semantic_statement()
+        );
+
+        let (stale, stale_relation) = adopted
+            .adopt_incumbent_fetch_for_retry_or_authority(&ordinary, &ordinary_fetch)
+            .expect("ordinary retransmission is an exact stale carrier");
+        assert_eq!(stale_relation, RuntimeFetchAuthorityRelation::Stale);
+        assert_eq!(stale.owner(), adopted.owner());
+        assert_eq!(
+            stale.candidate_semantic_statement(),
+            ordinary.candidate_semantic_statement(),
+            "the carrier remains exact while the task reducer retains stronger authority"
+        );
+
+        let prefix_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&prefix),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 4_204)],
+        )
+        .expect("StoreBody has an exact non-fetch candidate owner")
+        .pop()
+        .expect("one StoreBody owner");
+        assert!(
+            ordinary
+                .adopt_incumbent_fetch_for_retry_or_authority(&prefix_owner, &prefix)
+                .is_err(),
+            "candidate-kind drift must fail before owner adoption"
         );
     }
 
@@ -22784,6 +23284,51 @@ mod tests {
             .expect("an applied failed-validation retry is a monotone stutter");
         assert_eq!(runtime.queued_commands(), 0);
         assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
+
+        // A ValidateBody effect can have been authorized while the reducer was
+        // still Durable but reach the executor only after another exact task
+        // records the same deterministic terminal. Its bound owner is
+        // consumed by that monotone fact; it must not fail-stop the peer or
+        // allocate a replacement FIFO lifecycle.
+        let late_validation = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let late_owner = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&late_validation),
+            vec![RuntimeEffectOwnership::fresh_for_test(
+                tag,
+                next_ordinal
+                    .expect("live validation flow retains an unused lifecycle ordinal")
+                    .checked_add(100)
+                    .expect("test lifecycle ordinal remains finite"),
+            )],
+        )
+        .expect("bind one late exact validation owner")
+        .pop()
+        .expect("one validation owner");
+        assert_eq!(
+            runtime.driver.preflight_runtime_command_admission(
+                tag,
+                &AdapterCommand::ValidationFailed {
+                    round: manifest.round,
+                    subject: manifest.subject,
+                },
+            ),
+            RuntimeCommandAdmissionPreflight::Coalesce,
+        );
+        runtime
+            .enqueue_validation_failed_with_owner(
+                tag,
+                manifest.round,
+                manifest.subject,
+                &late_owner,
+            )
+            .expect("late exact validation owner terminates against the recorded rejection");
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
+        assert!(!runtime.fail_closed);
         assert_eq!(["validation_failed"], PHASE_INVENTORY);
 
         assert_eq!(

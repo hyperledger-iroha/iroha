@@ -24,7 +24,7 @@ waits for readiness, and verifies the built-in Kagemusha asset alias.
 Options:
   --iroha-dir <DIR>          Workspace root (default: repo root)
   --out-dir <DIR>            Localnet output directory (default: /tmp/iroha-localnet)
-  --peers <N>                Number of peers (default: 4)
+  --peers <N>                Exact revision-4 committee: 4, 7, ..., 31 (default: 4)
   --seed <SEED>              Deterministic key seed (default: Iroha)
   --build-line <LINE>        Build line for generated configs: iroha2 or iroha3 (default: iroha3)
   --block-time-ms <MS>       Override block time (ms) in generated configs
@@ -270,6 +270,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ ! "$PEERS" =~ ^[0-9]+$ || ${#PEERS} -gt 2 ]]; then
+  echo "Invalid --peers value: $PEERS (expected an exact revision-4 3f + 1 committee: 4, 7, ..., 31)" >&2
+  exit 2
+fi
+PEERS=$((10#$PEERS))
+if (( PEERS < 4 || PEERS > 31 || (PEERS - 1) % 3 != 0 )); then
+  echo "Invalid --peers value: $PEERS (expected an exact revision-4 3f + 1 committee: 4, 7, ..., 31)" >&2
+  exit 2
+fi
 
 if [[ -n "$QUEUE_CAPACITY" && -z "$QUEUE_CAPACITY_PER_USER" ]]; then
   QUEUE_CAPACITY_PER_USER="$QUEUE_CAPACITY"
