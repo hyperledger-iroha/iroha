@@ -67,6 +67,7 @@ use super::{
         LaneHistoricalRecoveryResponseV1, NativeAmxParticipantRecoveryMarkerV1,
     },
     output_guard::ConsensusOutputGuard,
+    v2::VerifiedHeightContext,
     v2_candidate::{
         CandidateDescriptor, CandidateLimits, CandidateWorkProvider, CandidateWorkUnavailable,
         PreparedCandidateWork,
@@ -968,6 +969,8 @@ enum DurableLaneSessionSource {
     Retained {
         proposal: LaneBlockProposalV1,
         message_hashes: BTreeSet<HashOf<BlockMessage>>,
+        retained_qcs: Vec<LaneBlockQcV1>,
+        validator_pops: Option<BTreeMap<PublicKey, Vec<u8>>>,
         rollover_source_hash: Hash,
     },
     CompletedRetained {
@@ -1041,11 +1044,66 @@ impl DurableLaneRolloverAuthority {
                 DurableLaneSessionSource::Retained {
                     proposal,
                     message_hashes,
+                    retained_qcs,
+                    validator_pops,
                     rollover_source_hash,
-                } => (proposal.descriptor.proposal_height == proposal_height
-                    && proposal.proposal_hash == proposal_hash
-                    && message_hashes.contains(&HashOf::new(message)))
-                .then_some(*rollover_source_hash),
+                } => {
+                    let exact_proposal = proposal.descriptor.proposal_height == proposal_height
+                        && proposal.proposal_hash == proposal_hash;
+                    let message_hash = HashOf::new(message);
+                    if exact_proposal && message_hashes.contains(&message_hash) {
+                        Some(*rollover_source_hash)
+                    } else if exact_proposal
+                        && proposal_height == self.height
+                        && self.winning_proposal_hashes.contains(&proposal_hash)
+                        && matches!(message, BlockMessage::LaneBlockQc(candidate)
+                        if retained_qcs.iter().any(|retained| {
+                            lane_qcs_certify_same_decision(retained, candidate)
+                        }))
+                    {
+                        // The successor already owns an equivalent QC. The
+                        // signer bitmap and aggregate signature are proof
+                        // variants rather than lane-decision identity, so an
+                        // alternate valid quorum remains successor-owned.
+                        if let Some(validator_pops) = validator_pops {
+                            validate_winning_lane_output(message, proposal, validator_pops)?;
+                            Some(Hash::new_from_chunks(&[
+                                b"iroha:sumeragi:v2:lane-rollover-proof-variant:v1\0",
+                                self.finality_artifact_hash.as_ref(),
+                                rollover_source_hash.as_ref(),
+                                message_hash.as_ref(),
+                            ]))
+                        } else {
+                            None
+                        }
+                    } else if exact_proposal
+                        && proposal_height == self.height
+                        && self.winning_proposal_hashes.contains(&proposal_hash)
+                        && matches!(message, BlockMessage::LaneBlockVote(vote)
+                        if retained_qcs.iter().any(|retained| {
+                            lane_qc_subsumes_vote(retained, vote)
+                        }))
+                    {
+                        // A QC for this exact phase already subsumes the local
+                        // vote which may still be backpressured in the network
+                        // actor. Validate the vote before retiring that stale
+                        // fanout owner; a later phase/certificate is not
+                        // covered here because it carries unique progress.
+                        if let Some(validator_pops) = validator_pops {
+                            validate_winning_lane_output(message, proposal, validator_pops)?;
+                            Some(Hash::new_from_chunks(&[
+                                b"iroha:sumeragi:v2:lane-rollover-subsumed-vote:v1\0",
+                                self.finality_artifact_hash.as_ref(),
+                                rollover_source_hash.as_ref(),
+                                message_hash.as_ref(),
+                            ]))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
                 DurableLaneSessionSource::CompletedRetained {
                     proposal,
                     signer_pops,
@@ -1104,9 +1162,21 @@ impl DurableLaneRolloverAuthority {
         matches!(
             self.durable_sessions.get(&proposal_hash),
             Some(DurableLaneSessionSource::Retained {
+                proposal,
                 message_hashes,
+                retained_qcs,
+                validator_pops,
                 ..
             }) if message_hashes.contains(&HashOf::new(message))
+                || (proposal.descriptor.proposal_height == self.height
+                    && self.winning_proposal_hashes.contains(&proposal_hash)
+                    && matches!(message, BlockMessage::LaneBlockQc(candidate)
+                        if retained_qcs.iter().any(|retained| {
+                            lane_qcs_certify_same_decision(retained, candidate)
+                        }))
+                    && validator_pops.as_ref().is_some_and(|validator_pops| {
+                        validate_winning_lane_output(message, proposal, validator_pops).is_ok()
+                    }))
         ) || matches!(
             self.durable_sessions.get(&proposal_hash),
             Some(DurableLaneSessionSource::CompletedRetained {
@@ -1180,13 +1250,17 @@ impl DurableLaneSessionSource {
         finality_artifact: &wire::finality::V2FinalityArtifact,
         proposal: LaneBlockProposalV1,
         message_hashes: BTreeSet<HashOf<BlockMessage>>,
+        retained_qcs: Vec<LaneBlockQcV1>,
+        validator_pops: Option<BTreeMap<PublicKey, Vec<u8>>>,
     ) -> Self {
         let finality_artifact_hash = HashOf::new(finality_artifact);
         let proposal_hash = proposal.proposal_hash;
-        let mut source_chunks = Vec::with_capacity(message_hashes.len().saturating_add(3));
-        source_chunks.push(b"iroha:sumeragi:v2:lane-rollover-retained-source:v1\0".as_slice());
+        let validator_pops_hash = HashOf::new(&validator_pops);
+        let mut source_chunks = Vec::with_capacity(message_hashes.len().saturating_add(4));
+        source_chunks.push(b"iroha:sumeragi:v2:lane-rollover-retained-source:v2\0".as_slice());
         source_chunks.push(finality_artifact_hash.as_ref());
         source_chunks.push(proposal_hash.as_ref());
+        source_chunks.push(validator_pops_hash.as_ref());
         source_chunks.extend(
             message_hashes
                 .iter()
@@ -1196,6 +1270,8 @@ impl DurableLaneSessionSource {
         Self::Retained {
             proposal,
             message_hashes,
+            retained_qcs,
+            validator_pops,
             rollover_source_hash,
         }
     }
@@ -1331,6 +1407,101 @@ fn validate_winning_lane_output(
     Ok(())
 }
 
+/// Return whether two lane QCs carry the same Prepare/Commit decision while
+/// differing only in quorum proof bytes.
+fn lane_qcs_certify_same_decision(left: &LaneBlockQcV1, right: &LaneBlockQcV1) -> bool {
+    left.body == right.body
+        && left.validator_set_hash_version == right.validator_set_hash_version
+        && left.validator_set_hash == right.validator_set_hash
+        && left.validator_set == right.validator_set
+        && left.payload_availability_qc == right.payload_availability_qc
+}
+
+/// Return whether a retained QC makes one still-backpressured vote redundant.
+///
+/// The exact vote body fixes proposal, phase, view, and subject. Autonomous
+/// READY evidence is considered subsumed only after the retained QC carries
+/// its completed availability certificate; otherwise the vote may still hold
+/// unique availability progress and must cross rollover by an exact owner.
+fn lane_qc_subsumes_vote(qc: &LaneBlockQcV1, vote: &LaneBlockVoteV1) -> bool {
+    qc.body == vote.body
+        && match (&vote.payload_availability_vote, &qc.payload_availability_qc) {
+            (None, None) => true,
+            (Some(vote_ready), Some(qc_ready)) => vote_ready.body == qc_ready.body,
+            _ => false,
+        }
+}
+
+/// Return the complete PoP authority embedded in an autonomous Prepare QC.
+///
+/// READY voters sign the exact lane roster together with an aligned PoP
+/// vector before the Prepare QC can form. That vector remains valid after
+/// rollover even when mutable State key indexes have advanced.
+fn validated_autonomous_validator_pops(
+    prepare_qc: &LaneBlockQcV1,
+    expected_validator_set: &[PeerId],
+) -> Result<Option<BTreeMap<PublicKey, Vec<u8>>>, String> {
+    let Some(availability) = prepare_qc.payload_availability_qc.as_ref() else {
+        return Ok(None);
+    };
+    crate::lane_consensus::validate_lane_payload_availability_qc(availability)
+        .map_err(|error| format!("autonomous READY signer PoPs are invalid: {error}"))?;
+    if prepare_qc.body.phase != CertPhase::Prepare
+        || availability.validator_set != prepare_qc.validator_set
+        || availability.validator_set.as_slice() != expected_validator_set
+        || availability.validator_set_pops.len() != availability.validator_set.len()
+    {
+        return Err("autonomous READY PoPs differ from the lane certificate roster".to_owned());
+    }
+    Ok(Some(
+        availability
+            .validator_set
+            .iter()
+            .zip(&availability.validator_set_pops)
+            .map(|(validator, pop)| (validator.public_key().clone(), pop.clone()))
+            .collect(),
+    ))
+}
+
+/// Project the exact Prepare/Commit signer union from a session's complete
+/// autonomous READY authority for legacy certified-artifact storage.
+fn autonomous_lane_session_signer_pops(
+    session: &CommittedLaneBlockSession,
+) -> Result<Option<BTreeMap<PublicKey, Vec<u8>>>, String> {
+    let expected = &session.proposal.descriptor.validator_set;
+    let Some(validator_pops) = validated_autonomous_validator_pops(&session.prepare_qc, expected)?
+    else {
+        return Ok(None);
+    };
+    if session.prepare_qc.validator_set != *expected || session.commit_qc.validator_set != *expected
+    {
+        return Err("autonomous READY PoPs differ from the lane certificate roster".to_owned());
+    }
+    let mut signer_pops = BTreeMap::new();
+    for qc in [&session.prepare_qc, &session.commit_qc] {
+        signer_pops.extend(project_qc_signer_pops(qc, &validator_pops)?);
+    }
+    Ok(Some(signer_pops))
+}
+
+fn project_qc_signer_pops(
+    qc: &LaneBlockQcV1,
+    validator_pops: &BTreeMap<PublicKey, Vec<u8>>,
+) -> Result<BTreeMap<PublicKey, Vec<u8>>, String> {
+    qc.validator_set
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| bitmap_selects(&qc.signers_bitmap, *index))
+        .map(|(_, validator)| {
+            validator_pops
+                .get(validator.public_key())
+                .cloned()
+                .map(|pop| (validator.public_key().clone(), pop))
+                .ok_or_else(|| "autonomous READY PoP index is missing".to_owned())
+        })
+        .collect()
+}
+
 /// Validate an earlier-height lane output against its certified Kura source.
 ///
 /// Once a full Prepare/Commit certificate is durable, proposal and QC output
@@ -1364,13 +1535,93 @@ pub(crate) fn durable_historical_lane_output_source_hash(
     if durable.proposal.proposal_hash != proposal_hash {
         return Ok(None);
     }
-    validate_winning_lane_output(message, &durable.proposal, &durable.signer_pops)?;
+    if let Err(retained_error) =
+        validate_winning_lane_output(message, &durable.proposal, &durable.signer_pops)
+    {
+        // Preserve self-contained replay of the exact retained certificate.
+        // Only an alternate quorum can require another signer from the full
+        // immutable height authority.
+        let signer_pops = durable_historical_lane_verification_pops(kura, &durable)?;
+        if signer_pops == durable.signer_pops {
+            return Err(retained_error);
+        }
+        validate_winning_lane_output(message, &durable.proposal, &signer_pops)?;
+    }
     let durable_hash = HashOf::new(&durable);
     Ok(Some(Hash::new_from_chunks(&[
         b"iroha:sumeragi:v2:historical-lane-output-source:v1\0",
         durable_hash.as_ref(),
         HashOf::new(message).as_ref(),
     ])))
+}
+
+/// Reconstruct the immutable PoP authority for an earlier-height lane output.
+///
+/// A certified lane artifact intentionally retains only the union of the
+/// signers in its exact Prepare/Commit QCs. A different valid quorum for the
+/// same proposal may therefore select another member of the four-validator
+/// committee. Its PoP comes from the cryptographically verified global
+/// finality artifact which froze that proposal height's complete roster, not
+/// from mutable current State.
+fn durable_historical_lane_verification_pops(
+    kura: &Kura,
+    durable: &CertifiedLaneBlockArtifact,
+) -> Result<BTreeMap<PublicKey, Vec<u8>>, String> {
+    let mut pops = durable.signer_pops.clone();
+    if let Some(validator_pops) = validated_autonomous_validator_pops(
+        &durable.prepare_qc,
+        &durable.proposal.descriptor.validator_set,
+    )? {
+        if durable.commit_qc.validator_set != durable.proposal.descriptor.validator_set {
+            return Err("autonomous READY PoPs differ from the lane certificate roster".to_owned());
+        }
+        pops.extend(validator_pops);
+        return Ok(pops);
+    }
+    let proposal_height = durable.proposal.descriptor.proposal_height;
+    let Some(finality) = kura
+        .v2_finality_artifact(proposal_height)
+        .map_err(|error| format!("failed to read historical lane finality authority: {error}"))?
+    else {
+        // The exact retained QC remains independently verifiable without a
+        // finality artifact. Only an alternate signer set needs the complete
+        // frozen roster below.
+        return Ok(pops);
+    };
+    let hint = durable
+        .proposal
+        .payload_block_hint
+        .ok_or_else(|| "historical lane proposal has no canonical finality binding".to_owned())?;
+    if finality.height != proposal_height
+        || finality.height_context.height != proposal_height
+        || hint.proposal_height != proposal_height
+        || hint.proposal_block_hash != finality.block_hash
+    {
+        return Err(
+            "historical lane proposal differs from its frozen finality authority".to_owned(),
+        );
+    }
+    wire::finality::verify_validator_roster_pops(
+        &finality.height_context,
+        &finality.validator_set_pops,
+    )
+    .map_err(|error| format!("historical lane finality PoPs are invalid: {error}"))?;
+    for (entry, pop) in finality
+        .height_context
+        .roster
+        .iter()
+        .zip(&finality.validator_set_pops)
+    {
+        if durable
+            .proposal
+            .descriptor
+            .validator_set
+            .contains(&entry.validator)
+        {
+            pops.insert(entry.validator.public_key().clone(), pop.clone());
+        }
+    }
+    Ok(pops)
 }
 
 fn validate_winning_lane_qc(
@@ -2146,6 +2397,13 @@ impl RetainedMergeSidecars {
 /// Authoritative bounded adapter retained for exactly one global height.
 pub(crate) struct V2LaneWorkAdapter {
     context: wire::HeightContext,
+    /// Authenticated PoPs in the frozen height roster, keyed by validator.
+    ///
+    /// Current-height lane proof verification must use this immutable
+    /// authority instead of re-reading mutable consensus-key indexes during
+    /// rollover. Historical and non-roster lane validators retain their
+    /// dedicated durable/live lookup paths.
+    frozen_validator_pops: BTreeMap<PublicKey, Vec<u8>>,
     local_peer: PeerId,
     key_pair: KeyPair,
     voting_enabled: bool,
@@ -2288,8 +2546,24 @@ impl V2LaneWorkAdapter {
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, V2LaneWorkError> {
         let (_, exact_output_handoff_owner) = durable_exact_output_handoff_owner_pair();
-        Self::new_with_output_guard_and_transport(
+        let frozen_validator_pops = {
+            let world = state.world_view();
+            context
+                .roster
+                .iter()
+                .filter_map(|entry| {
+                    crate::state::live_consensus_key_pop_for_peer(
+                        &world,
+                        &entry.validator,
+                        context.height,
+                    )
+                    .map(|pop| (entry.validator.public_key().clone(), pop))
+                })
+                .collect()
+        };
+        Self::new_with_output_guard_and_transport_inner(
             context,
+            frozen_validator_pops,
             local_peer,
             key_pair,
             voting_enabled,
@@ -2308,7 +2582,47 @@ impl V2LaneWorkAdapter {
     /// from the immediately preceding height.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_output_guard_and_transport(
+        verified_context: &VerifiedHeightContext,
+        local_peer: PeerId,
+        key_pair: KeyPair,
+        voting_enabled: bool,
+        state: Arc<State>,
+        kura: Arc<Kura>,
+        limits: V2LaneWorkLimits,
+        authenticated_genesis_nexus_amx_context: Option<AuthenticatedGenesisNexusAmxContext>,
+        recovered_applied_height: Option<super::v2_recovery::PendingKuraApply>,
+        output_guard: Arc<ConsensusOutputGuard>,
+        exact_output_handoff_owner: DurableExactOutputTransportOwner,
+        retained_merge_sidecars: Option<RetainedMergeSidecars>,
+    ) -> Result<Self, V2LaneWorkError> {
+        let context = verified_context.context().clone();
+        let frozen_validator_pops = context
+            .roster
+            .iter()
+            .zip(verified_context.proofs_of_possession())
+            .map(|(entry, pop)| (entry.validator.public_key().clone(), pop.clone()))
+            .collect();
+        Self::new_with_output_guard_and_transport_inner(
+            context,
+            frozen_validator_pops,
+            local_peer,
+            key_pair,
+            voting_enabled,
+            state,
+            kura,
+            limits,
+            authenticated_genesis_nexus_amx_context,
+            recovered_applied_height,
+            output_guard,
+            exact_output_handoff_owner,
+            retained_merge_sidecars,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_output_guard_and_transport_inner(
         context: wire::HeightContext,
+        frozen_validator_pops: BTreeMap<PublicKey, Vec<u8>>,
         local_peer: PeerId,
         key_pair: KeyPair,
         voting_enabled: bool,
@@ -2491,6 +2805,7 @@ impl V2LaneWorkAdapter {
         let effect_keys = effects.iter().map(lane_work_effect_key).collect();
         let mut adapter = Self {
             context,
+            frozen_validator_pops,
             local_peer,
             key_pair,
             voting_enabled,
@@ -4848,6 +5163,120 @@ impl V2LaneWorkAdapter {
         Ok(())
     }
 
+    /// Snapshot the complete immutable PoP authority for one unfinished
+    /// current-height lane committee.
+    ///
+    /// Autonomous READY evidence is self-contained. Autoscale committees use
+    /// their incarnation-pinned vector. Operator-managed committees use the
+    /// height-aware consensus-key index, with the verified global-context map
+    /// taking precedence for shared-roster members. The returned map moves
+    /// with the retained session, so successor validation never consults a
+    /// later mutable State view.
+    fn retained_lane_validator_pops(
+        &self,
+        finality_artifact: &wire::finality::V2FinalityArtifact,
+        proposal: &LaneBlockProposalV1,
+        retained_qcs: &[LaneBlockQcV1],
+    ) -> Result<Option<BTreeMap<PublicKey, Vec<u8>>>, V2LaneWorkError> {
+        let descriptor = &proposal.descriptor;
+        if descriptor.proposal_height != self.context.height {
+            return Err(V2LaneWorkError::Persistence(
+                "retained unfinished lane proposal belongs to another height".to_owned(),
+            ));
+        }
+        for qc in retained_qcs {
+            if qc.body == proposal.vote_body(CertPhase::Prepare)
+                && let Some(validator_pops) =
+                    validated_autonomous_validator_pops(qc, &descriptor.validator_set)
+                        .map_err(V2LaneWorkError::Persistence)?
+            {
+                return Ok(Some(validator_pops));
+            }
+        }
+
+        // The finalized height context is the immutable authority for every
+        // lane committee member shared with the global validator roster. Use
+        // it before consulting mutable successor State so proposal/vote-only
+        // sessions can validate a later remote vote, QC, or certificate after
+        // rollover.
+        wire::finality::verify_validator_roster_pops(
+            &finality_artifact.height_context,
+            &finality_artifact.validator_set_pops,
+        )
+        .map_err(|error| {
+            V2LaneWorkError::Persistence(format!(
+                "retained lane finality PoP authority is invalid: {error}"
+            ))
+        })?;
+        let finality_pops = finality_artifact
+            .height_context
+            .roster
+            .iter()
+            .zip(&finality_artifact.validator_set_pops)
+            .map(|(entry, pop)| (entry.validator.public_key().clone(), pop.clone()))
+            .collect::<BTreeMap<_, _>>();
+        if let Some(validator_pops) = descriptor
+            .validator_set
+            .iter()
+            .map(|validator| {
+                finality_pops
+                    .get(validator.public_key())
+                    .cloned()
+                    .map(|pop| (validator.public_key().clone(), pop))
+            })
+            .collect::<Option<BTreeMap<_, _>>>()
+        {
+            return Ok(Some(validator_pops));
+        }
+
+        let aligned_pops = match pinned_autoscale_validator_pops_for_set(
+            &self.state,
+            descriptor.lane_id,
+            &descriptor.validator_set,
+        ) {
+            Some(Some(pops)) => pops,
+            Some(None) => {
+                let world = self.state.world_view();
+                let Some(pops) = descriptor
+                    .validator_set
+                    .iter()
+                    .map(|validator| {
+                        self.consensus_pop_for_peer_at_height(
+                            &world,
+                            validator,
+                            descriptor.proposal_height,
+                        )
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Ok(None);
+                };
+                pops
+            }
+            None => return Ok(None),
+        };
+        if aligned_pops.len() != descriptor.validator_set.len()
+            || descriptor
+                .validator_set
+                .iter()
+                .zip(&aligned_pops)
+                .any(|(validator, pop)| {
+                    pop.len() != crate::lane_consensus::LANE_BLS_PROOF_BYTES
+                        || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+                })
+        {
+            return Ok(None);
+        }
+        Ok(Some(
+            descriptor
+                .validator_set
+                .iter()
+                .zip(aligned_pops)
+                .map(|(validator, pop)| (validator.public_key().clone(), pop))
+                .collect(),
+        ))
+    }
+
     fn retained_lane_rollover_sources(
         &self,
         finality_artifact: &wire::finality::V2FinalityArtifact,
@@ -4859,7 +5288,11 @@ impl V2LaneWorkAdapter {
             .map(|proposal| {
                 (
                     proposal.proposal_hash,
-                    (proposal, BTreeSet::<HashOf<BlockMessage>>::new()),
+                    (
+                        proposal,
+                        BTreeSet::<HashOf<BlockMessage>>::new(),
+                        Vec::<LaneBlockQcV1>::new(),
+                    ),
                 )
             })
             .collect::<BTreeMap<_, _>>();
@@ -4869,7 +5302,7 @@ impl V2LaneWorkAdapter {
         {
             proposals
                 .entry(proposal.proposal_hash)
-                .or_insert_with(|| (proposal, BTreeSet::new()))
+                .or_insert_with(|| (proposal, BTreeSet::new(), Vec::new()))
                 .1
                 .insert(HashOf::new(&BlockMessage::LaneBlockVote(vote)));
         }
@@ -4877,24 +5310,39 @@ impl V2LaneWorkAdapter {
             let Some(proposal) = self.canonical_proposal_for_vote_body(&qc.body) else {
                 continue;
             };
-            proposals
+            let retained = proposals
                 .entry(proposal.proposal_hash)
-                .or_insert_with(|| (proposal, BTreeSet::new()))
+                .or_insert_with(|| (proposal, BTreeSet::new(), Vec::new()));
+            retained
                 .1
-                .insert(HashOf::new(&BlockMessage::LaneBlockQc(qc)));
+                .insert(HashOf::new(&BlockMessage::LaneBlockQc(qc.clone())));
+            retained.2.push(qc);
         }
         let mut sources = proposals
             .into_iter()
-            .map(|(proposal_hash, (proposal, mut message_hashes))| {
-                message_hashes.insert(HashOf::new(&BlockMessage::LaneBlockProposal(
-                    proposal.clone(),
-                )));
-                (
-                    proposal_hash,
-                    DurableLaneSessionSource::retained(finality_artifact, proposal, message_hashes),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
+            .map(
+                |(proposal_hash, (proposal, mut message_hashes, retained_qcs))| {
+                    message_hashes.insert(HashOf::new(&BlockMessage::LaneBlockProposal(
+                        proposal.clone(),
+                    )));
+                    let validator_pops = self.retained_lane_validator_pops(
+                        finality_artifact,
+                        &proposal,
+                        &retained_qcs,
+                    )?;
+                    Ok((
+                        proposal_hash,
+                        DurableLaneSessionSource::retained(
+                            finality_artifact,
+                            proposal,
+                            message_hashes,
+                            retained_qcs,
+                            validator_pops,
+                        ),
+                    ))
+                },
+            )
+            .collect::<Result<BTreeMap<_, _>, V2LaneWorkError>>()?;
         for session in &self.historical_recovery_sessions {
             let candidate = CertifiedLaneBlockArtifact::new(
                 session.clone(),
@@ -5604,45 +6052,14 @@ impl V2LaneWorkAdapter {
 
         // Autonomous READY evidence already carries the complete historical
         // validator-set PoP vector. Project only the union of Prepare/Commit
-        // signers so the certified artifact retains an exact, no-extras map.
-        let signer_pops = if let Some(availability) =
-            session.prepare_qc.payload_availability_qc.as_ref()
-        {
-            crate::lane_consensus::validate_lane_payload_availability_qc(availability).map_err(
-                |error| format!("historical autonomous READY signer PoPs are invalid: {error}"),
-            )?;
-            if availability.validator_set != session.prepare_qc.validator_set
-                || availability.validator_set != session.commit_qc.validator_set
-                || availability.validator_set_pops.len() != availability.validator_set.len()
-            {
-                return Err(
-                    "historical autonomous READY PoPs differ from the lane certificate roster"
-                        .to_owned(),
-                );
-            }
-            let mut pops = BTreeMap::new();
-            for qc in [&session.prepare_qc, &session.commit_qc] {
-                for (index, validator) in qc.validator_set.iter().enumerate() {
-                    if bitmap_selects(&qc.signers_bitmap, index) {
-                        let pop = availability
-                            .validator_set_pops
-                            .get(index)
-                            .ok_or_else(|| {
-                                "historical autonomous READY PoP index is missing".to_owned()
-                            })?
-                            .clone();
-                        pops.insert(validator.public_key().clone(), pop);
-                    }
-                }
-            }
-            pops
-        } else {
+        // signers so the certified artifact retains its exact no-extras map.
+        let signer_pops = autonomous_lane_session_signer_pops(session)?.unwrap_or_else(|| {
             // Ordinary lane certificates do not carry PoPs. This fallback is
             // used only while constructing the first self-contained request;
             // the result is immediately validated and thereafter retained in
             // the request or certified Kura artifact.
             self.pops_for_lane_session(session)
-        };
+        });
         let candidate = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
         Kura::validate_certified_lane_block_artifact(&candidate).map_err(|error| {
             format!("historical lane session lacks exact validated signer PoPs: {error}")
@@ -6922,7 +7339,7 @@ impl V2LaneWorkAdapter {
                 .validator_set
                 .iter()
                 .map(|peer| {
-                    crate::state::live_consensus_key_pop_for_peer(
+                    self.consensus_pop_for_peer_at_height(
                         &world,
                         peer,
                         certificate.body.proposal_height,
@@ -10117,14 +10534,26 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         }
 
+        let autonomous_pops =
+            match autonomous_lane_session_signer_pops(&CommittedLaneBlockSession {
+                proposal: proposal.clone(),
+                prepare_qc: prepare_qc.clone(),
+                commit_qc: commit_qc.clone(),
+            }) {
+                Ok(pops) => pops,
+                Err(_) => return V2LaneIngressOutcome::Rejected,
+            };
+        let prepare_pops = autonomous_pops
+            .clone()
+            .unwrap_or_else(|| self.pops_for_lane_qc(&prepare_qc));
+        let commit_pops = autonomous_pops.unwrap_or_else(|| self.pops_for_lane_qc(&commit_qc));
+
         let mut next_sessions = self.lane_sessions.clone();
         let mut inserted = false;
         for outcome in [
             next_sessions.insert_recovered_proposal_replacing_uncommitted_conflict(proposal),
-            next_sessions
-                .insert_qc_with_pops(prepare_qc.clone(), &self.pops_for_lane_qc(&prepare_qc)),
-            next_sessions
-                .insert_qc_with_pops(commit_qc.clone(), &self.pops_for_lane_qc(&commit_qc)),
+            next_sessions.insert_qc_with_pops(prepare_qc.clone(), &prepare_pops),
+            next_sessions.insert_qc_with_pops(commit_qc.clone(), &commit_pops),
         ] {
             match outcome {
                 Ok(LaneBlockSessionInsertOutcome::Inserted) => inserted = true,
@@ -10407,7 +10836,7 @@ impl V2LaneWorkAdapter {
                         .validator_set
                         .iter()
                         .map(|validator| {
-                            crate::state::live_consensus_key_pop_for_peer(
+                            self.consensus_pop_for_peer_at_height(
                                 &world,
                                 validator,
                                 proposal.descriptor.proposal_height,
@@ -11229,7 +11658,28 @@ impl V2LaneWorkAdapter {
             })
     }
 
+    fn consensus_pop_for_peer_at_height(
+        &self,
+        world: &impl WorldReadOnly,
+        peer: &PeerId,
+        authority_height: u64,
+    ) -> Option<Vec<u8>> {
+        if authority_height == self.context.height
+            && let Some(pop) = self.frozen_validator_pops.get(peer.public_key())
+        {
+            return Some(pop.clone());
+        }
+        crate::state::live_consensus_key_pop_for_peer(world, peer, authority_height)
+    }
+
     fn pops_for_lane_qc(&self, qc: &LaneBlockQcV1) -> BTreeMap<PublicKey, Vec<u8>> {
+        if let Ok(Some(validator_pops)) = validated_autonomous_validator_pops(qc, &qc.validator_set)
+        {
+            return project_qc_signer_pops(qc, &validator_pops).unwrap_or_default();
+        }
+        if let Some(validator_pops) = self.autonomous_validator_pops_for_commit_qc(qc) {
+            return project_qc_signer_pops(qc, &validator_pops).unwrap_or_default();
+        }
         let world = self.state.world_view();
         qc.validator_set
             .iter()
@@ -11240,16 +11690,56 @@ impl V2LaneWorkAdapter {
                     .is_some_and(|byte| byte & (1_u8 << (index % 8)) != 0)
             })
             .filter_map(|(_, peer)| {
-                crate::state::live_consensus_key_pop_for_peer(&world, peer, qc.body.proposal_height)
+                self.consensus_pop_for_peer_at_height(&world, peer, qc.body.proposal_height)
                     .map(|pop| (peer.public_key().clone(), pop))
             })
             .collect()
+    }
+
+    fn autonomous_validator_pops_for_commit_qc(
+        &self,
+        qc: &LaneBlockQcV1,
+    ) -> Option<BTreeMap<PublicKey, Vec<u8>>> {
+        if qc.body.phase != CertPhase::Commit {
+            return None;
+        }
+        let mut prepare_body = qc.body.clone();
+        prepare_body.phase = CertPhase::Prepare;
+        if let Some(prepare_qc) = self
+            .lane_sessions
+            .qcs_for_incomplete_sessions()
+            .into_iter()
+            .find(|candidate| candidate.body == prepare_body)
+            && let Ok(Some(pops)) =
+                validated_autonomous_validator_pops(&prepare_qc, &qc.validator_set)
+        {
+            return Some(pops);
+        }
+
+        let expected_epoch = self.epoch_for_proposal_height(qc.body.proposal_height);
+        let artifact = self.kura.read_autonomous_lane_block_artifact(
+            qc.body.lane_id,
+            qc.body.lane_block_height,
+            self.native_chain_id_hash(),
+            expected_epoch,
+        )?;
+        let proposal = &artifact.executable_payload.origin_proposal;
+        if proposal.vote_body(CertPhase::Commit) != qc.body {
+            return None;
+        }
+        let prepare_qc = &artifact.availability_certificate?.certificate;
+        validated_autonomous_validator_pops(prepare_qc, &qc.validator_set)
+            .ok()
+            .flatten()
     }
 
     fn pops_for_lane_session(
         &self,
         session: &CommittedLaneBlockSession,
     ) -> BTreeMap<PublicKey, Vec<u8>> {
+        if let Ok(Some(signer_pops)) = autonomous_lane_session_signer_pops(session) {
+            return signer_pops;
+        }
         let mut pops = self.pops_for_lane_qc(&session.prepare_qc);
         pops.extend(self.pops_for_lane_qc(&session.commit_qc));
         pops
@@ -11652,11 +12142,8 @@ impl V2LaneWorkAdapter {
             validators
                 .iter()
                 .map(|peer| {
-                    let pop = crate::state::live_consensus_key_pop_for_peer(
-                        &world,
-                        peer,
-                        authority_height,
-                    )?;
+                    let pop =
+                        self.consensus_pop_for_peer_at_height(&world, peer, authority_height)?;
                     iroha_crypto::bls_normal_pop_verify(peer.public_key(), &pop).ok()?;
                     Some(pop)
                 })
@@ -20510,7 +20997,7 @@ pub(super) mod tests {
             adapter.bind_locked_global_body(&proposal_block),
             V2LaneIngressOutcome::Rejected
         );
-        let prepare_votes = keys
+        let prepare_votes = keys[..3]
             .iter()
             .map(|key| signed_autonomous_prepare_vote(&proposal, &payload, key, &keys))
             .collect::<Vec<_>>();
@@ -20523,7 +21010,7 @@ pub(super) mod tests {
         let recovered = CommittedLaneBlockSession {
             proposal: proposal.clone(),
             prepare_qc: prepare_qc.clone(),
-            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
         };
         adapter.pending_committed_lanes.push_back(recovered);
         assert!(
@@ -20562,15 +21049,44 @@ pub(super) mod tests {
             }),
             "READY durability must be repaired before recovered certified publication"
         );
+        let durable = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("the exact recovered autonomous certificate becomes durable");
         assert!(
-            adapter
-                .kura
-                .read_certified_lane_block_artifact(
-                    proposal.descriptor.lane_id,
-                    proposal.descriptor.lane_block_height,
-                )
-                .is_some(),
-            "the exact recovered autonomous certificate becomes durable"
+            !durable.signer_pops.contains_key(keys[3].public_key()),
+            "the retained 3-of-4 certificate deliberately omits one committee PoP"
+        );
+        let alternative_commit = lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Commit);
+        adapter.lane_sessions = LaneBlockSessionCache::new(1);
+        {
+            let mut world = adapter.state.world.block();
+            for key in &keys {
+                world
+                    .consensus_keys_by_pk
+                    .insert(key.public_key().to_string(), Vec::new());
+            }
+            world.commit();
+        }
+        assert_eq!(
+            validate_lane_block_qc_aggregate(
+                &alternative_commit,
+                &adapter.pops_for_lane_qc(&alternative_commit),
+            ),
+            Ok(()),
+            "standalone CommitQC must recover PoPs from durable READY after cache and State pruning"
+        );
+        assert!(
+            durable_historical_lane_output_source_hash(
+                adapter.kura.as_ref(),
+                &BlockMessage::LaneBlockQc(alternative_commit),
+            )
+            .expect("validate alternate autonomous quorum against durable READY authority")
+            .is_some(),
+            "a different valid 3-of-4 QC must survive rollover without mutable State PoPs"
         );
     }
 
@@ -20721,6 +21237,123 @@ pub(super) mod tests {
                 .is_some(),
             "rollover must cover the decided carrier's exact durable CommitQC"
         );
+    }
+
+    #[test]
+    fn historical_alternative_qc_uses_full_frozen_finality_roster_pops() {
+        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter
+            .kura
+            .store_block(block.clone())
+            .expect("persist historical lane carrier");
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
+        adapter
+            .kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist historical lane frozen roster");
+
+        let retained = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
+        };
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&retained, &lane_signer_pops(&keys[..3]))
+            .expect("persist one exact 3-of-4 lane certificate");
+
+        let alternative = lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Commit);
+        assert_ne!(
+            retained.commit_qc.signers_bitmap, alternative.signers_bitmap,
+            "fixture must select the validator omitted by the retained QC"
+        );
+        let durable = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("read retained historical lane certificate");
+        assert!(
+            !durable.signer_pops.contains_key(keys[3].public_key()),
+            "the retained certificate must contain only its exact signer union"
+        );
+
+        assert!(
+            durable_historical_lane_output_source_hash(
+                adapter.kura.as_ref(),
+                &BlockMessage::LaneBlockQc(alternative.clone()),
+            )
+            .expect("verify alternate historical QC against frozen finality PoPs")
+            .is_some(),
+            "a valid alternate 3-of-4 QC for the same body must remain reconstructible"
+        );
+
+        let mut forged = alternative;
+        forged.bls_aggregate_signature[0] ^= 0x80;
+        assert!(
+            durable_historical_lane_output_source_hash(
+                adapter.kura.as_ref(),
+                &BlockMessage::LaneBlockQc(forged),
+            )
+            .is_err(),
+            "the complete frozen PoP source must not weaken aggregate validation"
+        );
+    }
+
+    #[test]
+    fn current_height_qc_uses_frozen_context_pops_after_state_index_pruning() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter
+            .kura
+            .store_block(block.clone())
+            .expect("persist current-height lane carrier");
+        let committed = ValidBlock::committed_from_replay_signed_block(block);
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        let session = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Commit),
+        };
+        adapter.pending_committed_lanes.push_back(session);
+
+        {
+            let mut world = adapter.state.world.block();
+            for key in &keys {
+                world
+                    .consensus_keys_by_pk
+                    .insert(key.public_key().to_string(), Vec::new());
+            }
+            world.commit();
+        }
+        {
+            let world = adapter.state.world_view();
+            assert!(keys.iter().all(|key| {
+                crate::state::live_consensus_key_pop_for_peer(
+                    &world,
+                    &PeerId::new(key.public_key().clone()),
+                    adapter.context.height,
+                )
+                .is_none()
+            }));
+        }
+
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("persist with the authenticated frozen context PoPs"),
+            1
+        );
+        let durable = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("read certificate persisted after mutable index pruning");
+        assert_eq!(durable.signer_pops, lane_signer_pops(&keys[..3]));
     }
 
     #[test]
@@ -20979,8 +21612,6 @@ pub(super) mod tests {
             WrongBitmap,
             OutOfRangeBitmap,
             InsufficientCount,
-            MissingPop,
-            InvalidPop,
         }
 
         for (qc_under_test, variant) in [QcUnderTest::Prepare, QcUnderTest::Commit]
@@ -20994,8 +21625,6 @@ pub(super) mod tests {
                     InvalidQcVariant::WrongBitmap,
                     InvalidQcVariant::OutOfRangeBitmap,
                     InvalidQcVariant::InsufficientCount,
-                    InvalidQcVariant::MissingPop,
-                    InvalidQcVariant::InvalidPop,
                 ]
                 .into_iter()
                 .map(move |variant| (qc_under_test, variant))
@@ -21089,25 +21718,6 @@ pub(super) mod tests {
                         "fixture target QC must select validators 1, 2, and 3"
                     );
                     qc.signers_bitmap[0] = 0b0000_0110;
-                }
-                InvalidQcVariant::MissingPop | InvalidQcVariant::InvalidPop => {
-                    let state = Arc::get_mut(&mut adapter.state)
-                        .expect("isolated lane adapter uniquely owns its State");
-                    let id =
-                        ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator3".to_owned());
-                    let mut record = state
-                        .world
-                        .consensus_keys
-                        .view()
-                        .get(&id)
-                        .expect("signer unique to the target alternative QC")
-                        .clone();
-                    record.pop = match variant {
-                        InvalidQcVariant::MissingPop => None,
-                        InvalidQcVariant::InvalidPop => Some(vec![0xA5; 96]),
-                        _ => unreachable!("matched PoP variants"),
-                    };
-                    state.world.consensus_keys.insert(id, record);
                 }
             }
 
@@ -21271,6 +21881,15 @@ pub(super) mod tests {
                 .any(|pending| pending == &proposal),
             "rollover must rehydrate ownership which arrived after adapter construction"
         );
+        let retained_prepare_qc = lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
+        let retained_prepare_pops = adapter.pops_for_lane_qc(&retained_prepare_qc);
+        assert_eq!(
+            adapter
+                .lane_sessions
+                .insert_qc_with_pops(retained_prepare_qc.clone(), &retained_prepare_pops),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "retain one valid PrepareQC as the successor-owned decision"
+        );
         adapter
             .prepare_canonical_lane_rollover(&finality_artifact)
             .expect("canonicalize the late-applied lane owner");
@@ -21287,6 +21906,80 @@ pub(super) mod tests {
                 .expect("validate the retained proposal source")
                 .is_some(),
             "the decided height may close only after transferring exact unfinished lane ownership"
+        );
+        let subsumed_prepare_vote = signed_lane_vote(&proposal, CertPhase::Prepare, &keys[3]);
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockVote(subsumed_prepare_vote.clone()),
+                )
+                .expect("authenticate a still-backpressured vote subsumed by retained PrepareQC")
+                .is_some(),
+            "a retained same-phase QC must release a redundant vote still owned by network fanout"
+        );
+        assert!(
+            !authority
+                .uses_retained_source(&BlockMessage::LaneBlockVote(subsumed_prepare_vote.clone())),
+            "a QC-subsumed vote must retire instead of crossing into the successor"
+        );
+        let mut forged_subsumed_vote = subsumed_prepare_vote;
+        forged_subsumed_vote.bls_signature[0] ^= 0x80;
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockVote(forged_subsumed_vote),
+                )
+                .is_err(),
+            "rollover must never retire a forged vote under a retained QC"
+        );
+        let unique_commit_vote = signed_lane_vote(&proposal, CertPhase::Commit, &keys[3]);
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockVote(unique_commit_vote),
+                )
+                .is_err(),
+            "a PrepareQC cannot retire a Commit vote which still carries unique phase progress"
+        );
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),
+                )
+                .expect("authenticate an uncached same-proposal quorum variant")
+                .is_some(),
+            "a valid QC learned from another 3-of-4 subset must cross the retained rollover boundary"
+        );
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockQc(recovered.commit_qc.clone()),
+                )
+                .is_err(),
+            "rollover must not discard a new CommitQC when the successor owns only Prepare progress"
+        );
+        assert!(
+            adapter
+                .lane_sessions
+                .qcs_for_incomplete_sessions()
+                .contains(&retained_prepare_qc),
+            "the semantically equivalent retained QC must remain successor-owned"
+        );
+        let mut forged_rollover_qc = recovered.prepare_qc.clone();
+        forged_rollover_qc.bls_aggregate_signature[0] ^= 0x80;
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockQc(forged_rollover_qc),
+                )
+                .is_err(),
+            "semantic proof-variant recovery must still reject a forged aggregate"
         );
         let _ = adapter.drain_effects(usize::MAX);
         adapter

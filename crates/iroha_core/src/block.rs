@@ -8526,10 +8526,70 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        fn sumeragi_v2_raw_lane_predecessor_is_canonical(
+            block: &SignedBlock,
+            state: &impl StateReadOnly,
+            ownership: &iroha_data_model::block::consensus::SumeragiLanePayloadOwnership,
+            declared_predecessor_hash: Hash,
+            validation_profile: &ConsensusValidationProfile,
+        ) -> bool {
+            let Some(context) = validation_profile.v2_context() else {
+                return false;
+            };
+            let proposal_height = block.header().height().get();
+            let previous_height = ownership.previous_lane_block_height;
+            if context.height != proposal_height
+                || ownership.proposal_height != proposal_height
+                || previous_height == 0
+                || previous_height.checked_add(1) != Some(ownership.lane_block_height)
+                || ownership.previous_lane_block_descriptor_hash != Some(declared_predecessor_hash)
+            {
+                return false;
+            }
+
+            let Some(artifact) = state
+                .kura()
+                .read_lane_block_artifact(ownership.lane_id, previous_height)
+            else {
+                return false;
+            };
+            let predecessor = &artifact.ownership;
+            if predecessor.lane_id != ownership.lane_id
+                || predecessor.dataspace_id != ownership.dataspace_id
+                || predecessor.lane_incarnation != ownership.lane_incarnation
+                || predecessor.lane_block_height != previous_height
+                || predecessor.proposal_height == 0
+                || predecessor.proposal_height >= proposal_height
+                || predecessor.lane_block_descriptor_hash != Some(declared_predecessor_hash)
+            {
+                return false;
+            }
+            let Some(predecessor_index) = predecessor
+                .proposal_height
+                .checked_sub(1)
+                .and_then(|height| usize::try_from(height).ok())
+            else {
+                return false;
+            };
+            if state.block_hashes().get(predecessor_index) != Some(&artifact.proposal_block_hash) {
+                return false;
+            }
+
+            let canonical = state
+                .kura()
+                .canonical_lane_block_artifacts_at_proposal_height_matching(
+                    predecessor.proposal_height,
+                    2,
+                    |candidate| candidate == predecessor,
+                );
+            canonical.as_slice() == [artifact]
+        }
+
         fn validate_execution_context_lane_payload_artifacts(
             block: &SignedBlock,
             state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
+            validation_profile: &ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
             let proposal_height = block.header().height().get();
             let proposal_hash = block.hash();
@@ -8596,6 +8656,15 @@ pub(crate) mod valid {
                     .kura()
                     .read_lane_block_application_receipt(ownership.lane_id, previous_height)
                 else {
+                    if Self::sumeragi_v2_raw_lane_predecessor_is_canonical(
+                        block,
+                        state,
+                        ownership,
+                        declared_predecessor_hash,
+                        validation_profile,
+                    ) {
+                        continue;
+                    }
                     return Err(Self::execution_context_error(format!(
                         "lane payload ownership {ownership_idx} has no canonical predecessor application receipt for lane {} lane-height {previous_height}",
                         ownership.lane_id.as_u32()
@@ -9365,7 +9434,12 @@ pub(crate) mod valid {
             Self::validate_execution_context_lane_payload_ownerships(
                 block, topology, state, bundle,
             )?;
-            Self::validate_execution_context_lane_payload_artifacts(block, state, bundle)?;
+            Self::validate_execution_context_lane_payload_artifacts(
+                block,
+                state,
+                bundle,
+                &validation_profile,
+            )?;
             Self::validate_execution_context_autonomous_lane_payloads(
                 block,
                 topology,
@@ -20276,6 +20350,49 @@ pub(crate) mod valid {
                         if message.contains("has no canonical predecessor application receipt")
                 ),
                 "unexpected unapplied-predecessor validation error: {err:?}"
+            );
+
+            let v2_profile = ConsensusValidationProfile::SumeragiV2 {
+                block_cadence: Duration::from_millis(1),
+                context: SumeragiV2ValidationContext::for_body_without_context_bound_attachments(
+                    &exact_predecessor,
+                ),
+            };
+            ValidBlock::validate_execution_context_with_state(
+                &exact_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                v2_profile.clone(),
+            )
+            .expect(
+                "Sumeragi v2 accepts the exact canonical raw predecessor while its receipt catches up",
+            );
+
+            let wrong_raw_predecessor = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-wrong-raw",
+                2,
+                None,
+            );
+            let err = ValidBlock::validate_execution_context_with_state(
+                &wrong_raw_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                v2_profile,
+            )
+            .expect_err("Sumeragi v2 must not accept a differently bound raw predecessor");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("has no canonical predecessor application receipt")
+                ),
+                "unexpected wrong raw-predecessor validation error: {err:?}"
             );
 
             kura.persist_lane_block_application_receipt(&predecessor_proposal)

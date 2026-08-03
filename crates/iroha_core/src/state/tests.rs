@@ -856,6 +856,68 @@ fn merge_write_set_encoder_mentions_every_persisted_world_block_field() {
 }
 
 #[test]
+fn world_and_world_block_keep_snapshot_skip_annotations_in_sync() {
+    fn snapshot_skip_annotations(struct_body: &str) -> BTreeMap<&str, bool> {
+        let mut annotations = BTreeMap::new();
+        let mut skip = false;
+
+        for line in struct_body.lines() {
+            let trimmed = line.trim();
+            if trimmed == "#[norito(skip)]" {
+                skip = true;
+                continue;
+            }
+
+            let declaration = line
+                .strip_prefix("    pub(crate) ")
+                .or_else(|| line.strip_prefix("    pub "))
+                .or_else(|| line.strip_prefix("    "));
+            let Some((field, _)) = declaration.and_then(|line| line.split_once(':')) else {
+                continue;
+            };
+            if field
+                .chars()
+                .all(|character| character == '_' || character.is_ascii_alphanumeric())
+            {
+                annotations.insert(field, skip);
+                skip = false;
+            }
+        }
+
+        annotations
+    }
+
+    let source = include_str!("../state.rs");
+    let world = source
+        .split_once("pub struct World {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\n/// Struct for block's aggregated changes"))
+        .map(|(body, _)| body)
+        .expect("World declaration must remain discoverable");
+    let world_block = source
+        .split_once("pub struct WorldBlock<'world> {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nimpl<'world> WorldBlock"))
+        .map(|(body, _)| body)
+        .expect("WorldBlock declaration must remain discoverable");
+    let world_annotations = snapshot_skip_annotations(world);
+    let block_annotations = snapshot_skip_annotations(world_block);
+
+    for (field, world_skips) in &world_annotations {
+        if *field == "external_event_buf" {
+            // The staged canonical serializer deliberately substitutes the
+            // already-committed external event buffer for this block-local buffer.
+            continue;
+        }
+        let Some(block_skips) = block_annotations.get(field) else {
+            continue;
+        };
+        assert_eq!(
+            block_skips, world_skips,
+            "WorldBlock field `{field}` must match World's snapshot skip annotation"
+        );
+    }
+}
+
+#[test]
 fn explorer_count_indexes_keep_complete_world_plumbing() {
     let source = include_str!("../state.rs");
 
@@ -2147,6 +2209,18 @@ fn snapshot_state_with_numeric_asset() -> (State, AssetDefinitionId, AssetId) {
 #[test]
 fn state_snapshot_rejects_serialized_asset_definition_domain_index() {
     let (state, _, _) = snapshot_state_with_numeric_asset();
+    let block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let block_snapshot =
+        norito::json::to_value(&block.world).expect("serialize staged world snapshot");
+    let norito::json::Value::Object(block_world_object) = block_snapshot else {
+        panic!("staged world snapshot must be an object");
+    };
+    assert!(
+        !block_world_object.contains_key("asset_definition_domains"),
+        "staged snapshots must omit the same derived ownership index as committed snapshots"
+    );
+    drop(block);
+
     let mut snapshot = norito::json::to_value(&state).expect("serialize state");
     let norito::json::Value::Object(state_object) = &mut snapshot else {
         panic!("state snapshot must be an object");

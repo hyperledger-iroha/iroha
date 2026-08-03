@@ -1944,21 +1944,49 @@ fn derive_ed25519_signature(
     Ok(signature.to_bytes())
 }
 
-fn relay_identity_bytes(key_pair: &KeyPair) -> Result<[u8; 32], HarnessError> {
+fn relay_identity_bytes(key_pair: &KeyPair) -> Result<Vec<u8>, HarnessError> {
     let (algorithm, bytes) = key_pair
         .public_key()
         .try_to_bytes()
         .map_err(|error| HarnessError::Validation(format!("invalid relay identity: {error}")))?;
-    if algorithm != Algorithm::Ed25519 {
-        return Err(HarnessError::Validation(
-            "relay handshake identity must be Ed25519".to_owned(),
-        ));
+    if algorithm == Algorithm::Ed25519 {
+        if bytes.len() != 32 {
+            return Err(HarnessError::Validation(format!(
+                "relay Ed25519 identity must be 32 bytes, got {}",
+                bytes.len()
+            )));
+        }
+        // Preserve the original Ed25519 wire representation for compatibility.
+        return Ok(bytes.to_vec());
     }
-    bytes.try_into().map_err(|_| {
-        HarnessError::Validation(format!(
-            "relay Ed25519 identity must be 32 bytes, got {}",
-            bytes.len()
-        ))
+
+    let mut encoded = Vec::with_capacity(bytes.len() + 1);
+    encoded.push(algorithm as u8);
+    encoded.extend_from_slice(bytes);
+    Ok(encoded)
+}
+
+fn parse_relay_identity(bytes: &[u8]) -> Result<PublicKey, HarnessError> {
+    let (algorithm, payload) = if bytes.len() == 32 {
+        (Algorithm::Ed25519, bytes)
+    } else {
+        let (&tag, payload) = bytes.split_first().ok_or_else(|| {
+            HarnessError::Validation("relay identity must not be empty".to_owned())
+        })?;
+        let algorithm = Algorithm::try_from(tag).map_err(|()| {
+            HarnessError::Validation(format!("unknown relay identity algorithm tag {tag}"))
+        })?;
+        if algorithm == Algorithm::Ed25519 {
+            return Err(HarnessError::Validation(
+                "relay Ed25519 identity must use the canonical untagged 32-byte encoding"
+                    .to_owned(),
+            ));
+        }
+        (algorithm, payload)
+    };
+
+    PublicKey::from_bytes(algorithm, payload).map_err(|error| {
+        HarnessError::Validation(format!("relay {algorithm} identity is invalid: {error}"))
     })
 }
 
@@ -1972,7 +2000,7 @@ fn relay_auth_digest(
     client_hello: &[u8],
     relay_body: &[u8],
     transcript_hash: &[u8; 32],
-    relay_identity: &[u8; 32],
+    relay_identity: &[u8],
     transport_alpn: &[u8],
     tls_server_name: &str,
 ) -> [u8; 32] {
@@ -2011,15 +2039,20 @@ fn append_relay_authentication(
         client_hello,
         relay_body,
         transcript_hash,
-        &relay_identity,
+        relay_identity.as_slice(),
         transport_alpn,
         tls_server_name,
     );
     let signature = Signature::try_new(relay_identity_key.private_key(), &digest)
         .map_err(|error| HarnessError::Validation(format!("relay signing failed: {error}")))?;
-    if signature.payload().len() != ED25519_SIGNATURE_LEN {
+    let algorithm = relay_identity_key
+        .public_key()
+        .try_algorithm()
+        .map_err(|error| HarnessError::Validation(format!("invalid relay identity: {error}")))?;
+    let expected_signature_len = algorithm.signature_payload_len();
+    if signature.payload().len() != expected_signature_len {
         return Err(HarnessError::Validation(format!(
-            "relay Ed25519 signature must be {ED25519_SIGNATURE_LEN} bytes, got {}",
+            "relay {algorithm} signature must be {expected_signature_len} bytes, got {}",
             signature.payload().len()
         )));
     }
@@ -2032,24 +2065,26 @@ fn verify_relay_authentication(
     client_hello: &[u8],
     relay_body: &[u8],
     transcript_hash: &[u8; 32],
-    relay_identity: &[u8; 32],
+    relay_identity: &[u8],
     signature: &[u8],
     expected_relay_identity: &PublicKey,
     transport_alpn: &[u8],
     tls_server_name: &str,
 ) -> Result<(), HarnessError> {
-    let (algorithm, expected_bytes) = expected_relay_identity.try_to_bytes().map_err(|error| {
-        HarnessError::Validation(format!("invalid expected relay key: {error}"))
-    })?;
-    if algorithm != Algorithm::Ed25519 || expected_bytes != relay_identity {
+    let parsed_relay_identity = parse_relay_identity(relay_identity)?;
+    if &parsed_relay_identity != expected_relay_identity {
         return Err(HarnessError::Validation(
             "relay handshake identity does not match the authenticated directory identity"
                 .to_owned(),
         ));
     }
-    if signature.len() != ED25519_SIGNATURE_LEN {
+    let algorithm = expected_relay_identity.try_algorithm().map_err(|error| {
+        HarnessError::Validation(format!("invalid expected relay key: {error}"))
+    })?;
+    let expected_signature_len = algorithm.signature_payload_len();
+    if signature.len() != expected_signature_len {
         return Err(HarnessError::Validation(format!(
-            "relay Ed25519 signature must be {ED25519_SIGNATURE_LEN} bytes, got {}",
+            "relay {algorithm} signature must be {expected_signature_len} bytes, got {}",
             signature.len()
         )));
     }
@@ -2072,28 +2107,24 @@ fn verify_relay_authentication(
 
 fn read_relay_authentication(
     cursor: &mut MessageCursor<'_>,
-) -> Result<([u8; 32], Vec<u8>), HarnessError> {
-    let identity_bytes = cursor.read_len_prefixed()?;
-    let relay_identity: [u8; 32] = identity_bytes.try_into().map_err(|_| {
-        HarnessError::Validation(format!(
-            "relay Ed25519 identity must be 32 bytes, got {}",
-            identity_bytes.len()
-        ))
-    })?;
-    PublicKey::from_bytes(Algorithm::Ed25519, &relay_identity).map_err(|error| {
-        HarnessError::Validation(format!("relay Ed25519 identity is invalid: {error}"))
-    })?;
+) -> Result<(Vec<u8>, Vec<u8>), HarnessError> {
+    let relay_identity = cursor.read_len_prefixed()?.to_vec();
+    let relay_public_key = parse_relay_identity(&relay_identity)?;
     let signature = cursor.read_len_prefixed()?.to_vec();
-    if signature.len() != ED25519_SIGNATURE_LEN {
+    let algorithm = relay_public_key
+        .try_algorithm()
+        .map_err(|error| HarnessError::Validation(format!("invalid relay identity: {error}")))?;
+    let expected_signature_len = algorithm.signature_payload_len();
+    if signature.len() != expected_signature_len {
         return Err(HarnessError::Validation(format!(
-            "relay Ed25519 signature must be {ED25519_SIGNATURE_LEN} bytes, got {}",
+            "relay {algorithm} signature must be {expected_signature_len} bytes, got {}",
             signature.len()
         )));
     }
     if signature.iter().all(|byte| *byte == 0) {
-        return Err(HarnessError::Validation(
-            "relay Ed25519 signature must not be all zero".to_owned(),
-        ));
+        return Err(HarnessError::Validation(format!(
+            "relay {algorithm} signature must not be all zero"
+        )));
     }
     Ok((relay_identity, signature))
 }
@@ -3438,7 +3469,7 @@ struct HybridRelayParsed {
     confirmation: Vec<u8>,
     transcript_hash: [u8; 32],
     signed_relay_body: Vec<u8>,
-    relay_identity: [u8; 32],
+    relay_identity: Vec<u8>,
     relay_signature: Vec<u8>,
 }
 
@@ -3459,7 +3490,7 @@ struct PqfsRelayParsed {
     forward_commitment: Vec<u8>,
     dual_mix: Vec<u8>,
     signed_relay_body: Vec<u8>,
-    relay_identity: [u8; 32],
+    relay_identity: Vec<u8>,
     relay_signature: Vec<u8>,
 }
 
@@ -5083,6 +5114,107 @@ mod tests {
             .expect("derive checked SoraNet handshake fixture keypair")
     }
 
+    fn assert_relay_authentication_roundtrip(algorithm: Algorithm, seed: u8) {
+        let relay_keys = KeyPair::try_from_seed(vec![seed; 32], algorithm)
+            .expect("derive checked relay identity keypair");
+        let wrong_relay_keys = KeyPair::try_from_seed(vec![seed.wrapping_add(1); 32], algorithm)
+            .expect("derive checked mismatched relay identity keypair");
+        let client_hello = b"algorithm-agile-client-hello";
+        let relay_body = b"algorithm-agile-relay-body";
+        let transcript_hash = [0xA5; 32];
+        let mut frame = Vec::new();
+
+        append_relay_authentication(
+            &mut frame,
+            HandshakeSuite::Nk2Hybrid,
+            client_hello,
+            relay_body,
+            &transcript_hash,
+            &relay_keys,
+            b"iroha-p2p/1",
+            "iroha-quic",
+        )
+        .expect("append authenticated relay identity");
+
+        let mut cursor = MessageCursor::new(&frame);
+        let (relay_identity, signature) =
+            read_relay_authentication(&mut cursor).expect("parse authenticated relay identity");
+        assert!(cursor.remaining_slice().is_empty());
+        assert_eq!(relay_identity, relay_identity_bytes(&relay_keys).unwrap());
+        assert_eq!(signature.len(), algorithm.signature_payload_len());
+        if algorithm == Algorithm::Ed25519 {
+            assert_eq!(
+                relay_identity.len(),
+                32,
+                "Ed25519 keeps its legacy wire form"
+            );
+        } else {
+            assert_eq!(relay_identity.first().copied(), Some(algorithm as u8));
+        }
+
+        verify_relay_authentication(
+            HandshakeSuite::Nk2Hybrid,
+            client_hello,
+            relay_body,
+            &transcript_hash,
+            &relay_identity,
+            &signature,
+            relay_keys.public_key(),
+            b"iroha-p2p/1",
+            "iroha-quic",
+        )
+        .expect("verify authenticated relay identity");
+
+        let mismatch = verify_relay_authentication(
+            HandshakeSuite::Nk2Hybrid,
+            client_hello,
+            relay_body,
+            &transcript_hash,
+            &relay_identity,
+            &signature,
+            wrong_relay_keys.public_key(),
+            b"iroha-p2p/1",
+            "iroha-quic",
+        )
+        .expect_err("mismatched expected relay identity must fail");
+        assert!(
+            mismatch
+                .to_string()
+                .contains("authenticated directory identity")
+        );
+
+        let mut tampered_signature = signature;
+        tampered_signature[0] ^= 0x80;
+        let tampered = verify_relay_authentication(
+            HandshakeSuite::Nk2Hybrid,
+            client_hello,
+            relay_body,
+            &transcript_hash,
+            &relay_identity,
+            &tampered_signature,
+            relay_keys.public_key(),
+            b"iroha-p2p/1",
+            "iroha-quic",
+        )
+        .expect_err("tampered relay signature must fail");
+        assert!(
+            tampered
+                .to_string()
+                .contains("signature verification failed")
+        );
+    }
+
+    #[test]
+    fn relay_authentication_ed25519_roundtrip_rejects_mismatch_and_tamper() {
+        assert_relay_authentication_roundtrip(Algorithm::Ed25519, 0x61);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn relay_authentication_bls_normal_roundtrip_rejects_mismatch_and_tamper() {
+        assert_relay_authentication_roundtrip(Algorithm::BlsNormal, 0x71);
+    }
+
     fn authenticated_exchange(
         client_rng_seed: u64,
         relay_rng_seed: u64,
@@ -6693,7 +6825,7 @@ mod tests {
             client_commit,
             relay_body,
             &transcript,
-            relay_identity.try_into().expect("32-byte relay identity"),
+            relay_identity,
             relay_signature,
             relay_keys.public_key(),
             params.transport_alpn,

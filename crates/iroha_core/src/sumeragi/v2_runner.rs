@@ -1168,7 +1168,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // adapter may escape the construction boundary early.
             SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(
                 wal_path.clone(),
-                verified_context,
+                verified_context.clone(),
                 local_validator,
                 Generation::INITIAL,
                 consensus_key_hash,
@@ -1179,7 +1179,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         } else {
             SumeragiV2Adapter::open_with_capacity_geometry(
                 wal_path.clone(),
-                verified_context,
+                verified_context.clone(),
                 local_validator,
                 Generation::INITIAL,
                 consensus_key_hash,
@@ -1422,7 +1422,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             executor.durable_finality().is_some() && recovered_applied_height.is_some(),
             || {
                 V2LaneWorkAdapter::new_with_output_guard_and_transport(
-                    context.clone(),
+                    &verified_context,
                     local_peer.clone(),
                     common_config.key_pair.clone(),
                     config.role == NodeRole::Validator,

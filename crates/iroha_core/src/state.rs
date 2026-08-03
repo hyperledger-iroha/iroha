@@ -4762,7 +4762,8 @@ pub struct WorldBlock<'world> {
     /// Alias lease metadata keyed by canonical contract address.
     pub(crate) contract_alias_bindings:
         StorageBlock<'world, ContractAddress, ContractAliasBindingRecord>,
-    /// Authoritative domain ownership context for canonical asset definition ids.
+    /// Derived index of explicit asset-definition owning domains.
+    #[norito(skip)]
     pub(crate) asset_definition_domains: StorageBlock<'world, AssetDefinitionId, DomainId>,
     /// Asset-definition index keyed by definition domain.
     #[norito(skip)]

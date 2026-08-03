@@ -2632,6 +2632,61 @@ pub(crate) fn prepare_v2_lane_payload_plan(
     routing_decisions: &[RoutingDecision],
     candidate_hashes: &[Hash],
 ) -> Result<V2LanePayloadPlan, V2LanePayloadPlanError> {
+    prepare_v2_lane_payload_plan_inner(
+        state,
+        kura,
+        context,
+        view,
+        _local_peer,
+        routing_decisions,
+        candidate_hashes,
+        false,
+    )
+}
+
+/// Recompute a received proposal's lane plan while allowing one exact
+/// canonical predecessor whose lane certificate/application receipt is still
+/// catching up locally.
+///
+/// Proposal production must continue to use [`prepare_v2_lane_payload_plan`]
+/// so a node never extends its own unapplied lane work. Validation is
+/// different: another quorum may already have finalized the predecessor while
+/// this node is completing the independently durable lane sidecars. In that
+/// case the authenticated canonical block body is immutable planning input;
+/// rejecting its exact successor would turn local recovery lag into consensus
+/// divergence.
+pub(crate) fn prepare_v2_lane_payload_validation_plan(
+    state: &State,
+    kura: &Kura,
+    context: &wire::HeightContext,
+    view: wire::View,
+    local_peer: &PeerId,
+    routing_decisions: &[RoutingDecision],
+    candidate_hashes: &[Hash],
+) -> Result<V2LanePayloadPlan, V2LanePayloadPlanError> {
+    prepare_v2_lane_payload_plan_inner(
+        state,
+        kura,
+        context,
+        view,
+        local_peer,
+        routing_decisions,
+        candidate_hashes,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_v2_lane_payload_plan_inner(
+    state: &State,
+    kura: &Kura,
+    context: &wire::HeightContext,
+    view: wire::View,
+    _local_peer: &PeerId,
+    routing_decisions: &[RoutingDecision],
+    candidate_hashes: &[Hash],
+    allow_canonical_unapplied_predecessor: bool,
+) -> Result<V2LanePayloadPlan, V2LanePayloadPlanError> {
     if routing_decisions.len() != candidate_hashes.len() {
         return Err(V2LanePayloadPlanError::new(
             "lane routing and candidate hash lengths differ",
@@ -2641,20 +2696,86 @@ pub(crate) fn prepare_v2_lane_payload_plan(
         return Ok(V2LanePayloadPlan::default());
     }
 
-    let blocked_lanes = state
-        .unapplied_lane_block_artifact_heights_snapshot_cached()
-        .into_keys()
-        .chain(
-            state
-                .unapplied_certified_lane_block_heights_snapshot_cached()
-                .into_keys(),
-        )
-        .map(|(lane_id, _)| lane_id)
-        .collect::<BTreeSet<_>>();
+    let native_amx_blocked_routes =
+        state.unapplied_native_amx_participant_control_heights_snapshot_cached();
+    let mut blocked_routes = state.unapplied_lane_block_artifact_heights_snapshot_cached();
+    for (route, height) in state.unapplied_certified_lane_block_heights_snapshot_cached() {
+        blocked_routes
+            .entry(route)
+            .and_modify(|blocked_height| *blocked_height = (*blocked_height).max(height))
+            .or_insert(height);
+    }
+    let committed_height = u64::try_from(state.committed_height()).map_err(|_| {
+        V2LanePayloadPlanError::new("committed height does not fit the v2 lane planner")
+    })?;
+    let canonical_unapplied_tips = if allow_canonical_unapplied_predecessor {
+        routing_decisions
+            .iter()
+            .filter_map(|route| {
+                let artifact =
+                    kura.latest_lane_block_artifact_matching(route.lane_id, |artifact| {
+                        let ownership = &artifact.ownership;
+                        ownership.dataspace_id == route.dataspace_id
+                            && ownership.proposal_height <= committed_height
+                            && ownership.proposal_height < context.height
+                            && state.lane_route_and_incarnation_active_at_height(
+                                ownership.lane_id,
+                                ownership.dataspace_id,
+                                ownership.lane_incarnation,
+                                ownership.proposal_height,
+                            )
+                            && state.lane_route_and_incarnation_active_at_height(
+                                ownership.lane_id,
+                                ownership.dataspace_id,
+                                ownership.lane_incarnation,
+                                context.height,
+                            )
+                    })?;
+                // A matching global block hash is not enough: bind the raw
+                // sidecar to the exact ownership embedded in that canonical
+                // block body before it can affect deterministic planning.
+                let canonical = kura.canonical_lane_block_artifacts_at_proposal_height_matching(
+                    artifact.ownership.proposal_height,
+                    1,
+                    |ownership| ownership == &artifact.ownership,
+                );
+                if canonical.first() != Some(&artifact) || canonical.len() != 1 {
+                    return None;
+                }
+                let ownership = artifact.ownership;
+                Some((
+                    (ownership.lane_id, ownership.dataspace_id),
+                    LaneBlockTip {
+                        lane_id: ownership.lane_id,
+                        dataspace_id: ownership.dataspace_id,
+                        lane_incarnation: ownership.lane_incarnation,
+                        latest_lane_block_height: ownership.lane_block_height,
+                        latest_lane_block_descriptor_hash: ownership.lane_block_descriptor_hash,
+                    },
+                ))
+            })
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
+    if allow_canonical_unapplied_predecessor {
+        blocked_routes.retain(|route, blocked_height| {
+            if native_amx_blocked_routes.contains_key(route) {
+                return true;
+            }
+            canonical_unapplied_tips
+                .get(route)
+                .is_none_or(|tip| tip.latest_lane_block_height < *blocked_height)
+        });
+    }
     let unavailable_indices = routing_decisions
         .iter()
         .enumerate()
-        .filter_map(|(index, route)| blocked_lanes.contains(&route.lane_id).then_some(index))
+        .filter_map(|(index, route)| {
+            blocked_routes
+                .contains_key(&(route.lane_id, route.dataspace_id))
+                .then_some(index)
+        })
         .collect::<BTreeSet<_>>();
     if !unavailable_indices.is_empty() {
         return Ok(V2LanePayloadPlan {
@@ -2725,22 +2846,44 @@ pub(crate) fn prepare_v2_lane_payload_plan(
                     context.height
                 ))
             })?;
-            let (latest_lane_block_height, latest_lane_block_descriptor_hash) =
-                v2_known_lane_tip_for_route(
-                    state,
-                    kura,
-                    context.height,
-                    domain.lane_id,
-                    domain.dataspace_id,
-                    lane_incarnation,
-                )
-                .ok_or_else(|| {
-                    V2LanePayloadPlanError::new(format!(
-                        "lane {} has conflicting durable predecessor evidence at height {}",
+            let ordinary_tip = v2_known_lane_tip_for_route(
+                state,
+                kura,
+                context.height,
+                domain.lane_id,
+                domain.dataspace_id,
+                lane_incarnation,
+            )
+            .ok_or_else(|| {
+                V2LanePayloadPlanError::new(format!(
+                    "lane {} has conflicting durable predecessor evidence at height {}",
+                    domain.lane_id.as_u32(),
+                    context.height
+                ))
+            })?;
+            let canonical_tip = canonical_unapplied_tips
+                .get(&(domain.lane_id, domain.dataspace_id))
+                .filter(|tip| tip.lane_incarnation == lane_incarnation)
+                .map(|tip| {
+                    (
+                        tip.latest_lane_block_height,
+                        tip.latest_lane_block_descriptor_hash,
+                    )
+                });
+            let (latest_lane_block_height, latest_lane_block_descriptor_hash) = match canonical_tip
+            {
+                Some(canonical) if canonical.0 > ordinary_tip.0 => canonical,
+                Some(canonical)
+                    if canonical.0 == ordinary_tip.0 && canonical.1 != ordinary_tip.1 =>
+                {
+                    return Err(V2LanePayloadPlanError::new(format!(
+                        "lane {} has conflicting canonical predecessor evidence at height {}",
                         domain.lane_id.as_u32(),
                         context.height
-                    ))
-                })?;
+                    )));
+                }
+                _ => ordinary_tip,
+            };
             Ok(LaneBlockTip {
                 lane_id: domain.lane_id,
                 dataspace_id: domain.dataspace_id,

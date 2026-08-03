@@ -8452,6 +8452,13 @@ enum ExactOutputRolloverClaim {
     /// Manually assembled output has no semantic rollover authority.
     Exact,
     GlobalV2(ExactOutputCreationScope),
+    /// Canonical payload chunks emitted in a separate fanout from their
+    /// Proposal. The exact manifest is retained so finality handoff can
+    /// revalidate every chunk and signature against the applied context.
+    PayloadChunks {
+        scope: ExactOutputCreationScope,
+        manifest: wire::PayloadManifest,
+    },
     Lane(ExactOutputCreationScope),
     /// Kura-backed autonomous payload or NewView output that the successor
     /// rehydrates and deterministically retransmits with the same local
@@ -8565,6 +8572,7 @@ impl ExactOutputRolloverClaim {
         match self {
             Self::Exact => None,
             Self::GlobalV2(scope) | Self::Lane(scope) => Some(*scope),
+            Self::PayloadChunks { scope, .. } => Some(*scope),
             Self::AutonomousLane { scope, .. } => Some(*scope),
             Self::DurableCommitCertificateResponse { scope, .. }
             | Self::DurableCertifiedBodyResponse { scope, .. }
@@ -8595,6 +8603,42 @@ impl ExactOutputRolloverClaim {
                 } else {
                     Err("global-v2 rollover claim covers a different output kind".to_owned())
                 }
+            }
+            Self::PayloadChunks { manifest, .. } => {
+                let manifest_hash = HashOf::new(manifest);
+                if messages.len() != manifest.chunk_hashes.len() {
+                    return Err(
+                        "payload-chunk rollover claim changed the exact chunk count".to_owned()
+                    );
+                }
+                for (expected_index, message) in messages.iter().enumerate() {
+                    let NetworkMessage::SumeragiBlock(envelope) = message else {
+                        return Err(
+                            "payload-chunk rollover claim covers a non-Sumeragi message".to_owned()
+                        );
+                    };
+                    let BlockMessage::V2(message) = envelope.as_message() else {
+                        return Err("payload-chunk rollover claim covers a lane message".to_owned());
+                    };
+                    message
+                        .validate_version()
+                        .map_err(|error| error.to_string())?;
+                    let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload
+                    else {
+                        return Err(
+                            "payload-chunk rollover claim covers another v2 payload".to_owned()
+                        );
+                    };
+                    if chunk.manifest_hash != manifest_hash
+                        || usize::try_from(chunk.index).ok() != Some(expected_index)
+                    {
+                        return Err(
+                            "payload-chunk rollover claim changed exact manifest coordinates"
+                                .to_owned(),
+                        );
+                    }
+                }
+                Ok(())
             }
             Self::Lane(_) => {
                 if messages.iter().all(|message| {
@@ -13504,6 +13548,65 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
     Ok(())
 }
 
+fn payload_chunk_output_has_applied_height_authority(
+    messages: &[NetworkMessage],
+    manifest: &wire::PayloadManifest,
+    artifact: &wire::finality::V2FinalityArtifact,
+) -> Result<(), String> {
+    let context = &artifact.height_context;
+    manifest.validate(context).map_err(|error| {
+        format!("payload-chunk rollover manifest is invalid for the applied context: {error}")
+    })?;
+    let manifest_hash = HashOf::new(manifest);
+    if messages.len() != manifest.chunk_hashes.len() {
+        return Err("payload-chunk rollover changed the exact chunk count".to_owned());
+    }
+    for (expected_index, message) in messages.iter().enumerate() {
+        if message.progress_reconstruction() != ProgressReconstruction::Retransmit {
+            return Err(
+                "payload-chunk rollover contains non-reconstructible transport traffic".to_owned(),
+            );
+        }
+        let NetworkMessage::SumeragiBlock(envelope) = message else {
+            return Err("payload-chunk rollover contains non-Sumeragi traffic".to_owned());
+        };
+        let BlockMessage::V2(message) = envelope.as_message() else {
+            return Err("payload-chunk rollover contains lane traffic".to_owned());
+        };
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
+            return Err("payload-chunk rollover contains another v2 payload".to_owned());
+        };
+        if chunk.manifest_hash != manifest_hash
+            || usize::try_from(chunk.index).ok() != Some(expected_index)
+        {
+            return Err(
+                "payload-chunk rollover differs from its exact manifest coordinates".to_owned(),
+            );
+        }
+        chunk.validate(context, manifest).map_err(|error| {
+            format!("payload-chunk rollover is invalid for its exact manifest: {error}")
+        })?;
+        let sender_index = usize::try_from(chunk.sender)
+            .map_err(|_| "payload-chunk rollover sender is not representable".to_owned())?;
+        let sender = context.roster.get(sender_index).ok_or_else(|| {
+            "payload-chunk rollover sender is outside the applied roster".to_owned()
+        })?;
+        let preimage = chunk
+            .signature_preimage(context, manifest)
+            .map_err(|error| error.to_string())?;
+        Signature::try_from_bytes(&chunk.signature)
+            .map_err(|error| format!("payload-chunk rollover has an invalid signature: {error}"))?
+            .verify(sender.validator.public_key(), &preimage)
+            .map_err(|error| {
+                format!("payload-chunk rollover signature is not owned by its sender: {error}")
+            })?;
+    }
+    Ok(())
+}
+
 fn applied_height_reconstruction_covers(
     messages: &[NetworkMessage],
     peers: &[PeerId],
@@ -13518,6 +13621,9 @@ fn applied_height_reconstruction_covers(
     })?;
     if !scope.covers(artifact) {
         return Err("Sumeragi v2 output claim belongs to another creation scope".to_owned());
+    }
+    if let ExactOutputRolloverClaim::PayloadChunks { manifest, .. } = rollover_claim {
+        return payload_chunk_output_has_applied_height_authority(messages, manifest, artifact);
     }
     if let ExactOutputRolloverClaim::AutonomousLane {
         local_peer,
@@ -13596,7 +13702,6 @@ fn applied_height_reconstruction_covers(
         )
         .map(|source| source.is_some())
     };
-    let mut manifest_hashes = BTreeSet::new();
     for message in messages {
         let NetworkMessage::SumeragiBlock(envelope) = message else {
             return Err(
@@ -13610,17 +13715,14 @@ fn applied_height_reconstruction_covers(
                 message
                     .validate_version()
                     .map_err(|error| error.to_string())?;
-                match &message.payload {
-                    wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                        manifest_hashes.insert(HashOf::new(&proposal.manifest));
-                    }
-                    wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
-                    | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
-                        wire::CertifiedBodyResponse { manifest, .. },
-                    ) => {
-                        manifest_hashes.insert(HashOf::new(manifest));
-                    }
-                    _ => {}
+                if matches!(
+                    &message.payload,
+                    wire::ConsensusMessageV2Payload::PayloadChunk(_)
+                ) {
+                    return Err(
+                        "Sumeragi v2 payload chunks require an exact manifest rollover claim"
+                            .to_owned(),
+                    );
                 }
             }
             lane_message @ (BlockMessage::LaneBlockProposal(_)
@@ -13672,9 +13774,7 @@ fn applied_height_reconstruction_covers(
                     wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
                         round_matches(manifest.round)
                     }
-                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
-                        manifest_hashes.contains(&chunk.manifest_hash)
-                    }
+                    wire::ConsensusMessageV2Payload::PayloadChunk(_) => false,
                     wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
                         round_matches(request.round)
                     }
@@ -17835,7 +17935,10 @@ impl V2EffectServices for ProductionV2Services {
             source_retained |= self.enqueue_exact_fanout_while_guarded(
                 encoded_chunks,
                 payload_targets,
-                ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+                ExactOutputRolloverClaim::PayloadChunks {
+                    scope: self.exact_output_scope(),
+                    manifest: proposal.manifest.clone(),
+                },
                 operation.permit(),
             )? == ExactFanoutOwnership::SourceRetained;
         }
@@ -21351,6 +21454,87 @@ pub(super) mod tests {
 
         assert!(error.contains("not bound to the applied height"));
         assert!(pending.is_pending());
+    }
+
+    #[test]
+    fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {
+        let (mut service, keys) = fixture_with_block_payload();
+        let peer = service.context.roster[1].validator.clone();
+        let (_, artifact) = durable_finality_fixture(&service, &keys);
+        let (_, payload, _) = proposal_body_and_payload(&service.context, &keys);
+        let manifest = payload.manifest().clone();
+        let owner = service.active_tag;
+        service
+            .register_outbound_payload(owner, payload)
+            .expect("sign and retain exact payload chunks");
+        let retained_chunks = service
+            .outbound_chunks
+            .get(&HashOf::new(&manifest))
+            .expect("registered payload owns its exact manifest")
+            .messages
+            .clone();
+        let messages = retained_chunks
+            .iter()
+            .cloned()
+            .map(ProductionV2Services::preencode_v2_network_message)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("preencode exact payload chunks");
+        let chunk_count = messages.len();
+        let claim = ExactOutputRolloverClaim::PayloadChunks {
+            scope: service.exact_output_scope(),
+            manifest: manifest.clone(),
+        };
+        let mut pending = PendingExactOutput::new(1, chunk_count, 1, &[])
+            .expect("one exact payload-chunk fanout corridor");
+        pending
+            .enqueue(
+                PendingExactFanout::claimed(messages, vec![peer.clone()], claim)
+                    .expect("payload chunks match their exact manifest claim")
+                    .expect("non-empty payload-chunk fanout"),
+            )
+            .expect("retain exact payload-chunk fanout");
+
+        assert_eq!(
+            pending
+                .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+                .expect("applied context authenticates every retained payload chunk"),
+            chunk_count
+        );
+        assert!(!pending.is_pending());
+
+        let mut tampered_chunks = retained_chunks;
+        let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &mut tampered_chunks[0].payload
+        else {
+            unreachable!("registered outbound payload contains only chunks")
+        };
+        chunk.signature[0] ^= 0x01;
+        let tampered_messages = tampered_chunks
+            .into_iter()
+            .map(ProductionV2Services::preencode_v2_network_message)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("preencode signature-tampered payload chunks");
+        let mut tampered = PendingExactOutput::new(1, chunk_count, 1, &[])
+            .expect("one tampered payload-chunk fanout corridor");
+        tampered
+            .enqueue(
+                PendingExactFanout::claimed(
+                    tampered_messages,
+                    vec![peer],
+                    ExactOutputRolloverClaim::PayloadChunks {
+                        scope: service.exact_output_scope(),
+                        manifest,
+                    },
+                )
+                .expect("tampered signature retains exact structural coordinates")
+                .expect("non-empty tampered payload-chunk fanout"),
+            )
+            .expect("retain structurally exact tampered payload chunks");
+
+        let error = tampered
+            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+            .expect_err("an altered chunk signature cannot cross finality handoff");
+        assert!(error.contains("signature"));
+        assert!(tampered.is_pending(), "rejection is atomic");
     }
 
     #[test]

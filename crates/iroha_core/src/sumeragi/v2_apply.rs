@@ -983,15 +983,38 @@ impl V2ApplyService {
             &hashes,
         )
         .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
-        if !expected.unavailable_indices.is_empty()
-            || expected.ownerships != bundle.lane_payload_ownerships
+        if expected.unavailable_indices.is_empty()
+            && expected.ownerships == bundle.lane_payload_ownerships
         {
-            return Err(V2ApplyError::Validation(
-                "Sumeragi v2 lane ownerships differ from deterministic committed-state planning"
-                    .to_owned(),
-            ));
+            return Ok(());
         }
-        Ok(())
+        // A validator may have committed the canonical predecessor globally
+        // while its independently durable lane certificate/application receipt
+        // is still catching up. Proposal production remains blocked on that
+        // debt, but validation must not turn local sidecar lag into a different
+        // decision. Recompute from the exact canonical predecessor retained by
+        // Kura; never trust the received ownership as planning authority.
+        let recovered = super::lane_planner::prepare_v2_lane_payload_validation_plan(
+            self.state.as_ref(),
+            self.kura.as_ref(),
+            context,
+            view,
+            &leader.validator,
+            &routes,
+            &hashes,
+        )
+        .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+        if recovered.unavailable_indices.is_empty()
+            && recovered.ownerships == bundle.lane_payload_ownerships
+        {
+            return Ok(());
+        }
+        Err(V2ApplyError::Validation(format!(
+            "Sumeragi v2 lane ownerships differ from deterministic committed-state planning \
+             (ordinary_unavailable={}, recovery_unavailable={})",
+            expected.unavailable_indices.len(),
+            recovered.unavailable_indices.len(),
+        )))
     }
 
     /// Construct the serialized state/Kura application adapter.
@@ -2885,7 +2908,7 @@ mod tests {
         let leader_index = context.leader(round.view);
         let route = routing_plan.coordinator_route();
         let entrypoint_hash = Hash::from(accepted.hash_as_entrypoint());
-        let lane_plan = super::super::lane_planner::prepare_v2_lane_payload_plan(
+        let strict_lane_plan = super::super::lane_planner::prepare_v2_lane_payload_plan(
             fixture.state.as_ref(),
             fixture.kura.as_ref(),
             &context,
@@ -2896,6 +2919,21 @@ mod tests {
             std::slice::from_ref(&entrypoint_hash),
         )
         .expect("derive canonical successor lane plan");
+        let lane_plan = if strict_lane_plan.unavailable_indices.is_empty() {
+            strict_lane_plan
+        } else {
+            super::super::lane_planner::prepare_v2_lane_payload_validation_plan(
+                fixture.state.as_ref(),
+                fixture.kura.as_ref(),
+                &context,
+                round.view,
+                &context.roster[usize::try_from(leader_index).expect("successor leader index")]
+                    .validator,
+                std::slice::from_ref(&route),
+                std::slice::from_ref(&entrypoint_hash),
+            )
+            .expect("derive received successor lane plan from canonical predecessor")
+        };
         assert!(
             lane_plan.unavailable_indices.is_empty(),
             "successor fixture lane must be available"
@@ -5026,6 +5064,128 @@ mod tests {
             "an exact lane retry must preserve the complete canonical Kura wire"
         );
     });
+
+    v2_apply_test!(
+        canonical_raw_lane_successor_validates_and_applies_while_producer_waits_for_sidecars,
+        {
+            let fixture = ApplyFixture::new_with_lane_payload(true);
+            let predecessor = fixture
+                .body
+                .execution_context()
+                .expect("lane predecessor execution context")
+                .lane_payload_ownerships
+                .first()
+                .expect("lane predecessor ownership")
+                .clone();
+
+            let mut parent_store = fixture.reopen_body_store();
+            fixture
+                .execute(&mut parent_store)
+                .expect("commit the canonical raw lane predecessor");
+            assert_eq!(fixture.state.committed_height(), 1);
+            assert_eq!(
+                fixture
+                    .state
+                    .unapplied_lane_block_artifact_heights_snapshot_cached()
+                    .get(&(predecessor.lane_id, predecessor.dataspace_id)),
+                Some(&predecessor.lane_block_height),
+                "the producer must retain the raw predecessor readiness gate"
+            );
+            assert!(
+                fixture
+                    .kura
+                    .latest_certified_lane_block_artifact_matching(
+                        predecessor.lane_id,
+                        |artifact| {
+                            artifact.proposal.descriptor.dataspace_id == predecessor.dataspace_id
+                        },
+                    )
+                    .is_none(),
+                "the regression requires lane certification to remain locally pending"
+            );
+            assert!(
+                fixture
+                    .kura
+                    .read_lane_block_application_receipt(
+                        predecessor.lane_id,
+                        predecessor.lane_block_height,
+                    )
+                    .is_none(),
+                "the regression requires the lane application receipt to remain locally pending"
+            );
+
+            let mut successor = build_successor_apply_fixture(&fixture);
+            let successor_bundle = successor
+                .body
+                .execution_context()
+                .expect("successor execution context");
+            let successor_ownership = successor_bundle
+                .lane_payload_ownerships
+                .first()
+                .expect("successor lane ownership");
+            assert_eq!(
+                successor_ownership.previous_lane_block_height, predecessor.lane_block_height,
+                "validation must extend the exact canonical raw lane height"
+            );
+            assert_eq!(
+                successor_ownership.previous_lane_block_descriptor_hash,
+                predecessor.lane_block_descriptor_hash,
+                "validation must extend the exact canonical raw lane descriptor"
+            );
+            assert_eq!(
+                successor_ownership.lane_block_height,
+                predecessor.lane_block_height + 1,
+                "the received successor must advance exactly one lane height"
+            );
+
+            let routes = successor_bundle
+                .external
+                .iter()
+                .map(|entry| RoutingDecision::new(entry.lane_id, entry.dataspace_id))
+                .collect::<Vec<_>>();
+            let hashes = successor_bundle
+                .external
+                .iter()
+                .map(|entry| Hash::from(entry.entrypoint_hash))
+                .collect::<Vec<_>>();
+            let leader = successor.context.roster
+                [usize::try_from(successor.context.leader(0)).expect("successor leader index")]
+            .validator
+            .clone();
+            let strict = super::super::lane_planner::prepare_v2_lane_payload_plan(
+                fixture.state.as_ref(),
+                fixture.kura.as_ref(),
+                &successor.context,
+                0,
+                &leader,
+                &routes,
+                &hashes,
+            )
+            .expect("strict producer planning remains deterministic");
+            assert_eq!(strict.unavailable_indices.len(), 1);
+            assert!(
+                strict.unavailable_indices.contains(&0),
+                "proposal production must wait for the predecessor sidecars"
+            );
+            fixture
+                .service
+                .validate_candidate(&successor.context, &successor.body)
+                .expect("a validator accepts the exact canonical raw successor");
+
+            let completion = fixture
+                .service
+                .execute(&successor.context, &mut successor.store, &successor.task)
+                .expect("apply the exact canonical raw successor");
+            assert_eq!(completion.receipt().height(), 2);
+            assert_eq!(fixture.state.committed_height(), 2);
+            assert_eq!(
+                fixture
+                    .kura
+                    .get_durable_block_hash(NonZeroUsize::new(2).expect("height two")),
+                Some(successor.body.hash())
+            );
+        }
+    );
 
     v2_apply_test!(
         conflicting_canonical_kura_block_fails_before_wsv_mutation,
