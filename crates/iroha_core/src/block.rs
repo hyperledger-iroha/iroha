@@ -9835,9 +9835,7 @@ pub(crate) mod valid {
             match entrypoint {
                 TransactionEntrypoint::External(tx) => Some(tx),
                 TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                    None
-                }
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
             }
         }
 

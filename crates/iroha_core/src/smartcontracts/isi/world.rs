@@ -79,7 +79,6 @@ pub mod isi {
         confidential::ConfidentialStatus,
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         da::pin_intent::DaPinIntentWithLocation,
-        escrow::AssetEscrowStatus,
         events::data::{
             governance::{
                 GovernanceEvent, GovernanceParliamentApprovalRecorded,
@@ -1739,6 +1738,7 @@ pub mod isi {
         InstructionExecutionError::InvariantViolation(msg.into())
     }
 
+    #[cfg(test)]
     fn validate_confidential_v2_open_verify_envelope_metadata(
         label: &str,
         attachment: &iroha_data_model::proof::ProofAttachment,
@@ -1833,105 +1833,6 @@ pub mod isi {
                     format!("failed to update canonical confidential tree: {err}").into(),
                 )
             })
-    }
-
-    fn validate_confidential_transfer_v2_public_inputs(
-        asset_definition: &AssetDefinitionId,
-        nullifiers: &[[u8; 32]],
-        output_commitments: &[[u8; 32]],
-        root_hint: Option<[u8; 32]>,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-        state_transaction: &StateTransaction<'_, '_>,
-        vk_record: &VerifyingKeyRecord,
-    ) -> Result<[[u8; 32]; 2], Error> {
-        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
-            &vk_record.circuit_id,
-        ) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer requires the confidential-transfer-v2 circuit".into(),
-            ));
-        }
-        let vk_box = vk_record.key.as_ref().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "confidential transfer verifying key bytes are missing".into(),
-            )
-        })?;
-        crate::zk::confidential_v2::ensure_confidential_transfer_v2_canonical_vk_box(vk_box)
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid confidential-transfer-v2 verifying key: {err}").into(),
-                )
-            })?;
-        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 requires halo2/ipa backend".into(),
-            ));
-        }
-        validate_confidential_v2_open_verify_envelope_metadata(
-            "confidential transfer v2",
-            attachment,
-            state_transaction,
-            vk_record,
-            crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-        )?;
-        if nullifiers.is_empty()
-            || nullifiers.len() > 2
-            || output_commitments.is_empty()
-            || output_commitments.len() > 2
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 requires 1-2 inputs and 1-2 outputs".into(),
-            ));
-        }
-        let (input_commitments, proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag) =
-            crate::zk::confidential_v2::parse_transfer_public_inputs(&attachment.proof.bytes)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid confidential transfer v2 public inputs: {err}").into(),
-                    )
-                })?;
-        let root_hint = root_hint.ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 requires root_hint".into(),
-            )
-        })?;
-        if proof_root != root_hint {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 root_hint mismatch".into(),
-            ));
-        }
-        let zero = [0u8; 32];
-        for index in 0..2 {
-            let expected_nullifier = nullifiers.get(index).copied().unwrap_or(zero);
-            if proof_nullifiers[index] != expected_nullifier {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "confidential transfer v2 nullifier mismatch".into(),
-                ));
-            }
-            let expected_output = output_commitments.get(index).copied().unwrap_or(zero);
-            if proof_outputs[index] != expected_output {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "confidential transfer v2 output commitment mismatch".into(),
-                ));
-            }
-        }
-        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
-            &asset_definition.to_string(),
-        );
-        if asset_tag != expected_asset_tag {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 asset tag mismatch".into(),
-            ));
-        }
-        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-            state_transaction.chain_id.as_str(),
-        );
-        if chain_tag != expected_chain_tag {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential transfer v2 chain tag mismatch".into(),
-            ));
-        }
-        Ok(input_commitments)
     }
 
     fn extract_vote_public_inputs(
@@ -2892,13 +2793,6 @@ pub mod isi {
             ));
         }
         Ok(code_bytes)
-    }
-
-    #[cfg(feature = "telemetry")]
-    fn root_evictions_since(before_len: usize, appended: usize, after_len: usize) -> u64 {
-        let expected = before_len.saturating_add(appended);
-        let evicted = expected.saturating_sub(after_len);
-        u64::try_from(evicted).unwrap_or(u64::MAX)
     }
 
     impl Execute for verifying_keys::RegisterVerifyingKey {
@@ -14153,76 +14047,6 @@ pub mod isi {
 
     // --- ZK Asset policy & ledger ---
 
-    fn enforce_vk_binding(
-        binding: &crate::state::ZkAssetVerifierBinding,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-    ) -> Result<(), Error> {
-        if attachment.backend.as_str() != binding.id.backend {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "proof backend does not match asset verifying key".into(),
-            ));
-        }
-        if attachment.vk_ref != binding.id {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "verifying key reference mismatch".into(),
-            ));
-        }
-        if let Some(commitment) = attachment.vk_commitment {
-            if commitment != binding.commitment {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verifying key commitment mismatch".into(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn resolve_bound_asset_vk(
-        context: &str,
-        state_transaction: &StateTransaction<'_, '_>,
-        binding: Option<&crate::state::ZkAssetVerifierBinding>,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-    ) -> Result<(iroha_data_model::proof::VerifyingKeyBox, VerifyingKeyRecord), Error> {
-        let binding = binding.ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!("{context} verifying key is not configured").into(),
-            )
-        })?;
-        enforce_vk_binding(binding, attachment)?;
-        let record = state_transaction
-            .world
-            .verifying_keys
-            .get(&binding.id)
-            .cloned()
-            .ok_or_else(|| {
-                FindError::Permission(Box::new(Permission::new(
-                    "VerifyingKeyMissing".into(),
-                    iroha_primitives::json::Json::from(
-                        format!("{}::{}", binding.id.backend, binding.id.name).as_str(),
-                    ),
-                )))
-            })?;
-        if record.status != ConfidentialStatus::Active {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "verifying key is not active".into(),
-            ));
-        }
-        if record.commitment != binding.commitment {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "verifying key commitment mismatch".into(),
-            ));
-        }
-        let vk_box = record.key.clone().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation("verifying key bytes missing".into())
-        })?;
-        if vk_box.backend != attachment.backend {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "verifying key backend mismatch".into(),
-            ));
-        }
-        Ok((vk_box, record))
-    }
-
     #[derive(Clone)]
     struct PolicyMetadataContext {
         allow_shield: bool,
@@ -14755,14 +14579,12 @@ pub mod isi {
             }
             st.tree_profile = derived_tree_profile;
 
-            let mut vk_fingerprints: Vec<String> = [
-                self.vk_unshield().clone(),
-                self.vk_shield().clone(),
-            ]
-            .into_iter()
-            .flatten()
-            .map(|vk| format!("{}::{}", vk.backend, vk.name))
-            .collect();
+            let mut vk_fingerprints: Vec<String> =
+                [self.vk_unshield().clone(), self.vk_shield().clone()]
+                    .into_iter()
+                    .flatten()
+                    .map(|vk| format!("{}::{}", vk.backend, vk.name))
+                    .collect();
             vk_fingerprints.sort();
             let vk_set_hash = if vk_fingerprints.is_empty() {
                 None

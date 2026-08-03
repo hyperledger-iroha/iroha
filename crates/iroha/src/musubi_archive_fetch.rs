@@ -2278,7 +2278,7 @@ api_token_file = "tokens/provider.token"
             prepared.providers[0].api_token_path,
             std::env::current_dir()
                 .expect("current directory")
-                .join(platform_root)
+                .join(&platform_root)
                 .join("tokens/provider.token")
         );
         let debug = format!("{prepared:?}");

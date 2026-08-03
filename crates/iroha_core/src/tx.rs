@@ -60,7 +60,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
-    smartcontracts::{Execute, code, ivm::cache::IvmCache},
+    smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
 
@@ -5384,7 +5384,7 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
-        smartcontracts::ivm::cache::IvmCache,
+        smartcontracts::{Execute, ivm::cache::IvmCache},
         state::{State, StateBlock, StateReadOnly, World},
     };
 
@@ -7325,7 +7325,6 @@ pub mod tests {
             .encoded_len(),
             time_expected_len
         );
-
     }
 
     #[test]

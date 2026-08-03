@@ -15214,25 +15214,29 @@ mod tests {
         }))
         .expect("canonical VPN body");
         let signed = signed_app_headers(&account, &key_pair, &method, &uri, &body);
+        let signed_account = signed
+            .get(crate::HEADER_ACCOUNT)
+            .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
+            .expect("signed account");
+        let signed_signature = signed
+            .get(crate::HEADER_SIGNATURE)
+            .and_then(|value| value.to_str().ok())
+            .expect("signed signature");
+        let signed_timestamp_ms = signed
+            .get(crate::HEADER_TIMESTAMP_MS)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .expect("signed timestamp");
+        let signed_nonce = signed
+            .get(crate::HEADER_NONCE)
+            .and_then(|value| value.to_str().ok())
+            .expect("signed nonce");
         let arguments = norito::json!({
             "canonical_auth": {
-                "account": signed
-                    .get(crate::HEADER_ACCOUNT)
-                    .and_then(|value| value.to_str().ok())
-                    .expect("signed account"),
-                "signature": signed
-                    .get(crate::HEADER_SIGNATURE)
-                    .and_then(|value| value.to_str().ok())
-                    .expect("signed signature"),
-                "timestamp_ms": signed
-                    .get(crate::HEADER_TIMESTAMP_MS)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .expect("signed timestamp"),
-                "nonce": signed
-                    .get(crate::HEADER_NONCE)
-                    .and_then(|value| value.to_str().ok())
-                    .expect("signed nonce")
+                "account": signed_account,
+                "signature": signed_signature,
+                "timestamp_ms": signed_timestamp_ms,
+                "nonce": signed_nonce
             }
         });
         let canonical_headers =
@@ -18166,7 +18170,7 @@ mod tests {
     #[test]
     fn extract_vpn_session_id_argument_requires_exact_field() {
         let expected = "ab".repeat(32);
-        let args = norito::json!({ "session_id": expected.clone() });
+        let args = norito::json!({ "session_id": (expected.clone()) });
         let session_id = extract_vpn_session_id_argument(args.as_object().expect("object"))
             .expect("exact VPN session id");
         assert_eq!(session_id, expected);
@@ -18177,7 +18181,7 @@ mod tests {
         for args in [
             norito::json!({ "id": "top-level-vpn-session" }),
             norito::json!({ "path": { "session_id": "nested-vpn-session" } }),
-            norito::json!({ "session_id": "AB".repeat(32) }),
+            norito::json!({ "session_id": ("AB".repeat(32)) }),
             norito::json!({ "session_id": "ab" }),
         ] {
             assert!(extract_vpn_session_id_argument(args.as_object().expect("object")).is_err());

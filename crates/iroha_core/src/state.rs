@@ -12943,8 +12943,6 @@ pub struct StateBlock<'state> {
     pub(crate) replay_compatibility: bool,
     /// True for the disposable full-range replay pass that must not publish external effects.
     replay_prevalidation: bool,
-    /// True when applying committed Kura results after replay execution drift.
-    pub(crate) trust_committed_execution_results: bool,
 }
 
 impl<'state> StateBlock<'state> {
@@ -13713,8 +13711,6 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
     pub(crate) replay_compatibility: bool,
-    /// True when replay is applying committed Kura results after execution drift.
-    pub(crate) trust_committed_execution_results: bool,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Deterministic per-execution ordinal for contract lifecycle transitions.
@@ -30755,7 +30751,6 @@ impl State {
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
-            trust_committed_execution_results: false,
         };
         stage(&mut sb)?;
         // Chain-wide privacy policy changes take effect at the start of their
@@ -31660,7 +31655,6 @@ impl State {
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
-            trust_committed_execution_results: false,
         }
     }
 
@@ -31769,7 +31763,6 @@ impl State {
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
-            trust_committed_execution_results: false,
         }
     }
 
@@ -51212,7 +51205,6 @@ impl<'state> StateBlock<'state> {
             contract_lifecycle_transition_ordinal: 0,
             executor_fuel_remaining,
             replay_compatibility: self.replay_compatibility,
-            trust_committed_execution_results: self.trust_committed_execution_results,
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
             block_axt_envelopes: &mut self.axt_envelopes,

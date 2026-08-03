@@ -141,9 +141,7 @@ impl BlockPayload {
                 TransactionEntrypoint::SealedReveal(reveal) => {
                     Some(reveal.signed_transaction().clone())
                 }
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                    None
-                }
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
             })
             .collect();
         self.transactions.len()

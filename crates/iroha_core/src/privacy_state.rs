@@ -24,14 +24,13 @@ use iroha_data_model::{
         PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
         PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
         PrivacyOrchardPoolBootstrapDigestV1, PrivacyOrchardPoolBootstrapV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyProofManagedPoolBootstrapDigestV1, PrivacyProofManagedPoolBootstrapV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1,
-        PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
+        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProofManagedPoolBootstrapDigestV1,
+        PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLifecycleV1, PrivacyRootManagementV1, PrivacyRootPublicationDigestV1,
+        PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
+        PrivacyStatementV1, PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
         PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
         PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
         PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
@@ -5464,9 +5463,9 @@ impl PrivacyOrchardPoolStateV1 {
             self.reserve_account.clone(),
         )
         .map_err(|error| format!("invalid reconstructed Orchard bootstrap: {error}"))?;
-        let digest = bootstrap
-            .digest()
-            .map_err(|error| format!("failed to digest reconstructed Orchard bootstrap: {error}"))?;
+        let digest = bootstrap.digest().map_err(|error| {
+            format!("failed to digest reconstructed Orchard bootstrap: {error}")
+        })?;
         if digest != self.bootstrap_digest {
             return Err(
                 "Orchard pool state fields do not match the governed bootstrap digest".to_owned(),
@@ -10861,8 +10860,7 @@ mod tests {
                     iroha_data_model::privacy::PrivacyIvmPrivateNotePoolBootstrapV1 {
                         pool_id: PrivacyPoolIdV1::new(nonzero(0xB1)),
                         asset_definition_id,
-                        public_balance_scope:
-                            iroha_data_model::asset::AssetBalanceScope::Global,
+                        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
                         reserve_account: account(0xB2),
                         program_id: iroha_data_model::privacy::PrivacyProgramIdV1::new(nonzero(
                             0xB3,

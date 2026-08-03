@@ -437,24 +437,6 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
     })
 }
 
-pub fn bind_staged_sumeragi_v2_context(
-    genesis: RawGenesisTransaction,
-    genesis_key_pair: &KeyPair,
-    config: Option<&actual::Root>,
-    da_proof_policies: Option<DaProofPolicyBundle>,
-    confidential_policy_hash: [u8; 32],
-) -> Result<iroha_genesis::GenesisBlock, color_eyre::eyre::Error> {
-    let (_, block) = bind_and_sign_staged_sumeragi_v2_context(
-        genesis,
-        genesis_key_pair,
-        config,
-        da_proof_policies,
-        confidential_policy_hash,
-        None,
-    )?;
-    Ok(block)
-}
-
 fn build_signed_genesis(
     genesis: RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
@@ -2648,7 +2630,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut invalid_compliance_config = config.clone();
         invalid_compliance_config.nexus.compliance.enabled = true;
         invalid_compliance_config.nexus.compliance.policy_dir = None;
-        let invalid_compliance_error = bind_staged_sumeragi_v2_context(
+        let invalid_compliance_error = bind_and_sign_staged_sumeragi_v2_context(
             RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
                 .expect("reload generated genesis manifest"),
             &genesis_key_pair,
@@ -2659,6 +2641,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             iroha_core::state::compute_genesis_confidential_policy_hash(
                 &invalid_compliance_config.zk,
             ),
+            None,
         )
         .expect_err("compliance-enabled staging must require a policy directory");
         assert!(

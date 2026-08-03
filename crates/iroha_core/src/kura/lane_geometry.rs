@@ -5995,9 +5995,7 @@ impl Kura {
             let signed_transaction = match &entrypoint {
                 TransactionEntrypoint::External(transaction) => Some(transaction),
                 TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                    None
-                }
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
             };
             if matches!(&plan, crate::queue::RoutingPlan::NativeAmx(_)) {
                 let signed_transaction = signed_transaction.ok_or_else(|| {

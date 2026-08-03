@@ -12314,7 +12314,7 @@ mod pointer_abi_tests {
     };
     use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
     use iroha_data_model::{
-        events::execute_trigger::ExecuteTriggerEventFilter, proof::ProofAttachment,
+        events::execute_trigger::ExecuteTriggerEventFilter,
         smart_contract::manifest::ContractManifest,
     };
     use iroha_primitives::json::Json;
