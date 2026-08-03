@@ -14965,7 +14965,6 @@ pub(super) mod tests {
         },
         trigger::DataTriggerSequence,
     };
-    use mv::storage::StorageReadOnly;
 
     use super::*;
     use crate::{
@@ -21256,7 +21255,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist historical lane carrier");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _commit_receipt = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("persist historical lane frozen roster");

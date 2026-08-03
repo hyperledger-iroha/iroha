@@ -12,7 +12,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 
 [lib]
 name = "iroha_python_rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["node-crypto", "gost", "sm"], default-features = false }

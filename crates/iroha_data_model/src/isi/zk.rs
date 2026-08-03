@@ -636,14 +636,7 @@ mod tests {
         assert_registry_decodes(
             &registry,
             std::any::type_name::<RegisterZkAsset>(),
-            RegisterZkAsset::new(
-                asset.clone(),
-                ZkAssetMode::Hybrid,
-                false,
-                false,
-                None,
-                None,
-            ),
+            RegisterZkAsset::new(asset.clone(), ZkAssetMode::Hybrid, false, false, None, None),
         );
         assert_registry_decodes(
             &registry,
@@ -670,8 +663,7 @@ mod tests {
     #[test]
     fn zk_asset_mode_rejects_retired_native_mode() {
         assert_eq!(
-            norito::json::from_str::<ZkAssetMode>("\"Hybrid\"")
-                .expect("decode first-release mode"),
+            norito::json::from_str::<ZkAssetMode>("\"Hybrid\"").expect("decode first-release mode"),
             ZkAssetMode::Hybrid
         );
         assert!(

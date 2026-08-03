@@ -52,7 +52,7 @@ use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::Value as JsonValue;
 
-use super::{Outcome, Result, write_new_durable_file};
+use super::{Outcome, Result, publish_new_durable_file};
 
 const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const TAIRA_RELEASE_GENERATION_V4: &str = "production-gate-real-artifacts-v4";
@@ -428,7 +428,7 @@ pub(super) fn prepare_release_roster_v4<T: std::io::Write>(
     let roster = taira_release_roster_v4(validators, args.withdrawal_height)?;
     let bytes = norito::to_bytes(&roster).wrap_err("failed to encode Taira release roster")?;
     let sha256 = kagemusha_recursive_spend_release_sha256(&bytes);
-    write_new_durable_file(&args.output, &bytes)?;
+    publish_new_durable_file(writer, &args.output, &bytes)?;
     writeln!(
         writer,
         "{{\"status\":\"prepared\",\"chain_id\":\"{}\",\"generation\":\"{}\",\"activation_height\":{},\"withdrawal_height\":{},\"validator_count\":{},\"roster_sha256\":\"{}\",\"output\":\"{}\"}}",
@@ -1100,8 +1100,9 @@ pub(super) fn prepare_testnet_bootstrap_v4<T: std::io::Write>(
         .wrap_err("failed to encode offline-enabled Taira genesis")?;
     let operator_identity_json = norito::json::to_json_pretty(&operator_identity)
         .wrap_err("failed to encode operator-reviewed Taira release identity")?;
-    write_new_durable_file(&args.output, output_json.as_bytes())?;
-    write_new_durable_file(
+    publish_new_durable_file(writer, &args.output, output_json.as_bytes())?;
+    publish_new_durable_file(
+        writer,
         &args.operator_identity_output,
         operator_identity_json.as_bytes(),
     )?;

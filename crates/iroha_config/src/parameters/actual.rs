@@ -7003,6 +7003,7 @@ impl Sumeragi {
         .max(1);
         if runtime_progress_reserve
             .checked_add(runtime_completion_reserve)
+            .and_then(|reserved| reserved.checked_add(1))
             .is_none_or(|reserved| reserved >= runtime_command_capacity)
         {
             return Err(SumeragiV2ConfigError::InvalidQueueAllocation);
@@ -7015,8 +7016,8 @@ impl Sumeragi {
             self.queues.authenticated_non_validator_sources.get(),
         )?;
         let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
-            .checked_mul(2)
-            .and_then(|hubs| hubs.checked_add(6))
+            .checked_mul(3)
+            .and_then(|hubs| hubs.checked_add(7))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
             ))?;
@@ -7040,6 +7041,9 @@ impl Sumeragi {
                 .expect("static recommended transport-completion manifest fits u64");
         let timeout_vote_reserve = u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
             .expect("static timeout-vote reserve fits u64");
+        let certified_fence_escape_reserve =
+            u64::try_from(defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+                .expect("static certified fence-escape reserve fits u64");
         let lane_progress_bytes = u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES)
             .expect("static certified lane-source limit fits u64");
         let lane_completion_bytes = u64::try_from(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
@@ -7059,6 +7063,7 @@ impl Sumeragi {
             ))?;
         let minimum_body_source_bytes = ordinary_bytes
             .checked_add(completion_bytes)
+            .and_then(|minimum| minimum.checked_add(certified_fence_escape_reserve))
             .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 per-source canonical outer-ingress wire-byte minimum",
@@ -7070,6 +7075,7 @@ impl Sumeragi {
                 max_payload_bytes,
                 envelope_headroom,
                 manifest_wire_bytes,
+                certified_fence_escape_reserve,
                 timeout_vote_reserve,
                 lane_progress_bytes,
                 lane_completion_bytes,
@@ -7750,9 +7756,9 @@ pub enum SumeragiV2ConfigError {
         authenticated_non_validator_sources: u64,
     },
     /// The per-source canonical wire-byte budget cannot isolate ordinary and
-    /// payload-completion envelopes plus one timeout vote.
+    /// payload-completion envelopes plus one certified escape and timeout vote.
     #[error(
-        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest wire bytes, {lane_progress_bytes} bytes of lane progress, {lane_completion_bytes} bytes of lane completion, and {timeout_vote_reserve} reserved timeout-vote bytes"
+        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest wire bytes, {lane_progress_bytes} bytes of lane progress, {lane_completion_bytes} bytes of lane completion, {certified_fence_escape_reserve} reserved certified-fence-escape bytes, and {timeout_vote_reserve} reserved timeout-vote bytes"
     )]
     BodySourceBytesTooSmall {
         /// Configured per-source capacity.
@@ -7765,6 +7771,8 @@ pub enum SumeragiV2ConfigError {
         envelope_headroom: u64,
         /// Recommended manifest wire bytes included in the completion partition.
         manifest_wire_bytes: u64,
+        /// Fixed bytes isolated for a TC, CommitQC, or CommitQC response.
+        certified_fence_escape_reserve: u64,
         /// Fixed bytes isolated from ordinary traffic for a timeout vote.
         timeout_vote_reserve: u64,
         /// Minimum ordinary region required by an atomic lane certificate.
@@ -14691,10 +14699,11 @@ mod tests {
             &config,
             SumeragiV2ConfigError::BodySourceBytesTooSmall {
                 actual: 16 * 1024 * 1024,
-                minimum: 2 * 16 * 1024 * 1024 + 230_408,
+                minimum: 2 * 16 * 1024 * 1024 + 295_944,
                 max_payload_bytes: 16 * 1024 * 1024,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
+                certified_fence_escape_reserve: 64 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -14703,7 +14712,7 @@ mod tests {
 
         let mut config = default_v2_sumeragi();
         config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
-        let lane_minimum: usize = 5 * 1024 * 1024 + 64 * 1024;
+        let lane_minimum: usize = 5 * 1024 * 1024 + 2 * 64 * 1024;
         config.queues.body_source_bytes = NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
         assert_error(
             &config,
@@ -14713,6 +14722,7 @@ mod tests {
                 max_payload_bytes: 1,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
+                certified_fence_escape_reserve: 64 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -14720,12 +14730,12 @@ mod tests {
         );
 
         let mut config = default_v2_sumeragi();
-        config.queues.bodies = NonZeroUsize::new(9).expect("non-zero");
+        config.queues.bodies = NonZeroUsize::new(12).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodyQueueTooSmall {
-                actual: 9,
-                minimum: 10,
+                actual: 12,
+                minimum: 13,
                 authenticated_non_validator_sources: 2,
             },
         );

@@ -207,8 +207,7 @@ fn production_schema_host_rejects_unknown_and_malformed_inputs_for_canonical_sys
         let mut vm = IVM::new(0);
         load_metadata(&mut vm);
         let schema_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, schema_body));
-        let bytes_ptr =
-            preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, payload));
+        let bytes_ptr = preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, payload));
         vm.set_register(10, schema_ptr);
         vm.set_register(11, bytes_ptr);
         assert_eq!(

@@ -4378,7 +4378,9 @@ pub fn validate_confidential_tree_frontier_v2(
         ));
     }
     if !confidential_tree_node_is_canonical_v2(persisted_root) {
-        return Err("persisted confidential current root is not a canonical Pasta scalar".to_owned());
+        return Err(
+            "persisted confidential current root is not a canonical Pasta scalar".to_owned(),
+        );
     }
 
     for (level, slot) in frontier.iter().enumerate() {
@@ -4405,9 +4407,8 @@ pub fn validate_confidential_tree_frontier_v2(
     let mut node = empty_roots[0];
     for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
         if let Some(left) = frontier[level] {
-            let left = scalar_from_repr(left).ok_or_else(|| {
-                format!("confidential frontier slot {level} is not canonical")
-            })?;
+            let left = scalar_from_repr(left)
+                .ok_or_else(|| format!("confidential frontier slot {level} is not canonical"))?;
             node = merkle_parent_v3(left, node);
         } else {
             node = merkle_parent_v3(node, empty_roots[level]);
@@ -4483,10 +4484,7 @@ pub fn append_confidential_tree_frontier_v2(
 
     Ok(ConfidentialTreeAppendV2 {
         frontier: frontier_scalars.map(|slot| slot.map(scalar_to_repr_bytes)),
-        current_root: appended_roots
-            .last()
-            .copied()
-            .unwrap_or(persisted_root),
+        current_root: appended_roots.last().copied().unwrap_or(persisted_root),
         appended_roots,
     })
 }
@@ -7427,7 +7425,10 @@ mod tests {
             &commitments,
         )
         .expect("incremental append");
-        assert_eq!(projection.frontier().expect("projection frontier"), append.frontier);
+        assert_eq!(
+            projection.frontier().expect("projection frontier"),
+            append.frontier
+        );
         assert_eq!(projection.root(), append.current_root);
         assert_eq!(append.appended_roots, prefix_roots);
 
@@ -7448,8 +7449,8 @@ mod tests {
     #[test]
     fn compact_projection_hashes_each_commitment_once_for_many_paths() {
         let commitments = (1_u64..=128).map(scalar_bytes).collect::<Vec<_>>();
-        let expected_root = super::compute_confidential_root_v2(&commitments)
-            .expect("canonical confidential root");
+        let expected_root =
+            super::compute_confidential_root_v2(&commitments).expect("canonical confidential root");
         super::reset_confidential_commitment_leaf_hash_calls_v3();
 
         let projection = super::ConfidentialTreeProjectionV2::build(&commitments)

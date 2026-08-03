@@ -3135,7 +3135,7 @@ PROOF
       <3>1. /\ asyncIngressLanes[recipient] =
                     [source \in AsyncIngressSources |-> <<>>]
              /\ AsyncIngressCapacity \in Nat
-             /\ AsyncIngressCapacity >= 4 * N + 2
+             /\ AsyncIngressCapacity >= 5 * N + 2
         BY <1>1, <2>1, SMT
            DEF AsyncInitAt, AsyncBaseInitAt, AsyncIngressInit,
                AsyncConfiguration
@@ -3164,7 +3164,12 @@ PROOF
                  Len(asyncIngressLanes[recipient][source]) = 0
           BY <3>1, <4>1, Isa
         <4> QED BY <4>2, Isa
-             DEF IngressContinuationProtectedSourcesFor
+             DEF IngressContinuationProtectedSourcesFor,
+                 IngressProtectedClassesPresentIn,
+                 IngressLaneHasNonTimeoutProgressIn,
+                 IngressLaneHasCertifiedFenceEscapeIn,
+                 IngressLaneHasTimeoutVoteIn,
+                 IngressLaneHasTransportCompletionIn, SequenceSet
       <3>8. IngressTimeoutVoteProtectedSourcesFor(
                  asyncIngressLanes, recipient) = ValidatorIds
         <4>1. ValidatorIds \subseteq AsyncIngressSources
@@ -3175,6 +3180,16 @@ PROOF
         <4> QED BY <4>2, Isa
              DEF IngressTimeoutVoteProtectedSourcesFor,
                  IngressLaneHasTimeoutVoteIn, SequenceSet
+      <3>8b. IngressCertifiedFenceEscapeProtectedSourcesFor(
+                  asyncIngressLanes, recipient) = ValidatorIds
+        <4>1. ValidatorIds \subseteq AsyncIngressSources
+          BY Isa DEF AsyncIngressSources
+        <4>2. \A source \in ValidatorIds:
+                 Len(asyncIngressLanes[recipient][source]) = 0
+          BY <3>1, <4>1, Isa
+        <4> QED BY <4>2, Isa
+             DEF IngressCertifiedFenceEscapeProtectedSourcesFor,
+                 IngressLaneHasCertifiedFenceEscapeIn, SequenceSet
       <3>8c. IngressTransportCompletionProtectedSourcesFor(
                   asyncIngressLanes, recipient) = AsyncIngressSources
         <4>1. \A source \in AsyncIngressSources:
@@ -3197,8 +3212,9 @@ PROOF
       <3>13. IngressDepth(recipient)
                 + IngressProtectedSlotCountFor(
                     asyncIngressLanes, recipient)
-              = 4 * N + 2
-        BY <3>3, <3>4, <3>6, <3>7, <3>8, <3>8c, <3>9, <3>10, SMT
+              = 5 * N + 2
+        BY <3>3, <3>4, <3>6, <3>7, <3>8, <3>8b, <3>8c,
+           <3>9, <3>10, SMT
            DEF IngressProtectedSlotCountFor
       <3>14. IngressDepth(recipient)
                 + IngressProtectedSlotCountFor(

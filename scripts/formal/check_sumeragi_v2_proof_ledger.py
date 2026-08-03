@@ -884,7 +884,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "b41866a0e52ed0760c8221fcee78c1dc1bb88ec7d79c75bb5ec4928a388bc522",
-    "effect_candidate_retain": "529e79ca910c2c315a72bbb9b0e44611bf52e74413c2541d31cd9df3a80f0da6",
+    "effect_candidate_retain": "b7fbdd5ae5da857c63f2a5adbea69698c4b1f76bca99649d1ff7cf7674eb7535",
     "relay_retry": "f668e5ce645905c1e717c47f35512de6102d0d64f71da6b8508ce454209015f6",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -1517,7 +1517,7 @@ def _effect_to_candidate_supplemental_total_contract(
 
     call_site = CrossToolProductionCallContract(
         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
-        item="retain_effect_batch",
+        item="retain_effect_batch_at_frontier",
         projection="projection",
         required_expression="""
             let checked = check_production_effect_to_candidate_transition(projection).ok_or_else(
@@ -10009,6 +10009,492 @@ def _revision4_model_contract_errors(
     return errors
 
 
+def _revision4_adversarial_safety_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the non-vacuous four-validator/two-body adversarial safety search."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4AdversarialSafety.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [
+            f"{module_path}: revision-4 adversarial safety model must be a "
+            "regular file"
+        ]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "ConstantOK": (
+            "N = 4",
+            "F = 1",
+            "Q = 3",
+            "Cardinality(Faulty) = 1",
+            "Cardinality(Bodies) = 2",
+        ),
+        "HonestCommitVote": (
+            "validator \\in Honest",
+            "<<validator, body>> \\in fullBodies",
+            "VoteBodies(validator) = {}",
+            "commitVotes' = commitVotes \\cup {<<validator, body>>}",
+        ),
+        "ByzantineCommitVote": (
+            "validator \\in Faulty",
+            "<<validator, body>> \\notin commitVotes",
+            "commitVotes' = commitVotes \\cup {<<validator, body>>}",
+        ),
+        "FormCommitQC": (
+            "body \\notin commitQCs",
+            "VoteCount(body) >= Q",
+            "commitQCs' = commitQCs \\cup {body}",
+        ),
+        "Decide": (
+            "body \\in commitQCs",
+            "body \\notin decisions",
+            "decisions' = decisions \\cup {body}",
+        ),
+        "Next": (
+            "DeliverFullBody(validator, body)",
+            "HonestCommitVote(validator, body)",
+            "ByzantineCommitVote(validator, body)",
+            "FormCommitQC(body)",
+            "Decide(body)",
+        ),
+        "FixedAdversarialGeometry": (
+            "Cardinality(Validators) = 4",
+            "Cardinality(Honest) = 3",
+            "Cardinality(Faulty) = 1",
+            "Q = 3",
+        ),
+        "HonestSignOncePerRound": (
+            "validator \\in Honest",
+            "Cardinality(VoteBodies(validator)) <= 1",
+        ),
+        "ByzantineEquivocationRemainsEnabled": (
+            "validator \\in Faulty",
+            "<<validator, body>> \\notin commitVotes",
+            "ENABLED ByzantineCommitVote(validator, body)",
+        ),
+        "CommitQCsHaveQuorum": (
+            "body \\in commitQCs",
+            "VoteCount(body) >= Q",
+        ),
+        "DecisionsHaveCommitQC": ("decisions \\subseteq commitQCs",),
+        "PostQCExecutionRemainsOpen": (
+            "commitQCs /= {}",
+            "ENABLED DeliverFullBody(validator, body)",
+            "ENABLED HonestCommitVote(validator, body)",
+            "ENABLED ByzantineCommitVote(validator, body)",
+            "ENABLED FormCommitQC(body)",
+            "ENABLED Decide(body)",
+        ),
+        "ConflictingCommitQCsImpossible": (
+            "Cardinality(commitQCs) <= 1",
+        ),
+        "DecisionAgreement": ("Cardinality(decisions) <= 1",),
+    }
+    operator_bodies: dict[str, tuple[str, int]] = {}
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 adversarial operator "
+                f"{operator}"
+            )
+            continue
+        operator_bodies[operator] = extracted
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 adversarial operator "
+                f"{operator} is missing {missing}"
+            )
+
+    byzantine_body = operator_bodies.get("ByzantineCommitVote")
+    if byzantine_body is not None:
+        body, line = byzantine_body
+        normalized = " ".join(body.split())
+        if "VoteBodies(" in normalized:
+            errors.append(
+                f"{module_path}:{line}: ByzantineCommitVote must permit the "
+                "faulty validator to vote for both bodies"
+            )
+
+    for operator in (
+        "DeliverFullBody",
+        "HonestCommitVote",
+        "ByzantineCommitVote",
+        "FormCommitQC",
+        "Decide",
+    ):
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        forbidden = (
+            "commitQCs = {}",
+            "decisions = {}",
+            "Cardinality(commitQCs) = 0",
+            "Cardinality(decisions) = 0",
+        )
+        present = [token for token in forbidden if token in normalized]
+        if present:
+            errors.append(
+                f"{module_path}:{line}: {operator} must remain enabled after "
+                f"the first QC or decision; found global stop guards {present}"
+            )
+
+    config_path = formal_dir / "SumeragiV2Revision4AdversarialSafety.cfg"
+    if not config_path.is_file() or config_path.is_symlink():
+        errors.append(
+            f"{config_path}: revision-4 adversarial TLC config must be a "
+            "regular file"
+        )
+    else:
+        config_source = config_path.read_text(encoding="utf-8")
+        required_config_tokens = (
+            "SPECIFICATION Spec",
+            "Validators = {v1, v2, v3, v4}",
+            "Faulty = {v4}",
+            "Bodies = {b1, b2}",
+            "INVARIANT FixedAdversarialGeometry",
+            "INVARIANT HonestSignOncePerRound",
+            "INVARIANT ByzantineEquivocationRemainsEnabled",
+            "INVARIANT CommitQCsHaveQuorum",
+            "INVARIANT DecisionsHaveCommitQC",
+            "INVARIANT PostQCExecutionRemainsOpen",
+            "INVARIANT ConflictingCommitQCsImpossible",
+            "INVARIANT DecisionAgreement",
+        )
+        missing = [
+            token
+            for token in required_config_tokens
+            if token not in config_source
+        ]
+        if missing:
+            errors.append(
+                f"{config_path}: revision-4 adversarial TLC configuration is "
+                f"missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: revision-4 adversarial TLC runner must be a "
+            "regular file"
+        )
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_adversarial_safety",
+            (
+                'revision4_adversarial_safety) cfg='
+                '"SumeragiV2Revision4AdversarialSafety.cfg"'
+            ),
+            "SumeragiV2Revision4AdversarialSafety.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 adversarial TLC runner is "
+                f"missing {missing}"
+            )
+    return errors
+
+
+def _revision4_certified_fence_reservation_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the bounded revision-4 certified-fence reservation kernel."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4CertifiedFenceReservation.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [
+            f"{module_path}: revision-4 certified-fence reservation model "
+            "must be a regular file"
+        ]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "BarrierKinds": ('{"Serve", "LeaderWire"}',),
+        "CertifiedKinds": (
+            '{"TimeoutCertificate", "CommitQC", '
+            '"CommitCertificateResponse"}',
+        ),
+        "IneligibleKinds": ('{"PrepareQC", "TimeoutVote"}',),
+        "IngressKinds": ("CertifiedKinds \\cup IneligibleKinds",),
+        "Stages": ('{"Ingress", "Runtime", "TrustedTail", "Handled"}',),
+        "RuntimeCapacity": ("3",),
+        "OrdinaryRuntimePrefix": ('<<"Normal", "Completion">>',),
+        "Init": (
+            "ownerIdentity \\in OwnerIdentities",
+            "ownerSnapshot = ownerIdentity",
+            "ownerRetained = TRUE",
+            "offeredKind \\in IngressKinds",
+            "authenticated \\in BOOLEAN",
+            'stage = "Ingress"',
+            "runtimeQueue = OrdinaryRuntimePrefix",
+        ),
+        "CertifiedFenceEscapeKind": ("kind \\in CertifiedKinds",),
+        "OfferAdvancesRetainedOwner": (
+            "OfferContext = ownerIdentity.context",
+            "OfferHeight = ownerIdentity.height",
+            "OfferView >= ownerIdentity.view",
+        ),
+        "CanUseCertifiedFinalSlot": (
+            "CertifiedFenceEscapeEnabled",
+            "Len(runtimeQueue) = RuntimeCapacity - 1",
+            "Len(runtimeQueue) < RuntimeCapacity",
+        ),
+        "AdmitCertifiedEscape": (
+            'stage = "Ingress"',
+            "ownerRetained",
+            "authenticated",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            "OfferAdvancesRetainedOwner",
+            "CanUseCertifiedFinalSlot",
+            'stage\' = "Runtime"',
+            "runtimeQueue' = Append(runtimeQueue, offeredKind)",
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
+        ),
+        "DispatchCertifiedEscape": (
+            'stage = "Runtime"',
+            "ownerRetained",
+            "CertifiedFenceEscapeEnabled",
+            "runtimeQueue[RuntimeCapacity] = offeredKind",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'stage\' = "TrustedTail"',
+            "runtimeQueue' = SubSeq(runtimeQueue, 1, RuntimeCapacity - 1)",
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
+        ),
+        "RunCertifiedTrustedTail": (
+            'stage = "TrustedTail"',
+            "ownerRetained",
+            "CertifiedFenceEscapeEnabled",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'stage\' = "Handled"',
+            'installedTC\' = (offeredKind = "TimeoutCertificate")',
+            'decided\' = (offeredKind \\in '
+            '{"CommitQC", "CommitCertificateResponse"})',
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
+        ),
+        "Next": (
+            "AdmitCertifiedEscape",
+            "DispatchCertifiedEscape",
+            "RunCertifiedTrustedTail",
+        ),
+        "Spec": (
+            "Init",
+            "[][Next]_vars",
+            "WF_vars(AdmitCertifiedEscape)",
+            "WF_vars(DispatchCertifiedEscape)",
+            "WF_vars(RunCertifiedTrustedTail)",
+        ),
+        "OwnerIdentityNeverReplaced": ("ownerIdentity = ownerSnapshot",),
+        "OwnerRetainedAcrossEscape": (
+            'stage \\in {"Runtime", "TrustedTail", "Handled"} '
+            "=> ownerRetained",
+        ),
+        "NoOrdinaryRuntimeDisplacement": (
+            "Len(runtimeQueue) \\in {(RuntimeCapacity - 1), RuntimeCapacity}",
+            "SubSeq(runtimeQueue, 1, RuntimeCapacity - 1) "
+            "= OrdinaryRuntimePrefix",
+        ),
+        "ReservedSlotOnlyCertified": (
+            "Len(runtimeQueue) = RuntimeCapacity",
+            "authenticated",
+            "CertifiedFenceEscapeKind(runtimeQueue[RuntimeCapacity])",
+            "runtimeQueue[RuntimeCapacity] = offeredKind",
+        ),
+        "AtMostOneCertifiedRuntimeOwner": (
+            "runtimeQueue[index] \\in CertifiedKinds",
+            "<= 1",
+        ),
+        "PrepareQcCannotUseEscape": (
+            'offeredKind = "PrepareQC" => stage = "Ingress"',
+        ),
+        "RawTimeoutVoteCannotUseEscape": (
+            'offeredKind = "TimeoutVote" => stage = "Ingress"',
+        ),
+        "AuthenticationRequiredForEscape": (
+            'stage \\in {"Runtime", "TrustedTail", "Handled"} '
+            "=> authenticated",
+        ),
+        "HandledOutcomeExact": (
+            'stage = "Handled"',
+            'offeredKind = "TimeoutCertificate"',
+            "installedTC /\\ ~decided",
+            "~installedTC /\\ decided",
+        ),
+        "CertifiedEscapeEventuallyHandled": (
+            "authenticated",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            "ownerRetained",
+            '~> (stage = "Handled")',
+        ),
+    }
+    operator_bodies: dict[str, tuple[str, int]] = {}
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 certified-fence operator "
+                f"{operator}"
+            )
+            continue
+        operator_bodies[operator] = extracted
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 certified-fence operator "
+                f"{operator} is missing {missing}"
+            )
+
+    exact_kind_bodies = {
+        "CertifiedKinds": (
+            '{"TimeoutCertificate", "CommitQC", '
+            '"CommitCertificateResponse"}'
+        ),
+        "IneligibleKinds": '{"PrepareQC", "TimeoutVote"}',
+        "CertifiedFenceEscapeKind": "kind \\in CertifiedKinds",
+    }
+    for operator, expected in exact_kind_bodies.items():
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{module_path}:{line}: revision-4 certified-fence operator "
+                f"{operator} must equal only {expected!r}; found "
+                f"{normalized!r}"
+            )
+
+    config_contracts = {
+        "revision4_certified_fence_reservation_fixed.cfg": (
+            "SPECIFICATION Spec",
+            "CONSTANT CertifiedFenceEscapeEnabled = TRUE",
+            "INVARIANT TypeOK",
+            "INVARIANT OwnerIdentityNeverReplaced",
+            "INVARIANT OwnerRetainedAcrossEscape",
+            "INVARIANT NoOrdinaryRuntimeDisplacement",
+            "INVARIANT ReservedSlotOnlyCertified",
+            "INVARIANT AtMostOneCertifiedRuntimeOwner",
+            "INVARIANT PrepareQcCannotUseEscape",
+            "INVARIANT RawTimeoutVoteCannotUseEscape",
+            "INVARIANT AuthenticationRequiredForEscape",
+            "INVARIANT HandledOutcomeExact",
+            "PROPERTY CertifiedEscapeEventuallyHandled",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "revision4_certified_fence_reservation_blocked_bug.cfg": (
+            "SPECIFICATION Spec",
+            "CONSTANT CertifiedFenceEscapeEnabled = FALSE",
+            "INVARIANT TypeOK",
+            "INVARIANT OwnerIdentityNeverReplaced",
+            "INVARIANT NoOrdinaryRuntimeDisplacement",
+            "INVARIANT PrepareQcCannotUseEscape",
+            "INVARIANT RawTimeoutVoteCannotUseEscape",
+            "PROPERTY CertifiedEscapeEventuallyHandled",
+            "CHECK_DEADLOCK FALSE",
+        ),
+    }
+    for filename, required in config_contracts.items():
+        config_path = formal_dir / filename
+        if not config_path.is_file() or config_path.is_symlink():
+            errors.append(
+                f"{config_path}: revision-4 certified-fence TLC config must "
+                "be a regular file"
+            )
+            continue
+        config_source = config_path.read_text(encoding="utf-8")
+        missing = [token for token in required if token not in config_source]
+        if missing:
+            errors.append(
+                f"{config_path}: revision-4 certified-fence TLC "
+                f"configuration is missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: revision-4 certified-fence TLC runner must be a "
+            "regular file"
+        )
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_certified_fence_reservation",
+            (
+                'revision4_certified_fence_reservation) cfg='
+                '"revision4_certified_fence_reservation_fixed.cfg"'
+            ),
+            "SumeragiV2Revision4CertifiedFenceReservation.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 certified-fence TLC "
+                f"runner is missing {missing}"
+            )
+
+    mutation_runner_path = (
+        root_dir
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_liveness_ownership_mutations.sh"
+    )
+    if not mutation_runner_path.is_file() or mutation_runner_path.is_symlink():
+        errors.append(
+            f"{mutation_runner_path}: certified-fence mutation runner must be "
+            "a regular file"
+        )
+    else:
+        runner_source = mutation_runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "SumeragiV2Revision4CertifiedFenceReservation.tla",
+            (
+                "revision4-certified-fence-reservation|"
+                "SumeragiV2Revision4CertifiedFenceReservation.tla|"
+                "revision4_certified_fence_reservation_fixed.cfg"
+            ),
+            (
+                "revision4-certified-fence-reservation-blocked|"
+                "SumeragiV2Revision4CertifiedFenceReservation.tla|"
+                "revision4_certified_fence_reservation_blocked_bug.cfg"
+            ),
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{mutation_runner_path}: certified-fence mutation runner is "
+                f"missing {missing}"
+            )
+    return errors
+
+
 def _top_level_declaration_span(
     source: str,
     symbol: str,
@@ -15772,6 +16258,60 @@ def _serve_ingress_ordinal_production_source_fidelity_errors(
         errors,
     )
 
+    certified_escape = _require_rust_item(
+        path,
+        source,
+        "fair_v2_ingress_is_certified_fence_escape",
+        errors,
+    )
+    _require_rust_item_context(
+        path,
+        certified_escape,
+        (),
+        "fair-ingress certified reservation escape classifier",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        path,
+        certified_escape,
+        """
+fn fair_v2_ingress_is_certified_fence_escape(inbound: &InboundBlockMessage) -> bool {
+    fair_v2_ingress_message_is_certified_fence_escape(inbound.message())
+}
+""",
+        "fair ingress must delegate certified-fence classification to the shared canonical-message classifier",
+        errors,
+    )
+
+    certified_message_escape = _require_rust_item(
+        path,
+        source,
+        "fair_v2_ingress_message_is_certified_fence_escape",
+        errors,
+    )
+    _require_rust_item_context(
+        path,
+        certified_message_escape,
+        (),
+        "canonical fair-ingress certified reservation escape classifier",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        path,
+        certified_message_escape,
+        """
+fn fair_v2_ingress_message_is_certified_fence_escape(message: &BlockMessage) -> bool {
+    let BlockMessage::V2(message) = message else {
+        return false;
+    };
+    message.validate_version().is_ok()
+        && v2_effects::network_ingress_is_certified_fence_escape(&message.payload)
+}
+""",
+        "fair ingress must use the closed, version-validated TC/CommitQC classifier before bypassing a reservation",
+        errors,
+    )
+
     items = {
         name: _require_qualified_rust_item(
             path,
@@ -16004,6 +16544,37 @@ gate.reserve(
 """,
         "the fallback selector must freeze the globally earliest eligible "
         "Serve physical carrier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        receive,
+        """
+let authenticated_certified_fence_escape = !matches!(
+    source,
+    FairV2IngressSource::Anonymous
+) && fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
+let certified_fence_escape_dependency =
+    authenticated_certified_fence_escape
+        && leader_wire_barrier.as_ref().is_some_and(|owner| {
+            fair_v2_ingress_certified_fence_escape_advances_owner(
+                &owner.token,
+                &entry.inbound,
+            )
+        });
+let serve_fence_escape_dependency =
+    authenticated_certified_fence_escape
+        && (selected_serve_barrier.is_some()
+            || certified_body_request_cutoff.is_some());
+let dependency_bypass = !ingress_barrier_allows
+    && (serve_fence_escape_dependency
+        || (leader_wire_control_barrier
+            && (earlier_dependency
+                || selected_serve_control_dependency
+                || timeout_control_dependency
+                || certified_fence_escape_dependency)));
+""",
+        "a version-valid TC or CommitQC must remain visible across either retained Serve or leader-wire reservation without widening the ordinary dependency bypass",
         errors,
     )
     _require_rust_token_sequence(
@@ -17269,10 +17840,19 @@ def _serviced_candidate_production_source_fidelity_errors(
         "minimum_active_lifecycle_ordinal_excluding": (
             "minimum_active_lifecycle_ordinal_excluding"
         ),
+        "minimum_runnable_lifecycle_ordinal": (
+            "minimum_runnable_lifecycle_ordinal"
+        ),
         "complete_leader_wire_runtime_owner": (
             "complete_leader_wire_runtime_owner"
         ),
         "step": "step",
+        "finish_dispatched_step": "finish_dispatched_step",
+        "try_step_pacemaker_escape": "try_step_pacemaker_escape",
+        "dispatch_one_pacemaker_progress": (
+            "dispatch_one_pacemaker_progress"
+        ),
+        "step_recovery": "step_recovery",
         "dispatch_one_fence_dependency": "dispatch_one_fence_dependency",
         "dispatch_one_adapter_deferred": "dispatch_one_adapter_deferred",
     }
@@ -17993,17 +18573,22 @@ if self.dormant_local_fifo_reservations.contains(&expected) {
         ),
         "restart must install dormant FIFO owners before startup successors",
     )
-    require_item_order(
+    require_item_sequence(
         "runtime",
         runtime_items,
         "step",
-        (
-            "self.retain_effect_ownership(effect_source, Some(&effect_parent), &effects)",
-            "token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()",
-            "token.identity().causal_lifecycle_key() != effect_parent.causal_origin().lifecycle_key",
-            "self.driver.acknowledge_producer_handoff(token, evidence)",
-        ),
-        "runtime must retain successors and verify parent identity before acknowledgement",
+        """
+self.finish_dispatched_step(
+    now,
+    effects,
+    effect_source,
+    effect_parent,
+    effect_parent_statement,
+    producer_handoff,
+    retained_deferred_ingress,
+)
+""",
+        "runtime step must transfer the exact parent statement and handoff into shared completion",
     )
     require_item_order(
         "runtime",
@@ -18258,6 +18843,28 @@ if !timeout_vote_view_is_admissible(
 }
 """,
             "reducer TimeoutVote admission must use the bounded current/adjacent predicate",
+            errors,
+        )
+        certified_escape = _require_qualified_rust_item(
+            reducer_path,
+            reducer_source,
+            "Reducer",
+            "certified_progress_bypasses_signature_fence",
+            errors,
+            "closed certified signing-fence escape classifier",
+        )
+        _require_rust_token_sequence(
+            reducer_path,
+            certified_escape,
+            """
+matches!(event, Event::TimeoutCertificateReceived { .. })
+    || matches!(
+        event,
+        Event::QuorumCertificateReceived { certificate, .. }
+            if certificate.phase() == Phase::Commit
+    )
+""",
+            "only a verified TC or CommitQC may supersede a local signing fence",
             errors,
         )
         persisted = _require_qualified_rust_item(
@@ -36938,10 +37545,13 @@ let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
     )
 })?;
 match owners.get(&identity) {
-    Some(existing) if existing != ownership.owner() => {
-        Err(EffectExecutorError::Contract(
-            "one semantic candidate lifecycle had conflicting exact owners".to_owned(),
-        ))
+    Some(existing) if existing != ownership => Err(EffectExecutorError::Contract(
+        "one semantic candidate lifecycle had conflicting exact owners".to_owned(),
+    )),
+    Some(_) => Ok(()),
+    None => {
+        owners.insert(identity, ownership.clone());
+        Ok(())
     }
 """,
         "candidate owner inventory must reject semantic owner replacement",
@@ -36965,7 +37575,7 @@ if let Some(finality) = &self.finality_completion {
     retain = _require_rust_item(
         effects_path,
         source,
-        "retain_effect_batch",
+        "retain_effect_batch_at_frontier",
         errors,
     )
     _require_rust_item_context(
@@ -36980,20 +37590,48 @@ if let Some(finality) = &self.finality_completion {
         retain,
         """
 let candidate_semantic_identity = evidence.candidate_semantic_identity();
-if candidate_semantic_identity
+let exact_incumbent = candidate_semantic_identity
     .as_ref()
-    .is_some_and(|identity| {
-        retained_candidate_owners
-            .get(identity)
-            .is_some_and(|existing| existing != evidence.owner())
-    })
+    .and_then(|identity| retained_candidate_owners.get(identity))
+    .cloned();
+""",
+        "candidate admission must resolve the incumbent exact owner before constructing refinement evidence",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        retain,
+        """
+if let Some(incumbent) = exact_incumbent
+    && incumbent != *evidence
 {
-    return Err(EffectExecutorError::Contract(
-        "a coalesced adapter effect changed its exact lifecycle owner".to_owned(),
-    ));
+    let adopted = incumbent
+        .adopt_incumbent_candidate_for_retry(evidence, effect)
+        .map_err(EffectExecutorError::Contract)?;
+    let adopted_projection = production_adapter_effect_candidate_trace_projection(
+        effect,
+        &adopted,
+        effect_position,
+        effect_count,
+        candidate.as_ref().map_or(0, |_| candidate_position),
+        candidate_count,
+        candidate_owner_count_before,
+        candidate_owner_count_after,
+        true,
+    )
+    .map_err(EffectExecutorError::Contract)?;
+    let _authorized_incumbent_retry =
+        check_production_effect_to_candidate_transition(adopted_projection)
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "coalesced candidate retry failed its incumbent-owner refinement"
+                        .to_owned(),
+                )
+            })?;
+    *evidence = adopted;
 }
 """,
-        "candidate owner replacement must fail before refinement evidence is constructed",
+        "coalesced candidate admission must adopt and re-prove the incumbent exact owner",
         errors,
     )
     _require_rust_token_sequence(
@@ -37002,7 +37640,7 @@ if candidate_semantic_identity
         """
 match (admission, candidate_semantic_identity) {
     (RuntimeCandidateAdmissionDisposition::FirstAdmission, Some(identity)) => {
-        retained_candidate_owners.insert(identity, evidence.owner().clone());
+        retained_candidate_owners.insert(identity, evidence.clone());
         retain_effect.push(true);
     }
     (RuntimeCandidateAdmissionDisposition::CoalescedRetry, Some(_)) => {
@@ -37032,13 +37670,15 @@ match (admission, candidate_semantic_identity) {
         ordered_fragments = tuple(
             rust_code_tokens(fragment)
             for fragment in (
-                "if candidate_semantic_identity.as_ref().is_some_and",
+                "let exact_incumbent = candidate_semantic_identity",
                 "let candidate_owner_count_before =",
                 "production_adapter_effect_candidate_admission_disposition(",
                 "production_adapter_effect_candidate_trace_projection(",
                 "check_production_effect_to_candidate_transition(projection)",
+                "adopt_incumbent_candidate_for_retry",
+                "check_production_effect_to_candidate_transition(adopted_projection)",
                 "match (admission, candidate_semantic_identity)",
-                "retained_candidate_owners.insert(identity, evidence.owner().clone())",
+                "retained_candidate_owners.insert(identity, evidence.clone())",
             )
         )
         positions: list[int] = []
@@ -37050,8 +37690,8 @@ match (admission, candidate_semantic_identity) {
             positions.append(found[0])
         if not positions or positions != sorted(positions):
             errors.append(
-                f"{effects_path}:{retain.line}: owner replacement, exact count "
-                "classification, projection, checked refinement, and owner "
+                f"{effects_path}:{retain.line}: incumbent adoption, exact count "
+                "classification, both checked refinements, and owner "
                 "publication must retain the reviewed order"
             )
 
@@ -37163,15 +37803,23 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         consume_effects,
         """
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
 let ownership = match self.runtime.take_effect_ownership(&effects) {
     Ok(ownership) => ownership,
     Err(error) => {
         return Err(self.close(EffectExecutorError::Runtime(error), services));
     }
 };
-if let Err(error) = self.retain_effect_batch(effects, ownership) {
+if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
+    return Err(self.close(error, services));
+}
+if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
 """,
-        "executor must close fail-stop output while preserving the typed Runtime ownership error",
+        "executor must retain the complete batch before committing its atomically observed reducer frontier",
         errors,
     )
 
@@ -39287,6 +39935,51 @@ fn network_ingress_requires_reducer_order(
         errors,
     )
 
+    certified_escape = _require_rust_item(
+        effects_path,
+        source,
+        "network_ingress_is_certified_fence_escape",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        certified_escape,
+        (),
+        "closed authenticated fence-escape classifier",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        certified_escape,
+        """
+pub(crate) const fn network_ingress_is_certified_fence_escape(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    match payload {
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => true,
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+            matches!(certificate.phase, wire::GlobalPhase::Commit)
+        }
+        wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
+            matches!(response.certificate.phase, wire::GlobalPhase::Commit)
+        }
+        wire::ConsensusMessageV2Payload::Proposal(_)
+        | wire::ConsensusMessageV2Payload::Vote(_)
+        | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+    }
+}
+""",
+        "only TC, direct CommitQC, and discovery CommitQC may escape a hung signer",
+        errors,
+    )
+
     retained_dispatch = _require_rust_item(
         effects_path,
         source,
@@ -39308,11 +40001,13 @@ fn retained_dispatch_allows_network_ingress(
     &self,
     payload: &wire::ConsensusMessageV2Payload,
 ) -> bool {
-    self.retained_effect_batch.is_none()
-        || !Self::network_ingress_requires_reducer_order(payload)
+    network_ingress_is_certified_fence_escape(payload)
+        || (self.retained_certified_body_response.is_none()
+            && (self.retained_effect_batch.is_none() && self.parked_effect_batch.is_none()
+                || !Self::network_ingress_requires_reducer_order(payload)))
 }
 """,
-        "retained dispatch transport-completion bypass",
+        "retained dispatch transport completion and certified fence-escape policy",
         errors,
     )
 
@@ -39618,13 +40313,15 @@ enum FairV2IngressClass {
         core_source,
         """
 progress_len: usize,
+certified_fence_escape_len: usize,
 timeout_vote_len: usize,
 transport_completion_len: usize,
 bytes: usize,
+certified_fence_escape_bytes: usize,
 timeout_vote_bytes: usize,
 transport_completion_bytes: usize,
 """,
-        "shared per-validator progress and transport-completion owners",
+        "shared per-validator ordinary-progress, certified-fence, timeout, and transport-completion owners",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -39635,6 +40332,7 @@ pub(crate) struct FairV2Ingress {
     capacity: usize,
     byte_capacity: usize,
     source_byte_capacity: usize,
+    certified_fence_escape_byte_reserve: usize,
     timeout_vote_byte_reserve: usize,
     transport_completion_byte_reserve: usize,
     consensus_frame_byte_capacity: usize,
@@ -39655,14 +40353,22 @@ pub(crate) struct FairV2Ingress {
         core_path,
         push,
         """
-let is_validator_origin = inbound
+let is_current_validator_origin = inbound
     .sender()
     .is_some_and(|peer| state.roster.contains(peer));
-if is_transport_completion && !is_validator_origin {
+let is_historical_recovery_response =
+    message_kind == FairV2IngressMessageKind::LaneHistoricalRecoveryResponse;
+let authenticated_historical_recovery_response = is_historical_recovery_response
+    && inbound.sender().is_some()
+    && inbound.via().is_some();
+if is_transport_completion
+    && !is_current_validator_origin
+    && !authenticated_historical_recovery_response
+{
     return Err(FairV2IngressPushError::Rejected(inbound));
 }
 """,
-        "roster-origin premise for completion relayed through any authenticated hop",
+        "current-roster or proof-carrying historical authority premise for completion relayed through an authenticated hop",
         errors,
     )
     _require_rust_token_sequence(
@@ -39831,6 +40537,17 @@ if encoded_len > source_class_byte_limit || encoded_len > self.byte_capacity {
         core_path,
         push,
         """
+if uses_certified_fence_escape_reserve && lane_certified_fence_escape_len != 0 {
+    return Err(FairV2IngressPushError::Full(inbound));
+}
+""",
+        "single authenticated source-lane certified-fence escape count owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
 if is_transport_completion && lane_transport_completion_len != 0 {
     return Err(FairV2IngressPushError::Full(inbound));
 }
@@ -39842,13 +40559,20 @@ if is_transport_completion && lane_transport_completion_len != 0 {
         core_path,
         push,
         """
-lane.bytes
-    .checked_sub(lane.transport_completion_bytes)
-    .expect("non-validator completion bytes are included in the source total"),
-self.source_byte_capacity
-    .saturating_sub(self.transport_completion_byte_reserve),
+let reserved_bytes = lane
+    .certified_fence_escape_bytes
+    .checked_add(lane.transport_completion_bytes)
+    .expect("configured per-source byte limit prevents overflow");
+(
+    lane.bytes
+        .checked_sub(reserved_bytes)
+        .expect("reserved byte owners are included in the source total"),
+    self.source_byte_capacity
+        .saturating_sub(self.certified_fence_escape_byte_reserve)
+        .saturating_sub(self.transport_completion_byte_reserve),
+)
 """,
-        "non-validator ordinary bytes isolated from its relayed-completion reserve",
+        "authenticated non-validator ordinary bytes isolated from certified-fence and relayed-completion reserves",
         errors,
     )
     _require_rust_token_sequence(
@@ -39860,13 +40584,13 @@ let Some(latent_authenticated_slots_after) = self
     .map_or(Some(0), |capacity| {
         capacity
             .checked_sub(materialized_authenticated_after)
-            .and_then(|latent| latent.checked_mul(2))
+            .and_then(|latent| latent.checked_mul(3))
     })
 else {
     reject_after_leader_wire_admission!();
 };
 """,
-        "unmaterialized authenticated non-validator lanes retain two protected owners each",
+        "unmaterialized authenticated non-validator lanes retain three protected owners each",
         errors,
     )
     _require_rust_token_sequence(
@@ -39876,6 +40600,21 @@ else {
 let lane = state.lanes.entry(source.clone()).or_default();
 """,
         "new authenticated non-validator ownership materializes one exact source lane",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+if uses_certified_fence_escape_reserve {
+    lane.certified_fence_escape_len += 1;
+    lane.certified_fence_escape_bytes = lane
+        .certified_fence_escape_bytes
+        .checked_add(encoded_len)
+        .expect("certified fence-escape byte reserve prevents overflow");
+}
+""",
+        "certified-fence admission atomically acquires its source count and byte owners",
         errors,
     )
     receive = _require_rust_item(
@@ -39937,9 +40676,10 @@ fn fair_v2_ingress_newer_timeout_certificate_cannot_bypass_live_predecessor()
     # FairV2Ingress dequeue is only the first half of the live-control
     # predecessor cut.  Once the predecessor has transferred into the
     # serialized runtime, the successor may leave the outer queue, but its
-    # freshly minted lifecycle ordinal must remain behind the predecessor in
-    # FIFO, Busy-deferred, and effect-owned form.  Pin that complete
-    # composition rather than treating an outer dequeue as reducer service.
+    # freshly minted lifecycle ordinal remains immutable through FIFO,
+    # Busy-deferred, and effect-owned form. Class service itself is bounded
+    # round-robin: a permanently retrying oldest Normal item cannot suppress
+    # later Progress. Within each selected class, lifecycle order is strict.
     runtime_path = paths["runtime"]
     runtime_source = sources["runtime"]
     oldest_lifecycle = _require_rust_item(
@@ -39975,26 +40715,30 @@ Ok(Some(
         runtime_path,
         pop_next,
         """
-let Some(oldest_lifecycle_ordinal) = self.oldest_lifecycle_ordinal()? else {
+if self.oldest_lifecycle_ordinal()?.is_none() {
     return Ok(None);
-};
+}
 let (completion_ready, progress_ready, normal_ready) =
-    self.class_readiness_at_lifecycle(oldest_lifecycle_ordinal);
+    self.class_readiness();
 """,
-        "runtime class arbitration is restricted to the oldest live lifecycle",
+        "runtime class arbitration sees every globally ready bounded service class",
         errors,
     )
     _require_rust_token_sequence(
         runtime_path,
         pop_next,
         """
+let oldest_class_lifecycle_ordinal = self
+    .minimum_lifecycle_for_class(class)
+    .ok_or(EnqueueError::FailClosed)?;
 let Some(index) = self.commands.iter().position(|queued| {
-    queued.class == class && queued.lifecycle_ordinal == Some(oldest_lifecycle_ordinal)
+    queued.class == class
+        && queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)
 }) else {
     return Err(EnqueueError::FailClosed);
 };
 """,
-        "runtime FIFO cannot select a later lifecycle within the chosen class",
+        "runtime FIFO selects the oldest lifecycle within the chosen fair class",
         errors,
     )
     accept_dispatch = _require_rust_item(
@@ -40083,8 +40827,16 @@ for queued in &self.ingress.commands {
         runtime_path,
         minimum_active_excluding,
         """
-for owner in self.deferred_lifecycle_ownership.values() {
-    observe(owner)?;
+for (ordinal, owner) in &self.deferred_lifecycle_ownership {
+    if owner.deferred_admission_ordinal != *ordinal
+        || !owner.validate_active_against_ingress(
+            self.deferred_ingress_ownership.get(ordinal),
+            self.driver.deferred_admission_ordinal_source(),
+        )
+    {
+        return Err(EnqueueError::FailClosed);
+    }
+    observe(owner.owner())?;
 }
 """,
         "global runtime predecessor cut includes Busy-deferred ownership",
@@ -40110,11 +40862,36 @@ if let Some(ownership) = &self.pending_effect_ownership {
         runtime_path,
         arbitration,
         """
-let global_minimum = self.minimum_active_lifecycle_ordinal()?;
+let _ = self.minimum_active_lifecycle_ordinal()?;
 let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;
-let fifo_ready = fifo_minimum.is_some() && fifo_minimum == global_minimum;
+let fifo_ready = fifo_minimum.is_some();
+let (completion_ready, progress_ready, normal_ready) = if fifo_ready {
+    self.ingress.class_readiness()
+} else {
+    (false, false, false)
+};
 """,
-        "runtime FIFO is ready only at the global live-lifecycle minimum",
+        "passive lifecycle capabilities cannot suppress runnable FIFO classes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        receive,
+        """
+if !matches!(source, FairV2IngressSource::Anonymous)
+    && fair_v2_ingress_is_certified_fence_escape(&entry.inbound)
+{
+    lane.certified_fence_escape_len = lane
+        .certified_fence_escape_len
+        .checked_sub(1)
+        .expect("certified fence-escape count includes every reserved owner");
+    lane.certified_fence_escape_bytes = lane
+        .certified_fence_escape_bytes
+        .checked_sub(entry.encoded_len)
+        .expect("certified fence-escape bytes include every reserved owner");
+}
+""",
+        "exact certified-fence count and byte owner retirement on dequeue",
         errors,
     )
     _require_rust_token_sequence(
@@ -40167,6 +40944,33 @@ if remains_ready {
         errors,
     )
 
+    certified_fence_bytes = _require_rust_item(
+        core_path,
+        core_source,
+        "fair_v2_ingress_required_certified_fence_escape_bytes",
+        errors,
+    )
+    _require_rust_item_context(
+        core_path,
+        certified_fence_bytes,
+        (),
+        "closed certified-fence canonical wire-byte ceiling",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        certified_fence_bytes,
+        """
+Some(
+    direct_quorum_certificate
+        .max(timeout_certificate)
+        .max(recovery_response),
+)
+""",
+        "certified-fence reserve must cover direct CommitQC, TC, and CommitQC recovery response",
+        errors,
+    )
+
     configure_context = _require_rust_item(
         core_path, core_source, "configure_roster_for_context", errors
     )
@@ -40177,6 +40981,8 @@ if remains_ready {
 let required_proposal_bytes = fair_v2_ingress_required_proposal_bytes(layout, roster.len());
 let required_commit_certificate_response_bytes =
     fair_v2_ingress_required_commit_certificate_response_bytes(roster.len());
+let required_certified_fence_escape_bytes =
+    fair_v2_ingress_required_certified_fence_escape_bytes(roster.len());
 let required_control_message_bytes =
     required_proposal_bytes.max(required_commit_certificate_response_bytes);
 let required_transport_completion_bytes =
@@ -40225,13 +41031,14 @@ BODY_ENVELOPE_HEADROOM_BYTES
     .max(required_control_message_bytes)
     .max(required_recovery_request_bytes)
     .max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES),
+required_certified_fence_escape_bytes,
 required_transport_completion_bytes,
 required_consensus_frame_bytes,
 required_control_frame_bytes,
 required_block_sync_frame_bytes,
 required_outbound_high_frame_bytes,
 """,
-        "disjoint ordinary/completion and every progress-frame requirement hand-off",
+        "disjoint ordinary/certified/completion and every progress-frame requirement hand-off",
         errors,
     )
 
@@ -40239,6 +41046,56 @@ required_outbound_high_frame_bytes,
         core_path, core_source, "configure_roster_with_byte_requirements", errors
     )
     open_ingress = _require_rust_item(core_path, core_source, "open", errors)
+    for item, stage in ((configure, "configure"), (open_ingress, "open")):
+        _require_rust_token_sequence(
+            core_path,
+            item,
+            """
+if self.certified_fence_escape_byte_reserve > self.source_byte_capacity {
+    return Err(FairV2IngressCapacityError {
+        configured: self.source_byte_capacity,
+        required: self.certified_fence_escape_byte_reserve,
+        kind: FairV2IngressCapacityKind::CertifiedFenceEscapeBytes,
+    });
+}
+""",
+            f"{stage} certified-fence reserve must fit its source partition",
+            errors,
+        )
+        _require_rust_token_sequence(
+            core_path,
+            item,
+            """
+let Some(required_reserved_bytes) = self
+    .certified_fence_escape_byte_reserve
+    .checked_add(self.timeout_vote_byte_reserve)
+    .and_then(|reserved| reserved.checked_add(self.transport_completion_byte_reserve))
+else {
+    return Err(FairV2IngressCapacityError {
+        configured: self.source_byte_capacity,
+        required: usize::MAX,
+        kind: FairV2IngressCapacityKind::TransportCompletionBytes,
+    });
+};
+""",
+            f"{stage} disjoint certified/timeout/completion reserve sum",
+            errors,
+        )
+        _require_rust_token_sequence(
+            core_path,
+            item,
+            """
+if state.required_certified_fence_escape_bytes > self.certified_fence_escape_byte_reserve {
+    return Err(FairV2IngressCapacityError {
+        configured: self.certified_fence_escape_byte_reserve,
+        required: state.required_certified_fence_escape_bytes,
+        kind: FairV2IngressCapacityKind::CertifiedFenceEscapeBytes,
+    });
+}
+""",
+            f"{stage} certified-fence canonical byte requirement",
+            errors,
+        )
     for item, stage in ((configure, "configure"), (open_ingress, "open")):
         for required_field, capacity_field, kind in (
             (
@@ -40334,6 +41191,23 @@ let block_sync_frame_byte_capacity =
         core_path,
         start,
         """
+let transport_completion_byte_reserve = block_source_byte_cap
+    .checked_sub(CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+    .and_then(|bytes| bytes.checked_sub(TIMEOUT_VOTE_RESERVE_BYTES))
+    .and_then(|bytes| bytes.checked_sub(ordinary_wire_byte_reserve))
+    .ok_or_else(|| {
+        eyre::eyre!(
+            "Sumeragi per-source ingress bytes do not contain disjoint ordinary, timeout, and payload-completion partitions"
+        )
+    })?;
+""",
+        "production completion reserve must leave the certified-fence partition disjoint",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        start,
+        """
 let authenticated_non_validator_source_capacity =
     config.queues.authenticated_non_validator_sources.get();
 """,
@@ -40348,6 +41222,7 @@ FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
     block_channel_cap,
     block_byte_cap,
     block_source_byte_cap,
+    CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
     TIMEOUT_VOTE_RESERVE_BYTES,
     transport_completion_byte_reserve,
     consensus_frame_byte_capacity,
@@ -41254,10 +42129,10 @@ let mut emitter = Emitter::new();
             "reviewed authenticated non-validator ingress lane count H",
         ),
         (
-            "pub const QUEUE_BODY_CAPACITY: NonZeroUsize = "
-            "nonzero!(4 * MAX_VALIDATORS_PER_HEIGHT + 2 * "
+            "pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!("
+            "5 * MAX_VALIDATORS_PER_HEIGHT + 3 * "
             "QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get() + 2);",
-            "exact default 4N+2H+2 outer-ingress message geometry",
+            "exact default 5N+3H+2 outer-ingress message geometry",
         ),
         (
             "pub const QUEUE_BODY_BYTES: NonZeroUsize = "
@@ -41362,10 +42237,10 @@ let mut emitter = Emitter::new();
         actual_source,
         """
 let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
-    .checked_mul(2)
-    .and_then(|hubs| hubs.checked_add(6))
+    .checked_mul(3)
+    .and_then(|hubs| hubs.checked_add(7))
 """,
-        "actual N=1 minimum 2H+6 ingress-message geometry",
+        "actual N=1 minimum 3H+7 ingress-message geometry",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -41429,10 +42304,10 @@ if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capa
 let minimum_body_messages = queues
     .authenticated_non_validator_sources
     .get()
-    .checked_mul(2)
-    .and_then(|hubs| hubs.checked_add(6));
+    .checked_mul(3)
+    .and_then(|hubs| hubs.checked_add(7));
 """,
-        "user N=1 minimum 2H+6 ingress-message geometry",
+        "user N=1 minimum 3H+7 ingress-message geometry",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -46952,16 +47827,16 @@ AsyncPersistDecisionCommandThisStep,
     fixed_count = sum(name.endswith("_fixed.cfg") for name in expected_formal)
     mutation_count = sum(name.endswith("_bug.cfg") for name in expected_formal)
     if (
-        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 151
-        or model_count != 30
-        or config_count != 121
-        or fixed_count != 30
-        or mutation_count != 91
+        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 154
+        or model_count != 31
+        or config_count != 123
+        or fixed_count != 31
+        or mutation_count != 92
     ):
         errors.append(
             "liveness-ownership mutation source seal must name exactly "
-            "thirty models, thirty repaired configurations, and "
-            "ninety-one failing configurations; found "
+            "thirty-one models, thirty-one repaired configurations, and "
+            "ninety-two failing configurations; found "
             f"models={model_count}, repaired={fixed_count}, "
             f"failing={mutation_count}, configurations={config_count}, "
             f"total={len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS)}"
@@ -46969,7 +47844,7 @@ AsyncPersistDecisionCommandThisStep,
     if digest_names != expected_all:
         errors.append(
             "liveness-ownership mutation digest inventory must equal the "
-            f"exact 152-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"exact 155-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -48784,6 +49659,11 @@ Init /\ [][Next]_vars
     runner_source = runner_path.read_text(encoding="utf-8")
     expected_fixed_cases = {
         (
+            "revision4-certified-fence-reservation",
+            "SumeragiV2Revision4CertifiedFenceReservation.tla",
+            "revision4_certified_fence_reservation_fixed.cfg",
+        ),
+        (
             "local-ingress-scheduler-reservation",
             "SumeragiV2LocalIngressSchedulerReservationMutation.tla",
             "local_ingress_scheduler_reservation_fixed.cfg",
@@ -49508,6 +50388,11 @@ Init /\ [][Next]_vars
     }
     expected_temporal_mutation_cases = {
         (
+            "revision4-certified-fence-reservation-blocked",
+            "SumeragiV2Revision4CertifiedFenceReservation.tla",
+            "revision4_certified_fence_reservation_blocked_bug.cfg",
+        ),
+        (
             "producer-replay-capacity-replenishment-lasso",
             "SumeragiV2ProducerReplayCapacityMutation.tla",
             "producer_replay_capacity_replenishment_lasso_bug.cfg",
@@ -49571,7 +50456,7 @@ Init /\ [][Next]_vars
     )
     temporal_mutation_pattern = re.compile(
         r'^\s*"([^"|]+)\|([^"|]+\.tla)\|'
-        r'(producer_replay_capacity_replenishment_lasso_bug\.cfg)"\s*$',
+        r'([^"|]+_bug\.cfg)"\s*$',
         re.MULTILINE,
     )
     observed_fixed_case_rows = fixed_pattern.findall(runner_source)
@@ -49585,23 +50470,23 @@ Init /\ [][Next]_vars
         observed_temporal_mutation_case_rows
     )
     if (
-        len(expected_fixed_cases) != 30
+        len(expected_fixed_cases) != 31
         or len(expected_mutation_cases) != 90
-        or len(expected_temporal_mutation_cases) != 1
+        or len(expected_temporal_mutation_cases) != 2
     ):
         errors.append(
             "liveness-ownership runner review contract must retain exactly "
-            "thirty repaired, ninety invariant-mutation, and one "
-            "temporal-mutation case"
+            "thirty-one repaired, ninety invariant-mutation, and two "
+            "temporal-mutation cases"
         )
     if (
-        len(observed_fixed_case_rows) != 30
+        len(observed_fixed_case_rows) != 31
         or len(observed_mutation_case_rows) != 90
-        or len(observed_temporal_mutation_case_rows) != 1
+        or len(observed_temporal_mutation_case_rows) != 2
     ):
         errors.append(
             f"{runner_path}: liveness-ownership runner census must equal "
-            "exactly 30 repaired / 90 invariant-mutation / 1 temporal-"
+            "exactly 31 repaired / 90 invariant-mutation / 2 temporal-"
             "mutation cases; found "
             f"{len(observed_fixed_case_rows)} / "
             f"{len(observed_mutation_case_rows)} / "
@@ -49610,7 +50495,7 @@ Init /\ [][Next]_vars
     if observed_fixed_cases != expected_fixed_cases:
         errors.append(
             f"{runner_path}: repaired case matrix must equal the exact reviewed "
-            f"thirty cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
+            f"thirty-one cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
             f"extra={sorted(observed_fixed_cases - expected_fixed_cases)}"
         )
     if observed_mutation_cases != expected_mutation_cases:
@@ -49623,7 +50508,7 @@ Init /\ [][Next]_vars
     if observed_temporal_mutation_cases != expected_temporal_mutation_cases:
         errors.append(
             f"{runner_path}: temporal liveness mutation matrix must equal "
-            "the exact reviewed producer replay-capacity lasso; "
+            "the exact reviewed revision-4 fence and producer replay lassos; "
             f"missing={sorted(expected_temporal_mutation_cases - observed_temporal_mutation_cases)}, "
             f"extra={sorted(observed_temporal_mutation_cases - expected_temporal_mutation_cases)}"
         )
@@ -55857,6 +56742,56 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                         f"reviewed token digest {expected_sha256}; found "
                         f"{observed_sha256}"
                     )
+        pacemaker_escape = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "try_step_pacemaker_escape",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            pacemaker_escape,
+            runtime_context,
+            "typed timeout and Progress-root escape scheduler",
+            errors,
+        )
+        require_runtime_item_order(
+            pacemaker_escape,
+            (
+                "self.freeze_due_clock_owners(now)",
+                "self.scheduler_arbitration_inputs(now)",
+                "if timeout_due",
+                "return self.step(now).map(Some)",
+                "self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS))?",
+                "self.dispatch_one_pacemaker_progress(now)",
+            ),
+            "typed pacemaker escape must prefer the absolute timeout and otherwise admit only Progress-root work",
+        )
+        pacemaker_progress = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "dispatch_one_pacemaker_progress",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            pacemaker_progress,
+            runtime_context,
+            "exact Progress-root FIFO dispatcher",
+            errors,
+        )
+        require_runtime_item_order(
+            pacemaker_progress,
+            (
+                "pop_pacemaker_progress_with_ownership",
+                "driver.certified_progress_bypasses_signature_fence(command)",
+                "RuntimeQueueSelectionKind::PacemakerCertifiedProgress",
+                "owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS",
+                "self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?",
+                "self.finish_dispatched_step(",
+            ),
+            "pacemaker FIFO escape must retain exact selection evidence and Progress-root ownership through shared completion",
+        )
         _require_rust_token_sequence(
             runtime_path,
             observed_runtime_items.get("minimum_active_lifecycle_ordinal"),
@@ -56032,22 +56967,24 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
             observed_runtime_items.get("scheduler_arbitration_inputs"),
             (
                 "self.validate_clock_owner_physical_cuts()?;",
-                "let global_minimum = self.minimum_active_lifecycle_ordinal()?;",
+                "let _ = self.minimum_active_lifecycle_ordinal()?;",
                 "let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;",
+                "self.ingress.class_readiness()",
                 "self.timeout_owner_physical_cut",
                 "let raw_periodic_timer_due = timers_enabled",
                 "self.retransmit_owner_physical_cut",
                 "Ok(RuntimeSchedulerArbitrationInputs",
             ),
-            "scheduler arbitration must validate clock pairs and compare only "
-            "their frozen physical prefixes",
+            "scheduler arbitration must validate all ownership, expose every "
+            "runnable FIFO class, and compare clocks only through frozen cuts",
         )
         require_runtime_item_order(
             observed_runtime_items.get("step"),
             (
                 "self.freeze_due_clock_owners(now)",
                 "self.dispatch_one_fence_dependency(now)?",
-                "self.dispatch_one_adapter_deferred(now)?",
+                "!timeout_preempts",
+                "self.dispatch_one_adapter_deferred(now, None)?",
                 "let selected_round_tag = self.round_tag;",
             ),
             "live scheduling must freeze clock owners, service one exact fence "
@@ -56073,6 +57010,7 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
 self.accept_driver_dispatch(
     dispatch,
     &owner,
+    parent_statement,
     RuntimeDispatchIngress::LocalOrCausal
 )?
 """,
@@ -56264,6 +57202,7 @@ fn accept_driver_dispatch(
     &mut self,
     dispatch: RuntimeDriverDispatch<D::Effect>,
     parent: &RuntimeLifecycleOwner,
+    parent_statement: Option<RuntimeCandidateSemanticStatement>,
     current_ingress: RuntimeDispatchIngress,
 )
 """,
@@ -56283,6 +57222,20 @@ if retry_unadmitted
 """,
             "retryable dispatch must not expose effects, deferred ownership, or "
             "a producer handoff",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            accept_dispatch,
+            "existing.candidate_semantic_statement != parent_statement",
+            "an existing deferred occurrence must retain the selected command's exact semantic statement",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            accept_dispatch,
+            "ownership.with_candidate_semantic_statement(parent_statement)",
+            "a newly sealed deferred occurrence must retain the selected command's exact semantic statement",
             errors,
         )
         require_runtime_item_order(
@@ -56324,6 +57277,19 @@ Ok((
             "with_driver_and_lifecycle_ordinals",
             errors,
         )
+        finish_dispatched_step = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "finish_dispatched_step",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            finish_dispatched_step,
+            runtime_context,
+            "shared live-dispatch successor and parent terminal handoff",
+            errors,
+        )
         _require_rust_item_context(
             runtime_path,
             dormant_constructor,
@@ -56345,6 +57311,7 @@ ingress.install_dormant_local_fifo_reservations(
 runtime.retain_effect_ownership(
     RuntimeEffectSource::Startup,
     None,
+    None,
     startup_effects.as_slice(),
 )
 """,
@@ -56353,9 +57320,16 @@ runtime.retain_effect_ownership(
             "retaining any startup successor",
         )
         require_runtime_item_order(
-            observed_runtime_items.get("step"),
+            finish_dispatched_step,
             (
-                "self.retain_effect_ownership(effect_source, Some(&effect_parent), &effects)",
+                """
+self.retain_effect_ownership(
+    effect_source,
+    Some(&effect_parent),
+    effect_parent_statement.as_ref(),
+    &effects,
+)
+""",
                 "token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()",
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
                 "self.driver.acknowledge_producer_handoff(token, evidence)",
@@ -56368,14 +57342,21 @@ self.complete_driver_dispatch_leader_wire_owners(
 """,
                 "self.observe_effects(now, &effects)",
             ),
-            "live dispatch must retain successors, acknowledge the exact "
+            "live dispatch completion must retain successors, acknowledge the exact "
             "producer, terminalize the selected parent before adapter-side "
             "orphans, and publish every terminal before observing effects",
         )
         require_runtime_item_order(
             observed_runtime_items.get("step_recovery"),
             (
-                "self.retain_effect_ownership(RuntimeEffectSource::Fifo, Some(&owner), &effects)",
+                """
+self.retain_effect_ownership(
+    RuntimeEffectSource::Fifo,
+    Some(&owner),
+    parent_statement.as_ref(),
+    &effects,
+)
+""",
                 "token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
                 "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
                 "self.driver.acknowledge_producer_handoff(token, evidence)",
@@ -56424,7 +57405,7 @@ self.complete_driver_dispatch_leader_wire_owners(
                 continue
             item_tokens = rust_code_tokens(item.source)
             dispatch_tokens = rust_code_tokens(
-                "self.dispatch_one_adapter_deferred(now)?"
+                "self.dispatch_one_adapter_deferred(now, None)?"
             )
             later_tokens = rust_code_tokens(later_contract)
             dispatch_positions = [
@@ -56815,7 +57796,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
     "run_inner": (
-        "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9"
+        "62a3e8e7e2950f06b33d82e4eba9119956fd3ef0056d6e750c2c34a3bed8883e"
     ),
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "3245d9f8affaf523e99a6049a0aeab2d140cda6c099097390d0d85cafa5d3b5a"
@@ -61696,7 +62677,28 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "IngressLaneHasNonTimeoutProgressIn": (
                 "\\E queued \\in SequenceSet(lanes[recipient][source]): "
                 '/\\ IngressAdmissionClass(queued) = "Progress" '
-                '/\\ queued.kind # "TimeoutVote"'
+                '/\\ queued.kind # "TimeoutVote" '
+                "/\\ ~AsyncCertifiedFenceEscapeItem(queued)"
+            ),
+            "AsyncCertifiedFenceEscapeKinds": (
+                '{"TimeoutCertificate", "CommitQC", '
+                '"CommitCertificateResponse"}'
+            ),
+            "AsyncCertifiedFenceEscapeItem": (
+                "/\\ item.kind \\in AsyncCertifiedFenceEscapeKinds "
+                "/\\ IngressItemHasAuthenticatedHistory(item) "
+                "/\\ IngressResourceSource(item) \\in ValidatorIds"
+            ),
+            "AsyncCertifiedFenceEscapeContext": (
+                'CASE item.kind = "TimeoutCertificate" -> '
+                "item.envelope.tc.context "
+                '[] item.kind = "CommitQC" -> item.envelope.qc.context '
+                '[] item.kind = "CommitCertificateResponse" -> '
+                "item.envelope.qc.context"
+            ),
+            "IngressLaneHasCertifiedFenceEscapeIn": (
+                "\\E queued \\in SequenceSet(lanes[recipient][source]): "
+                "AsyncCertifiedFenceEscapeItem(queued)"
             ),
             "IngressLaneHasTransportCompletionIn": (
                 "\\E queued \\in SequenceSet(lanes[recipient][source]): "
@@ -61713,42 +62715,40 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "{source \\in ValidatorIds: "
                 "~IngressLaneHasTimeoutVoteIn(lanes, recipient, source)}"
             ),
+            "IngressCertifiedFenceEscapeProtectedSourcesFor": (
+                "{source \\in ValidatorIds: "
+                "~IngressLaneHasCertifiedFenceEscapeIn("
+                "lanes, recipient, source)}"
+            ),
             "IngressTransportCompletionProtectedSourcesFor": (
                 "{source \\in AsyncIngressSources: "
                 "~IngressLaneHasTransportCompletionIn("
                 "lanes, recipient, source)}"
             ),
+            "IngressProtectedClassNames": (
+                '{"OrdinaryProgress", "CertifiedFenceEscape", '
+                '"TimeoutVote", "TransportCompletion"}'
+            ),
+            "IngressProtectedClassesPresentIn": (
+                "{class \\in IngressProtectedClassNames: "
+                'CASE class = "OrdinaryProgress" -> '
+                "IngressLaneHasNonTimeoutProgressIn("
+                "lanes, recipient, source) "
+                '[] class = "CertifiedFenceEscape" -> '
+                "IngressLaneHasCertifiedFenceEscapeIn("
+                "lanes, recipient, source) "
+                '[] class = "TimeoutVote" -> '
+                "IngressLaneHasTimeoutVoteIn(lanes, recipient, source) "
+                '[] class = "TransportCompletion" -> '
+                "IngressLaneHasTransportCompletionIn("
+                "lanes, recipient, source)}"
+            ),
             "IngressContinuationProtectedSourcesFor": (
                 "{source \\in AsyncIngressSources: "
                 "\\/ /\\ source \\in ValidatorIds "
-                "/\\ \\/ Len(lanes[recipient][source]) = 0 "
-                "\\/ /\\ Len(lanes[recipient][source]) = 1 "
-                "/\\ (IngressLaneHasNonTimeoutProgressIn( "
-                "lanes, recipient, source) "
-                "\\/ IngressLaneHasTimeoutVoteIn( "
-                "lanes, recipient, source) "
-                "\\/ IngressLaneHasTransportCompletionIn( "
+                "/\\ Len(lanes[recipient][source]) = Cardinality( "
+                "IngressProtectedClassesPresentIn( "
                 "lanes, recipient, source)) "
-                "\\/ /\\ Len(lanes[recipient][source]) = 2 "
-                "/\\ \\/ /\\ IngressLaneHasNonTimeoutProgressIn( "
-                "lanes, recipient, source) "
-                "/\\ IngressLaneHasTimeoutVoteIn( "
-                "lanes, recipient, source) "
-                "\\/ /\\ IngressLaneHasNonTimeoutProgressIn( "
-                "lanes, recipient, source) "
-                "/\\ IngressLaneHasTransportCompletionIn( "
-                "lanes, recipient, source) "
-                "\\/ /\\ IngressLaneHasTimeoutVoteIn( "
-                "lanes, recipient, source) "
-                "/\\ IngressLaneHasTransportCompletionIn( "
-                "lanes, recipient, source) "
-                "\\/ /\\ Len(lanes[recipient][source]) = 3 "
-                "/\\ IngressLaneHasNonTimeoutProgressIn( "
-                "lanes, recipient, source) "
-                "/\\ IngressLaneHasTimeoutVoteIn( "
-                "lanes, recipient, source) "
-                "/\\ IngressLaneHasTransportCompletionIn( "
-                "lanes, recipient, source) "
                 "\\/ /\\ source \\notin ValidatorIds "
                 "/\\ Len(lanes[recipient][source]) = 1 "
                 "/\\ IngressLaneHasTransportCompletionIn( "
@@ -61756,6 +62756,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "IngressProtectedSlotCountFor": (
                 "Cardinality(IngressProtectedSourcesFor(lanes, recipient)) + "
+                "Cardinality( "
+                "IngressCertifiedFenceEscapeProtectedSourcesFor("
+                "lanes, recipient)) + "
                 "Cardinality( IngressTimeoutVoteProtectedSourcesFor("
                 "lanes, recipient)) + "
                 "Cardinality( IngressTransportCompletionProtectedSourcesFor("
@@ -61787,6 +62790,16 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "AsyncTimeoutVoteByteReserve "
                 "/\\ ~IngressLaneHasTimeoutVoteIn(asyncIngressLanes, "
                 "item.envelope.recipient, IngressResourceSource(item))"
+            ),
+            "AsyncCertifiedFenceEscapeOwnerGateAllowsVia": (
+                "\\/ ~AsyncCertifiedFenceEscapeItem(item) "
+                "\\/ ~IngressLaneHasCertifiedFenceEscapeIn("
+                " asyncIngressLanes, item.envelope.recipient, "
+                "IngressResourceSourceVia(item, authenticatedSource))"
+            ),
+            "AsyncCertifiedFenceEscapeOwnerGateAllows": (
+                "AsyncCertifiedFenceEscapeOwnerGateAllowsVia("
+                "item, item.source)"
             ),
             "AsyncTransportCompletionOwnerGateAllows": (
                 "\\/ ~IngressUsesPhysicalCompletionOwner(item) "
@@ -61899,18 +62912,29 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ AsyncServeServiceabilityInvariant "
                 "/\\ AsyncServeOrdinalInvariant"
             ),
-            "CanAdmitIngressItem": (
+            "CanAdmitIngressItemVia": (
+                "/\\ ~IngressPacketPolicyRejected(item) "
                 "/\\ ~AsyncControlServiceAdmissionCoalesced(item) "
+                "/\\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item) "
                 "/\\ ~AsyncCandidateServicePacketRetired(item) "
                 "/\\ ~AsyncCandidateStageRetired(item) "
-                "/\\ AsyncServeTransportAdmissionGateAllows( "
-                "item.envelope.recipient, item) "
+                "/\\ AsyncLeaderWireAtomicAdmissionAllows(item) "
+                "/\\ AsyncServeTransportAdmissionGateAllowsVia( "
+                "item.envelope.recipient, item, authenticatedSource) "
+                "/\\ AsyncOrdinaryIngressCarrierAdmissionCapacityAvailable(item) "
+                "/\\ AsyncOrdinaryIngressCarrierOwnerCompatibleAtAdmission(item) "
                 "/\\ IngressDepth(item.envelope.recipient) < "
-                "IngressUsableCapacityAfterAdmission(item) "
+                "IngressUsableCapacityAfterAdmissionVia( "
+                "item, authenticatedSource) "
                 "/\\ AsyncTimeoutVoteByteGateAllows(item) "
+                "/\\ AsyncCertifiedFenceEscapeOwnerGateAllowsVia( "
+                "item, authenticatedSource) "
                 "/\\ AsyncTransportCompletionOwnerGateAllows(item) "
                 "/\\ CertifiedResponseFreshClaimGateAllows(item) "
                 "/\\ AsyncUntrustedGenericCompletionGateAllows(item)"
+            ),
+            "CanAdmitIngressItem": (
+                "CanAdmitIngressItemVia(item, item.source)"
             ),
             "ProtectedProgressCommand": (
                 'CASE command.kind = "DeliverVote" -> '
@@ -62142,16 +63166,38 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "THEN AsyncIoCapacity ELSE AsyncIoQueueDepth(node)"
             ),
             "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
-                "IF AsyncServeIngressLifecycleOwnerIdentities(node) = {} "
+                "IF ~AsyncServeIngressOwnsSharedPhysicalTurn(node) "
                 "THEN TRUE ELSE LET ownerIdentity == "
-                "AsyncServeEarliestIngressLifecycleOwnerIdentity(node) "
+                "AsyncServeEarliestIngressSchedulerOwnerIdentity(node) "
                 "item == asyncIngressLanes[node][source][index] "
                 "IN \\/ index <= "
                 "AsyncServeIngressAdmissionPredecessorCounts( "
                 "node, ownerIdentity)[source] "
                 "\\/ /\\ item.kind \\in AsyncReplyRequestKinds "
                 "/\\ AsyncServeLogicalRequestIdentity(node, item) "
-                "= ownerIdentity"
+                "= ownerIdentity "
+                "\\/ AsyncCertifiedFenceEscapeItem(item)"
+            ),
+            "AsyncCertifiedFenceEscapeAdvancesLeaderWire": (
+                "/\\ AsyncCertifiedFenceEscapeItem(item) "
+                "/\\ owner.phase \\in AsyncControlKinds "
+                "/\\ AsyncCertifiedFenceEscapeContext(item) = owner.context "
+                "/\\ DeliveryHeight(item) = owner.height "
+                "/\\ DeliveryView(item) >= owner.view"
+            ),
+            "AsyncLeaderWireIngressPrefixCleared": (
+                "\\A predecessorSource \\in AsyncIngressSources: "
+                "owner.ingressPredecessors[predecessorSource] = 0"
+            ),
+            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget": (
+                "IF ~AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node) "
+                "THEN TRUE ELSE LET owner == "
+                "AsyncLeaderWireEarliestPhysicalIngressRecord(node) "
+                "item == asyncIngressLanes[node][source][index] "
+                "IN \\/ index <= owner.ingressPredecessors[source] "
+                "\\/ /\\ AsyncLeaderWireAdmissionMatchesRecord(item, owner) "
+                "/\\ AsyncLeaderWireIngressPrefixCleared(owner) "
+                "\\/ AsyncCertifiedFenceEscapeAdvancesLeaderWire(item, owner)"
             ),
             "PopSelectedIngress": (
                 "LET source == asyncIngressReady[node][index] "
@@ -62586,9 +63632,6 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncServeLifecycleTypeInvariant": (
             "49c0c66834b2f4f12b211e6523aaf426d58fb2bc18cf2115960ff3c49081f520"
         ),
-        "CanAdmitIngressItem": (
-            "04bf55f310b7bb465772fffb1c4675ba714e10d83b24cc448ef16290780b4dc5"
-        ),
         "ReserveExactServeCapacity": (
             "301db8a2c6cafdcfd26abedae21fff7b20376071adca5e1309c6b487fcc9b743"
         ),
@@ -62597,9 +63640,6 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "CoalesceExactServeIngressCapacity": (
             "201ebef767d5b1f2c3f28c66717805c3220f98d0239e814859b4f55548fbf450"
-        ),
-        "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
-            "cf7cbe2fe0979ac886098795788bdeea0f6345ed3eb571214ef1fbc6c6b0c962"
         ),
         "PopSelectedIngress": (
             "f48e04bddc904f89060ffa1d78c648ea4645972ba243d83cc44507cf4e47acda"
@@ -62675,6 +63715,47 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             errors.append(
                 f"{path}:{line}: {symbol} must equal only {expected!r}; "
                 f"found {normalized!r}"
+            )
+
+    certified_fence_theorem_dependencies = {
+        "AsyncLeaderWireCarrierCannotBypassFrozenPrefix": (
+            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
+            "AsyncLeaderWireIngressPrefixCleared",
+            "AsyncCertifiedFenceEscapeAdvancesLeaderWire",
+            "IngressLane",
+        ),
+        "AsyncCertifiedFenceEscapeCrossesSelectedServeBarrier": (
+            "AsyncCertifiedFenceEscapeItem",
+            "AsyncServeIngressIndexMayPrecedeAdmittedTarget",
+            "IngressLane",
+        ),
+        "AsyncCertifiedFenceEscapeCrossesMatchingLeaderWireBarrier": (
+            "AsyncCertifiedFenceEscapeAdvancesLeaderWire",
+            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
+            "IngressLane",
+        ),
+    }
+    for symbol, dependencies in certified_fence_theorem_dependencies.items():
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing certified-fence ingress theorem {symbol}"
+            )
+            continue
+        body, line = extracted
+        missing = [
+            dependency
+            for dependency in dependencies
+            if not _tla_dependency_present(body, dependency)
+        ]
+        if missing:
+            errors.append(
+                f"{path}:{line}: certified-fence ingress theorem {symbol} "
+                f"must retain reviewed dependencies {missing!r}"
             )
 
     async_filtered_projections = {
@@ -64691,7 +65772,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "AsyncConfiguration": (
                 "AsyncDeferredProgressCapacity >= 2 * N + 3",
-                "AsyncIngressCapacity >= 4 * N + 2",
+                "AsyncIngressCapacity >= 5 * N + 2",
                 "AsyncValidTimeoutVoteWireByteBound <= AsyncTimeoutVoteByteReserve",
             ),
         })
@@ -64935,16 +66016,30 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "if turn == OuterIngressTurn::Runtime", turn_loop
         )
         executor_turn = drain_body.find(
-            "advance_executor(executor, services, 1)?", runtime_turn
+            "advance_executor(receiver, executor, services, 1)?", runtime_turn
         )
         ingress_receive = drain_body.find("receiver.try_recv_if", executor_turn)
         if not (
             0 <= turn_loop < runtime_turn < executor_turn < ingress_receive
         ):
             errors.append(
-                f"{runner_path}: every outer ingress occurrence must be preceded "
+                f"{runner_path}: every ordinary outer ingress occurrence must be preceded "
                 "by one serialized advance_executor turn"
             )
+        for escape_contract, description in (
+            (
+                "mode == V2IngressDrainMode::CertifiedFenceEscape "
+                "&& turn != OuterIngressTurn::Ingress",
+                "escape mode must skip Completion and Runtime turns",
+            ),
+            (
+                "message.validate_version().is_err() "
+                "|| !network_ingress_is_certified_fence_escape(&message.payload)",
+                "escape mode must reject wrong-version and ordinary ingress",
+            ),
+        ):
+            if escape_contract not in " ".join(drain_body.split()):
+                errors.append(f"{runner_path}: {description}")
 
         outer_start = runner_source.find("fn outer_ingress_turns(")
         outer_end = runner_source.find("\nfn v2_ingress_head_can_drain(", outer_start)
@@ -64954,13 +66049,14 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             else " ".join(runner_source[outer_start:outer_end].split())
         )
         expected_turns = (
-            "(0..limit.max(1)).flat_map(|_| "
-            "[OuterIngressTurn::Runtime, OuterIngressTurn::Ingress])"
+            "(0..limit.max(1)).flat_map(|_| { "
+            "[ OuterIngressTurn::Completion, OuterIngressTurn::Runtime, "
+            "OuterIngressTurn::Ingress, ] })"
         )
         if expected_turns not in outer_body:
             errors.append(
                 f"{runner_path}: outer_ingress_turns must keep the exact "
-                "Runtime-before-Ingress alternation"
+                "Completion/Runtime/Ingress alternation"
             )
 
     adapter_path = _formal_repo_root(formal_dir) / "crates/iroha_core/src/sumeragi/v2.rs"
@@ -65100,17 +66196,30 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             effects_path,
             consume,
             """
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
 let ownership = match self.runtime.take_effect_ownership(&effects) {
     Ok(ownership) => ownership,
     Err(error) => {
         return Err(self.close(EffectExecutorError::Runtime(error), services));
     }
 };
-if let Err(error) = self.retain_effect_batch(effects, ownership) {
+if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
     return Err(self.close(error, services));
 }
+if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
+    return Err(self.close_after_transferring_runtime_terminals(error, services));
+}
+if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+    return Err(self.close(error, services));
+}
+let count = self
+    .drain_retained_effect_batch(services, true)
 """,
-            "consume_effects must close a missing ownership boundary, preserve its Runtime type, and retain the complete owned batch before draining it",
+            "consume_effects must snapshot, retain, and commit the reducer frontier before transferring terminals and draining",
             errors,
         )
         if consume is not None:
@@ -65119,11 +66228,23 @@ if let Err(error) = self.retain_effect_batch(effects, ownership) {
                 "self.runtime.take_effect_ownership(&effects)"
             )
             retain_tokens = rust_code_tokens(
-                "self.retain_effect_batch(effects, ownership)"
+                "self.retain_effect_batch_at_frontier(effects, ownership, frontier)"
+            )
+            frontier_tokens = rust_code_tokens("self.runtime.reconciliation_frontier()")
+            commit_tokens = rust_code_tokens(
+                "self.commit_reconciliation_frontier(frontier, services)"
             )
             drain_tokens = rust_code_tokens(
-                "self.drain_retained_effect_batch(services)"
+                "self.drain_retained_effect_batch(services, true)"
             )
+            frontier_positions = [
+                index
+                for index in range(
+                    len(consume_tokens) - len(frontier_tokens) + 1
+                )
+                if consume_tokens[index : index + len(frontier_tokens)]
+                == frontier_tokens
+            ]
             ownership_positions = [
                 index
                 for index in range(
@@ -65137,29 +66258,114 @@ if let Err(error) = self.retain_effect_batch(effects, ownership) {
                 for index in range(len(consume_tokens) - len(retain_tokens) + 1)
                 if consume_tokens[index : index + len(retain_tokens)] == retain_tokens
             ]
+            commit_positions = [
+                index
+                for index in range(len(consume_tokens) - len(commit_tokens) + 1)
+                if consume_tokens[index : index + len(commit_tokens)] == commit_tokens
+            ]
             drain_positions = [
                 index
                 for index in range(len(consume_tokens) - len(drain_tokens) + 1)
                 if consume_tokens[index : index + len(drain_tokens)] == drain_tokens
             ]
             if not (
-                len(ownership_positions) == 1
+                len(frontier_positions) == 1
+                and len(ownership_positions) == 1
                 and len(retain_positions) == 1
+                and len(commit_positions) == 1
                 and len(drain_positions) == 1
-                and ownership_positions[0]
+                and frontier_positions[0]
+                < ownership_positions[0]
                 < retain_positions[0]
+                < commit_positions[0]
                 < drain_positions[0]
             ):
                 errors.append(
                     f"{effects_path}:{consume.line}: consume_effects must acquire "
-                    "one ownership vector, retain it with its effects exactly "
-                    "once, then perform one retained-batch drain"
+                    "one frontier and ownership vector, retain exactly once, "
+                    "commit reconciliation, then perform one retained-batch drain"
                 )
+
+        consume_pacemaker = executor_items["consume_pacemaker_effects"]
+        _require_rust_token_sequence(
+            effects_path,
+            consume_pacemaker,
+            """
+if ownership
+    .iter()
+    .any(|evidence| evidence.owner().causal_origin().root_class != SERVICE_CLASS_PROGRESS)
+{
+    return Err(self.close(
+        EffectExecutorError::Contract(
+            "typed pacemaker escape returned a non-Progress causal owner".to_owned(),
+        ),
+        services,
+    ));
+}
+""",
+            "typed pacemaker effect consumption must reject every non-Progress causal owner",
+            errors,
+        )
+        _require_rust_token_sequence(
+            effects_path,
+            consume_pacemaker,
+            """
+if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
+    return Err(self.close(error, services));
+}
+if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
+    return Err(self.close_after_transferring_runtime_terminals(error, services));
+}
+if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+    return Err(self.close(error, services));
+}
+let count = self
+    .drain_retained_effect_batch(services, false)
+""",
+            "typed pacemaker effect consumption must commit even an empty reducer frontier before transferring terminals and dispatching only pacemaker-safe effects",
+            errors,
+        )
+
+        step_pacemaker = executor_items["step_pacemaker_once"]
+        _require_rust_token_sequence(
+            effects_path,
+            step_pacemaker,
+            """
+let step = match self.runtime.step_pacemaker_effects(now) {
+    Ok(step) => step,
+    Err(reason) => {
+        drop(wal_step);
+        return Err(self.close(EffectExecutorError::Runtime(reason), services));
+    }
+};
+if step.is_some()
+    && let Err(reason) = self.runtime.take_scheduler_ownership()
+{
+    drop(wal_step);
+    return Err(self.close(EffectExecutorError::Runtime(reason), services));
+}
+wal_step.complete();
+""",
+            "typed pacemaker executor turn must invoke only the runtime pacemaker scheduler and consume its exact owner before releasing the WAL permit",
+            errors,
+        )
+        _require_rust_token_sequence(
+            effects_path,
+            step_pacemaker,
+            """
+Some(RuntimeStep::Advanced(effects)) => {
+    let count = self.consume_pacemaker_effects(effects, services)?;
+    Ok(EffectExecutorStep::Advanced { effects: count })
+}
+""",
+            "typed pacemaker executor turn must dispatch advanced effects only through the Progress-root consumer",
+            errors,
+        )
 
         retain = _require_rust_item(
             effects_path,
             effects_source,
-            "retain_effect_batch",
+            "retain_effect_batch_at_frontier",
             errors,
         )
         _require_rust_item_context(
@@ -65186,13 +66392,16 @@ if effects.len() != ownership.len() {
             effects_path,
             retain,
             """
-effects: effects
+let retained = effects
     .into_iter()
     .zip(ownership)
-    .map(|(effect, ownership)| OwnedAdapterEffect { effect, ownership })
-    .collect(),
+    .zip(retain_effect)
+    .filter_map(|((effect, ownership), retain)| {
+        retain.then_some(OwnedAdapterEffect { effect, ownership })
+    })
+    .collect::<VecDeque<_>>();
 """,
-            "retained effect construction must zip each effect with its immutable owner",
+            "retained effect construction must zip each retained effect with its immutable owner",
             errors,
         )
 
@@ -65265,24 +66474,33 @@ Err(
             effects_path,
             step,
             """
-if self.retained_effect_batch.is_some() {
+if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
     let count = self
-        .drain_retained_effect_batch(services)
-        .map_err(|error| self.close(error, services))?;
-    return Ok(if count == 0 {
-        EffectExecutorStep::Idle
-    } else {
-        EffectExecutorStep::Advanced { effects: count }
-    });
+        .drain_retained_effect_batch(services, true)
+        .map_err(|error| {
+            self.close_after_transferring_runtime_terminals(error, services)
+        })?;
+    if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+        return Err(self.close(error, services));
+    }
+    if count != 0 {
+        return Ok(EffectExecutorStep::Advanced { effects: count });
+    }
+    if self.retained_effect_batch.is_some() && self.parked_effect_batch.is_none() {
+        self.park_retained_effect_batch()
+            .map_err(|error| self.close(error, services))?;
+        return self.step_pacemaker_once(now, services);
+    }
+    return Ok(EffectExecutorStep::Idle);
 }
 """,
-            "step must drain retained causal debt and return before runtime stepping",
+            "step must drain retained or parked debt and give blocked ordinary debt one typed pacemaker turn",
             errors,
         )
         if step is not None:
             step_tokens = rust_code_tokens(step.source)
             drain_tokens = rust_code_tokens(
-                "self.drain_retained_effect_batch(services)"
+                "self.drain_retained_effect_batch(services, true)"
             )
             runtime_tokens = rust_code_tokens("self.runtime.step_effects(now)")
             drain_positions = [
@@ -66142,11 +67360,11 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
     if validator_count is not None and validator_count != 1:
         errors.append(f"{path}: ownership search must remain the N=1 boundary")
     if validator_count is not None and ingress_capacity is not None:
-        exact_ingress_capacity = 4 * validator_count + 2
-        if ingress_capacity != exact_ingress_capacity or ingress_capacity != 6:
+        exact_ingress_capacity = 5 * validator_count + 2
+        if ingress_capacity != exact_ingress_capacity or ingress_capacity != 7:
             errors.append(
-                f"{path}: N=1 AsyncIngressCapacity must equal exact 4 * N + 2 "
-                f"geometry (6), found {ingress_capacity}"
+                f"{path}: N=1 AsyncIngressCapacity must equal exact 5 * N + 2 "
+                f"geometry (7), found {ingress_capacity}"
             )
     if validator_count is not None and deferred_progress_capacity is not None:
         exact_deferred_capacity = 2 * validator_count + 3
@@ -80205,6 +81423,22 @@ leader_wire_carrier_ordinal
 """,
             "Serve-versus-leader arbitration must compare physical carrier ordinals",
         ),
+        (
+            """
+index
+    < owner
+        .ingress_predecessors
+        .get(source)
+        .copied()
+        .unwrap_or(0)
+    || (owner
+        .ingress_predecessors
+        .values()
+        .all(|count| *count == 0)
+        && entry.leader_wire_token.as_ref() == Some(&owner.token))
+""",
+            "the restored leader-wire self-carrier must remain behind every frozen source-prefix predecessor",
+        ),
     ):
         _require_rust_token_sequence(
             ingress_path,
@@ -80880,7 +82114,7 @@ self.runtime
     .older_lifecycle_predates_exact_serve(now, serve_lifecycle_ordinal)
 """,
         "executor-retained owners must publish before the runtime freezes and "
-        "compares the complete owner set",
+        "deeply validates the complete owner set before comparing runnable predecessors",
         errors,
     )
 
@@ -80924,6 +82158,27 @@ self.runtime
         "let _ = self.ingress.oldest_active_lifecycle_ordinal()?;",
         "the exact-Serve runtime minimum must deeply validate every FIFO and "
         "latent Local FIFO owner",
+        errors,
+    )
+    runtime_runnable = runtime_items.get("minimum_runnable_lifecycle_ordinal")
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_runnable,
+        """
+let _ = self.minimum_active_lifecycle_ordinal()?;
+let mut minimum = self.ingress.oldest_lifecycle_ordinal()?;
+""",
+        "exact-Serve predecessor selection must deeply validate all owners before projecting runnable FIFO work",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        runtime_runnable,
+        """
+if self.driver.deferred_work_is_serviceable() {
+    for admission_ordinal in self.eligible_deferred_admission_ordinals()? {
+""",
+        "serviceable deferred work must participate in the runnable exact-Serve predecessor minimum",
         errors,
     )
     _require_rust_token_sequence(
@@ -81032,8 +82287,12 @@ self.dormant_local_fifo_reservations
             "ticket/runtime ordinal collisions must fail closed",
         ),
         (
+            "self.minimum_runnable_lifecycle_ordinal(now)",
+            "exact-Serve comparison must use only owners runnable by one serialized turn",
+        ),
+        (
             "minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal)",
-            "the complete owner minimum must be strictly older than the ticket",
+            "the runnable owner minimum must be strictly older than the ticket",
         ),
     ):
         _require_rust_token_sequence(
@@ -81488,6 +82747,52 @@ def _local_runner_service_contract_source_fidelity_errors(
             f"local-runner trusted-contract structural seam {item_name}",
             errors,
         )
+    advance_pacemaker = _require_rust_item(
+        runner_path,
+        runner_source,
+        "advance_pacemaker_once",
+        errors,
+    )
+    _require_rust_item_context(
+        runner_path,
+        advance_pacemaker,
+        (),
+        "one bounded typed pacemaker turn",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runner_path,
+        advance_pacemaker,
+        """
+fn advance_pacemaker_once(
+    receiver: &FairV2Ingress,
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+) -> Result<(), V2RunnerError> {
+    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
+    let _ = executor.step_pacemaker_once(Instant::now(), services)?;
+    Ok(())
+}
+""",
+        "retained transport episodes may execute only one typed pacemaker transition",
+        errors,
+    )
+    run_inner = runner_items.get("run_inner")
+    if run_inner is not None:
+        escape_tokens = rust_code_tokens(
+            "V2IngressDrainMode::CertifiedFenceEscape"
+        )
+        advance_tokens = rust_code_tokens(
+            "advance_pacemaker_once(&block_rx, &mut executor, &mut services)?"
+        )
+        if _token_sequence_count(rust_code_tokens(run_inner.source), escape_tokens) != 2:
+            errors.append(
+                f"{runner_path}:{run_inner.line}: exactly the retained response and exact-Serve episodes must admit certified fence-escape ingress"
+            )
+        if _token_sequence_count(rust_code_tokens(run_inner.source), advance_tokens) != 2:
+            errors.append(
+                f"{runner_path}:{run_inner.line}: both retained transport episodes must receive exactly one typed pacemaker turn"
+            )
 
     run_inner = runner_items.get("run_inner")
     _require_rust_token_sequence(
@@ -81608,8 +82913,16 @@ else {
     _require_rust_token_sequence(
         runner_path,
         runner_items.get("outer_ingress_turns"),
-        "(0..limit.max(1)).flat_map(|_| [OuterIngressTurn::Runtime, OuterIngressTurn::Ingress])",
-        "ingress must alternate a finite runtime turn with each finite ingress turn",
+        """
+(0..limit.max(1)).flat_map(|_| {
+    [
+        OuterIngressTurn::Completion,
+        OuterIngressTurn::Runtime,
+        OuterIngressTurn::Ingress,
+    ]
+})
+""",
+        "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",
         errors,
     )
     _require_rust_token_sequence(
@@ -82927,7 +84240,6 @@ drain_v2_ingress(
     &mut lane_work,
     output_guard.as_ref(),
     kura.as_ref(),
-    &context_store,
     &common_config.key_pair,
     block_sync_server
         .as_mut()
@@ -82935,6 +84247,7 @@ drain_v2_ingress(
     &mut block_sync,
     &mut block_sync_request,
     &mut npos_vrf,
+    V2IngressDrainMode::Ordinary,
     body_queue_capacity,
 )?;
 if discovery_was_outstanding && block_sync_request.is_none() {
@@ -90695,6 +92008,14 @@ def validate_ledger(
     errors.extend(_retired_liveness_errors(formal_dir))
     errors.extend(_bounded_view_dependency_errors(formal_dir))
     errors.extend(_revision4_model_contract_errors(formal_dir, ROOT_DIR))
+    errors.extend(
+        _revision4_adversarial_safety_contract_errors(formal_dir, ROOT_DIR)
+    )
+    errors.extend(
+        _revision4_certified_fence_reservation_contract_errors(
+            formal_dir, ROOT_DIR
+        )
+    )
     errors.extend(_reachable_oracle_guard_errors(formal_dir))
     errors.extend(_generalized_context_init_errors(formal_dir))
     errors.extend(_safety_property_source_fidelity_errors(formal_dir))
@@ -90919,7 +92240,9 @@ def validate_ledger(
             not in {
                 "effective_lock_acquisition.cfg",
                 "SumeragiV2Revision4.cfg",
+                "SumeragiV2Revision4AdversarialSafety.cfg",
                 "SumeragiV2Revision4Liveness.cfg",
+                "revision4_certified_fence_reservation_fixed.cfg",
             }
             and '  ValidSubjects = {"A"}\n' not in source
         ):

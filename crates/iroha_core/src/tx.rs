@@ -60,7 +60,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
-    smartcontracts::{Execute, code, ivm::cache::IvmCache},
+    smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
 
@@ -5384,7 +5384,7 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
-        smartcontracts::ivm::cache::IvmCache,
+        smartcontracts::{Execute, ivm::cache::IvmCache},
         state::{State, StateBlock, StateReadOnly, World},
     };
 
@@ -6831,7 +6831,7 @@ pub mod tests {
         let chain: ChainId = "single-ed25519-fast-path-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            chain.clone(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6844,7 +6844,7 @@ pub mod tests {
         let secp_keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let secp_authority = AccountId::new(secp_keypair.public_key().clone());
         let secp_signed = TransactionBuilder::new(
-            chain.clone(),
+            chain,
             secp_authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7325,7 +7325,6 @@ pub mod tests {
             .encoded_len(),
             time_expected_len
         );
-
     }
 
     #[test]

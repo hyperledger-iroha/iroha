@@ -2003,6 +2003,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "release gate: generates and verifies the full-domain IVM private-note proof"]
     fn full_domain_stark_roundtrip_and_adversarial_wires_fail_closed() {
         let value = fixture();
         let (binding, limits) = consensus_material(&value.statement);

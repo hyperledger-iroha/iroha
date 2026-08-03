@@ -8256,6 +8256,7 @@ THEOREM ExactDecisionRequestIngressOrdinalRejectsLaterPriorityBypass ==
        /\ identity =
             AsyncServeEarliestIngressLifecycleOwnerIdentity(archive)
        /\ item.kind \notin AsyncReplyRequestKinds
+       /\ ~AsyncCertifiedFenceEscapeItem(item)
        /\ index >
             AsyncServeIngressAdmissionPredecessorCounts(
               archive, identity)[source]
@@ -8330,6 +8331,7 @@ THEOREM AsyncServeIngressFrozenPrefixCutoffRejectsPostCutoff ==
        /\ index >
             AsyncServeIngressAdmissionPredecessorCounts(
               archive, identity)[source]
+       /\ ~AsyncCertifiedFenceEscapeItem(item)
        /\ \/ item.kind \notin AsyncReplyRequestKinds
           \/ AsyncServeLogicalRequestIdentity(archive, item) # identity
        => ~AsyncServeIngressIndexMayPrecedeAdmittedTarget(

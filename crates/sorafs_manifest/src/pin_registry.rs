@@ -767,9 +767,10 @@ mod tests {
     #[test]
     fn alias_proof_bundle_rejects_self_asserted_council() {
         let (bundle, _) = signed_alias_proof_bundle();
-        let trusted = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32])
-            .and_then(KeyPair::from_private_key)
-            .expect("derive trusted fixture keypair");
+        let trusted_private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32])
+            .expect("parse trusted fixture private key");
+        let trusted =
+            KeyPair::from_private_key(trusted_private).expect("derive trusted fixture keypair");
         let policy = council_policy_for(&trusted);
 
         let err = verify_alias_proof_bundle(&bundle, &policy)

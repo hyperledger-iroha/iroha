@@ -1009,34 +1009,6 @@ fn py_fixed_array_list(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<
     )))
 }
 
-fn ensure_non_zero_fixed_array<const N: usize>(item: [u8; N], context: &str) -> PyResult<[u8; N]> {
-    if item.iter().all(|byte| *byte == 0) {
-        return Err(PyValueError::new_err(format!("{context} must be non-zero")));
-    }
-    Ok(item)
-}
-
-fn py_non_zero_fixed_array<const N: usize>(
-    value: &Bound<'_, PyAny>,
-    context: &str,
-) -> PyResult<[u8; N]> {
-    let item = py_fixed_array::<N>(value, context)?;
-    ensure_non_zero_fixed_array(item, context)
-}
-
-fn parse_optional_fixed_array_py<const N: usize>(
-    value: Option<&Bound<'_, PyAny>>,
-    context: &str,
-) -> PyResult<Option<[u8; N]>> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.is_none() {
-        return Ok(None);
-    }
-    py_fixed_array::<N>(value, context).map(Some)
-}
-
 fn dict_get_alias<'py>(
     dict: &Bound<'py, PyDict>,
     aliases: &[&str],
@@ -1054,7 +1026,6 @@ fn dict_get_alias<'py>(
 fn parse_zk_asset_mode(value: Option<&str>) -> PyResult<ZkAssetMode> {
     match value.unwrap_or("Hybrid").trim() {
         "Hybrid" | "hybrid" => Ok(ZkAssetMode::Hybrid),
-        "ZkNative" | "zk_native" | "zk-native" | "native" => Ok(ZkAssetMode::ZkNative),
         other => Err(PyValueError::new_err(format!(
             "invalid ZK asset mode `{other}`"
         ))),
@@ -6254,7 +6225,6 @@ fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> Py
 mod tests {
     use std::fs;
 
-    use base64::Engine as _;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
     use ivm::bn254_vec::{self, FieldElem};
@@ -6262,7 +6232,7 @@ mod tests {
     use once_cell::sync::OnceCell;
     use pyo3::{
         Python,
-        types::{PyBytes, PyDict, PyList, PyString},
+        types::{PyBytes, PyDict, PyList},
     };
     use sorafs_car::multi_fetch::PolicyBlockEvidence;
     use tempfile::tempdir;
@@ -6294,6 +6264,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn zk_asset_mode_accepts_only_hybrid() {
+        ensure_python();
+        assert_eq!(
+            parse_zk_asset_mode(None).expect("default mode"),
+            ZkAssetMode::Hybrid
+        );
+        assert_eq!(
+            parse_zk_asset_mode(Some("hybrid")).expect("lowercase hybrid alias"),
+            ZkAssetMode::Hybrid
+        );
+        for retired in ["ZkNative", "zk_native", "zk-native", "native"] {
+            assert!(
+                parse_zk_asset_mode(Some(retired)).is_err(),
+                "retired mode alias {retired:?} must be rejected"
+            );
+        }
     }
 
     fn py_err_message(err: pyo3::PyErr) -> String {
@@ -6841,6 +6830,8 @@ mod tests {
             "payload/checksum tampering must be rejected"
         );
     }
+
+    #[test]
     fn seed_derivation_pyfunctions_use_checked_backend_derivation() {
         ensure_python();
         let seed = b"python checked seed derivation";
@@ -8855,6 +8846,7 @@ mod tests {
         });
     }
 
+    #[test]
     fn merge_rwas_and_set_rwa_controls_classmethods_roundtrip_payloads() {
         ensure_python();
         Python::attach(|py| {
@@ -11976,15 +11968,13 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (asset_definition_id, *, mode=None, allow_shield=true, allow_unshield=true, vk_transfer=None, vk_unshield=None, vk_shield=None))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (asset_definition_id, *, mode=None, allow_shield=true, allow_unshield=true, vk_unshield=None, vk_shield=None))]
     fn register_zk_asset<'py>(
         _cls: &Bound<'py, PyType>,
         asset_definition_id: &str,
         mode: Option<&str>,
         allow_shield: bool,
         allow_unshield: bool,
-        vk_transfer: Option<&Bound<'py, PyAny>>,
         vk_unshield: Option<&Bound<'py, PyAny>>,
         vk_shield: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
@@ -11998,7 +11988,6 @@ impl Instruction {
             parse_zk_asset_mode(mode)?,
             allow_shield,
             allow_unshield,
-            parse_verifying_key_id_py(vk_transfer, "vk_transfer")?,
             parse_verifying_key_id_py(vk_unshield, "vk_unshield")?,
             parse_verifying_key_id_py(vk_shield, "vk_shield")?,
         );
@@ -14493,12 +14482,18 @@ impl TransactionBuilder {
         }
         let private_key = parse_private_key(private_key)?;
         self.validate_privacy_action_signing_authority_v1(&private_key)?;
-        let transfer = ZkAcePrivacyTransferV1::try_new(policy, source, destination, amount)
-            .map_err(|error| {
-                PyValueError::new_err(format!(
-                    "invalid native ZK-ACE transparent transfer: {error}"
-                ))
-            })?;
+        let transfer = ZkAcePrivacyTransferV1::try_new(
+            policy,
+            source,
+            destination,
+            AssetBalanceScope::Global,
+            amount,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid native ZK-ACE transparent transfer: {error}"
+            ))
+        })?;
         for (bytes, label) in [
             (&witness_bytes.identity_root, "identity_root"),
             (&witness_bytes.identity_blinding, "identity_blinding"),

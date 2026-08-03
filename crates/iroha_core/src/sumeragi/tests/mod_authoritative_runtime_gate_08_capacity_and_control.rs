@@ -1,6 +1,6 @@
     #[test]
     fn fair_v2_ingress_capacity_arithmetic_overflow_fails_closed() {
-        let largest_exact_roster = (usize::MAX - 2) / 4;
+        let largest_exact_roster = (usize::MAX - 2) / 5;
         assert!(super::fair_v2_ingress_required_capacity(largest_exact_roster, None).is_some());
         assert_eq!(
             super::fair_v2_ingress_required_capacity(largest_exact_roster + 1, None),
@@ -27,7 +27,7 @@
             .expect("an exact representable maximum must not be rejected as overflow");
 
         let validator = validator_peers(1).pop().expect("validator fixture");
-        let aggregate_overflow = super::FairV2Ingress::new(6, usize::MAX, usize::MAX, 0, 0);
+        let aggregate_overflow = super::FairV2Ingress::new(7, usize::MAX, usize::MAX, 0, 0);
         let error = aggregate_overflow
             .configure_roster([validator.clone()])
             .expect_err("two source partitions must not overflow into an apparent exact fit");
@@ -36,7 +36,7 @@
         assert_eq!(error.kind, super::FairV2IngressCapacityKind::Bytes);
         assert_eq!(aggregate_overflow.open(), Err(error));
 
-        let reserve_overflow = super::FairV2Ingress::new(6, usize::MAX, usize::MAX, usize::MAX, 1);
+        let reserve_overflow = super::FairV2Ingress::new(7, usize::MAX, usize::MAX, usize::MAX, 1);
         let error = reserve_overflow
             .configure_roster([validator])
             .expect_err("disjoint byte reserves must not overflow into an apparent exact fit");
@@ -57,7 +57,7 @@
         let reserve = timeout_vote_len.checked_sub(1).expect("non-empty envelope");
         let source_capacity = timeout_vote_len * 2;
         let ingress =
-            super::FairV2Ingress::new(6, 2 * source_capacity, source_capacity, reserve, 0);
+            super::FairV2Ingress::new(7, 2 * source_capacity, source_capacity, reserve, 0);
         ingress
             .configure_roster([validator.clone()])
             .expect("the deliberately short reserve still fits its source partition");
@@ -72,7 +72,7 @@
     #[test]
     fn fair_v2_ingress_rejects_timeout_vote_reserve_larger_than_source_partition() {
         let validator = validator_peers(1).pop().expect("validator fixture");
-        let ingress = super::FairV2Ingress::new(6, 2 * 1024, 1024, 1025, 0);
+        let ingress = super::FairV2Ingress::new(7, 2 * 1024, 1024, 1025, 0);
         let error = ingress
             .configure_roster([validator])
             .expect_err("timeout-vote reserve must fit each validator source partition");
@@ -83,7 +83,7 @@
 
     #[test]
     fn fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pressure() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
         let validator = validator_peers(1).pop().expect("validator fixture");
         ingress.close();
         ingress
@@ -123,7 +123,7 @@
 
     #[test]
     fn fair_v2_ingress_prepare_vote_cannot_consume_commit_progress_reservation() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
         let validator = validator_peers(1).pop().expect("validator fixture");
         ingress.close();
         ingress
@@ -198,7 +198,7 @@
 
     #[test]
     fn fair_v2_ingress_minimum_capacity_admits_timeout_votes() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(6);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(7);
         let validator = validator_peers(1).pop().expect("validator fixture");
         ingress.close();
         ingress
@@ -234,7 +234,133 @@
     }
 
     #[test]
-    fn fair_v2_ingress_newer_timeout_certificate_cannot_bypass_live_predecessor() {
+    fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let commit_response = v2_commit_certificate_response(7, &validator);
+        let BlockMessage::V2(response_message) = &commit_response else {
+            unreachable!("commit-certificate response fixture is v2");
+        };
+        let wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) =
+            &response_message.payload
+        else {
+            unreachable!("commit-certificate response fixture carries CommitQC");
+        };
+        let direct_commit_qc = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(response.certificate.clone()),
+        ));
+
+        for (label, escape) in [
+            ("timeout certificate", v2_timeout_certificate(1)),
+            ("commit quorum certificate", direct_commit_qc),
+            ("commit certificate response", commit_response),
+        ] {
+            let prepare = v2_auxiliary_prepare(0);
+            let progress = v2_vote(wire::GlobalPhase::Commit);
+            let completion = v2_message_with_index(99);
+            let timeout = v2_timeout_vote();
+            let ordinary_bytes = encoded_v2_len(&prepare)
+                .checked_add(encoded_v2_len(&progress))
+                .expect("ordinary test envelopes fit usize");
+            let certified_bytes = encoded_v2_len(&escape);
+            let timeout_bytes = encoded_v2_len(&timeout);
+            let completion_bytes = encoded_v2_len(&completion);
+            let source_bytes = ordinary_bytes
+                .checked_add(certified_bytes)
+                .and_then(|bytes| bytes.checked_add(timeout_bytes))
+                .and_then(|bytes| bytes.checked_add(completion_bytes))
+                .expect("exact test source partition fits usize");
+            let ingress = super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                7,
+                2 * source_bytes,
+                source_bytes,
+                certified_bytes,
+                timeout_bytes,
+                completion_bytes,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            );
+            ingress
+                .configure_roster([validator.clone()])
+                .expect("one exact validator corridor and anonymous lane fit");
+            ingress.open().expect("open exact certified corridor");
+
+            for message in [prepare, progress, completion, timeout] {
+                assert!(matches!(
+                    ingress.try_push(InboundBlockMessage::new(
+                        message,
+                        Some(validator.clone()),
+                    )),
+                    Ok(super::FairV2IngressPushDisposition::Enqueued)
+                ));
+            }
+            {
+                let state = ingress.state.lock();
+                let lane = state
+                    .lanes
+                    .get(&super::FairV2IngressSource::Validator(validator.clone()))
+                    .expect("validator lane exists");
+                assert_eq!(lane.entries.len(), 4, "case={label}");
+                assert_eq!(lane.certified_fence_escape_len, 0, "case={label}");
+                assert_eq!(lane.timeout_vote_len, 1, "case={label}");
+                assert_eq!(lane.transport_completion_len, 1, "case={label}");
+                assert_eq!(
+                    lane.bytes
+                        .checked_sub(lane.timeout_vote_bytes)
+                        .and_then(|bytes| bytes.checked_sub(lane.transport_completion_bytes)),
+                    Some(ordinary_bytes),
+                    "ordinary Prepare/progress bytes must fill only their own partition: case={label}",
+                );
+            }
+
+            let BlockMessage::V2(envelope) = &escape else {
+                unreachable!("certified escape fixture is v2");
+            };
+            assert_eq!(envelope.protocol_version, 4, "case={label}");
+            assert!(envelope.validate_version().is_ok(), "case={label}");
+            let expected = escape.encode();
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(
+                    escape,
+                    Some(validator.clone()),
+                )),
+                Ok(super::FairV2IngressPushDisposition::Enqueued)
+            ));
+            {
+                let state = ingress.state.lock();
+                let lane = state
+                    .lanes
+                    .get(&super::FairV2IngressSource::Validator(validator.clone()))
+                    .expect("validator lane exists");
+                assert_eq!(lane.entries.len(), 5, "case={label}");
+                assert_eq!(lane.certified_fence_escape_len, 1, "case={label}");
+                assert_eq!(
+                    lane.certified_fence_escape_bytes, certified_bytes,
+                    "case={label}",
+                );
+                assert_eq!(lane.bytes, source_bytes, "case={label}");
+                assert_eq!(
+                    state.len
+                        + super::fair_v2_ingress_current_protected_slots(
+                            &state,
+                            ingress.authenticated_non_validator_source_capacity,
+                        ),
+                    7,
+                    "the certified owner consumes the final validator position without touching anonymous reserve: case={label}",
+                );
+            }
+            let delivered = ingress
+                .try_recv_if(super::fair_v2_ingress_is_certified_fence_escape)
+                .expect("certified escape bypasses the older saturated same-source prefix");
+            assert_eq!(delivered.message().encode(), expected, "case={label}");
+            assert_eq!(ingress.len(), 4, "case={label}");
+        }
+    }
+
+    #[test]
+    fn fair_v2_ingress_serializes_distinct_timeout_certificates_per_source() {
         let (handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
         let validator = validator_peers(1).pop().expect("validator fixture");
         ingress.close();
@@ -247,9 +373,10 @@
             handle.try_incoming_block_message_from(validator.clone(), v2_timeout_certificate(0),)
         );
         assert!(
-            handle.try_incoming_block_message_from(validator.clone(), v2_timeout_certificate(1),)
+            !handle.try_incoming_block_message_from(validator.clone(), v2_timeout_certificate(1),),
+            "one authenticated source cannot spend two certified owners concurrently",
         );
-        assert_eq!(ingress.len(), 2);
+        assert_eq!(ingress.len(), 1);
 
         let timeout_view = |inbound: &InboundBlockMessage| match inbound.message() {
             BlockMessage::V2(wire::ConsensusMessageV2 {
@@ -258,21 +385,18 @@
             }) => Some(certificate.round.view),
             _ => None,
         };
-        assert!(
-            ingress
-                .try_recv_if(|inbound| timeout_view(inbound) == Some(1))
-                .is_none(),
-            "a newer same-source TC must remain behind its fair-ingress predecessor"
-        );
-        assert_eq!(ingress.len(), 2, "a rejected bypass cannot drain either TC");
         let predecessor = ingress
             .try_recv_if(|inbound| timeout_view(inbound) == Some(0))
             .expect("the immutable first TC crosses into the runtime FIFO first");
         assert_eq!(timeout_view(&predecessor), Some(0));
-        assert_eq!(ingress.len(), 1);
+        assert_eq!(ingress.len(), 0);
+        assert!(
+            handle.try_incoming_block_message_from(validator.clone(), v2_timeout_certificate(1),),
+            "releasing the first certified owner admits the retained retry",
+        );
         let successor = ingress
             .try_recv_if(|inbound| timeout_view(inbound) == Some(1))
-            .expect("the newer TC crosses only after its predecessor owns the older position");
+            .expect("the newer TC crosses only after its predecessor releases the source owner");
         assert_eq!(timeout_view(&successor), Some(1));
         assert_eq!(ingress.len(), 0);
     }
@@ -329,11 +453,11 @@
     #[test]
     fn fair_v2_ingress_reservation_potential_does_not_increase_on_service() {
         assert_eq!(super::fair_v2_ingress_required_capacity(0, None), Some(1));
-        assert_eq!(super::fair_v2_ingress_required_capacity(1, None), Some(6));
-        assert_eq!(super::fair_v2_ingress_required_capacity(4, None), Some(18));
+        assert_eq!(super::fair_v2_ingress_required_capacity(1, None), Some(7));
+        assert_eq!(super::fair_v2_ingress_required_capacity(4, None), Some(22));
         assert_eq!(
             super::fair_v2_ingress_required_capacity(4, Some(2)),
-            Some(22),
+            Some(28),
             "four validators, two authenticated non-validator sources, and anonymous reserve exactly"
         );
         assert_eq!(
@@ -349,55 +473,73 @@
             (super::FairV2IngressSourceClass::Validator, true),
         ] {
             let is_validator = source_class == super::FairV2IngressSourceClass::Validator;
+            let is_authenticated = source_class != super::FairV2IngressSourceClass::Anonymous;
             for depth in 1_usize..=8 {
                 for timeout_count in 0..=usize::from(is_validator) {
-                    let completion_limit = 1_usize.min(depth.saturating_sub(timeout_count));
-                    for completion_count in 0..=completion_limit {
-                        let remaining = depth - timeout_count - completion_count;
-                        for progress_count in 0..=remaining {
-                            let auxiliary_count =
-                                depth - timeout_count - completion_count - progress_count;
-                            for removed in [
-                                "Auxiliary",
-                                "Progress",
-                                "TimeoutVote",
-                                "TransportCompletion",
-                            ] {
-                                if (removed == "Auxiliary" && auxiliary_count == 0)
-                                    || (removed == "Progress" && progress_count == 0)
-                                    || (removed == "TimeoutVote" && timeout_count == 0)
-                                    || (removed == "TransportCompletion" && completion_count == 0)
-                                {
-                                    continue;
+                    let certified_limit = usize::from(is_authenticated)
+                        .min(depth.saturating_sub(timeout_count));
+                    for certified_count in 0..=certified_limit {
+                        let completion_limit = 1_usize
+                            .min(depth.saturating_sub(timeout_count + certified_count));
+                        for completion_count in 0..=completion_limit {
+                            let remaining =
+                                depth - timeout_count - certified_count - completion_count;
+                            for progress_count in 0..=remaining {
+                                let auxiliary_count = depth
+                                    - timeout_count
+                                    - certified_count
+                                    - completion_count
+                                    - progress_count;
+                                for removed in [
+                                    "Auxiliary",
+                                    "Progress",
+                                    "CertifiedFenceEscape",
+                                    "TimeoutVote",
+                                    "TransportCompletion",
+                                ] {
+                                    if (removed == "Auxiliary" && auxiliary_count == 0)
+                                        || (removed == "Progress" && progress_count == 0)
+                                        || (removed == "CertifiedFenceEscape"
+                                            && certified_count == 0)
+                                        || (removed == "TimeoutVote" && timeout_count == 0)
+                                        || (removed == "TransportCompletion"
+                                            && completion_count == 0)
+                                    {
+                                        continue;
+                                    }
+                                    let next_progress_count =
+                                        progress_count - usize::from(removed == "Progress");
+                                    let next_timeout_count =
+                                        timeout_count - usize::from(removed == "TimeoutVote");
+                                    let next_certified_count = certified_count
+                                        - usize::from(removed == "CertifiedFenceEscape");
+                                    let next_completion_count = completion_count
+                                        - usize::from(removed == "TransportCompletion");
+                                    let before = depth
+                                        + super::fair_v2_ingress_lane_protected_slots(
+                                            source_class,
+                                            reserve_anonymous_completion,
+                                            depth,
+                                            progress_count != 0,
+                                            certified_count != 0,
+                                            timeout_count != 0,
+                                            completion_count != 0,
+                                        );
+                                    let after = depth - 1
+                                        + super::fair_v2_ingress_lane_protected_slots(
+                                            source_class,
+                                            reserve_anonymous_completion,
+                                            depth - 1,
+                                            next_progress_count != 0,
+                                            next_certified_count != 0,
+                                            next_timeout_count != 0,
+                                            next_completion_count != 0,
+                                        );
+                                    assert!(
+                                        after <= before,
+                                        "service increased potential: source_class={source_class:?}, depth={depth}, progress={progress_count}, certified={certified_count}, timeout={timeout_count}, completion={completion_count}, removed={removed}"
+                                    );
                                 }
-                                let next_progress_count =
-                                    progress_count - usize::from(removed == "Progress");
-                                let next_timeout_count =
-                                    timeout_count - usize::from(removed == "TimeoutVote");
-                                let next_completion_count = completion_count
-                                    - usize::from(removed == "TransportCompletion");
-                                let before = depth
-                                    + super::fair_v2_ingress_lane_protected_slots(
-                                        source_class,
-                                        reserve_anonymous_completion,
-                                        depth,
-                                        progress_count != 0,
-                                        timeout_count != 0,
-                                        completion_count != 0,
-                                    );
-                                let after = depth - 1
-                                    + super::fair_v2_ingress_lane_protected_slots(
-                                        source_class,
-                                        reserve_anonymous_completion,
-                                        depth - 1,
-                                        next_progress_count != 0,
-                                        next_timeout_count != 0,
-                                        next_completion_count != 0,
-                                    );
-                                assert!(
-                                    after <= before,
-                                    "service increased potential: source_class={source_class:?}, depth={depth}, progress={progress_count}, timeout={timeout_count}, completion={completion_count}, removed={removed}"
-                                );
                             }
                         }
                     }
@@ -408,7 +550,7 @@
 
     #[test]
     fn fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
         let validators = validator_peers(2);
         let saturated = validators[0].clone();
         let honest = validators[1].clone();
@@ -447,7 +589,7 @@
 
     #[test]
     fn fair_v2_ingress_non_head_service_consumes_one_source_turn() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
         let validators = validator_peers(2);
         let first_source = validators[0].clone();
         let second_source = validators[1].clone();
@@ -487,4 +629,3 @@
         assert_eq!(vote_height(&retained), Some(1));
         assert_eq!(ingress.len(), 0);
     }
-

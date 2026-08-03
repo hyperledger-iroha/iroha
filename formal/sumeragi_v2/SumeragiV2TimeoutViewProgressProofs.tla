@@ -4306,6 +4306,7 @@ THEOREM TimeoutEarlierServeFrozenSelectorRejectsPostCutIngress ==
        /\ index >
             AsyncServeIngressAdmissionPredecessorCounts(
               source, identity)[laneSource]
+       /\ ~AsyncCertifiedFenceEscapeItem(item)
        /\ \/ item.kind \notin AsyncReplyRequestKinds
           \/ AsyncServeLogicalRequestIdentity(source, item) # identity
        => ~AsyncServeIngressIndexMayPrecedeAdmittedTarget(

@@ -62,7 +62,7 @@ use super::{
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
         EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
-        PostFinalityCleanupTarget, V2EffectExecutor,
+        PostFinalityCleanupTarget, V2EffectExecutor, network_ingress_is_certified_fence_escape,
     },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
@@ -1627,15 +1627,43 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         &mut services,
                     )?;
                 }
-                match executor.retry_retained_certified_body_response(&mut services) {
-                    Ok(_) => {}
-                    Err(EffectTransportError::Backpressure) => {}
+                let response_backpressured = match executor
+                    .retry_retained_certified_body_response(&mut services)
+                {
+                    Ok(_) => false,
+                    Err(EffectTransportError::Backpressure) => true,
                     Err(EffectTransportError::FailClosed(reason)) => {
                         return Err(V2RunnerError::Service(reason));
                     }
                     Err(error) => {
                         iroha_logger::debug!(%error, "rejected retained certified body response");
+                        false
                     }
+                };
+                if response_backpressured {
+                    // Transport capacity is not pacemaker authority. Give one
+                    // authenticated certificate a chance to enter the typed
+                    // Progress lane, then give one timeout/Progress root a
+                    // turn before retrying the exact response. Ordinary work
+                    // remains parked exactly.
+                    drain_v2_ingress(
+                        &block_rx,
+                        &mut executor,
+                        &mut services,
+                        &mut lane_work,
+                        output_guard.as_ref(),
+                        kura.as_ref(),
+                        &common_config.key_pair,
+                        block_sync_server
+                            .as_mut()
+                            .expect("block-sync server initialized before ingress"),
+                        &mut block_sync,
+                        &mut block_sync_request,
+                        &mut npos_vrf,
+                        V2IngressDrainMode::CertifiedFenceEscape,
+                        1,
+                    )?;
+                    advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;
                 }
                 committed_lane_status_publisher.publish_if_changed(&lane_work);
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
@@ -1693,6 +1721,30 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             )?;
                         }
                     }
+                    if !recovering_interrupted_tip {
+                        // A backpressured Serve ticket may retain the sole I/O
+                        // unit indefinitely. It cannot suppress authenticated
+                        // certified progress admission, the absolute timeout,
+                        // or an already-admitted certificate root.
+                        drain_v2_ingress(
+                            &block_rx,
+                            &mut executor,
+                            &mut services,
+                            &mut lane_work,
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &common_config.key_pair,
+                            block_sync_server
+                                .as_mut()
+                                .expect("block-sync server initialized before ingress"),
+                            &mut block_sync,
+                            &mut block_sync_request,
+                            &mut npos_vrf,
+                            V2IngressDrainMode::CertifiedFenceEscape,
+                            1,
+                        )?;
+                        advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;
+                    }
                     older_predecessor_remains = executor
                         .older_runtime_lifecycle_predates_exact_serve(
                             Instant::now(),
@@ -1742,6 +1794,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut block_sync,
                             &mut block_sync_request,
                             &mut npos_vrf,
+                            V2IngressDrainMode::Ordinary,
                             1,
                         )?;
                     }
@@ -1846,6 +1899,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut block_sync,
                     &mut block_sync_request,
                     &mut npos_vrf,
+                    V2IngressDrainMode::Ordinary,
                     body_queue_capacity,
                 )?;
                 if discovery_was_outstanding && block_sync_request.is_none() {
@@ -2960,6 +3014,14 @@ fn prepare_decided_lane_recovery_ingress(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2IngressDrainMode {
+    /// Normal completion/runtime/ingress round-robin.
+    Ordinary,
+    /// Only a TC or CommitQC which can supersede a hung signing fence.
+    CertifiedFenceEscape,
+}
+
 fn drain_v2_ingress(
     receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
@@ -2972,9 +3034,10 @@ fn drain_v2_ingress(
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     npos_vrf: &mut V2NposVrfLifecycle,
+    mode: V2IngressDrainMode,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
-    if executor.has_retained_certified_body_response() {
+    if mode == V2IngressDrainMode::Ordinary && executor.has_retained_certified_body_response() {
         // The dedicated outer episode owns all progress until this exact
         // transport completion either crosses capacity or reaches a permanent
         // terminal. Do not give even the Runtime half-turn of a new batch to a
@@ -2982,6 +3045,9 @@ fn drain_v2_ingress(
         return Ok(());
     }
     for turn in outer_ingress_turns(limit) {
+        if mode == V2IngressDrainMode::CertifiedFenceEscape && turn != OuterIngressTurn::Ingress {
+            continue;
+        }
         if turn == OuterIngressTurn::Completion {
             if services
                 .certified_serve_barrier_request_hash()
@@ -3036,6 +3102,16 @@ fn drain_v2_ingress(
         let mut prepared_serve = None;
         let Some(mut inbound) = receiver
             .try_recv_if_checked(|inbound| {
+                if mode == V2IngressDrainMode::CertifiedFenceEscape {
+                    let BlockMessage::V2(message) = inbound.message() else {
+                        return false;
+                    };
+                    if message.validate_version().is_err()
+                        || !network_ingress_is_certified_fence_escape(&message.payload)
+                    {
+                        return false;
+                    }
+                }
                 if !v2_ingress_head_can_drain(inbound, executor, terminal_subject) {
                     return false;
                 }
@@ -4148,6 +4224,18 @@ fn advance_executor_once_before_exact_serve(
 ) -> Result<(), V2RunnerError> {
     executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
     let _ = executor.step(Instant::now(), services)?;
+    Ok(())
+}
+
+/// Execute at most one typed timeout/Progress-root transition while an exact
+/// transport episode retains ordinary ownership.
+fn advance_pacemaker_once(
+    receiver: &FairV2Ingress,
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+) -> Result<(), V2RunnerError> {
+    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
+    let _ = executor.step_pacemaker_once(Instant::now(), services)?;
     Ok(())
 }
 

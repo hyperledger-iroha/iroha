@@ -9731,8 +9731,8 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
         ),
         (
             "retained_candidate_owners",
-            "Some(existing) if existing != ownership.owner() => {",
-            "Some(existing) if existing == ownership.owner() => {",
+            "Some(existing) if existing != ownership => Err(",
+            "Some(existing) if existing == ownership => Err(",
             "candidate owner inventory must reject semantic owner replacement",
         ),
         (
@@ -9744,12 +9744,10 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             "durable Apply tombstone must retain the same candidate owner",
         ),
         (
-            "retain_effect_batch",
-            """            if candidate_semantic_identity
-                .as_ref()""",
-            """            if false && candidate_semantic_identity
-                .as_ref()""",
-            "candidate owner replacement must fail before refinement evidence",
+            "retain_effect_batch_at_frontier",
+            "                && incumbent != *evidence\n",
+            "                && incumbent == *evidence\n",
+            "coalesced candidate admission must adopt and re-prove the incumbent exact owner",
         ),
         (
             "begin_apply",
@@ -9869,7 +9867,7 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             "retained_dispatch_allows_network_ingress",
             "|| !Self::network_ingress_requires_reducer_order(payload)",
             "&& !Self::network_ingress_requires_reducer_order(payload)",
-            "retained dispatch transport-completion bypass",
+            "retained dispatch transport completion and certified fence-escape policy",
         ),
         (
             "can_admit_network_message_with_ingress_ownership",
@@ -11889,9 +11887,9 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
     (
         (
             "pop_next_with_ownership",
-            "self.class_readiness_at_lifecycle(oldest_lifecycle_ordinal)",
             "self.class_readiness()",
-            "runtime class arbitration is restricted to the oldest live lifecycle",
+            "(false, false, false)",
+            "runtime class arbitration sees every globally ready bounded service class",
         ),
         (
             "accept_driver_dispatch",
@@ -11900,16 +11898,16 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
             "Busy deferral transfers rather than replaces the predecessor owner",
         ),
         (
-            "minimum_active_lifecycle_ordinal",
-            "for owner in self.deferred_lifecycle_ownership.values()",
-            "for owner in [].iter()",
+            "minimum_active_lifecycle_ordinal_excluding",
+            "observe(owner.owner())?;",
+            "let _ = owner;",
             "global runtime predecessor cut includes Busy-deferred ownership",
         ),
         (
             "scheduler_arbitration_inputs",
-            "fifo_minimum.is_some() && fifo_minimum == global_minimum",
-            "fifo_minimum.is_some()",
-            "runtime FIFO is ready only at the global live-lifecycle minimum",
+            "let fifo_ready = fifo_minimum.is_some();",
+            "let fifo_ready = false;",
+            "passive lifecycle capabilities cannot suppress runnable FIFO classes",
         ),
     ),
 )
@@ -26529,6 +26527,12 @@ def test_adequate_leader_static_carrier_rejects_branch_loss_or_dynamic_state(
             "must compare current physical carrier ordinals",
         ),
         (
+            "try_recv_if_at_checked",
+            "fair_v2_ingress_is_certified_fence_escape(&entry.inbound)",
+            "false",
+            "a version-valid TC or CommitQC must remain visible across either retained Serve or leader-wire reservation",
+        ),
+        (
             "configure_roster_with_byte_requirements",
             "        state.pending_wire_owners.clear();",
             "        state.pending_wire_owners.clear();\n"
@@ -26565,6 +26569,46 @@ def test_serve_ingress_ordinal_contract_rejects_ordering_mutations(
     )
 
     assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        ("message.validate_version().is_ok()", "true"),
+        (
+            "v2_effects::network_ingress_is_certified_fence_escape(&message.payload)",
+            "true",
+        ),
+    ),
+)
+def test_serve_ingress_certified_escape_classifier_remains_closed(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    shutil.copy2(module.ROOT_DIR / relative, target)
+    mutate_rust_item_source_in_context(
+        module,
+        target,
+        "fair_v2_ingress_is_certified_fence_escape",
+        (),
+        old,
+        new,
+    )
+
+    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        "fair ingress must use the closed, version-validated TC/CommitQC classifier"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_serve_ingress_ordinal_carrier_must_remain_private(
@@ -27358,9 +27402,9 @@ def test_serviced_candidate_production_contract_rejects_mutations(
             "            {",
             "if false {",
             "_SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256",
-            "step",
-            "step",
-            "runtime must retain successors and verify parent identity",
+            "finish_dispatched_step",
+            "finish_dispatched_step",
+            "live dispatch completion must retain successors, acknowledge the exact producer",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
@@ -35377,37 +35421,31 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     effects_path.write_text(
         mutate_effect_item(
             "consume_effects",
-            "        let ownership = self\n"
-            "            .runtime\n"
-            "            .take_effect_ownership(&effects)\n"
-            "            .map_err(EffectExecutorError::Runtime)?;\n"
-            "        if let Err(error) = self.retain_effect_batch(effects, ownership) {\n"
+            "        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {\n"
             "            return Err(self.close(error, services));\n"
             "        }\n"
-            "        self.drain_retained_effect_batch(services)\n"
-            "            .map_err(|error| self.close(error, services))",
-            "        let ownership = self\n"
-            "            .runtime\n"
-            "            .take_effect_ownership(&effects)\n"
-            "            .map_err(EffectExecutorError::Runtime)?;\n"
-            "        let count = self.drain_retained_effect_batch(services)?;\n"
-            "        if let Err(error) = self.retain_effect_batch(effects, ownership) {\n"
-            "            return Err(self.close(error, services));\n"
+            "        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n"
+            "            return Err(self.close_after_transferring_runtime_terminals(error, services));\n"
+            "        }",
+            "        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n"
+            "            return Err(self.close_after_transferring_runtime_terminals(error, services));\n"
             "        }\n"
-            "        Ok(count)",
+            "        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {\n"
+            "            return Err(self.close(error, services));\n"
+            "        }",
         ),
         encoding="utf-8",
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "consume_effects must bind the complete ownership vector and retained reducer batch before draining it"
+        "consume_effects must snapshot, retain, and commit the reducer frontier before transferring terminals and draining"
         in error
         for error in errors
     ), errors
 
     effects_path.write_text(
         mutate_effect_item(
-            "retain_effect_batch",
+            "retain_effect_batch_at_frontier",
             "                .zip(ownership)\n",
             "                .zip(ownership.into_iter().rev())\n",
         ),
@@ -35415,7 +35453,7 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "retained effect construction must zip each effect with its immutable owner"
+        "retained effect construction must zip each retained effect with its immutable owner"
         in error
         for error in errors
     ), errors
@@ -35475,14 +35513,14 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     effects_path.write_text(
         mutate_effect_item(
             "step",
-            "        if self.retained_effect_batch.is_some() {\n",
-            "        if false && self.retained_effect_batch.is_some() {\n",
+            "        if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {\n",
+            "        if false {\n",
         ),
         encoding="utf-8",
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "step must drain retained causal debt and return before runtime stepping"
+        "step must drain retained or parked debt and give blocked ordinary debt one typed pacemaker turn"
         in error
         for error in errors
     ), errors
@@ -35523,6 +35561,82 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
 
     effects_path.write_text(
         mutate_effect_item(
+            "consume_pacemaker_effects",
+            "evidence.owner().causal_origin().root_class != SERVICE_CLASS_PROGRESS",
+            "evidence.owner().causal_origin().root_class == SERVICE_CLASS_PROGRESS",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "typed pacemaker effect consumption must reject every non-Progress causal owner"
+        in error
+        for error in errors
+    ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "consume_pacemaker_effects",
+            "        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n",
+            "        if false && let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "typed pacemaker effect consumption must commit even an empty reducer frontier"
+        in error
+        for error in errors
+    ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "step_pacemaker_once",
+            "self.runtime.step_pacemaker_effects(now)",
+            "self.runtime.step_effects(now)",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "typed pacemaker executor turn must invoke only the runtime pacemaker scheduler"
+        in error
+        or "retained effect FIFO step_pacemaker_once declaration and complete control flow must match"
+        in error
+        for error in errors
+    ), errors
+
+    for old, new in (
+        (
+            "wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => true",
+            "wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => false",
+        ),
+        (
+            "matches!(certificate.phase, wire::GlobalPhase::Commit)",
+            "matches!(certificate.phase, wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit)",
+        ),
+        (
+            "matches!(certificate.phase, wire::GlobalPhase::Commit)",
+            "false",
+        ),
+    ):
+        effects_path.write_text(
+            mutate_effect_item(
+                "network_ingress_is_certified_fence_escape",
+                old,
+                new,
+            ),
+            encoding="utf-8",
+        )
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(
+            "only TC, direct CommitQC, and discovery CommitQC may escape a hung signer"
+            in error
+            for error in errors
+        ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
             "take_scheduler_ownership",
             "SerializedV2Runtime::take_last_scheduler_ownership(self)",
             "None",
@@ -35536,6 +35650,44 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
         for error in errors
     ), errors
     effects_path.write_text(canonical_effects, encoding="utf-8")
+
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    canonical_runner = runner_path.read_text(encoding="utf-8")
+
+    def mutate_runner_item(name: str, old: str, new: str) -> str:
+        item = module.rust_items(canonical_runner, name)[0]
+        assert item.source.count(old) == 1, (name, old)
+        return canonical_runner.replace(item.source, item.source.replace(old, new, 1), 1)
+
+    runner_path.write_text(
+        mutate_runner_item(
+            "drain_v2_ingress",
+            "mode == V2IngressDrainMode::CertifiedFenceEscape && turn != OuterIngressTurn::Ingress",
+            "false && turn != OuterIngressTurn::Ingress",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "escape mode must skip Completion and Runtime turns" in error
+        for error in errors
+    ), errors
+
+    runner_path.write_text(
+        mutate_runner_item(
+            "drain_v2_ingress",
+            "message.validate_version().is_err()\n"
+            "                        || !network_ingress_is_certified_fence_escape(&message.payload)",
+            "false || !network_ingress_is_certified_fence_escape(&message.payload)",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "escape mode must reject wrong-version and ordinary ingress" in error
+        for error in errors
+    ), errors
+    runner_path.write_text(canonical_runner, encoding="utf-8")
 
 
 def test_rust_item_scanner_masks_noncode_and_records_fail_closed_context() -> None:
@@ -36350,11 +36502,11 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "restart must install dormant Local FIFO reservations before retaining any startup successor",
         ),
         (
-            "step",
+            "finish_dispatched_step",
             "if token.identity().admission_ordinal() != "
             "effect_parent.lifecycle_ordinal()",
             "if false",
-            "live dispatch must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
+            "live dispatch completion must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
         ),
         (
             "step_recovery",
@@ -36368,6 +36520,24 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "lifecycle_owner.lifecycle_ordinal()",
             "if false",
             "deferred dispatch must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
+        ),
+        (
+            "try_step_pacemaker_escape",
+            "if timeout_due {",
+            "if false {",
+            "typed pacemaker escape must prefer the absolute timeout and otherwise admit only Progress-root work",
+        ),
+        (
+            "dispatch_one_pacemaker_progress",
+            "owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS",
+            "owner.causal_origin().root_class != SERVICE_CLASS_PROGRESS",
+            "pacemaker FIFO escape must retain exact selection evidence and Progress-root ownership through shared completion",
+        ),
+        (
+            "dispatch_one_pacemaker_progress",
+            "driver.certified_progress_bypasses_signature_fence(command)",
+            "false",
+            "pacemaker FIFO escape must retain exact selection evidence and Progress-root ownership through shared completion",
         ),
         (
             "later_same_semantic_fair_retry_retains_runtime_lifecycle_root",
@@ -36455,11 +36625,15 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     runtime.write_text(
         mutate_runtime_item(
             "step",
-            "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
+            "        if !timeout_preempts\n"
+            "            && let Some(step) = self.dispatch_one_adapter_deferred(now, None)?\n"
+            "        {\n",
             "        if false {\n"
             "            return Ok(RuntimeStep::Idle);\n"
             "        }\n"
-            "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
+            "        if !timeout_preempts\n"
+            "            && let Some(step) = self.dispatch_one_adapter_deferred(now, None)?\n"
+            "        {\n",
         ),
         encoding="utf-8",
     )
@@ -38313,12 +38487,15 @@ def test_async_source_fidelity_pins_validator_progress_capacity(
     )
     (formal_dir / "SumeragiV2AsyncNetwork.tla").write_text(
         source.replace(
-            "AsyncIngressCapacity >= 4 * N + 2",
+            "AsyncIngressCapacity >= 5 * N + 2",
             "AsyncIngressCapacity >= N + 2",
             1,
         ).replace(
-            "Len(lanes[recipient][source]) = 3",
-            "Len(lanes[recipient][source]) = 4",
+            "           /\\ Len(lanes[recipient][source]) =\n"
+            "                Cardinality(\n"
+            "                  IngressProtectedClassesPresentIn(\n"
+            "                    lanes, recipient, source))\n",
+            "           /\\ Len(lanes[recipient][source]) = 4\n",
             1,
         ).replace(
             "       /\\ \\A source \\in AsyncIngressSources:\n"
@@ -38366,11 +38543,11 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
     )
 
     path.write_text(
-        source.replace("  AsyncIngressCapacity = 6\n", "  AsyncIngressCapacity = 5\n", 1),
+        source.replace("  AsyncIngressCapacity = 7\n", "  AsyncIngressCapacity = 6\n", 1),
         encoding="utf-8",
     )
     errors = module._ownership_n1_configuration_errors(formal_dir)
-    assert any("exact 4 * N + 2 geometry (6)" in error for error in errors)
+    assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
 
     path.write_text(
         source.replace(
@@ -38389,7 +38566,7 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
     )
     errors = module._ownership_n1_configuration_errors(formal_dir)
     assert any("must remain the N=1 boundary" in error for error in errors)
-    assert any("exact 4 * N + 2 geometry (6)" in error for error in errors)
+    assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
     assert any("exact 2 * N + 3 geometry (5)" in error for error in errors)
 
     path.write_text(

@@ -200,6 +200,18 @@ invariant checking. The finite `Views = 0..(n - 1)` horizon is one complete
 role rotation; unlike the former unbounded natural-valued executable view, it
 has a finite state graph which TLC can exhaust.
 
+[`SumeragiV2Revision4AdversarialSafety.tla`](SumeragiV2Revision4AdversarialSafety.tla)
+separately removes the main compact model's single-proposal and retained-lock
+shortcuts from the agreement search. Its bounded round contains four
+validators, quorum three, two independent candidate bodies, and one Byzantine
+validator which may vote for both. Each honest validator may receive both full
+bodies but its durable Commit intent permits at most one vote. Vote, QC, and
+decision actions remain enabled after the first QC, so TLC continues searching
+for a second, conflicting QC and decision instead of obtaining agreement by
+terminating progress. The exhaustive
+[`SumeragiV2Revision4AdversarialSafety.cfg`](SumeragiV2Revision4AdversarialSafety.cfg)
+checks both conflicting-CommitQC unreachability and decision agreement.
+
 [`SumeragiV2Revision4Liveness.cfg`](SumeragiV2Revision4Liveness.cfg) checks the
 same finite geometry with `PostGSTSpec`. That specification makes the
 conditional partial-synchrony premises executable: while the current leader
@@ -1591,9 +1603,9 @@ atomic-lane, semantic-origin, P2P source-fairness, daemon-relay, and active-
 watchdog regressions. The 232-name baseline already included two exact locked-Commit
 progress-witness regressions
 and six outer TransportCompletion-corridor regressions. The current
-geometry inventories four owners per validator, two owners for every one of
+geometry inventories five owners per validator, three owners for every one of
 the `H` simultaneously materialized authenticated non-validator lanes, and two
-anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
+anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
@@ -1609,7 +1621,7 @@ includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
-`4N+2H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
+`5N+3H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, retained effect-capacity ownership,
 post-decision timeout/TC quiescence, and watchdog classification. It also pins
 the adapter's maximum flattened persistence macro-step at five effects within

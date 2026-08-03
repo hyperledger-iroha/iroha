@@ -963,7 +963,7 @@
             .validation_succeeded(tag, round, decided_subject, &validated)
             .expect("body valid")
             .into_effects();
-        let sign_tag = match sign.as_slice() {
+        let _sign_tag = match sign.as_slice() {
             [AdapterEffect::Sign { tag, .. }] => *tag,
             effects => panic!("unexpected validation effects: {effects:?}"),
         };
@@ -1017,8 +1017,8 @@
         assert_eq!(adapter.ingress_deliveries.len(), 2);
         assert!(adapter.registry.subjects.len() <= 2);
 
-        // A valid CommitQC bypasses normal admission and receives a reserved,
-        // higher-priority deferred slot even while the signer is outstanding.
+        // A valid CommitQC supersedes the outstanding local signer immediately;
+        // it must not join ordinary or PrepareQC Busy-deferred ownership.
         let commit_qc = wire::QuorumCertificate {
             round,
             proposal_round: round,
@@ -1032,24 +1032,9 @@
             .receive_verified(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::QuorumCertificate(commit_qc),
             ))
-            .expect("defer CommitQC");
-        assert_eq!(
-            commit.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-        );
-        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
-
-        let completed = adapter
-            .signature_completed(sign_tag, vec![0xD1; 96])
-            .expect("complete outstanding Prepare signature")
-            .into_effects();
-        assert!(!completed.iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::Apply { subject, .. } if *subject == decided_subject
-        )));
-        let decided = adapter
-            .drain_deferred()
-            .expect("service the older progress-owned CommitQC as one macro-step");
+            .expect("apply CommitQC through the signature fence");
+        assert_eq!(commit.disposition(), reducer::StepDisposition::Applied);
+        let decided = commit.into_effects();
         assert!(decided.iter().any(|effect| matches!(
             effect,
             AdapterEffect::Apply { subject, .. } if *subject == decided_subject

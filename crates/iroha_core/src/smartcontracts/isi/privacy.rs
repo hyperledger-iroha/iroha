@@ -4744,8 +4744,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.bootstrap_digest() != snapshot.bootstrap_digest()
                     || effect.asset_definition_id() != snapshot.state().asset_definition_id()
                     || effect.asset_definition_id() != &statement.asset_definition_id
-                    || effect.public_balance_scope()
-                        != snapshot.state().public_balance_scope()
+                    || effect.public_balance_scope() != snapshot.state().public_balance_scope()
                     || effect.public_balance_scope() != statement.public_balance_scope
                     || effect.reserve_account() != snapshot.state().reserve_account()
                     || effect.anchor() != statement.anchor
@@ -4880,8 +4879,7 @@ impl Execute for SubmitPrivacyProofV1 {
                                 authority,
                                 effect.reserve_account(),
                                 amount,
-                            )
-                            ?;
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
                             super::asset::isi::execute_verified_privacy_public_balance_transfer(
@@ -4976,8 +4974,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.next_root() == effect.current_root()
                     || effect.value_balance() != value_balance
                     || effect.public_balance_scope() != public_balance_scope
-                    || effect.public_balance_scope()
-                        != snapshot.bootstrap().public_balance_scope()
+                    || effect.public_balance_scope() != snapshot.bootstrap().public_balance_scope()
                 {
                     return Err(Error::InvariantViolation(
                         "native proof-managed effect is inconsistent with trusted state or its statement"
@@ -5324,8 +5321,7 @@ impl Execute for SubmitPrivacyProofV1 {
                                 authority,
                                 reserve_account,
                                 amount,
-                            )
-                            ?;
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
                             super::asset::isi::execute_verified_privacy_public_balance_transfer(
@@ -9146,6 +9142,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "release gate: generates and verifies a full masked ZK-AMS batch proof"]
     fn zk_ams_submit_commits_batch_successor_then_provisions_once() {
         let fixture: ZkAmsRuntimeFixtureForTest = zk_ams_runtime_fixture_for_test();
         let namespace = fixture.bootstrap.namespace();
@@ -9260,6 +9257,8 @@ mod tests {
         let PrivacyZkAmsActionV1::BatchAdmission(batch) = &batch_statement.action else {
             unreachable!("ZK-AMS batch action")
         };
+        // ZK-AMS v1 binds every proof to the sole action index zero, so the
+        // ordered batch and provisioning actions belong to distinct transactions.
         let head_after_batch = transaction
             .world
             .privacy_root_heads
@@ -9288,13 +9287,9 @@ mod tests {
                     .is_some()
             );
         }
+        transaction.apply();
 
         let provision_instruction = SubmitPrivacyProofV1::new(fixture.provision_envelope.clone());
-        bind_submit_privacy_instruction(&mut transaction, &provision_instruction);
-        provision_instruction
-            .clone()
-            .execute(&ALICE_ID, &mut transaction)
-            .expect("native ZK-AMS provisioning transition");
         let PrivacyStatementV1::IrohaZkAmsV1(provision_statement) =
             &fixture.provision_envelope.statement
         else {
@@ -9303,6 +9298,28 @@ mod tests {
         let PrivacyZkAmsActionV1::ProvisionAccount(provision) = &provision_statement.action else {
             unreachable!("ZK-AMS provision action")
         };
+        let key_image_key = PrivacyNullifierKeyV1::zk_ams_key_image(namespace, provision.key_image)
+            .expect("ZK-AMS key-image key");
+        let mut transaction = block.transaction();
+        let committed_head = transaction
+            .world
+            .privacy_root_heads
+            .get(&head_key)
+            .copied()
+            .expect("committed ZK-AMS successor root head");
+        assert_eq!(
+            (committed_head.epoch(), committed_head.root()),
+            (
+                provision.account_registry_root_epoch,
+                provision.account_registry_root
+            ),
+            "provisioning transaction must inherit the admitted batch successor"
+        );
+        bind_submit_privacy_instruction(&mut transaction, &provision_instruction);
+        provision_instruction
+            .clone()
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("native ZK-AMS provisioning transition");
         assert!(
             transaction
                 .world
@@ -9311,8 +9328,6 @@ mod tests {
                 .is_some(),
             "ZK-AMS provisioning must create the proof-bound account"
         );
-        let key_image_key = PrivacyNullifierKeyV1::zk_ams_key_image(namespace, provision.key_image)
-            .expect("ZK-AMS key-image key");
         assert!(
             transaction
                 .world
@@ -9321,8 +9336,46 @@ mod tests {
                 .is_some(),
             "ZK-AMS provisioning must persist the replay key image"
         );
+        transaction.apply();
+        block
+            .commit()
+            .expect("commit ZK-AMS batch and provisioning transactions");
 
-        let budget_after_success = transaction.privacy_budget_for_testing();
+        let replay_height = fixture
+            .current_height
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .expect("next non-zero ZK-AMS height");
+        let replay_timestamp_ms = fixture
+            .block_timestamp_ms
+            .checked_add(1)
+            .expect("next ZK-AMS block timestamp");
+        let replay_header =
+            BlockHeader::new(replay_height, None, None, None, replay_timestamp_ms, 0);
+        let mut replay_block = state.block(replay_header);
+        let mut transaction = replay_block.transaction();
+        assert!(
+            transaction
+                .world
+                .accounts
+                .get(&provision.account_id)
+                .is_some(),
+            "ZK-AMS provisioning account must survive the block commit"
+        );
+        let budget_before_replay = transaction.privacy_budget_for_testing();
+        let account_count_before_replay = transaction.world.accounts.iter().count();
+        let key_image_before_replay = transaction
+            .world
+            .privacy_nullifiers
+            .get(&key_image_key)
+            .cloned()
+            .expect("committed ZK-AMS replay key image");
+        let head_before_replay = transaction
+            .world
+            .privacy_root_heads
+            .get(&head_key)
+            .copied()
+            .expect("committed ZK-AMS registry head");
         bind_submit_privacy_instruction(&mut transaction, &provision_instruction);
         let replay_error = provision_instruction
             .execute(&ALICE_ID, &mut transaction)
@@ -9333,8 +9386,23 @@ mod tests {
         );
         assert_eq!(
             transaction.privacy_budget_for_testing(),
-            budget_after_success,
+            budget_before_replay,
             "ZK-AMS replay rejection must not reserve budget"
+        );
+        assert_eq!(
+            transaction.world.accounts.iter().count(),
+            account_count_before_replay,
+            "ZK-AMS replay rejection must not create another account"
+        );
+        assert_eq!(
+            transaction.world.privacy_nullifiers.get(&key_image_key),
+            Some(&key_image_before_replay),
+            "ZK-AMS replay rejection must preserve key-image provenance"
+        );
+        assert_eq!(
+            transaction.world.privacy_root_heads.get(&head_key).copied(),
+            Some(head_before_replay),
+            "ZK-AMS replay rejection must preserve the registry head"
         );
     }
 

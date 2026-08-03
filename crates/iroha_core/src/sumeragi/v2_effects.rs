@@ -90,7 +90,8 @@ use super::v2_core::{
     IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP, ProductionDecisionIdentityProjection,
     ProductionDecisionRecoveryTraceProjection, ProductionDurableBodyIdentityProjection,
     ProductionHistoricalBodyPipelineTraceProjection, ProductionQuorumCertificateIdentityProjection,
-    TagProjection, check_production_body_capacity_retirement_effective_lock_transition,
+    SERVICE_CLASS_PROGRESS, TagProjection,
+    check_production_body_capacity_retirement_effective_lock_transition,
     check_production_body_ownership_effective_lock_transition,
     check_production_decision_recovery_transition, check_production_effect_to_candidate_transition,
     check_production_historical_body_pipeline_transition, exact_body_stage_is_owned,
@@ -139,6 +140,36 @@ use super::{
     },
 };
 use crate::kura::KuraV2CommitReceipt;
+
+/// Return whether one authenticated envelope can retire a hung signing fence.
+///
+/// Only a TC or a CommitQC changes the reducer incarnation strongly enough to
+/// supersede an outstanding local signature. PrepareQCs and ordinary ingress
+/// remain behind retained reducer-effect debt. A discovery response carries
+/// the same authority only when its embedded certificate is a CommitQC.
+pub(crate) const fn network_ingress_is_certified_fence_escape(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    match payload {
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => true,
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+            matches!(certificate.phase, wire::GlobalPhase::Commit)
+        }
+        wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
+            matches!(response.certificate.phase, wire::GlobalPhase::Commit)
+        }
+        wire::ConsensusMessageV2Payload::Proposal(_)
+        | wire::ConsensusMessageV2Payload::Vote(_)
+        | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+    }
+}
 
 /// Stable identifier for one asynchronous effect invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -2376,6 +2407,47 @@ type DurableDecision = (
     wire::ExecutionCommitment,
 );
 
+/// One atomic read of reducer state which can retire executor-owned work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeReconciliationFrontier {
+    tag: Option<EventTag>,
+    locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    lock_is_authoritative: bool,
+    decision: Option<DurableDecision>,
+}
+
+/// Closed body-owner retirement predicate shared by pre-dispatch filtering and
+/// the service-owning lock reconciliation commit.
+fn protected_lock_retires_body_key(
+    superseded: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    replacement: (wire::ConsensusRound, wire::BlockSubject),
+    key: (wire::ConsensusRound, wire::BlockSubject),
+) -> bool {
+    let (replacement_round, replacement_subject) = replacement;
+    let (round, subject) = key;
+    match superseded {
+        Some((old_round, old_subject)) if old_subject == replacement_subject => {
+            subject == old_subject && round == old_round
+        }
+        Some((_, old_subject)) => {
+            subject == old_subject
+                || (subject != replacement_subject
+                    && round.context_id == replacement_round.context_id
+                    && round.height == replacement_round.height
+                    && round.view <= replacement_round.view)
+        }
+        None => {
+            round.context_id == replacement_round.context_id
+                && round.height == replacement_round.height
+                && if subject == replacement_subject {
+                    round.view < replacement_round.view
+                } else {
+                    round.view <= replacement_round.view
+                }
+        }
+    }
+}
+
 /// One adapter macro-step's causal suffix waiting for bounded dispatch capacity.
 ///
 /// The adapter bounds every serialized invocation by [`MAX_EFFECTS_PER_STEP`],
@@ -2430,6 +2502,13 @@ pub(crate) trait EffectRuntime {
         Ok(())
     }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
+    /// Run at most one absolute-timeout or authenticated Progress-root turn.
+    fn step_pacemaker_effects(
+        &mut self,
+        _now: Instant,
+    ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
+        Ok(None)
+    }
     fn step_recovery_effects(&mut self, now: Instant)
     -> Result<RuntimeStep<AdapterEffect>, String>;
     /// Consume the exact positional lifecycle sidecar for one returned batch.
@@ -2478,6 +2557,17 @@ pub(crate) trait EffectRuntime {
     fn take_scheduler_ownership(&mut self) -> Result<(), String>;
     /// Return the reducer incarnation which currently owns effects.
     fn authoritative_tag(&self) -> Option<EventTag>;
+    /// Read the reducer tag, durable lock, and Decision from one serialized
+    /// frontier. Synthetic runtimes which do not model locks inherit the
+    /// conservative tag/Decision projection.
+    fn reconciliation_frontier(&self) -> Result<RuntimeReconciliationFrontier, String> {
+        Ok(RuntimeReconciliationFrontier {
+            tag: self.authoritative_tag(),
+            locked_body: None,
+            lock_is_authoritative: false,
+            decision: self.decided_body()?,
+        })
+    }
     /// Return the exact durable Decision currently owned by the reducer.
     fn decided_body(
         &self,
@@ -2697,6 +2787,14 @@ impl EffectRuntime for SerializedV2Runtime {
         self.step(now).map_err(|error| error.to_string())
     }
 
+    fn step_pacemaker_effects(
+        &mut self,
+        now: Instant,
+    ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
+        self.try_step_pacemaker_escape(now)
+            .map_err(|error| error.to_string())
+    }
+
     fn step_recovery_effects(
         &mut self,
         now: Instant,
@@ -2773,6 +2871,26 @@ impl EffectRuntime for SerializedV2Runtime {
 
     fn authoritative_tag(&self) -> Option<EventTag> {
         Some(self.round_tag())
+    }
+
+    fn reconciliation_frontier(&self) -> Result<RuntimeReconciliationFrontier, String> {
+        let directive = self
+            .local_proposal_directive()
+            .map_err(|error| error.to_string())?;
+        let decision = self
+            .replayed_decision_key()
+            .map_err(|error| error.to_string())?;
+        if directive.decided_subject() != decision.map(|(_, _, subject, _)| subject) {
+            return Err(
+                "runtime proposal directive disagreed with its durable Decision".to_owned(),
+            );
+        }
+        Ok(RuntimeReconciliationFrontier {
+            tag: Some(directive.tag()),
+            locked_body: directive.locked_body(),
+            lock_is_authoritative: true,
+            decision,
+        })
     }
 
     fn decided_body(
@@ -3082,6 +3200,8 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     outstanding_requests: OutstandingCertifiedBodyRequests,
     retained_certified_body_response: Option<RetainedCertifiedBodyResponse>,
     ready_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ReadyBody>,
+    /// Last reducer incarnation whose executor-side view transition completed.
+    reconciled_tag: Option<EventTag>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
     pending_tip_recovery: Option<PendingKuraApplyRecoveryEvidence>,
@@ -3097,6 +3217,8 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     rejected_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     finality_completion: Option<FinalityCompletion>,
     retained_effect_batch: Option<RetainedEffectBatch>,
+    /// Ordinary dispatch debt parked behind one bounded typed control turn.
+    parked_effect_batch: Option<RetainedEffectBatch>,
     fatal_reason: Option<String>,
 }
 
@@ -3384,9 +3506,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// however, and may be the only events able to release the pending-work
     /// capacity blocking that suffix. They never enter the
     /// reducer FIFO directly, so admitting them cannot overtake reducer state.
-    /// A `CommitCertificateResponse` is deliberately classified as reducer
-    /// producing because the runner unwraps its authenticated CommitQC into
-    /// reducer ingress before retiring discovery ownership.
+    /// A `CommitCertificateResponse` is reducer-producing because the runner
+    /// unwraps its authenticated CommitQC before retiring discovery ownership;
+    /// that exact terminal certificate is nevertheless an allowed escape from
+    /// retained debt because it can retire a hung signing fence.
     pub(crate) fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
@@ -3447,6 +3570,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         !self.output_guard.restart_required()
             && self.finality_completion.is_some()
             && self.retained_effect_batch.is_none()
+            && self.parked_effect_batch.is_none()
             && self.retained_certified_body_response.is_none()
             && self.runtime.queued_commands() == 0
             && self.runtime.driver().ready_to_finish()
@@ -3581,9 +3705,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &self,
         payload: &wire::ConsensusMessageV2Payload,
     ) -> bool {
-        self.retained_certified_body_response.is_none()
-            && (self.retained_effect_batch.is_none()
-                || !Self::network_ingress_requires_reducer_order(payload))
+        network_ingress_is_certified_fence_escape(payload)
+            || (self.retained_certified_body_response.is_none()
+                && (self.retained_effect_batch.is_none() && self.parked_effect_batch.is_none()
+                    || !Self::network_ingress_requires_reducer_order(payload)))
     }
 
     /// Return whether handling this outer ingress envelope can execute reducer
@@ -3660,6 +3785,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         runtime
             .configure_external_lifecycle_owner_capacity(config.max_pending_work)
             .map_err(EffectExecutorError::Runtime)?;
+        let reconciled_tag = runtime.authoritative_tag();
         let outstanding_requests =
             OutstandingCertifiedBodyRequests::new(config.max_certified_requests)
                 .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
@@ -3683,6 +3809,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             outstanding_requests,
             retained_certified_body_response: None,
             ready_bodies: BTreeMap::new(),
+            reconciled_tag,
             protected_lock: None,
             protected_decision: None,
             pending_tip_recovery: None,
@@ -3698,6 +3825,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             rejected_bodies: BTreeMap::new(),
             finality_completion: None,
             retained_effect_batch: None,
+            parked_effect_batch: None,
             fatal_reason: None,
         })
     }
@@ -3748,6 +3876,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.fatal_reason.is_none()
             && !self.output_guard.restart_required()
             && self.retained_effect_batch.is_none()
+            && self.parked_effect_batch.is_none()
             && self.retained_certified_body_response.is_none()
             && self.pending_work() < self.config.max_pending_work
     }
@@ -3872,28 +4001,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .retained_locked_body
             .as_ref()
             .is_some_and(|(subject, _)| *subject != replacement_subject);
-        let key_is_superseded =
-            |round: wire::ConsensusRound, subject: wire::BlockSubject| match superseded {
-                Some((old_round, old_subject)) if old_subject == replacement_subject => {
-                    subject == old_subject && round == old_round
-                }
-                Some((_, old_subject)) => {
-                    subject == old_subject
-                        || (subject != replacement_subject
-                            && round.context_id == replacement_round.context_id
-                            && round.height == replacement_round.height
-                            && round.view <= replacement_round.view)
-                }
-                None => {
-                    round.context_id == replacement_round.context_id
-                        && round.height == replacement_round.height
-                        && if subject == replacement_subject {
-                            round.view < replacement_round.view
-                        } else {
-                            round.view <= replacement_round.view
-                        }
-                }
-            };
+        let key_is_superseded = |round, subject| {
+            protected_lock_retires_body_key(
+                superseded,
+                (replacement_round, replacement_subject),
+                (round, subject),
+            )
+        };
         let mut superseded_keys = BTreeSet::new();
         for key in self
             .body_pipeline_owners
@@ -3932,17 +4046,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 superseded_keys.insert(key);
             }
         }
-        if self.pending_signatures.values().any(|pending| {
-            pending
-                .request
-                .body_round()
-                .zip(pending.request.subject())
-                .is_some_and(|key| key_is_superseded(key.0, key.1))
-        }) {
-            return Err(EffectExecutorError::Contract(
-                "lock installation overtook an outstanding durable signature intent".to_owned(),
-            ));
-        }
+        let signatures = self
+            .pending_signatures
+            .iter()
+            .filter_map(|(id, pending)| {
+                pending
+                    .request
+                    .body_round()
+                    .zip(pending.request.subject())
+                    .is_some_and(|key| key_is_superseded(key.0, key.1))
+                    .then_some(*id)
+            })
+            .collect::<Vec<_>>();
         if self.pending_applications.values().any(|pending| {
             superseded_keys.contains(&(
                 pending.task.validated_receipt.durable().round(),
@@ -4116,6 +4231,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .retire_outbound_payload_for_subject(subject)
                 .map_err(service_error)?;
         }
+        for id in &signatures {
+            services.cancel_consensus_sign(*id).map_err(service_error)?;
+        }
         for plan in &fetches {
             services
                 .cancel_body_fetch(&plan.pending.task)
@@ -4134,6 +4252,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
         for plan in fetches {
             self.commit_pending_fetch_retirement(plan);
+        }
+        for id in signatures {
+            self.pending_signatures.remove(&id);
         }
         for (id, _) in stores {
             self.pending_stores.remove(&id);
@@ -4251,20 +4372,28 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
+        let frontier = self
+            .runtime
+            .reconciliation_frontier()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
         let ownership = match self.runtime.take_effect_ownership(&effects) {
             Ok(ownership) => ownership,
             Err(error) => {
                 return Err(self.close(EffectExecutorError::Runtime(error), services));
             }
         };
-        if let Err(error) = self.retain_effect_batch(effects, ownership) {
+        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
             return Err(self.close(error, services));
+        }
+        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
+            return Err(self.close_after_transferring_runtime_terminals(error, services));
         }
         if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
             return Err(self.close(error, services));
         }
         let count = self
-            .drain_retained_effect_batch(services)
+            .drain_retained_effect_batch(services, true)
             .map_err(|error| self.close_after_transferring_runtime_terminals(error, services))?;
         if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
             return Err(self.close(error, services));
@@ -4325,6 +4454,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// persistence continuations remain within the reducer-sized bound.
     fn retained_candidate_owners(
         &self,
+        entering_view: Option<EventTag>,
     ) -> Result<BTreeMap<Hash, RuntimeEffectOwnership>, EffectExecutorError> {
         let mut owners = BTreeMap::<Hash, RuntimeEffectOwnership>::new();
         let mut insert = |ownership: &RuntimeEffectOwnership| {
@@ -4346,6 +4476,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
         };
         for pending in self.pending_signatures.values() {
+            // `EnterView` is ordered before every freshly reissued Sign in the
+            // reducer batch. Its service callback cancels the old tagged task,
+            // so that task is not an incumbent for the new-generation
+            // candidate. Counting it here would coalesce away the replacement
+            // and leave the reducer awaiting a signature no service owns.
+            if entering_view.is_some_and(|tag| tag.strictly_advances(pending.tag)) {
+                continue;
+            }
             insert(&pending.ownership)?;
         }
         for pending in self.pending_fetches.values() {
@@ -4363,13 +4501,259 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Some(finality) = &self.finality_completion {
             insert(&finality.ownership)?;
         }
+        if let Some(batch) = &self.parked_effect_batch {
+            for owned in &batch.effects {
+                if entering_view
+                    .is_some_and(|tag| Self::parked_effect_is_retired_by_view(owned, tag))
+                {
+                    continue;
+                }
+                if owned.ownership.candidate_semantic_identity().is_some() {
+                    insert(&owned.ownership)?;
+                }
+            }
+        }
         Ok(owners)
+    }
+
+    fn effect_execution_tag(effect: &AdapterEffect) -> Option<EventTag> {
+        match effect {
+            AdapterEffect::Sign { tag, .. }
+            | AdapterEffect::FetchBody { tag, .. }
+            | AdapterEffect::StoreBody { tag, .. }
+            | AdapterEffect::ValidateBody { tag, .. }
+            | AdapterEffect::Apply { tag, .. }
+            | AdapterEffect::EnterView { tag, .. } => Some(*tag),
+            AdapterEffect::Broadcast(_)
+            | AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
+        }
+    }
+
+    /// Return whether a not-yet-dispatched ordinary effect is superseded by
+    /// an installed view before it can acquire service ownership.
+    ///
+    /// Diagnostics remain valid across views. A control broadcast has no
+    /// concrete reducer tag, so its immutable causal root supplies the same
+    /// check; the reducer's post-TC outbound catalog reproduces any control
+    /// message which remains active in the installed view.
+    fn parked_effect_is_retired_by_view(owned: &OwnedAdapterEffect, tag: EventTag) -> bool {
+        match &owned.effect {
+            AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => false,
+            AdapterEffect::Broadcast(_) => {
+                tag.strictly_advances(owned.ownership.owner().causal_origin().root_tag)
+            }
+            effect => Self::effect_execution_tag(effect)
+                .is_some_and(|effect_tag| tag.strictly_advances(effect_tag)),
+        }
+    }
+
+    fn entering_view_tag(
+        effects: &[AdapterEffect],
+    ) -> Result<Option<EventTag>, EffectExecutorError> {
+        let mut entering = effects.iter().filter_map(|effect| match effect {
+            AdapterEffect::EnterView { tag, .. } => Some(*tag),
+            _ => None,
+        });
+        let tag = entering.next();
+        if entering.next().is_some() {
+            return Err(EffectExecutorError::Contract(
+                "one adapter macro-step emitted more than one EnterView".to_owned(),
+            ));
+        }
+        Ok(tag)
+    }
+
+    fn adapter_effect_body_key(
+        effect: &AdapterEffect,
+    ) -> Option<(wire::ConsensusRound, wire::BlockSubject)> {
+        match effect {
+            AdapterEffect::Sign { request, .. } => request.body_round().zip(request.subject()),
+            AdapterEffect::FetchBody { round, subject, .. }
+            | AdapterEffect::StoreBody { round, subject, .. }
+            | AdapterEffect::ValidateBody { round, subject, .. } => Some((*round, *subject)),
+            AdapterEffect::Apply {
+                subject,
+                certificate,
+                ..
+            } => Some((certificate.proposal_round, *subject)),
+            AdapterEffect::Broadcast(_)
+            | AdapterEffect::EnterView { .. }
+            | AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
+        }
+    }
+
+    /// Retire only not-yet-dispatched ordinary work which the reducer's new
+    /// durable frontier makes impossible. This pure in-memory phase runs before
+    /// candidate coalescing; service/runtime cancellation waits until the full
+    /// replacement batch is retained.
+    fn prepare_parked_effects_for_frontier(
+        &mut self,
+        effects: &[AdapterEffect],
+        frontier: RuntimeReconciliationFrontier,
+    ) -> Result<Option<EventTag>, EffectExecutorError> {
+        let entering_view = Self::entering_view_tag(effects)?;
+        if entering_view.is_some()
+            && !matches!(effects.first(), Some(AdapterEffect::EnterView { .. }))
+        {
+            return Err(EffectExecutorError::Contract(
+                "EnterView must be the first effect in its reducer macro-step".to_owned(),
+            ));
+        }
+        match (self.reconciled_tag, frontier.tag) {
+            (Some(current), Some(next)) if current == next => {
+                if entering_view.is_some() {
+                    return Err(EffectExecutorError::Contract(
+                        "EnterView did not advance the reconciled reducer incarnation".to_owned(),
+                    ));
+                }
+            }
+            (Some(current), Some(next)) if next.strictly_advances(current) => {
+                if entering_view != Some(next) {
+                    return Err(EffectExecutorError::Contract(
+                        "an advancing reducer frontier omitted its leading EnterView".to_owned(),
+                    ));
+                }
+            }
+            (None, None) => {
+                if entering_view.is_some() {
+                    return Err(EffectExecutorError::Contract(
+                        "EnterView has no authoritative reducer incarnation".to_owned(),
+                    ));
+                }
+            }
+            (None, Some(next)) => {
+                if entering_view != Some(next) {
+                    return Err(EffectExecutorError::Contract(
+                        "the first authoritative reducer incarnation omitted EnterView".to_owned(),
+                    ));
+                }
+            }
+            (Some(_), None) | (Some(_), Some(_)) => {
+                return Err(EffectExecutorError::Contract(
+                    "the reducer reconciliation frontier regressed or changed incomparably"
+                        .to_owned(),
+                ));
+            }
+        }
+        let mut protected = effects.iter().filter_map(|effect| match effect {
+            AdapterEffect::EnterView {
+                tag,
+                protected_body,
+                ..
+            } => Some((*tag, *protected_body)),
+            _ => None,
+        });
+        if let Some((tag, protected_body)) = protected.next() {
+            if protected.next().is_some() {
+                return Err(EffectExecutorError::Contract(
+                    "one adapter macro-step emitted more than one EnterView".to_owned(),
+                ));
+            }
+            if frontier.tag != Some(tag)
+                || (frontier.lock_is_authoritative
+                    && frontier.decision.is_none()
+                    && frontier.locked_body != protected_body)
+            {
+                return Err(EffectExecutorError::Contract(
+                    "EnterView disagreed with the reducer reconciliation frontier".to_owned(),
+                ));
+            }
+        }
+
+        let lock_transition = frontier
+            .decision
+            .is_none()
+            .then_some(frontier.locked_body)
+            .flatten()
+            .filter(|replacement| Some(*replacement) != self.protected_lock)
+            .map(|replacement| (self.protected_lock, replacement));
+        if let Some(batch) = self.parked_effect_batch.as_mut() {
+            batch.effects.retain(|owned| {
+                if entering_view
+                    .is_some_and(|tag| Self::parked_effect_is_retired_by_view(owned, tag))
+                {
+                    return false;
+                }
+                if let Some(decision) = frontier.decision
+                    && !Self::effect_survives_decision(&owned.effect, decision)
+                {
+                    return false;
+                }
+                if let Some((superseded, replacement)) = lock_transition
+                    && Self::adapter_effect_body_key(&owned.effect).is_some_and(|key| {
+                        protected_lock_retires_body_key(superseded, replacement, key)
+                    })
+                {
+                    return false;
+                }
+                true
+            });
+        }
+        if self
+            .parked_effect_batch
+            .as_ref()
+            .is_some_and(|batch| batch.effects.is_empty())
+        {
+            self.parked_effect_batch = None;
+        }
+        Ok(entering_view)
+    }
+
+    /// Commit the service-owning half of one already-retained reducer
+    /// frontier before any fresh adapter effect can dispatch.
+    fn commit_reconciliation_frontier<S: V2EffectServices>(
+        &mut self,
+        frontier: RuntimeReconciliationFrontier,
+        services: &mut S,
+    ) -> Result<(), EffectExecutorError> {
+        if let Some(decision) = frontier.decision {
+            return self.reconcile_decision_work(decision, false, services);
+        }
+        if !frontier.lock_is_authoritative {
+            return Ok(());
+        }
+        let Some(replacement) = frontier.locked_body else {
+            if self.protected_lock.is_some() || self.retained_locked_body.is_some() {
+                return Err(EffectExecutorError::Contract(
+                    "the reducer reconciliation frontier cleared a durable PrepareQC lock"
+                        .to_owned(),
+                ));
+            }
+            return Ok(());
+        };
+        let tag = frontier.tag.ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "durable lock reconciliation omitted its reducer tag".to_owned(),
+            )
+        })?;
+        if self.protected_lock == Some(replacement) {
+            return Ok(());
+        }
+        self.preflight_observed_protected_lock(tag, replacement)?;
+        self.reconcile_protected_lock(tag, Some(replacement), services)?;
+        Ok(())
     }
 
     fn retain_effect_batch(
         &mut self,
         effects: Vec<AdapterEffect>,
+        ownership: Vec<RuntimeEffectOwnership>,
+    ) -> Result<(), EffectExecutorError> {
+        let frontier = self
+            .runtime
+            .reconciliation_frontier()
+            .map_err(EffectExecutorError::Runtime)?;
+        self.retain_effect_batch_at_frontier(effects, ownership, frontier)
+    }
+
+    fn retain_effect_batch_at_frontier(
+        &mut self,
+        effects: Vec<AdapterEffect>,
         mut ownership: Vec<RuntimeEffectOwnership>,
+        frontier: RuntimeReconciliationFrontier,
     ) -> Result<(), EffectExecutorError> {
         if self.retained_effect_batch.is_some() {
             return Err(EffectExecutorError::Contract(
@@ -4387,6 +4771,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "one adapter macro-step had mismatched lifecycle ownership".to_owned(),
             ));
         }
+        let entering_view = self.prepare_parked_effects_for_frontier(&effects, frontier)?;
         if effects.is_empty() {
             return Ok(());
         }
@@ -4412,7 +4797,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "one adapter macro-step candidate count was not representable".to_owned(),
             )
         })?;
-        let mut retained_candidate_owners = self.retained_candidate_owners()?;
+        let mut retained_candidate_owners = self.retained_candidate_owners(entering_view)?;
         // A body acquisition has one physical owner even as authenticated
         // consensus evidence refines it from an ordinary Proposal fetch to a
         // Prepare- or Commit-certified fetch. The route-neutral candidate
@@ -4434,7 +4819,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
         }
+        if let Some(batch) = &self.parked_effect_batch {
+            for owned in &batch.effects {
+                let AdapterEffect::FetchBody {
+                    tag,
+                    round,
+                    subject,
+                    ..
+                } = &owned.effect
+                else {
+                    continue;
+                };
+                let key = (*tag, *round, *subject);
+                if let Some(existing) = retained_fetch_lineages.insert(key, owned.ownership.clone())
+                    && existing != owned.ownership
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "one parked body-fetch lineage had conflicting exact owners".to_owned(),
+                    ));
+                }
+            }
+        }
         let mut retain_effect = Vec::with_capacity(effects.len());
+        let mut retire_parked_fetch_lineages = BTreeSet::new();
         let mut candidate_position = 0u8;
         for (index, (effect, evidence)) in effects.iter().zip(&mut ownership).enumerate() {
             let candidate = production_adapter_effect_candidate_semantic_identity(effect);
@@ -4619,6 +5026,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         retained_fetch_lineages.insert(key, evidence.clone());
                     }
                 }
+                if retain_effect.last() == Some(&true)
+                    && !matches!(
+                        fetch_authority_relation,
+                        Some(RuntimeFetchAuthorityRelation::Stale)
+                    )
+                {
+                    retire_parked_fetch_lineages.insert(key);
+                }
             }
         }
         debug_assert!(effects.iter().all(|effect| {
@@ -4635,6 +5050,35 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .collect::<VecDeque<_>>();
         if retained.is_empty() {
             return Ok(());
+        }
+        let replacement_candidates = retained
+            .iter()
+            .filter_map(|owned| owned.ownership.candidate_semantic_identity())
+            .collect::<BTreeSet<_>>();
+        if let Some(batch) = self.parked_effect_batch.as_mut() {
+            batch.effects.retain(|owned| {
+                let replaced_candidate = owned
+                    .ownership
+                    .candidate_semantic_identity()
+                    .is_some_and(|identity| replacement_candidates.contains(&identity));
+                let replaced_fetch = match &owned.effect {
+                    AdapterEffect::FetchBody {
+                        tag,
+                        round,
+                        subject,
+                        ..
+                    } => retire_parked_fetch_lineages.contains(&(*tag, *round, *subject)),
+                    _ => false,
+                };
+                !replaced_candidate && !replaced_fetch
+            });
+        }
+        if self
+            .parked_effect_batch
+            .as_ref()
+            .is_some_and(|batch| batch.effects.is_empty())
+        {
+            self.parked_effect_batch = None;
         }
         self.retained_effect_batch = Some(RetainedEffectBatch {
             effects: retained,
@@ -4677,6 +5121,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 insert(&owned.ownership)?;
             }
         }
+        if let Some(batch) = &self.parked_effect_batch {
+            for owned in &batch.effects {
+                insert(&owned.ownership)?;
+            }
+        }
         for pending in self.pending_signatures.values() {
             insert(&pending.ownership)?;
         }
@@ -4699,6 +5148,31 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .map_err(EffectExecutorError::Runtime)
     }
 
+    fn park_retained_effect_batch(&mut self) -> Result<(), EffectExecutorError> {
+        if self.parked_effect_batch.is_some() {
+            return Err(EffectExecutorError::Contract(
+                "a second ordinary suffix attempted to enter the pacemaker escape".to_owned(),
+            ));
+        }
+        let batch = self.retained_effect_batch.take().ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "pacemaker escape attempted to park missing dispatch debt".to_owned(),
+            )
+        })?;
+        self.parked_effect_batch = Some(batch);
+        Ok(())
+    }
+
+    fn restore_parked_effect_batch(&mut self) -> Result<(), EffectExecutorError> {
+        if self.retained_effect_batch.is_some() {
+            return Err(EffectExecutorError::Contract(
+                "pacemaker control debt still occupied the dispatch slot".to_owned(),
+            ));
+        }
+        self.retained_effect_batch = self.parked_effect_batch.take();
+        Ok(())
+    }
+
     /// Drain the retained causal suffix in exact FIFO order.
     ///
     /// Pending-work and certified-request exhaustion are retryable for every
@@ -4712,7 +5186,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn drain_retained_effect_batch<S: V2EffectServices>(
         &mut self,
         services: &mut S,
+        restore_parked: bool,
     ) -> Result<usize, EffectExecutorError> {
+        if restore_parked
+            && self.retained_effect_batch.is_none()
+            && self.parked_effect_batch.is_some()
+        {
+            self.restore_parked_effect_batch()?;
+        }
         let decision = self.reconcile_runtime_decision(services)?;
         if let Some(decision) = decision
             && let Some(batch) = self.retained_effect_batch.as_mut()
@@ -4727,12 +5208,26 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .effects
                 .retain(|owned| Self::effect_survives_decision(&owned.effect, decision));
         }
+        if let Some(decision) = decision
+            && let Some(batch) = self.parked_effect_batch.as_mut()
+        {
+            batch
+                .effects
+                .retain(|owned| Self::effect_survives_decision(&owned.effect, decision));
+        }
         if self
             .retained_effect_batch
             .as_ref()
             .is_some_and(|batch| batch.effects.is_empty())
         {
             self.retained_effect_batch = None;
+        }
+        if self
+            .parked_effect_batch
+            .as_ref()
+            .is_some_and(|batch| batch.effects.is_empty())
+        {
+            self.parked_effect_batch = None;
         }
 
         let mut consumed = 0usize;
@@ -4942,7 +5437,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(error, services));
         }
         let count = self
-            .drain_retained_effect_batch(services)
+            .drain_retained_effect_batch(services, true)
             .map_err(|error| self.close_after_transferring_runtime_terminals(error, services))?;
         if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
             return Err(self.close(error, services));
@@ -4950,16 +5445,67 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(count)
     }
 
-    /// Run at most one serialized runtime step and dispatch all of its effects.
-    pub(crate) fn step<S: V2EffectServices>(
+    fn consume_pacemaker_effects<S: V2EffectServices>(
+        &mut self,
+        effects: Vec<AdapterEffect>,
+        services: &mut S,
+    ) -> Result<usize, EffectExecutorError> {
+        self.ensure_open()?;
+        let frontier = self
+            .runtime
+            .reconciliation_frontier()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        let ownership = self
+            .runtime
+            .take_effect_ownership(&effects)
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        if ownership
+            .iter()
+            .any(|evidence| evidence.owner().causal_origin().root_class != SERVICE_CLASS_PROGRESS)
+        {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "typed pacemaker escape returned a non-Progress causal owner".to_owned(),
+                ),
+                services,
+            ));
+        }
+        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
+            return Err(self.close(error, services));
+        }
+        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
+            return Err(self.close_after_transferring_runtime_terminals(error, services));
+        }
+        if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+            return Err(self.close(error, services));
+        }
+        let count = self
+            .drain_retained_effect_batch(services, false)
+            .map_err(|error| self.close_after_transferring_runtime_terminals(error, services))?;
+        if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+            return Err(self.close(error, services));
+        }
+        Ok(count)
+    }
+
+    /// Give one bounded scheduler turn only to absolute timeout or an
+    /// authenticated Progress-root lifecycle.
+    ///
+    /// If ordinary adapter debt occupies the dispatch slot, its exact suffix
+    /// is parked first and restored after the control turn. A retained control
+    /// suffix is drained before another scheduler owner may be selected.
+    pub(crate) fn step_pacemaker_once<S: V2EffectServices>(
         &mut self,
         now: Instant,
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
-        if self.retained_effect_batch.is_some() {
+
+        if self.retained_effect_batch.is_some() && self.parked_effect_batch.is_some() {
             let count = self
-                .drain_retained_effect_batch(services)
+                .drain_retained_effect_batch(services, false)
                 .map_err(|error| {
                     self.close_after_transferring_runtime_terminals(error, services)
                 })?;
@@ -4971,6 +5517,91 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             } else {
                 EffectExecutorStep::Advanced { effects: count }
             });
+        }
+        if self.retained_effect_batch.is_some() {
+            self.park_retained_effect_batch()
+                .map_err(|error| self.close(error, services))?;
+        }
+        if let Err(error) = self.publish_external_lifecycle_owners() {
+            return Err(self.close(error, services));
+        }
+
+        let wal_step = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| {
+                EffectExecutorError::FailClosed(
+                    "process restart is required after a fatal consensus failure".to_owned(),
+                )
+            })?;
+        if let Err(error) = services.begin_decision_serve_reconciliation() {
+            drop(wal_step);
+            return Err(self.close(service_error(error), services));
+        }
+        let step = match self.runtime.step_pacemaker_effects(now) {
+            Ok(step) => step,
+            Err(reason) => {
+                drop(wal_step);
+                return Err(self.close(EffectExecutorError::Runtime(reason), services));
+            }
+        };
+        if step.is_some()
+            && let Err(reason) = self.runtime.take_scheduler_ownership()
+        {
+            drop(wal_step);
+            return Err(self.close(EffectExecutorError::Runtime(reason), services));
+        }
+        wal_step.complete();
+        if let Err(error) = self.finish_decision_serve_reconciliation(services) {
+            return Err(self.close(error, services));
+        }
+
+        match step {
+            None | Some(RuntimeStep::Idle) => {
+                if self.retained_effect_batch.is_none() && self.parked_effect_batch.is_some() {
+                    self.restore_parked_effect_batch()
+                        .map_err(|error| self.close(error, services))?;
+                }
+                if let Err(error) = self.publish_external_lifecycle_owners() {
+                    return Err(self.close(error, services));
+                }
+                if let Err(error) = self.publish_status(services) {
+                    return Err(self.close(error, services));
+                }
+                Ok(EffectExecutorStep::Idle)
+            }
+            Some(RuntimeStep::Advanced(effects)) => {
+                let count = self.consume_pacemaker_effects(effects, services)?;
+                Ok(EffectExecutorStep::Advanced { effects: count })
+            }
+        }
+    }
+
+    /// Run at most one serialized runtime step and dispatch all of its effects.
+    pub(crate) fn step<S: V2EffectServices>(
+        &mut self,
+        now: Instant,
+        services: &mut S,
+    ) -> Result<EffectExecutorStep, EffectExecutorError> {
+        self.ensure_open()?;
+        if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
+            let count = self
+                .drain_retained_effect_batch(services, true)
+                .map_err(|error| {
+                    self.close_after_transferring_runtime_terminals(error, services)
+                })?;
+            if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+                return Err(self.close(error, services));
+            }
+            if count != 0 {
+                return Ok(EffectExecutorStep::Advanced { effects: count });
+            }
+            if self.retained_effect_batch.is_some() && self.parked_effect_batch.is_none() {
+                self.park_retained_effect_batch()
+                    .map_err(|error| self.close(error, services))?;
+                return self.step_pacemaker_once(now, services);
+            }
+            return Ok(EffectExecutorStep::Idle);
         }
         if let Err(error) = self.publish_external_lifecycle_owners() {
             return Err(self.close(error, services));
@@ -5029,7 +5660,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.pending_tip_recovery_attempts = self.pending_tip_recovery_attempts.saturating_add(1);
         if self.retained_effect_batch.is_some() {
             let count = self
-                .drain_retained_effect_batch(services)
+                .drain_retained_effect_batch(services, true)
                 .map_err(|error| {
                     self.close_after_transferring_runtime_terminals(error, services)
                 })?;
@@ -5947,7 +6578,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // exact protected body across this bounded pre-dispatch seam without
         // duplicating protection state in the service.
         let mut retained_protected = None;
-        if let Some(batch) = &self.retained_effect_batch {
+        for batch in [
+            self.retained_effect_batch.as_ref(),
+            self.parked_effect_batch.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             for owned in &batch.effects {
                 let AdapterEffect::EnterView { protected_body, .. } = &owned.effect else {
                     continue;
@@ -9758,6 +10395,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
         }
 
+        // The typed pacemaker path may install this TC while an ordinary
+        // reducer suffix is parked behind adapter backpressure. Effects from
+        // the superseded incarnation have not acquired service ownership yet,
+        // so retire them here. The reducer has already rebuilt every active
+        // control and protected-body successor in this EnterView batch;
+        // diagnostics are view-independent and remain parked.
+        if let Some(batch) = self.parked_effect_batch.as_mut() {
+            batch
+                .effects
+                .retain(|owned| !Self::parked_effect_is_retired_by_view(owned, tag));
+        }
+        if self
+            .parked_effect_batch
+            .as_ref()
+            .is_some_and(|batch| batch.effects.is_empty())
+        {
+            self.parked_effect_batch = None;
+        }
+
         // A certified-request index mismatch must be diagnosed before lock
         // reconciliation, which can itself retire runtime/service ownership.
         // Protected fetch rebinding is also fully checked here so no fallible
@@ -10039,7 +10695,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .map_err(EffectExecutorError::Runtime)?;
         services
             .entered_view(tag, certificate)
-            .map_err(service_error)
+            .map_err(service_error)?;
+        self.reconciled_tag = Some(tag);
+        Ok(())
     }
 
     fn ensure_pending_slot(&self) -> Result<(), EffectExecutorError> {
@@ -10153,24 +10811,34 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     fn effect_dispatch_queue_snapshot(&self, now: Instant) -> RuntimeQueueLaneSnapshot {
-        self.retained_effect_batch.as_ref().map_or(
-            RuntimeQueueLaneSnapshot {
-                depth: 0,
-                capacity: MAX_EFFECTS_PER_STEP,
-                oldest_age: None,
-                max_service_debt: 0,
-            },
-            |batch| RuntimeQueueLaneSnapshot {
-                depth: batch.effects.len(),
-                capacity: MAX_EFFECTS_PER_STEP,
-                oldest_age: Some(now.saturating_duration_since(batch.oldest_at)),
-                // This suffix is always attempted before another runtime
-                // transition. Pending-work capacity can make its head
-                // temporarily ineligible, but the head never
-                // loses an eligible scheduler dispatch to another queue.
-                max_service_debt: 0,
-            },
-        )
+        let depth = self
+            .retained_effect_batch
+            .as_ref()
+            .map_or(0, |batch| batch.effects.len())
+            .saturating_add(
+                self.parked_effect_batch
+                    .as_ref()
+                    .map_or(0, |batch| batch.effects.len()),
+            );
+        let oldest_at = self
+            .retained_effect_batch
+            .as_ref()
+            .map(|batch| batch.oldest_at)
+            .into_iter()
+            .chain(
+                self.parked_effect_batch
+                    .as_ref()
+                    .map(|batch| batch.oldest_at),
+            )
+            .min();
+        RuntimeQueueLaneSnapshot {
+            depth,
+            capacity: MAX_EFFECTS_PER_STEP.saturating_mul(2),
+            oldest_age: oldest_at.map(|oldest| now.saturating_duration_since(oldest)),
+            // A parked suffix can lose one bounded dispatch to typed control;
+            // it is restored before any ordinary runtime transition.
+            max_service_debt: u64::from(self.parked_effect_batch.is_some()),
+        }
     }
 
     fn allocate_work_id(&mut self) -> Result<EffectWorkId, EffectExecutorError> {
@@ -10629,6 +11297,7 @@ mod tests {
         decided_body: Option<DurableDecision>,
         decision_on_next_step: Option<DurableDecision>,
         round_tag: Option<EventTag>,
+        locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
         fail_enqueue: bool,
         fail_enqueue_hits: usize,
         panic_step: bool,
@@ -10831,9 +11500,12 @@ mod tests {
             &mut self,
             max_pending_work: usize,
         ) -> Result<(), String> {
+            let retained_capacity = MAX_EFFECTS_PER_STEP
+                .checked_mul(2)
+                .ok_or_else(|| "fake external lifecycle-owner capacity overflowed".to_owned())?;
             self.external_lifecycle_owner_capacity = Some(
                 max_pending_work
-                    .checked_add(MAX_EFFECTS_PER_STEP)
+                    .checked_add(retained_capacity)
                     .ok_or_else(|| {
                         "fake external lifecycle-owner capacity overflowed".to_owned()
                     })?,
@@ -10904,6 +11576,15 @@ mod tests {
 
         fn authoritative_tag(&self) -> Option<EventTag> {
             self.round_tag
+        }
+
+        fn reconciliation_frontier(&self) -> Result<RuntimeReconciliationFrontier, String> {
+            Ok(RuntimeReconciliationFrontier {
+                tag: self.round_tag,
+                locked_body: self.locked_body,
+                lock_is_authoritative: self.locked_body.is_some(),
+                decision: self.decided_body,
+            })
         }
 
         fn decided_body(&self) -> Result<Option<DurableDecision>, String> {
@@ -12815,7 +13496,7 @@ mod tests {
         assert_eq!(executor.status().effect_dispatch_queue.depth, 2);
         assert_eq!(
             executor.status().effect_dispatch_queue.capacity,
-            MAX_EFFECTS_PER_STEP
+            2 * MAX_EFFECTS_PER_STEP
         );
         assert_eq!(executor.status().effect_dispatch_queue.max_service_debt, 0);
         assert!(!executor.can_admit_local_proposal());
@@ -12876,7 +13557,7 @@ mod tests {
         let executor = fixture.executor(config);
         assert_eq!(
             executor.runtime.external_lifecycle_owner_capacity,
-            Some(config.max_pending_work + MAX_EFFECTS_PER_STEP)
+            Some(config.max_pending_work + 2 * MAX_EFFECTS_PER_STEP)
         );
     }
 
@@ -13225,7 +13906,7 @@ mod tests {
     }
 
     #[test]
-    fn certified_request_pressure_retains_source_faithful_fetch_ahead_of_timeout_signing() {
+    fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owner() {
         let mut fixture = ProductionTransportFixture::new_validator();
         fixture.executor.config = EffectQueueConfig::new(2, 4, 1 << 20, 1);
         fixture.executor.outstanding_requests =
@@ -13314,57 +13995,39 @@ mod tests {
             .ownership
             .clone();
 
-        // The admitted Fetch B owns a frozen predecessor position. A later
-        // timeout/control producer cannot cross it while request capacity is
-        // still held by A.
+        // Fetch B remains exact ordinary debt, but transport capacity is not
+        // pacemaker authority. The absolute timeout gets one typed turn,
+        // preempts the reconstructible Fetch A slot, and leaves B parked with
+        // its original lifecycle owner.
         let timeout_now = started + Duration::from_secs(30);
         assert_eq!(
             fixture
                 .executor
                 .step(timeout_now, &mut services)
-                .expect("request pressure preserves the exact Fetch B head"),
-            EffectExecutorStep::Idle
+                .expect("request pressure cannot suppress timeout signing"),
+            EffectExecutorStep::Advanced { effects: 1 }
         );
-        assert!(fixture.executor.pending_signatures.is_empty());
-        assert!(services.sign_tasks.is_empty());
-        assert_eq!(fixture.executor.outstanding_requests.len(), 1);
-        assert!(fixture.executor.retained_effect_batch.is_some());
-
-        let request_hash_a = HashOf::new(
-            task_a
-                .certified_request()
-                .expect("A owns the sole certified request"),
-        );
-        let mut response_a = wire::CertifiedBodyResponse {
-            request_hash: request_hash_a,
-            manifest: fixture.manifest.clone(),
-            body: fixture.body.clone(),
-            responder: 0,
-            signature: Vec::new(),
-        };
-        response_a.signature = Signature::new(
-            fixture.validator_keys[0].private_key(),
-            &response_a.signature_preimage(),
-        )
-        .payload()
-        .to_vec();
+        assert_eq!(fixture.executor.pending_signatures.len(), 1);
+        assert_eq!(services.sign_tasks.len(), 1);
+        assert_eq!(services.cancelled_fetches, vec![task_a.id()]);
+        assert_eq!(fixture.executor.outstanding_requests.len(), 0);
+        assert!(fixture.executor.retained_effect_batch.is_none());
+        assert!(fixture.executor.parked_effect_batch.is_some());
+        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
         assert_eq!(
             fixture
                 .executor
-                .accept_certified_body_response(
-                    response_a,
-                    &fixture.context.roster[0].validator,
-                    &mut services,
-                )
-                .expect("A response releases certified-request capacity"),
-            CompletionDisposition::Accepted
+                .status()
+                .effect_dispatch_queue
+                .max_service_debt,
+            1
         );
 
         assert_eq!(
             fixture
                 .executor
                 .step(timeout_now, &mut services)
-                .expect("released request capacity drains the admitted Fetch B"),
+                .expect("the exact parked Fetch B resumes after the control turn"),
             EffectExecutorStep::Advanced { effects: 1 }
         );
         let admitted_b = fixture
@@ -13379,8 +14042,9 @@ mod tests {
         assert_eq!(admitted_b.task.ownership(), &retained_b_ownership);
         assert_eq!(fixture.executor.outstanding_requests.len(), 1);
         assert_eq!(services.fetch_tasks.len(), 2);
-        assert!(services.sign_tasks.is_empty());
+        assert_eq!(services.sign_tasks.len(), 1);
         assert!(fixture.executor.retained_effect_batch.is_none());
+        assert!(fixture.executor.parked_effect_batch.is_none());
         assert!(!fixture.executor.status().fail_closed);
     }
 
@@ -14591,10 +15255,10 @@ mod tests {
             signature: Vec::new(),
         };
         assert!(
-            !executor.retained_dispatch_allows_network_ingress(
+            executor.retained_dispatch_allows_network_ingress(
                 &wire::ConsensusMessageV2Payload::CommitCertificateResponse(discovery_response)
             ),
-            "an authenticated discovery response produces reducer CommitQC ingress"
+            "an authenticated discovery CommitQC can retire a hung signing fence"
         );
         assert_eq!(
             executor
@@ -14749,7 +15413,7 @@ mod tests {
         assert_eq!(retained.effects.len(), 2);
         assert_eq!(retained.effects[1].ownership, incumbent);
         fetch_executor
-            .drain_retained_effect_batch(&mut fetch_services)
+            .drain_retained_effect_batch(&mut fetch_services, true)
             .expect("adopted Fetch retry reaches the incumbent task");
         assert_eq!(fetch_executor.pending_fetches.len(), 1);
         let retained_fetch = fetch_executor
@@ -15624,6 +16288,237 @@ mod tests {
             assert!(executor.body_pipeline_owners.is_empty());
             assert_eq!(services.cancelled_validations, vec![validation_id]);
         }
+    }
+
+    #[test]
+    fn same_tag_higher_lock_retires_parked_old_body_before_empty_progress_batch() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let consumer = EventTag::new(1, 3, Generation::new(91));
+        let first = (round(&fixture.context, 0), fixture.manifest.subject);
+        let (replacement_subject, _) = distinct_body(&fixture);
+        let higher = (round(&fixture.context, 1), replacement_subject);
+        executor.runtime.round_tag = Some(consumer);
+        executor.reconciled_tag = Some(consumer);
+        executor
+            .reconcile_locked_body_for_recovery(consumer, first, &mut services)
+            .expect("publish the initial lock");
+
+        let parked = AdapterEffect::StoreBody {
+            tag: consumer,
+            round: first.0,
+            subject: first.1,
+        };
+        let ownership = executor
+            .runtime
+            .take_effect_ownership(std::slice::from_ref(&parked))
+            .expect("bind parked old-body ownership");
+        executor
+            .retain_effect_batch(vec![parked], ownership)
+            .expect("retain the ordinary old-body suffix");
+        executor
+            .park_retained_effect_batch()
+            .expect("park ordinary suffix behind certified progress");
+
+        executor.runtime.locked_body = Some(higher);
+        assert_eq!(
+            executor
+                .consume_effects(Vec::new(), &mut services)
+                .expect("empty progress batch still commits its lock frontier"),
+            0
+        );
+        assert_eq!(executor.protected_lock, Some(higher));
+        assert!(executor.parked_effect_batch.is_none());
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(services.store_tasks.is_empty());
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let old_tag = tag(1);
+        let next_tag = tag(2);
+        let first = (round(&fixture.context, 0), fixture.manifest.subject);
+        executor.runtime.round_tag = Some(old_tag);
+        executor.reconciled_tag = Some(old_tag);
+        executor
+            .reconcile_locked_body_for_recovery(old_tag, first, &mut services)
+            .expect("publish the old lock");
+
+        let mut old_vote = vote(&fixture);
+        old_vote.round = first.0;
+        old_vote.proposal_round = first.0;
+        executor
+            .consume_effects(
+                vec![AdapterEffect::Sign {
+                    tag: old_tag,
+                    request: SignRequest::Vote(old_vote),
+                }],
+                &mut services,
+            )
+            .expect("start the old-lock signature");
+        let old_sign_id = services.sign_tasks[0].id();
+
+        let parked = AdapterEffect::StoreBody {
+            tag: old_tag,
+            round: first.0,
+            subject: first.1,
+        };
+        let ownership = executor
+            .runtime
+            .take_effect_ownership(std::slice::from_ref(&parked))
+            .expect("bind parked old-view suffix");
+        executor
+            .retain_effect_batch(vec![parked], ownership)
+            .expect("retain old-view suffix");
+        executor
+            .park_retained_effect_batch()
+            .expect("park old-view suffix");
+
+        let (higher_subject, _) = distinct_body(&fixture);
+        let higher_round = round(&fixture.context, 1);
+        let higher = (higher_round, higher_subject);
+        let mut high_prepare = fixture.qc(wire::GlobalPhase::Prepare);
+        high_prepare.round = higher_round;
+        high_prepare.proposal_round = higher_round;
+        high_prepare.subject = higher_subject;
+        let mut timeout = timeout_at_view(&fixture, 1);
+        timeout.groups[0].highest_prepare_qc = Some(high_prepare);
+        let mut fresh_vote = vote(&fixture);
+        fresh_vote.round = higher_round;
+        fresh_vote.proposal_round = higher_round;
+        fresh_vote.phase = wire::GlobalPhase::Commit;
+        fresh_vote.subject = higher_subject;
+        executor.runtime.round_tag = Some(next_tag);
+        executor.runtime.locked_body = Some(higher);
+
+        executor
+            .consume_effects(
+                vec![
+                    AdapterEffect::EnterView {
+                        tag: next_tag,
+                        certificate: timeout,
+                        protected_body: Some(higher),
+                    },
+                    AdapterEffect::Sign {
+                        tag: next_tag,
+                        request: SignRequest::Vote(fresh_vote),
+                    },
+                ],
+                &mut services,
+            )
+            .expect("certified view transition retires old work before fresh Sign");
+
+        assert!(services.cancelled_signatures.contains(&old_sign_id));
+        assert_eq!(executor.pending_signatures.len(), 1);
+        assert_eq!(services.sign_tasks.len(), 2);
+        assert_eq!(
+            services.sign_tasks.last().expect("fresh Sign").tag(),
+            next_tag
+        );
+        assert_eq!(executor.protected_lock, Some(higher));
+        assert!(executor.parked_effect_batch.is_none());
+        assert!(services.store_tasks.is_empty());
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn advancing_frontier_without_enter_view_fails_before_dispatch() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor.runtime.round_tag = Some(tag(1));
+
+        assert!(matches!(
+            executor.consume_effects(Vec::new(), &mut services),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("omitted its leading EnterView")
+        ));
+        assert!(services.sign_tasks.is_empty());
+        assert!(services.entered_views.is_empty());
+        assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn reordered_enter_view_fails_before_fresh_sign_dispatch() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let next_tag = tag(1);
+        executor.runtime.round_tag = Some(next_tag);
+        let mut fresh_vote = vote(&fixture);
+        fresh_vote.round = round(&fixture.context, 1);
+        fresh_vote.proposal_round = fresh_vote.round;
+
+        assert!(matches!(
+            executor.consume_effects(
+                vec![
+                    AdapterEffect::Sign {
+                        tag: next_tag,
+                        request: SignRequest::Vote(fresh_vote),
+                    },
+                    AdapterEffect::EnterView {
+                        tag: next_tag,
+                        certificate: timeout_at_view(&fixture, 0),
+                        protected_body: None,
+                    },
+                ],
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("must be the first effect")
+        ));
+        assert!(services.sign_tasks.is_empty());
+        assert!(services.entered_views.is_empty());
+        assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn same_view_higher_generation_tc_requires_and_installs_leading_enter_view() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+
+        for view in [1, 2] {
+            let next_tag = tag(view);
+            executor.runtime.round_tag = Some(next_tag);
+            executor
+                .consume_effects(
+                    vec![AdapterEffect::EnterView {
+                        tag: next_tag,
+                        certificate: timeout_at_view(&fixture, view - 1),
+                        protected_body: None,
+                    }],
+                    &mut services,
+                )
+                .expect("install the ordinary certified view transition");
+        }
+
+        let current = tag(2);
+        let upgraded = EventTag::new(
+            current.height(),
+            current.view(),
+            Generation::new(current.generation().get() + 1),
+        );
+        executor.runtime.round_tag = Some(upgraded);
+        executor
+            .consume_effects(
+                vec![AdapterEffect::EnterView {
+                    tag: upgraded,
+                    certificate: timeout_at_view(&fixture, 1),
+                    protected_body: None,
+                }],
+                &mut services,
+            )
+            .expect("install the alternate same-view TC generation");
+
+        assert_eq!(executor.reconciled_tag, Some(upgraded));
+        assert_eq!(services.entered_views.last(), Some(&upgraded));
+        assert!(!executor.status().fail_closed);
     }
 
     #[test]
@@ -20084,6 +20979,63 @@ mod tests {
     }
 
     #[test]
+    fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let ordinary = AdapterEffect::FetchBody {
+            tag: tag(0),
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let ordinary_ownership = executor
+            .runtime
+            .take_effect_ownership(std::slice::from_ref(&ordinary))
+            .expect("bind ordinary parked Fetch");
+        let parked_owner = ordinary_ownership[0].clone();
+        executor
+            .retain_effect_batch(vec![ordinary], ordinary_ownership)
+            .expect("retain ordinary Fetch suffix");
+        executor
+            .park_retained_effect_batch()
+            .expect("park ordinary Fetch behind certified progress");
+
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        executor.runtime.decided_body = Some((
+            commit.round,
+            commit.proposal_round,
+            commit.subject,
+            commit.execution_commitment,
+        ));
+        let commit_fetch = AdapterEffect::FetchBody {
+            tag: tag(0),
+            round: commit.proposal_round,
+            subject: commit.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: certified_sources(&fixture, &commit),
+            certificate: Some(commit),
+        };
+        assert_eq!(
+            executor
+                .consume_effects(vec![commit_fetch], &mut services)
+                .expect("Commit-certified Fetch replaces its parked physical lineage"),
+            1
+        );
+
+        assert_eq!(services.fetch_tasks.len(), 1);
+        assert_eq!(services.fetch_tasks[0].ownership(), &parked_owner);
+        assert_eq!(executor.pending_fetches.len(), 1);
+        assert!(executor.parked_effect_batch.is_none());
+        assert!(executor.retained_effect_batch.is_none());
+        assert_eq!(executor.pending_work(), 1);
+        assert!(!executor.status().fail_closed);
+        assert!(services.closed.is_empty());
+    }
+
+    #[test]
     fn failed_decision_cleanup_keeps_losing_owner_and_requires_restart() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -20422,6 +21374,7 @@ mod tests {
         complete_local_proposal_chain(&mut executor, &mut services);
         let current_tag = EventTag::new(1, 1, Generation::new(8));
         executor.runtime.round_tag = Some(current_tag);
+        executor.reconciled_tag = Some(current_tag);
         let commit = fixture.qc(wire::GlobalPhase::Commit);
         executor.runtime.decided_body = Some((
             commit.round,
@@ -22805,9 +23758,8 @@ mod tests {
 
         // Keep ApplicationCompleted queued in the fake runtime and reproduce
         // the production timer/CommitQC race which rediscovered Apply first.
-        // The reducer may already have drained its authoritative tag, so the
-        // durable completion itself must remain the exact retry tombstone.
-        executor.runtime.round_tag = None;
+        // The runtime retains its authoritative incarnation after finality;
+        // the durable completion itself remains the exact retry tombstone.
         for _ in 0..8 {
             executor
                 .consume_effects(vec![effect.clone()], &mut services)
