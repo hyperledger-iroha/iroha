@@ -1709,6 +1709,7 @@ fn zk_ace_fixture_v1()
         source: privacy_release_account_v1(0x9C)?,
         destination: privacy_release_account_v1(0x9D)?,
         asset_definition_id: AssetDefinitionId::derive_from_components(domain_id, asset_name),
+        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         amount: 19,
         authorization_epoch: 7,
         replay_nullifier: PrivacyNullifierV1::new([0; 32]),
@@ -4479,6 +4480,7 @@ fn orchard_release_statement_v1(
     Ok(OrchardHalo2ActionsStatementV1 {
         context,
         asset_definition_id: AssetDefinitionId::derive_from_components(domain_id, asset_name),
+        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         pool_id: PrivacyPoolIdV1::new([0x4e; 32]),
         anchor: PrivacyRootV1::new(draft.anchor),
         anchor_epoch: 1,

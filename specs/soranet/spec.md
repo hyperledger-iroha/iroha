@@ -88,6 +88,11 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   lanes)`. The first-release default is 6 bits and zero is invalid. Tickets
   must expire within `max_future_skew_secs` of the relay's
   clock and remain valid for at least `min_ticket_ttl_secs` seconds. A relay
+  mints each Argon2 candidate against a freshly anchored expiry and discards a
+  candidate if the clock moves backwards or the completed trial would leave
+  less than the required remaining lifetime. A configured mint target must
+  exceed the minimum remaining lifetime while remaining below the future-skew
+  ceiling, preserving headroom for clock differences between peers. A relay
   persistently consumes the ticket fingerprint before accepting the handshake;
   a replay, concurrent duplicate, full replay store, or unavailable replay
   store fails closed. Missing or invalid tickets cause the relay to terminate

@@ -120,9 +120,10 @@ pub enum ParameterError {
     /// The minimum ticket TTL must be non-zero.
     #[error("puzzle min_ticket_ttl must be greater than zero")]
     MinTicketTtlZero,
-    /// The maximum future skew must cover the minimum ticket TTL.
+    /// The maximum future skew must leave time to solve the puzzle before the
+    /// minimum remaining ticket TTL is enforced.
     #[error(
-        "puzzle max_future_skew {max_future_skew:?} is shorter than min_ticket_ttl {min_ticket_ttl:?}"
+        "puzzle max_future_skew {max_future_skew:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
     )]
     MaxFutureSkewTooShort {
         /// Configured maximum future skew.
@@ -217,7 +218,7 @@ impl Parameters {
         if min_ticket_ttl.is_zero() {
             return Err(ParameterError::MinTicketTtlZero);
         }
-        if max_future_skew < min_ticket_ttl {
+        if max_future_skew <= min_ticket_ttl {
             return Err(ParameterError::MaxFutureSkewTooShort {
                 max_future_skew,
                 min_ticket_ttl,
@@ -322,8 +323,9 @@ pub enum Error {
 /// Errors surfaced while minting puzzle tickets (used for tests and fixtures).
 #[derive(Debug, Error)]
 pub enum MintError {
-    /// Requested TTL shorter than the policy minimum.
-    #[error("requested ttl {requested:?} shorter than required minimum {required:?}")]
+    /// Requested TTL does not leave time to solve the puzzle before the policy
+    /// minimum remaining lifetime is enforced.
+    #[error("requested ttl {requested:?} must exceed required minimum {required:?}")]
     TtlTooShort {
         /// TTL requested by the client.
         requested: Duration,
@@ -352,6 +354,10 @@ pub enum MintError {
     /// System clock could not be queried.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
+    /// The system clock moved backwards while a puzzle solution was being
+    /// searched, so the resulting expiry window cannot be trusted.
+    #[error("system clock moved backwards while minting puzzle ticket")]
+    ClockMovedBackwards,
     /// Argon2 parameter set was invalid.
     #[error("argon2 parameter error: {0}")]
     Parameters(String),
@@ -461,8 +467,38 @@ pub fn mint_ticket<R: TryCryptoRng>(
     ttl: Duration,
     rng: &mut R,
 ) -> Result<Ticket, MintError> {
+    mint_ticket_with_clock(params, binding, ttl, rng, SystemTime::now)
+}
+
+fn mint_ticket_with_clock<R, F>(
+    params: &Parameters,
+    binding: &ChallengeBinding<'_>,
+    ttl: Duration,
+    rng: &mut R,
+    now: F,
+) -> Result<Ticket, MintError>
+where
+    R: TryCryptoRng,
+    F: FnMut() -> SystemTime,
+{
+    mint_ticket_with_clock_and_digest(params, binding, ttl, rng, now, derive_solution_digest)
+}
+
+fn mint_ticket_with_clock_and_digest<R, F, D>(
+    params: &Parameters,
+    binding: &ChallengeBinding<'_>,
+    ttl: Duration,
+    rng: &mut R,
+    mut now: F,
+    mut derive_digest: D,
+) -> Result<Ticket, MintError>
+where
+    R: TryCryptoRng,
+    F: FnMut() -> SystemTime,
+    D: FnMut(&blake3::Hash, &[u8; 32], &Parameters) -> Result<[u8; OUTPUT_LEN], DigestError>,
+{
     validate_binding(binding).map_err(MintError::MalformedBinding)?;
-    if ttl < params.min_ticket_ttl {
+    if ttl <= params.min_ticket_ttl {
         return Err(MintError::TtlTooShort {
             requested: ttl,
             required: params.min_ticket_ttl,
@@ -475,23 +511,38 @@ pub fn mint_ticket<R: TryCryptoRng>(
         });
     }
 
-    let now = SystemTime::now();
-    let expires_at = now
-        .checked_add(ttl)
-        .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
-    let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
-    let mut client_nonce = [0u8; 32];
-    fill_random(rng, "minting puzzle client nonce", &mut client_nonce)?;
-    let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
-
     loop {
+        let minted_at = now();
+        let expires_at = minted_at
+            .checked_add(ttl)
+            .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
+        let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
+        let wire_expires_at =
+            unix_time_from_secs(expires_at_secs).ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
+        let mut client_nonce = [0u8; 32];
+        fill_random(rng, "minting puzzle client nonce", &mut client_nonce)?;
+        let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
+
         let mut solution = [0u8; 32];
         fill_random(rng, "minting puzzle solution nonce", &mut solution)?;
-        let digest =
-            derive_solution_digest(&challenge, &solution, params).map_err(|err| match err {
-                DigestError::Parameters(msg) => MintError::Parameters(msg),
-                DigestError::Hash(msg) => MintError::Hash(msg),
-            })?;
+        let digest = derive_digest(&challenge, &solution, params).map_err(|err| match err {
+            DigestError::Parameters(msg) => MintError::Parameters(msg),
+            DigestError::Hash(msg) => MintError::Hash(msg),
+        })?;
+
+        let solved_at = now();
+        if solved_at < minted_at {
+            return Err(MintError::ClockMovedBackwards);
+        }
+        let remaining = wire_expires_at
+            .duration_since(solved_at)
+            .unwrap_or(Duration::ZERO);
+        if remaining < params.min_ticket_ttl {
+            // The expiry is part of the Argon2 challenge and cannot be
+            // extended after solving. Discard the stale candidate and derive
+            // a fresh expiry/challenge before the next expensive evaluation.
+            continue;
+        }
         if leading_zero_bits_at_least(&digest, params.difficulty) {
             return Ok(Ticket {
                 version: 1,
@@ -794,6 +845,24 @@ mod tests {
             } if max_future_skew == Duration::from_secs(4)
                 && min_ticket_ttl == Duration::from_secs(5)
         ));
+
+        let no_solution_window = Parameters::try_new(
+            memory,
+            time,
+            lanes,
+            4,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .expect_err("equal future skew and minimum ttl leave no puzzle solution window");
+        assert!(matches!(
+            no_solution_window,
+            ParameterError::MaxFutureSkewTooShort {
+                max_future_skew,
+                min_ticket_ttl
+            } if max_future_skew == Duration::from_secs(5)
+                && min_ticket_ttl == Duration::from_secs(5)
+        ));
     }
 
     #[test]
@@ -881,7 +950,7 @@ mod tests {
         let err = mint_ticket(
             &test_parameters(),
             &binding(),
-            Duration::from_secs(5),
+            Duration::from_secs(6),
             &mut rng,
         )
         .expect_err("failing RNG must abort ticket minting");
@@ -1047,6 +1116,29 @@ mod tests {
         panic!("failed to construct an invalid transcript binding candidate")
     }
 
+    fn first_invalid_expiry(
+        ticket: &Ticket,
+        binding: &ChallengeBinding<'_>,
+        params: &Parameters,
+    ) -> u64 {
+        let max_delta = params
+            .max_future_skew()
+            .saturating_sub(params.min_ticket_ttl())
+            .as_secs();
+        for delta in 1..=max_delta {
+            let Some(expires_at) = ticket.expires_at.checked_add(delta) else {
+                break;
+            };
+            let challenge = derive_challenge(binding, ticket.client_nonce, expires_at);
+            let digest = derive_solution_digest(&challenge, &ticket.solution, params)
+                .expect("digest derivation should succeed");
+            if !leading_zero_bits_at_least(&digest, params.difficulty) {
+                return expires_at;
+            }
+        }
+        panic!("failed to construct an invalid expiry candidate")
+    }
+
     fn stable_verify_time(ticket: &Ticket, params: &Parameters) -> SystemTime {
         let ttl_floor = params.min_ticket_ttl().as_secs();
         let now_secs = ticket.expires_at.saturating_sub(ttl_floor);
@@ -1110,6 +1202,162 @@ mod tests {
         )
         .expect_err("expired");
         assert!(matches!(err, Error::Expired(_, _)));
+
+        let err = mint_ticket(&params, &binding, params.min_ticket_ttl(), &mut rng)
+            .expect_err("ttl equal to the required remaining lifetime leaves no solve window");
+        assert!(matches!(
+            err,
+            MintError::TtlTooShort {
+                requested,
+                required
+            } if requested == params.min_ticket_ttl()
+                && required == params.min_ticket_ttl()
+        ));
+    }
+
+    #[test]
+    fn mint_reanchors_each_candidate_across_long_search() {
+        let params = Parameters::try_new(
+            NonZeroU32::new(MIN_MEMORY_KIB).expect("non-zero memory"),
+            NonZeroU32::new(1).expect("non-zero iterations"),
+            NonZeroU32::new(1).expect("non-zero lanes"),
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        )
+        .expect("valid puzzle parameters");
+        let mut rng = ChaCha20Rng::from_seed([0x37; 32]);
+        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut clock_reads = 0_u64;
+        let mut digest_trials = 0_u64;
+
+        let ticket = mint_ticket_with_clock_and_digest(
+            &params,
+            &binding(),
+            Duration::from_secs(10),
+            &mut rng,
+            || {
+                let read = clock_reads;
+                clock_reads += 1;
+                let candidate = read / 2;
+                let offset = candidate * 6 + u64::from(read % 2 == 1);
+                base + Duration::from_secs(offset)
+            },
+            |challenge, solution, params| {
+                digest_trials += 1;
+                let digest = derive_solution_digest(challenge, solution, params)?;
+                if digest_trials <= 7 {
+                    Ok([0xFF; OUTPUT_LEN])
+                } else {
+                    Ok(digest)
+                }
+            },
+        )
+        .expect("failed search history must not consume the successful candidate's ttl");
+
+        assert!(digest_trials >= 8, "seven forced failures must be retried");
+        let successful_candidate = clock_reads / 2 - 1;
+        let solved_at = base + Duration::from_secs(successful_candidate * 6 + 1);
+        assert_eq!(ticket.expires_at, 1_700_000_010 + successful_candidate * 6);
+        assert!(solved_at.duration_since(base).expect("ordered clock") >= Duration::from_secs(43));
+        verify_at(&ticket, &binding(), &params, solved_at)
+            .expect("fresh successful candidate must satisfy remaining-ttl policy");
+    }
+
+    #[test]
+    fn mint_discards_valid_candidate_that_completed_below_ttl_floor() {
+        let params = Parameters::try_new(
+            NonZeroU32::new(MIN_MEMORY_KIB).expect("non-zero memory"),
+            NonZeroU32::new(1).expect("non-zero iterations"),
+            NonZeroU32::new(1).expect("non-zero lanes"),
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        )
+        .expect("valid puzzle parameters");
+        let mut rng = ChaCha20Rng::from_seed([0x48; 32]);
+        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let after_stale_candidate = base + Duration::from_secs(6);
+        let mut clock_reads = 0_u64;
+        let mut digest_trials = 0_u64;
+
+        let ticket = mint_ticket_with_clock_and_digest(
+            &params,
+            &binding(),
+            Duration::from_secs(10),
+            &mut rng,
+            || {
+                clock_reads += 1;
+                if clock_reads == 1 {
+                    base
+                } else {
+                    after_stale_candidate
+                }
+            },
+            |challenge, solution, params| {
+                digest_trials += 1;
+                if digest_trials == 1 {
+                    Ok([0; OUTPUT_LEN])
+                } else {
+                    derive_solution_digest(challenge, solution, params)
+                }
+            },
+        )
+        .expect("valid-but-stale candidate must be discarded before returning");
+
+        assert!(digest_trials >= 2, "stale valid candidate must be retried");
+        assert_eq!(ticket.expires_at, 1_700_000_016);
+        verify_at(&ticket, &binding(), &params, after_stale_candidate)
+            .expect("replacement candidate must verify with a fresh ttl window");
+    }
+
+    #[test]
+    fn changing_refreshed_expiry_invalidates_solution_binding() {
+        let params = test_parameters();
+        let binding = binding();
+        let mut rng = ChaCha20Rng::from_seed([0x59; 32]);
+        let mut ticket =
+            mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng).expect("mint");
+        let verify_time = stable_verify_time(&ticket, &params);
+        verify_at(&ticket, &binding, &params, verify_time).expect("baseline ticket verifies");
+
+        ticket.expires_at = first_invalid_expiry(&ticket, &binding, &params);
+        let err = verify_at(&ticket, &binding, &params, verify_time)
+            .expect_err("expiry substitution must invalidate the Argon2 challenge");
+        assert!(matches!(err, Error::InvalidSolution));
+    }
+
+    #[test]
+    fn mint_fails_closed_when_clock_moves_backwards_during_search() {
+        let params = Parameters::try_new(
+            NonZeroU32::new(MIN_MEMORY_KIB).expect("non-zero memory"),
+            NonZeroU32::new(1).expect("non-zero iterations"),
+            NonZeroU32::new(1).expect("non-zero lanes"),
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        )
+        .expect("valid puzzle parameters");
+        let mut rng = ChaCha20Rng::from_seed([0x83; 32]);
+        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut clock_reads = 0_u8;
+
+        let err = mint_ticket_with_clock(
+            &params,
+            &binding(),
+            Duration::from_secs(10),
+            &mut rng,
+            || {
+                clock_reads = clock_reads.saturating_add(1);
+                if clock_reads == 1 {
+                    base
+                } else {
+                    base - Duration::from_secs(1)
+                }
+            },
+        )
+        .expect_err("clock rollback must not produce a future-skewed ticket");
+        assert!(matches!(err, MintError::ClockMovedBackwards));
     }
 
     #[test]

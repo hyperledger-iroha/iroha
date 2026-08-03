@@ -7366,22 +7366,6 @@ fn core_query_page_type(builtin: Builtin) -> Type {
     .expect("projected plural core-query builtins use supported view types")
 }
 
-fn direct_json_getter_type(builtin: Builtin) -> Option<Type> {
-    let payload = match builtin {
-        Builtin::JsonGetIntDirect => Type::Int,
-        Builtin::JsonGetDecimalDirect => Type::Decimal,
-        Builtin::JsonGetQuantityDirect => Type::Quantity,
-        Builtin::JsonGetJsonDirect => Type::Json,
-        Builtin::JsonGetNameDirect => Type::Name,
-        Builtin::JsonGetAccountIdDirect => Type::AccountId,
-        Builtin::JsonGetAssetDefinitionIdDirect => Type::AssetDefinitionId,
-        Builtin::JsonGetNftIdDirect => Type::NftId,
-        Builtin::JsonGetBlobHexDirect => Type::Bytes,
-        _ => return None,
-    };
-    Some(Type::Option(Box::new(payload)))
-}
-
 fn canonicalize_builtin_result<T>(
     builtin: Builtin,
     result: Result<T, SemanticError>,
@@ -8138,50 +8122,7 @@ fn analyze_surface_builtin_call(
                 ty: Type::Bytes,
             })
         }
-        Builtin::BuildUnshieldInline => {
-            let valid = arg_typed.len() == 7
-                && arg_typed[0].ty == Type::AssetDefinitionId
-                && arg_typed[1].ty == Type::AccountId
-                && arg_typed[2].ty == Type::Quantity
-                && is_blob_like(&arg_typed[3].ty)
-                && arg_typed[4].ty == Type::String
-                && is_blob_like(&arg_typed[5].ty)
-                && is_blob_like(&arg_typed[6].ty);
-            if !valid {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, string backend, bytes proof, bytes vk)".into(),
-                });
-            }
-            if let ExprKind::DecimalLiteral { value: amount, .. } = arg_typed[2].kind() {
-                if amount.scale() != 0 {
-                    return Err(SemanticError {
-                        code: "E_UNSHIELD_AMOUNT_RANGE",
-                        message:
-                            "crypto::zk::build_unshield requires a whole quantity with scale 0"
-                                .into(),
-                    });
-                }
-                if amount.try_mantissa_u128().is_none() {
-                    return Err(SemanticError {
-                        code: "E_UNSHIELD_AMOUNT_RANGE",
-                        message:
-                            "crypto::zk::build_unshield quantity exceeds the u128 V1 proof-scalar range"
-                                .into(),
-                    });
-                }
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::RecordSccpMessage
-        | Builtin::ScExecuteSubmitBallot
-        | Builtin::ScExecuteUnshield => {
+        Builtin::RecordSccpMessage | Builtin::ScExecuteSubmitBallot => {
             let name = builtin.name();
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
@@ -8250,11 +8191,7 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
-        Builtin::ZkVerifyTransfer
-        | Builtin::ZkVerifyUnshield
-        | Builtin::ZkVerifyBatch
-        | Builtin::ZkVoteVerifyBallot
-        | Builtin::ZkVoteVerifyTally => {
+        Builtin::ZkVerifyBatch | Builtin::ZkVoteVerifyBallot | Builtin::ZkVoteVerifyTally => {
             let name = builtin.name();
             if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
@@ -8932,7 +8869,7 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
-        Builtin::CreateTrigger | Builtin::RegisterTrigger => {
+        Builtin::RegisterTrigger => {
             let name = builtin.name();
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Json {
                 return Err(SemanticError {
@@ -8948,7 +8885,7 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
-        Builtin::RemoveTrigger | Builtin::UnregisterTrigger => {
+        Builtin::UnregisterTrigger => {
             let name = builtin.name();
             if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
@@ -9139,61 +9076,6 @@ fn analyze_surface_builtin_call(
                     code: "K2003",
                     message: "escrow_resolve_dispute expects (Name, quantity, quantity[, bytes evidence_hashes])"
                         .into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AnonymousEscrowOpenOffer
-        | Builtin::AnonymousEscrowRelease
-        | Builtin::AnonymousEscrowCancel
-        | Builtin::AnonymousEscrowResolveDispute => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (bytes) Norito request payload"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AnonymousEscrowAccept | Builtin::AnonymousEscrowMarkPaymentSent => {
-            let name = builtin.name();
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{name} expects (Name)"),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: name.to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Unit,
-            })
-        }
-        Builtin::AnonymousEscrowOpenDispute => {
-            if !(arg_typed.len() == 1 || arg_typed.len() == 2)
-                || arg_typed[0].ty != Type::Name
-                || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message:
-                        "anonymous_escrow_open_dispute expects (Name[, bytes evidence_hashes])"
-                            .into(),
                 });
             }
             Ok(TypedExpr {
@@ -9863,89 +9745,6 @@ fn analyze_surface_builtin_call(
                 ty: Type::Json,
             })
         }
-        Builtin::JsonSetIntDirect => {
-            if arg_typed.len() != 3
-                || arg_typed[0].ty != Type::Json
-                || arg_typed[1].ty != Type::Name
-                || !is_int_like(&arg_typed[2].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "json_set_int_direct expects (Json, Name, int)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::JsonSetAccountIdDirect => {
-            if arg_typed.len() != 3
-                || arg_typed[0].ty != Type::Json
-                || arg_typed[1].ty != Type::Name
-                || arg_typed[2].ty != Type::AccountId
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "json_set_account_id_direct expects (Json, Name, AccountId)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::JsonGetIntDirect
-        | Builtin::JsonGetDecimalDirect
-        | Builtin::JsonGetQuantityDirect
-        | Builtin::JsonGetJsonDirect
-        | Builtin::JsonGetNameDirect
-        | Builtin::JsonGetAccountIdDirect
-        | Builtin::JsonGetAssetDefinitionIdDirect
-        | Builtin::JsonGetNftIdDirect
-        | Builtin::JsonGetBlobHexDirect => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Json
-                || arg_typed[1].ty != Type::Name
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: format!("{} expects (Json, Name)", builtin.name()),
-                });
-            }
-            let ty = direct_json_getter_type(builtin).expect("direct JSON getter type");
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty,
-            })
-        }
-        Builtin::BuildPathKeyNoritoDirect => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Name
-                || !is_blob_like(&arg_typed[1].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "build_path_key_norito_direct expects (Name, bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
         Builtin::SchemaEncode => {
             if arg_typed.len() != 2
                 || arg_typed[0].ty != Type::Name
@@ -9987,57 +9786,6 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message: "schema_info expects (Name)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::SchemaEncodeDirect => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Name
-                || arg_typed[1].ty != Type::Json
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "encode_schema_direct expects (Name, Json)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Bytes,
-            })
-        }
-        Builtin::SchemaDecodeDirect => {
-            if arg_typed.len() != 2
-                || arg_typed[0].ty != Type::Name
-                || !is_blob_like(&arg_typed[1].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "decode_schema_direct expects (Name, bytes)".into(),
-                });
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
-                    args: arg_typed,
-                },
-                ty: Type::Json,
-            })
-        }
-        Builtin::SchemaInfoDirect => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "schema_info_direct expects (Name)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -19092,66 +18840,6 @@ mod tests {
     }
 
     #[test]
-    fn unshield_public_amount_is_a_quantity_with_a_narrow_v1_literal_domain() {
-        let source = |declaration: &str, amount: &str| {
-            format!(
-                r#"
-seiyaku UnshieldAmount {{
-  {declaration}
-  fn build() {{
-    let _bytes = crypto::zk::build_unshield(
-      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
-      amount: {amount},
-      inputs: b"0123456789abcdef0123456789abcdef",
-      backend: "halo2/ipa",
-      proof: b"proof",
-      verification_key: b"vk",
-    );
-  }}
-}}
-"#
-            )
-        };
-        let analyze_zk = |source: &str| {
-            let program = parse(source).expect("parse unshield quantity fixture");
-            SemanticContext::with_zk_enabled(true).analyze(&program)
-        };
-
-        analyze_zk(&source("", "9223372036854775808"))
-            .expect("a contextual whole quantity inside u128 must type check");
-        analyze_zk(&source("const quantity AMOUNT = 7;", "AMOUNT"))
-            .expect("an explicit quantity constant must type check");
-
-        for (amount, code, message) in [
-            (
-                "1.5",
-                "E_UNSHIELD_AMOUNT_RANGE",
-                "requires a whole quantity with scale 0",
-            ),
-            (
-                "340282366920938463463374607431768211456",
-                "E_UNSHIELD_AMOUNT_RANGE",
-                "quantity exceeds the u128 V1 proof-scalar range",
-            ),
-            (
-                "-1",
-                "E_NEGATIVE_QUANTITY",
-                "contextual quantity literal cannot be negative",
-            ),
-        ] {
-            let error = analyze_zk(&source("", amount))
-                .expect_err("invalid unshield quantity must fail semantic validation");
-            assert_eq!(error.code(), code, "amount={amount}: {}", error.message);
-            assert!(
-                error.message.contains(message),
-                "amount={amount}: expected `{message}` in `{}`",
-                error.message
-            );
-        }
-    }
-
-    #[test]
     fn valcom_registry_rejects_non_zk_analysis_with_the_source_name() {
         let result = analyze_surface_builtin_call(
             &SemanticContext::new(),
@@ -19171,7 +18859,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn public_entrypoints_reject_zk_verify_without_permission() {
         let mut program = parse(
-            "seiyaku Demo { kotoage fn verify(bytes payload) authorize(\"Verify\") { crypto::zk::verify_unshield(payload); } }",
+            "seiyaku Demo { kotoage fn verify(bytes payload) authorize(\"Verify\") { crypto::zk::verify_batch(payload); } }",
         )
         .expect("parse public zk verify");
         let function = program
@@ -19364,7 +19052,7 @@ seiyaku UnshieldAmount {{
     #[test]
     fn view_entrypoints_reject_transitive_zk_verify() {
         let program = parse(
-            "seiyaku Demo { fn helper(bytes payload) { crypto::zk::verify_transfer(payload); } view fn f(bytes payload) -> int { helper(payload); return 1; } }",
+            "seiyaku Demo { fn helper(bytes payload) { crypto::zk::verify_batch(payload); } view fn f(bytes payload) -> int { helper(payload); return 1; } }",
         )
         .expect("parse transitive zk verify");
         let err = SemanticContext::with_zk_enabled(true)
@@ -19730,8 +19418,8 @@ seiyaku UnshieldAmount {{
                 ledger::trigger::unregister(Name::parse(\"wake\")); \
             }",
         )
-        .expect("parse trigger aliases");
-        analyze(&program).expect("analyze trigger aliases");
+        .expect("parse canonical trigger operations");
+        analyze(&program).expect("analyze canonical trigger operations");
     }
 
     #[test]

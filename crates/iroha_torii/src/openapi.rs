@@ -1173,9 +1173,16 @@ fn musubi_paths() -> Map {
         (
             musubi_routes::EXACT_RELEASE.path(),
             "Fetch an exact Musubi V1 release.",
-            "Execute a bounded exact structural release query.",
+            "Execute one bounded exact query that returns coherent home and universal release projections from the same finalized state view.",
             "MusubiExactReleaseQueryV1",
-            "MusubiReleaseRecordV1",
+            "MusubiExactReleaseSnapshotV1",
+        ),
+        (
+            musubi_routes::PROVIDER_BUNDLE_ATTESTATION.path(),
+            "Audit an exact Musubi V1 provider bundle attestation.",
+            "Return one immutable full provider proof by its exact archive, replication-order, and provider key.",
+            "MusubiProviderBundleAttestationKeyV1",
+            "MusubiProviderBundleAttestationRecordV1",
         ),
         (
             musubi_routes::RESOLVER_INDEX.path(),
@@ -1274,6 +1281,11 @@ fn musubi_paths() -> Map {
             musubi_routes::ARCHIVE_REGISTER.path(),
             "Build a Musubi V1 archive registration.",
             "RegisterMusubiArchiveV1",
+        ),
+        (
+            musubi_routes::PROVIDER_BUNDLE_ATTESTATION_REGISTER.path(),
+            "Build an immutable Musubi V1 provider bundle-attestation registration.",
+            "RegisterMusubiProviderBundleAttestationV1",
         ),
         (
             musubi_routes::ARCHIVE_LOCATION_ADD.path(),
@@ -3772,24 +3784,20 @@ fn zk_paths() -> Map {
     );
     paths.insert(
         "/v1/zk/roots".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
+        Value::Object(zk_state_query_operation(
             "Fetch ZK roots.",
             "Fetch roots for any asset with a validated persisted confidential tree profile, including unshield-only registration, from one exact committed snapshot.",
             "#/components/schemas/ZkRootsGetRequest",
             "#/components/schemas/ZkRootsGetResponse",
-            Vec::new(),
         )),
     );
     paths.insert(
         "/v1/zk/merkle-path".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
+        Value::Object(zk_state_query_operation(
             "Fetch ZK Merkle paths.",
             "Fetch current confidential-v2 commitment inclusion paths bound to one exact committed snapshot.",
             "#/components/schemas/ZkMerklePathGetRequest",
             "#/components/schemas/ZkMerklePathGetResponse",
-            Vec::new(),
         )),
     );
     paths.insert(
@@ -4003,7 +4011,7 @@ fn zk_verify_batch_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Verify a bounded batch of zero-knowledge proof envelopes supplied as JSON or canonical Norito. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
+            "Verify a bounded batch of zero-knowledge proof envelopes supplied with one exact JSON or canonical-Norito Content-Type. The route is available only when Halo2 verification is enabled and moves admitted decode/verification work to a cancellation-safe blocking worker. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
                 .to_owned(),
         ),
     );
@@ -4019,6 +4027,49 @@ fn zk_verify_batch_operation() -> Map {
             "#/components/schemas/ZkVerifyBatchResponse",
         )),
     );
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
+fn zk_state_query_operation(
+    summary: &str,
+    description: &str,
+    request_schema: &str,
+    response_schema: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("ZK".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(request_schema)),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        typed_dual_format_response(
+            "Typed result from one immutable committed state snapshot.",
+            response_schema,
+        ),
+    );
+    responses.insert(
+        "400".into(),
+        json_response("The typed request is invalid.", error_schema_reference()),
+    );
+    responses.insert(
+        "404".into(),
+        json_response(
+            "The requested asset or commitment does not exist in the committed state snapshot.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".into(), Value::Object(operation));
     methods
@@ -4056,6 +4107,13 @@ fn zk_vote_tally_operation() -> Map {
         ),
     );
     responses.insert(
+        "400".into(),
+        json_response(
+            "The election identifier is not a canonical governance selector V1.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
         "404".into(),
         json_response(
             "The requested election does not exist in the committed state snapshot.",
@@ -4077,7 +4135,7 @@ fn governance_paths() -> Map {
             "Ministry",
             "Draft a Ministry agenda proposal submission.",
             "Build a detached-signature-ready Ministry agenda proposal transaction and return the canonical payload bytes for Connect signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/MinistryAgendaProposalDraftRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4089,9 +4147,10 @@ fn governance_paths() -> Map {
             "Fetch a submitted Ministry agenda proposal.",
             "Fetch a persisted Ministry agenda proposal submission record by proposal id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param(
+            vec![patterned_string_path_param(
                 "proposal_id",
-                "Agenda proposal identifier.",
+                "Exact agenda proposal identifier in AC-YYYY-### form.",
+                "^AC-[0-9]{4}-[0-9]{3}$",
             )],
         )),
     );
@@ -4101,7 +4160,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Propose contract deployment.",
             "Submit a governance proposal for contract deployment and receive draft instructions for local signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceProposeDeployContractRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4164,9 +4223,10 @@ fn governance_paths() -> Map {
             "Fetch one validation-fee Parliament proposal.",
             "Return the exact native proposal, plain referendum, seven-body snapshot, finalization evidence, and enactment status.",
             "#/components/schemas/ValidationFeeProposalDetailV1",
-            vec![string_path_param(
+            vec![patterned_string_path_param(
                 "proposal_id",
                 "Exact lowercase 32-byte native proposal fingerprint.",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
             )],
         )),
     );
@@ -4182,9 +4242,10 @@ fn governance_paths() -> Map {
             "Validate the authenticated citizen against the retained proposal electorate and return one exact CastPlainBallot instruction. Amount and duration are forced from the immutable proposal rules.",
             "#/components/schemas/ValidationFeePlainBallotDraftRequestV1",
             "#/components/schemas/ValidationFeePlainBallotDraftResponseV1",
-            vec![string_path_param(
+            vec![patterned_string_path_param(
                 "proposal_id",
                 "Exact lowercase 32-byte native proposal fingerprint.",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
             )],
         )),
     );
@@ -4195,7 +4256,11 @@ fn governance_paths() -> Map {
             "Fetch a proposal.",
             "Fetch a governance proposal by id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("id", "Proposal identifier.")],
+            vec![patterned_string_path_param(
+                "id",
+                "Exact lowercase 32-byte proposal fingerprint.",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
+            )],
         )),
     );
     paths.insert(
@@ -4205,7 +4270,11 @@ fn governance_paths() -> Map {
             "Fetch governance locks.",
             "Fetch governance lock records by referendum id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("rid", "Referendum identifier.")],
+            vec![patterned_string_path_param(
+                "rid",
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            )],
         )),
     );
     paths.insert(
@@ -4215,7 +4284,11 @@ fn governance_paths() -> Map {
             "Fetch a referendum.",
             "Fetch a referendum by id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("id", "Referendum identifier.")],
+            vec![patterned_string_path_param(
+                "id",
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            )],
         )),
     );
     paths.insert(
@@ -4225,18 +4298,11 @@ fn governance_paths() -> Map {
             "Fetch a tally snapshot.",
             "Fetch a tally snapshot by referendum id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("id", "Referendum identifier.")],
-        )),
-    );
-    paths.insert(
-        "/v1/gov/ballots/zk".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Submit a ZK ballot.",
-            "Submit a zero-knowledge ballot and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![patterned_string_path_param(
+                "id",
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            )],
         )),
     );
     paths.insert(
@@ -4245,7 +4311,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a ZK ballot (v1).",
             "Submit a ZK ballot using the v1 envelope and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceZkBallotEnvelopeRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4256,7 +4322,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a ballot proof.",
             "Submit a ZK ballot proof bundle and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceZkBallotProofRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4267,7 +4333,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a plain ballot.",
             "Submit a non-ZK ballot and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernancePlainBallotRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4278,7 +4344,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a parliament ballot.",
             "Submit a parliament ballot and receive deterministic draft instructions for local signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceParliamentBallotRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4289,7 +4355,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Finalize a referendum.",
             "Finalize referendum tally and status and receive draft instructions for local signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceFinalizeRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4308,7 +4374,7 @@ fn governance_paths() -> Map {
                 "Governance",
                 "Update protected namespaces.",
                 "Submit protected namespace updates.",
-                "#/components/schemas/JsonValue",
+                "#/components/schemas/GovernanceProtectedNamespacesRequestV1",
                 "#/components/schemas/JsonValue",
                 Vec::new(),
             );
@@ -4350,7 +4416,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Enact a referendum.",
             "Enact an approved referendum and receive draft instructions for local signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceEnactRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -8649,7 +8715,11 @@ role- and sponsor-gated responses always return `Cache-Control: private, no-stor
 all canonical authentication headers. Existing protected bundles authenticate and authorize \
 before file lookup: absent or invalid proof returns 401, authorization mismatch returns 403, \
 and a missing file returns 404 only after successful authorization. Unknown or expired bundles \
-also return 404."
+also return 404. The Torii origin is a byte-delivery boundary, not a web-hosting origin: safe \
+inert media retain their type, while active, unknown, or invalid media types are returned as \
+`application/octet-stream` attachments. Every successful response sends `X-Content-Type-Options: \
+nosniff` and a restrictive sandbox Content Security Policy without changing byte or range \
+semantics."
                         .to_owned(),
                 ),
             );
@@ -8666,7 +8736,7 @@ also return 404."
             responses.insert(
                 "200".to_owned(),
                 content_binary_response(
-                    "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable.",
+                    "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable. Active, unknown, and invalid media types are delivered as non-sniffable `application/octet-stream` attachments from the Torii origin; byte and range semantics are unchanged.",
                 ),
             );
             responses.insert(
@@ -8716,6 +8786,27 @@ fn content_binary_response(description: &str) -> Value {
                 "schema": {
                     "type": "string",
                     "const": (crate::content::CANONICAL_CONTENT_AUTH_VARY)
+                }
+            },
+            "X-Content-Type-Options": {
+                "description": "Always `nosniff` so content bytes cannot override the selected inert representation type.",
+                "schema": {
+                    "type": "string",
+                    "const": "nosniff"
+                }
+            },
+            "Content-Security-Policy": {
+                "description": "A restrictive sandbox fallback for every response served from the Torii origin.",
+                "schema": {
+                    "type": "string",
+                    "const": "sandbox; default-src 'none'"
+                }
+            },
+            "Content-Disposition": {
+                "description": "Present as `attachment` when a requested media type is active, unknown, or invalid; absent for the inert inline allow-list.",
+                "schema": {
+                    "type": "string",
+                    "const": "attachment"
                 }
             }
         }),
@@ -9006,31 +9097,13 @@ fn sumeragi_paths() -> Map {
     );
     paths.insert(
         "/v1/sumeragi/evidence".to_owned(),
-        Value::Object({
-            let get_op = json_get_operation(
-                "Sumeragi",
-                "List evidence entries.",
-                "List evidence entries recorded by the node.",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let post_op = json_post_operation(
-                "Sumeragi",
-                "Submit evidence.",
-                "Submit consensus evidence payloads.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let mut methods = Map::new();
-            if let Some(get_value) = get_op.get("get") {
-                methods.insert("get".to_owned(), get_value.clone());
-            }
-            if let Some(post_value) = post_op.get("post") {
-                methods.insert("post".to_owned(), post_value.clone());
-            }
-            methods
-        }),
+        Value::Object(json_get_operation(
+            "Sumeragi",
+            "List evidence entries.",
+            "List evidence entries recorded by the node.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
     );
     paths.insert(
         "/v1/sumeragi/status".to_owned(),
@@ -9257,28 +9330,6 @@ fn sumeragi_paths() -> Map {
                 "Epoch identifier.",
                 Some("uint64"),
             )],
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/vrf/commit".to_owned(),
-        Value::Object(json_post_operation(
-            "Sumeragi",
-            "Submit VRF commit.",
-            "Submit an authenticated VRF commit payload.",
-            "#/components/schemas/SumeragiVrfCommitRequest",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/vrf/reveal".to_owned(),
-        Value::Object(json_post_operation(
-            "Sumeragi",
-            "Submit VRF reveal.",
-            "Submit an authenticated VRF reveal payload.",
-            "#/components/schemas/SumeragiVrfRevealRequest",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths
@@ -12172,9 +12223,6 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
                 | "/v1/internal/torii/proxy"
                 | "/v1/nexus/lifecycle"
                 | "/v1/nexus/lane-lifecycle"
-                | "/v1/sumeragi/evidence"
-                | "/v1/sumeragi/vrf/commit"
-                | "/v1/sumeragi/vrf/reveal"
                 | "/v1/gov/protected-namespaces"
         )
 }
@@ -14885,6 +14933,9 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "parent_commit_qc": {
                         "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                     },
+                    "snapshot_bootstrap": {
+                        "$ref": "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+                    },
                     "nexus_amx_context_hash": { "$ref": "#/components/schemas/Hash" },
                     "execution_policy_hash": { "$ref": "#/components/schemas/Hash" },
                     "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
@@ -17567,6 +17618,30 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "SumeragiV2SnapshotBootstrapAnchor".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "snapshot_height", "snapshot_block_hash",
+                "snapshot_block_creation_time_ms", "snapshot_state_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "snapshot_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "snapshot_block_hash": { "$ref": "#/components/schemas/Hash" },
+                "snapshot_block_creation_time_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "snapshot_state_hash": { "$ref": "#/components/schemas/Hash" }
+            },
+            "description": "Audited snapshot boundary that replaces an unavailable parent CommitQC and binds the restored ledger geometry and WSV."
+        }),
+    );
+    schemas.insert(
         "SumeragiV2BlsProof".to_owned(),
         norito::json!({
             "type": "array",
@@ -17702,37 +17777,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "type": "integer", "format": "uint32", "minimum": 1,
                     "maximum": 4294967295_u64
                 }
-            },
-            "oneOf": [
-                {
-                    "properties": {
-                        "encoding": {
-                            "type": "object",
-                            "required": ["encoding", "details"],
-                            "properties": {
-                                "encoding": { "enum": ["plain"] },
-                                "details": { "type": "null" }
-                            }
-                        },
-                        "data_shards": { "const": 0 },
-                        "parity_shards": { "const": 0 }
-                    }
-                },
-                {
-                    "properties": {
-                        "encoding": {
-                            "type": "object",
-                            "required": ["encoding", "details"],
-                            "properties": {
-                                "encoding": { "enum": ["reed_solomon16"] },
-                                "details": { "type": "null" }
-                            }
-                        },
-                        "data_shards": { "minimum": 1 },
-                        "parity_shards": { "minimum": 1 }
-                    }
-                }
-            ]
+            }
         }),
     );
     schemas.insert(
@@ -17857,12 +17902,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "round", "phase", "subject", "execution_commitment", "signers",
-                "aggregate_signature"
+                "round", "proposal_round", "phase", "subject", "execution_commitment",
+                "signers", "aggregate_signature"
             ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2GlobalPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
                 "execution_commitment": {
@@ -17886,12 +17932,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "round", "phase", "subject", "execution_commitment", "signers",
-                "aggregate_signature"
+                "round", "proposal_round", "phase", "subject", "execution_commitment",
+                "signers", "aggregate_signature"
             ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2CommitPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
                 "execution_commitment": {
@@ -17942,6 +17989,9 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "parent_commit_qc": {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
+                "snapshot_bootstrap": {
+                    "$ref": "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+                },
                 "roster": {
                     "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
@@ -17954,7 +18004,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
                 "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
             },
-            "description": "Complete immutable Sumeragi-v2 context. next_epoch_snapshot is present exactly at an epoch-ending height; parent_commit_qc is omitted only at height one."
+            "description": "Complete immutable Sumeragi-v2 context. next_epoch_snapshot is present exactly at an epoch-ending height; parent_commit_qc is omitted only at height one or an audited snapshot boundary, where snapshot_bootstrap is required instead."
         }),
     );
     schemas.insert(
@@ -19151,6 +19201,482 @@ fn tagged_unit_schema(tag: &str, values: &[&str]) -> Value {
     let mut schema = Map::new();
     schema.insert("oneOf".to_owned(), Value::Array(cases));
     Value::Object(schema)
+}
+
+const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
+    "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
+const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
+const GOVERNANCE_EXACT_TOKEN_PATTERN: &str = r"^[^\s\u0000-\u001F\u007F-\u009F]+$";
+const GOVERNANCE_SELECTOR_V1_PATTERN: &str =
+    iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN;
+const GOVERNANCE_NAMESPACE_TOKEN_PATTERN: &str = "^[!-~]+$";
+const GOVERNANCE_U64_DECIMAL_PATTERN: &str = concat!(
+    "^(?:0|[1-9][0-9]{0,18}|",
+    "1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|",
+    "1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|",
+    "1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|",
+    "1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|",
+    "1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|",
+    "184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|",
+    "18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|",
+    "1844674407370955161[0-4]|18446744073709551615)$"
+);
+
+fn governance_mutation_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "GovernanceCanonicalAccountIdV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 1,
+            "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN),
+            "description": "Exact canonical domainless I105 AccountId. Runtime admission verifies the complete I105 alphabet, checksum, controller encoding, and byte-for-byte canonical re-rendering; aliases and noncanonical spellings are rejected."
+        }),
+    );
+    schemas.insert(
+        "GovernanceAtWindowV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Inclusive governance block window; upper must be greater than or equal to lower.",
+            "required": ["lower", "upper"],
+            "properties": {
+                "lower": { "type": "integer", "format": "uint64", "minimum": 0, "maximum": (u64::MAX) },
+                "upper": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": (u64::MAX),
+                    "description": "Inclusive upper bound; must be greater than or equal to lower."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceManifestProvenanceV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["signer", "signature"],
+            "properties": {
+                "signer": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical public key; private signing material is never accepted."
+                },
+                "signature": { "type": "string", "minLength": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceBallotProofV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["backend", "envelope_bytes"],
+            "properties": {
+                "backend": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "envelope_bytes": {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "minLength": 4
+                },
+                "root_hint": {
+                    "oneOf": [
+                        { "type": "string", "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN) },
+                        { "type": "null" }
+                    ]
+                },
+                "owner": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "nullifier": {
+                    "oneOf": [
+                        { "type": "string", "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN) },
+                        { "type": "null" }
+                    ]
+                },
+                "amount": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Quantity" },
+                        { "type": "null" }
+                    ]
+                },
+                "duration_blocks": {
+                    "type": ["integer", "null"],
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "direction": {
+                    "type": ["string", "null"],
+                    "enum": ["Aye", "Nay", "Abstain", null]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceProposeDeployContractRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["abi_version", "code_hash", "abi_hash"],
+            "oneOf": [
+                {
+                    "required": ["contract_address"],
+                    "properties": {
+                        "contract_address": { "type": "string", "minLength": 1 },
+                        "contract_alias": { "type": "null" }
+                    }
+                },
+                {
+                    "required": ["contract_alias"],
+                    "properties": {
+                        "contract_address": { "type": "null" },
+                        "contract_alias": { "type": "string", "minLength": 1 }
+                    }
+                }
+            ],
+            "properties": {
+                "contract_address": { "type": ["string", "null"], "minLength": 1 },
+                "contract_alias": { "type": ["string", "null"], "minLength": 1 },
+                "abi_version": { "type": "string", "const": "1" },
+                "code_hash": {
+                    "type": "string",
+                    "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN)
+                },
+                "abi_hash": {
+                    "type": "string",
+                    "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN)
+                },
+                "window": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceAtWindowV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "mode": {
+                    "type": ["string", "null"],
+                    "enum": ["Zk", "Plain", null],
+                    "description": "Exact first-release voting mode; omitted or null defaults to `Zk`."
+                },
+                "manifest_provenance": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceManifestProvenanceV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernancePlainBallotRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "authority", "chain_id", "referendum_id", "owner", "amount",
+                "duration_blocks", "direction"
+            ],
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "chain_id": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "referendum_id": {
+                    "type": "string", "minLength": 1,
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
+                },
+                "owner": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "amount": { "$ref": "#/components/schemas/Quantity" },
+                "duration_blocks": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN),
+                    "description": "Canonical unsigned decimal u64 in the inclusive range 0..18446744073709551615."
+                },
+                "direction": { "type": "string", "enum": ["Aye", "Nay", "Abstain"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceParliamentBallotRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "chain_id", "proposal_id", "body", "decision"],
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "chain_id": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "proposal_id": { "type": "string", "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN) },
+                "body": {
+                    "type": "string",
+                    "enum": [
+                        "rules-committee", "agenda-council", "interest-panel", "review-panel",
+                        "policy-jury", "oversight-committee", "fma-committee"
+                    ]
+                },
+                "decision": {
+                    "type": "string",
+                    "enum": ["approve", "reject", "abstain"]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceZkBallotEnvelopeRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "chain_id", "election_id", "backend", "envelope_b64"],
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "chain_id": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "election_id": {
+                    "type": "string", "minLength": 1,
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
+                },
+                "backend": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "envelope_b64": { "type": "string", "contentEncoding": "base64", "minLength": 4 },
+                "root_hint": {
+                    "type": ["string", "null"],
+                    "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN)
+                },
+                "owner": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "amount": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Quantity" },
+                        { "type": "null" }
+                    ]
+                },
+                "duration_blocks": {
+                    "type": ["integer", "null"], "format": "uint64",
+                    "minimum": 0, "maximum": (u64::MAX)
+                },
+                "direction": {
+                    "type": ["string", "null"],
+                    "enum": ["Aye", "Nay", "Abstain", null]
+                },
+                "nullifier": {
+                    "type": ["string", "null"],
+                    "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN)
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceZkBallotProofRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "chain_id", "election_id", "ballot"],
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "chain_id": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "election_id": {
+                    "type": "string", "minLength": 1,
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
+                },
+                "ballot": { "$ref": "#/components/schemas/GovernanceBallotProofV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceFinalizeRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["referendum_id", "proposal_id"],
+            "properties": {
+                "referendum_id": {
+                    "type": "string", "minLength": 64, "maxLength": 64,
+                    "pattern": (GOVERNANCE_LOWER_HEX32_PATTERN),
+                    "description": "Exact lowercase proposal fingerprint; must equal proposal_id."
+                },
+                "proposal_id": {
+                    "type": "string", "minLength": 64, "maxLength": 64,
+                    "pattern": (GOVERNANCE_LOWER_HEX32_PATTERN),
+                    "description": "Exact lowercase proposal fingerprint; referendum_id must equal this value."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceEnactRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["proposal_id"],
+            "properties": {
+                "proposal_id": {
+                    "type": "string",
+                    "pattern": (GOVERNANCE_LOWER_HEX32_PATTERN),
+                    "description": "Exact lowercase proposal fingerprint; Torii derives the preimage and referendum window from committed state."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceProtectedNamespacesRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["namespaces"],
+            "properties": {
+                "namespaces": {
+                    "type": "array",
+                    "items": {
+                        "type": "string", "minLength": 1,
+                        "pattern": (GOVERNANCE_NAMESPACE_TOKEN_PATTERN)
+                    }
+                },
+                "authority": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalSummaryV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["title", "motivation", "expected_impact"],
+            "properties": {
+                "title": { "type": "string", "minLength": 1 },
+                "motivation": { "type": "string", "minLength": 1 },
+                "expected_impact": { "type": "string", "minLength": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalTargetV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["label", "hash_family", "hash_hex", "reason"],
+            "properties": {
+                "label": { "type": "string", "minLength": 1 },
+                "hash_family": { "type": "string", "minLength": 1 },
+                "hash_hex": { "type": "string", "minLength": 32, "pattern": "^[0-9a-fA-F]+$" },
+                "reason": { "type": "string", "minLength": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaEvidenceAttachmentV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["kind", "uri"],
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["url", "torii-case", "sorafs-cid", "attachment"]
+                },
+                "uri": { "type": "string", "minLength": 1 },
+                "digest_blake3_hex": {
+                    "oneOf": [
+                        { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+                        { "type": "null" }
+                    ]
+                },
+                "description": { "type": ["string", "null"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalSubmitterV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["name", "contact"],
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "contact": { "type": "string", "minLength": 1 },
+                "organization": { "type": ["string", "null"] },
+                "pgp_fingerprint": { "type": ["string", "null"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": [
+                "version", "proposal_id", "submitted_at_unix_ms", "language",
+                "action", "summary", "targets", "evidence", "submitter"
+            ],
+            "properties": {
+                "version": { "type": "integer", "const": 1 },
+                "proposal_id": { "type": "string", "pattern": "^AC-[0-9]{4}-[0-9]{3}$" },
+                "submitted_at_unix_ms": {
+                    "type": "integer", "format": "uint64",
+                    "minimum": 1, "maximum": (u64::MAX)
+                },
+                "language": { "type": "string", "minLength": 1 },
+                "action": {
+                    "type": "string",
+                    "enum": ["add-to-denylist", "remove-from-denylist", "amend-policy"]
+                },
+                "summary": { "$ref": "#/components/schemas/MinistryAgendaProposalSummaryV1" },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "csam", "malware", "fraud", "harassment", "impersonation",
+                            "policy-escalation", "terrorism", "spam"
+                        ]
+                    }
+                },
+                "targets": {
+                    "type": "array", "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/MinistryAgendaProposalTargetV1" }
+                },
+                "evidence": {
+                    "type": "array", "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/MinistryAgendaEvidenceAttachmentV1" }
+                },
+                "submitter": { "$ref": "#/components/schemas/MinistryAgendaProposalSubmitterV1" },
+                "duplicates": { "type": "array", "items": { "type": "string" } }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["proposal", "authority"],
+            "properties": {
+                "proposal": { "$ref": "#/components/schemas/MinistryAgendaProposalV1" },
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" }
+            }
+        }),
+    );
 }
 
 fn app_api_local_signing_schemas(schemas: &mut Map) {
@@ -21786,12 +22312,11 @@ fn insert_musubi_v1_schemas(schemas: &mut Map) {
 
 fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
     use iroha_data_model::musubi::{
-        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1,
-        MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_FILES_V1,
-        MUSUBI_MAX_KEYWORDS_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-        MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1,
+        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1,
+        MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1, MUSUBI_MAX_DEPENDENCIES_V1,
+        MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_FILES_V1, MUSUBI_MAX_KEYWORDS_V1,
+        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1,
         MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
-        MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1,
     };
 
     schemas.insert(
@@ -22065,7 +22590,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                         "type": "integer",
                         "format": "uint64",
                         "minimum": 1,
-                        "maximum": (MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1)
+                        "maximum": (MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1)
                     }),
                 ),
                 ("car_digest", schema_ref("MusubiDigest32V1")),
@@ -22383,6 +22908,39 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
             ],
         ),
     );
+    schemas.insert(
+        "MusubiProviderBundleAttestationKeyV1".to_owned(),
+        musubi_closed_object(
+            &["archive_id", "replication_order", "provider_id"],
+            vec![
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("replication_order", schema_ref("MusubiDigest32V1")),
+                ("provider_id", schema_ref("MusubiProviderIdV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiProviderBundleAttestationRecordV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "key",
+                "attestation_digest",
+                "attestation",
+                "registered_by",
+                "registered_at_height",
+            ],
+            vec![
+                ("key", schema_ref("MusubiProviderBundleAttestationKeyV1")),
+                ("attestation_digest", schema_ref("MusubiDigest32V1")),
+                (
+                    "attestation",
+                    schema_ref("MusubiProviderBundleVerificationAttestationV1"),
+                ),
+                ("registered_by", schema_ref("MusubiAccountIdV1")),
+                ("registered_at_height", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
 
     schemas.insert(
         "MusubiArchiveLocationStateV1".to_owned(),
@@ -22465,7 +23023,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                 "pin_manifest",
                 "replication_order",
                 "providers",
-                "provider_attestations",
+                "provider_attestation_set_digest",
                 "renew_after_epoch",
                 "expires_at_epoch",
                 "finalized_height",
@@ -22486,12 +23044,8 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                     ),
                 ),
                 (
-                    "provider_attestations",
-                    musubi_array(
-                        schema_ref("MusubiProviderBundleVerificationAttestationV1"),
-                        1,
-                        MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-                    ),
+                    "provider_attestation_set_digest",
+                    schema_ref("MusubiDigest32V1"),
                 ),
                 ("renew_after_epoch", schema_ref("MusubiU64V1")),
                 ("expires_at_epoch", schema_ref("MusubiPositiveU64V1")),
@@ -22621,11 +23175,34 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
             ],
         ),
     );
+    schemas.insert(
+        "MusubiExactReleaseSnapshotV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "chain_id",
+                "genesis_hash",
+                "snapshot",
+                "home_release",
+                "universal_release",
+            ],
+            vec![
+                ("chain_id", schema_ref("MusubiChainIdV1")),
+                ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+                ("home_release", schema_ref("MusubiReleaseRecordV1")),
+                (
+                    "universal_release",
+                    schema_ref("MusubiResolverReleaseRowV1"),
+                ),
+            ],
+        ),
+    );
 }
 
 fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
     use iroha_data_model::musubi::{
-        MUSUBI_MAX_PACKAGE_MEMBERS_V1, MUSUBI_MAX_PACKAGE_OWNERS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
+        MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1, MUSUBI_MAX_PACKAGE_MEMBERS_V1,
+        MUSUBI_MAX_PACKAGE_OWNERS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
     };
 
     schemas.insert(
@@ -22928,10 +23505,7 @@ fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
     );
     schemas.insert(
         "MusubiOrderedPrefixV1".to_owned(),
-        musubi_string_newtype(
-            iroha_data_model::musubi::MUSUBI_MAX_CURSOR_KEY_BYTES_V1,
-            None,
-        ),
+        musubi_string_newtype(MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1, None),
     );
     schemas.insert(
         "MusubiOrderedPackageEntryV1".to_owned(),
@@ -23038,9 +23612,7 @@ fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
 }
 
 fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
-    use iroha_data_model::musubi::{
-        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_PACKAGE_OWNERS_V1,
-    };
+    use iroha_data_model::musubi::MUSUBI_MAX_PACKAGE_OWNERS_V1;
 
     for (name, schema) in [
         (
@@ -23071,6 +23643,22 @@ fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
             ),
         ),
         (
+            "RegisterMusubiProviderBundleAttestationV1",
+            musubi_closed_object(
+                &["attestation", "expected_location_revision"],
+                vec![
+                    (
+                        "attestation",
+                        schema_ref("MusubiProviderBundleVerificationAttestationV1"),
+                    ),
+                    (
+                        "expected_location_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
             "AddMusubiArchiveLocationV1",
             musubi_closed_object(
                 &[
@@ -23078,7 +23666,7 @@ fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
                     "location_id",
                     "pin_manifest",
                     "replication_order",
-                    "provider_attestations",
+                    "provider_attestation_set_digest",
                     "renew_after_epoch",
                     "expires_at_epoch",
                     "expected_location_revision",
@@ -23089,12 +23677,8 @@ fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
                     ("pin_manifest", schema_ref("MusubiDigest32V1")),
                     ("replication_order", schema_ref("MusubiDigest32V1")),
                     (
-                        "provider_attestations",
-                        musubi_array(
-                            schema_ref("MusubiProviderBundleVerificationAttestationV1"),
-                            1,
-                            MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-                        ),
+                        "provider_attestation_set_digest",
+                        schema_ref("MusubiDigest32V1"),
                     ),
                     ("renew_after_epoch", schema_ref("MusubiU64V1")),
                     ("expires_at_epoch", schema_ref("MusubiPositiveU64V1")),
@@ -23641,7 +24225,8 @@ fn insert_musubi_instruction_envelope_schema(schemas: &mut Map) {
         AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1, AssertMusubiReleaseDigestV1,
         InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1, RecoverMusubiPackageV1,
         RegisterMusubiAliasV1, RegisterMusubiArchiveV1, RegisterMusubiNamespaceBindingV1,
-        RemoveMusubiPackageMaintainerV1, RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+        RegisterMusubiProviderBundleAttestationV1, RemoveMusubiPackageMaintainerV1,
+        RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
         RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
         SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1, SetMusubiRegistryPolicyV1,
         SetMusubiReleaseYankV1,
@@ -23653,6 +24238,10 @@ fn insert_musubi_instruction_envelope_schema(schemas: &mut Map) {
             "RegisterMusubiNamespaceBindingV1",
         ),
         (RegisterMusubiArchiveV1::WIRE_ID, "RegisterMusubiArchiveV1"),
+        (
+            RegisterMusubiProviderBundleAttestationV1::WIRE_ID,
+            "RegisterMusubiProviderBundleAttestationV1",
+        ),
         (
             AddMusubiArchiveLocationV1::WIRE_ID,
             "AddMusubiArchiveLocationV1",
@@ -23783,6 +24372,7 @@ fn openapi_schemas() -> Map {
     schemas.extend(sccp_schemas());
     bridge_finality_schemas(&mut schemas);
     validation_fee_schemas(&mut schemas);
+    governance_mutation_schemas(&mut schemas);
     app_api_local_signing_schemas(&mut schemas);
     subscription_schemas(&mut schemas);
     insert_musubi_v1_schemas(&mut schemas);
@@ -24056,8 +24646,9 @@ fn openapi_schemas() -> Map {
                 "election_id": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 256,
-                    "description": "Exact on-chain election identifier."
+                    "maxLength": 128,
+                    "pattern": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN),
+                    "description": "Canonical governance selector V1: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot."
                 }
             }
         }),
@@ -27476,62 +28067,6 @@ fn openapi_schemas() -> Map {
                 "tx_hash_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                 "status": { "type": "string", "enum": ["Queued", "Repaired", "Unchanged"] },
                 "disposition": { "$ref": "#/components/schemas/JsonValue" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiVrfCommitRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["epoch", "signer", "commitment_hex", "bls_sig_hex"],
-            "additionalProperties": false,
-            "properties": {
-                "epoch": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Sumeragi VRF epoch number."
-                },
-                "signer": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "description": "Validator index in the active topology for the epoch height."
-                },
-                "commitment_hex": {
-                    "type": "string",
-                    "description": "32-byte VRF reveal commitment encoded as hex."
-                },
-                "bls_sig_hex": {
-                    "type": "string",
-                    "description": "BLS signature over the Sumeragi VRF commit preimage, encoded as non-empty hex."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiVrfRevealRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["epoch", "signer", "reveal_hex", "bls_sig_hex"],
-            "additionalProperties": false,
-            "properties": {
-                "epoch": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Sumeragi VRF epoch number."
-                },
-                "signer": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "description": "Validator index in the active topology for the epoch height."
-                },
-                "reveal_hex": {
-                    "type": "string",
-                    "description": "32-byte VRF reveal value encoded as hex."
-                },
-                "bls_sig_hex": {
-                    "type": "string",
-                    "description": "BLS signature over the Sumeragi VRF reveal preimage, encoded as non-empty hex."
-                }
             }
         }),
     );
@@ -33776,6 +34311,7 @@ mod tests {
                 | "SumeragiV2FinalizedNextEpochSnapshot"
                 | "SumeragiV2ConsensusMode"
                 | "SumeragiV2CommitQuorumCertificate"
+                | "SumeragiV2SnapshotBootstrapAnchor"
                 | "SumeragiV2DataAvailabilityLayout"
                 | "SumeragiV2Bytes32"
         )
@@ -38456,6 +38992,10 @@ mod tests {
             "authenticate and authorize before file lookup",
             "absent or invalid proof returns 401",
             "missing file returns 404 only after successful authorization",
+            "byte-delivery boundary",
+            "active, unknown, or invalid media types",
+            "X-Content-Type-Options",
+            "without changing byte or range semantics",
         ] {
             assert!(
                 description.contains(phrase),
@@ -38519,6 +39059,23 @@ mod tests {
                 .and_then(Value::as_str),
             Some(crate::content::CANONICAL_CONTENT_AUTH_VARY)
         );
+        for (name, expected) in [
+            ("X-Content-Type-Options", "nosniff"),
+            ("Content-Security-Policy", "sandbox; default-src 'none'"),
+            ("Content-Disposition", "attachment"),
+        ] {
+            assert_eq!(
+                success_headers
+                    .get(name)
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some(expected),
+                "content response must document the {name} boundary"
+            );
+        }
 
         let unauthorized = responses
             .get("401")
@@ -38538,7 +39095,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_batch_and_tally_openapi_match_runtime_media_and_status_contracts() {
+    fn zk_openapi_matches_runtime_media_and_status_contracts() {
         fn content_types(container: &Map) -> BTreeSet<&str> {
             container
                 .get("content")
@@ -38555,6 +39112,10 @@ mod tests {
             "ZkVerifyBatchRequest",
             "ZkVerifyBatchOutcome",
             "ZkVerifyBatchResponse",
+            "ZkRootsGetRequest",
+            "ZkRootsGetResponse",
+            "ZkMerklePathGetRequest",
+            "ZkMerklePathGetResponse",
             "ZkVoteGetTallyRequest",
             "ZkVoteGetTallyResponse",
         ] {
@@ -38654,6 +39215,73 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/ZkVoteGetTallyResponse")
         );
+
+        for (path, request_schema, response_schema) in [
+            (
+                "/v1/zk/roots",
+                "#/components/schemas/ZkRootsGetRequest",
+                "#/components/schemas/ZkRootsGetResponse",
+            ),
+            (
+                "/v1/zk/merkle-path",
+                "#/components/schemas/ZkMerklePathGetRequest",
+                "#/components/schemas/ZkMerklePathGetResponse",
+            ),
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            let request = operation
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .expect("ZK state-query request body");
+            assert_eq!(
+                content_types(request),
+                BTreeSet::from(["application/json", "application/x-norito"]),
+                "request media mismatch for {path}"
+            );
+            assert_eq!(
+                request
+                    .get("content")
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(request_schema),
+                "request schema mismatch for {path}"
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("ZK state-query responses");
+            assert!(
+                responses.contains_key("406"),
+                "missing negotiation failure for {path}"
+            );
+            let success = responses
+                .get("200")
+                .and_then(Value::as_object)
+                .expect("ZK state-query success response");
+            assert_eq!(
+                content_types(success),
+                BTreeSet::from(["application/json", "application/x-norito"]),
+                "response media mismatch for {path}"
+            );
+            assert_eq!(
+                success
+                    .get("content")
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(response_schema),
+                "response schema mismatch for {path}"
+            );
+        }
 
         let roots = openapi_operation(&document, "/v1/zk/roots", "post");
         let roots_description = roots
@@ -40827,6 +41455,30 @@ mod tests {
             "#/components/schemas/OfflineTopUpFinalityCompactQc"
         );
         assert_eq!(
+            component_required(schemas, "OfflineTopUpFinalityHeightContext"),
+            [
+                "context_id",
+                "chain_id",
+                "protocol_version",
+                "height",
+                "epoch",
+                "epoch_end_height",
+                "mode",
+                "nexus_amx_context_hash",
+                "execution_policy_hash",
+                "da_layout",
+                "leader_seed",
+            ]
+        );
+        assert_eq!(
+            property_ref(
+                schemas,
+                "OfflineTopUpFinalityHeightContext",
+                "snapshot_bootstrap",
+            ),
+            "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+        );
+        assert_eq!(
             property_ref(schemas, "OfflineTopUpFinalityProof", "anchor_path"),
             "#/components/schemas/OfflineTopUpAnchorMerkleProof"
         );
@@ -41601,7 +42253,7 @@ mod tests {
             .iter()
             .map(|route| route.path())
             .collect::<BTreeSet<_>>();
-        assert_eq!(musubi_routes::ROUTES.len(), 29);
+        assert_eq!(musubi_routes::ROUTES.len(), 31);
         assert_eq!(actual, expected);
 
         let mut schema_roots = BTreeSet::new();
@@ -41628,24 +42280,39 @@ mod tests {
                 .get("x-iroha-norito-response-type")
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| panic!("{path} exact response type"));
+            let request_schema_reference = operation
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .and_then(|request_body| request_body.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str);
+            let response_schema_reference = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str);
             for (model_type, schema_reference) in [
-                (
-                    request_type,
-                    operation
-                        .pointer("/requestBody/content/application~1json/schema/$ref")
-                        .and_then(Value::as_str),
-                ),
-                (
-                    response_type,
-                    operation
-                        .pointer("/responses/200/content/application~1json/schema/$ref")
-                        .and_then(Value::as_str),
-                ),
+                (request_type, request_schema_reference),
+                (response_type, response_schema_reference),
             ] {
                 assert!(model_type.ends_with("V1"), "{path} exact V1 model");
+                let expected_reference = format!("{COMPONENT_SCHEMA_REF_PREFIX}{model_type}");
                 assert_eq!(
                     schema_reference,
-                    Some(format!("{COMPONENT_SCHEMA_REF_PREFIX}{model_type}").as_str()),
+                    Some(expected_reference.as_str()),
                     "{path} must reference its declared exact model"
                 );
                 let schema = schemas
@@ -41731,7 +42398,7 @@ mod tests {
             .and_then(|schema| schema.get("oneOf"))
             .and_then(Value::as_array)
             .expect("Musubi instruction preview variants");
-        assert_eq!(variants.len(), 18);
+        assert_eq!(variants.len(), 19);
 
         let mut bindings = BTreeSet::new();
         let mut wire_ids = BTreeSet::new();
@@ -41841,6 +42508,39 @@ mod tests {
         assert_eq!(
             provider_id.get("pattern").and_then(Value::as_str),
             Some("^[0-9A-Fa-f]{64}$")
+        );
+    }
+
+    #[test]
+    fn musubi_cursor_and_ordered_prefix_bounds_match_the_wire_types() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let cursor_last_key = schemas
+            .get("MusubiFinalizedCursorV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("last_key"))
+            .and_then(Value::as_object)
+            .expect("Musubi finalized-cursor last-key schema");
+        assert_eq!(
+            cursor_last_key.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(iroha_data_model::musubi::MUSUBI_MAX_CURSOR_KEY_BYTES_V1)
+                    .expect("cursor-key bound fits u64")
+            )
+        );
+
+        let ordered_prefix = schemas
+            .get("MusubiOrderedPrefixV1")
+            .and_then(Value::as_object)
+            .expect("Musubi ordered-prefix schema");
+        assert_eq!(
+            ordered_prefix.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(iroha_data_model::musubi::MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1)
+                    .expect("ordered-prefix bound fits u64")
+            )
         );
     }
 
@@ -42041,35 +42741,27 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_documents_vrf_signature_payloads() {
-        fn post_request_schema_ref<'a>(doc: &'a Value, path: &str) -> Option<&'a str> {
-            doc.get("paths")?
-                .as_object()?
-                .get(path)?
-                .as_object()?
-                .get("post")?
-                .as_object()?
-                .get("requestBody")?
-                .as_object()?
-                .get("content")?
-                .as_object()?
-                .get("application/json")?
-                .as_object()?
-                .get("schema")?
-                .as_object()?
-                .get("$ref")?
-                .as_str()
-        }
-
+    fn retired_sumeragi_mutation_surfaces_are_absent() {
         let doc = generate_spec();
-        assert_eq!(
-            post_request_schema_ref(&doc, "/v1/sumeragi/vrf/commit"),
-            Some("#/components/schemas/SumeragiVrfCommitRequest")
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let evidence = paths
+            .get("/v1/sumeragi/evidence")
+            .and_then(Value::as_object)
+            .expect("retained evidence-list path");
+        assert!(evidence.contains_key("get"));
+        assert!(
+            !evidence.contains_key("post"),
+            "retired evidence submission operation remains documented"
         );
-        assert_eq!(
-            post_request_schema_ref(&doc, "/v1/sumeragi/vrf/reveal"),
-            Some("#/components/schemas/SumeragiVrfRevealRequest")
-        );
+        for retired_path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+            assert!(
+                !paths.contains_key(retired_path),
+                "retired Sumeragi mutation path remains documented: {retired_path}"
+            );
+        }
 
         let schemas = doc
             .get("components")
@@ -42077,18 +42769,10 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("schemas section");
-        for schema_name in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
-            let required = schemas
-                .get(schema_name)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("required"))
-                .and_then(Value::as_array)
-                .expect("VRF request required fields");
+        for retired_schema in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
             assert!(
-                required
-                    .iter()
-                    .any(|field| field.as_str() == Some("bls_sig_hex")),
-                "{schema_name} should require bls_sig_hex"
+                !schemas.contains_key(retired_schema),
+                "retired Sumeragi mutation schema remains documented: {retired_schema}"
             );
         }
     }
@@ -43953,6 +44637,78 @@ mod tests {
     }
 
     #[test]
+    fn sumeragi_v2_da_schema_requires_reed_solomon16_without_plain_compatibility() {
+        let schemas = openapi_schemas();
+        let encoding = schemas
+            .get("SumeragiV2PayloadEncoding")
+            .and_then(Value::as_object)
+            .expect("Sumeragi v2 payload encoding schema");
+        let allowed_encodings = encoding
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("encoding"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("Sumeragi v2 payload encoding enum");
+        assert_eq!(allowed_encodings, &[Value::from("reed_solomon16")]);
+        assert!(
+            !allowed_encodings
+                .iter()
+                .any(|encoding| encoding.as_str() == Some("plain")),
+            "retired Plain payload encoding must not be advertised"
+        );
+
+        let layout = schemas
+            .get("SumeragiV2DataAvailabilityLayout")
+            .and_then(Value::as_object)
+            .expect("Sumeragi v2 data-availability layout schema");
+        assert!(
+            layout.get("oneOf").is_none() && layout.get("anyOf").is_none(),
+            "the RS16-only layout must not retain a compatibility union"
+        );
+        let required = layout
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("Sumeragi v2 data-availability required fields");
+        for field in ["encoding", "data_shards", "parity_shards"] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "Sumeragi v2 data-availability layout must require {field}"
+            );
+        }
+        let properties = layout
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("Sumeragi v2 data-availability properties");
+        assert_eq!(
+            properties
+                .get("encoding")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2PayloadEncoding")
+        );
+        for field in ["data_shards", "parity_shards"] {
+            assert_eq!(
+                properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("minimum"))
+                    .and_then(Value::as_u64),
+                Some(1),
+                "RS16 requires a positive {field} value"
+            );
+        }
+        let serialized_layout = norito::json::to_string(&Value::Object(layout.clone()))
+            .expect("serialize Sumeragi v2 data-availability layout schema");
+        assert!(
+            !serialized_layout.contains("\"plain\""),
+            "retired Plain layout branch must not be advertised"
+        );
+    }
+
+    #[test]
     fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         fn schema<'a>(schemas: &'a Map, name: &str) -> &'a Map {
             schemas
@@ -44098,6 +44854,7 @@ mod tests {
                 "next_epoch_snapshot",
                 "mode",
                 "parent_commit_qc",
+                "snapshot_bootstrap",
                 "roster",
                 "quorum",
                 "nexus_amx_context_hash",
@@ -44158,6 +44915,7 @@ mod tests {
                 certificate,
                 &[
                     "round",
+                    "proposal_round",
                     "phase",
                     "subject",
                     "execution_commitment",
@@ -44166,6 +44924,7 @@ mod tests {
                 ],
                 &[
                     "round",
+                    "proposal_round",
                     "phase",
                     "subject",
                     "execution_commitment",
@@ -44174,6 +44933,22 @@ mod tests {
                 ],
             );
         }
+        assert_closed_shape(
+            &schemas,
+            "SumeragiV2SnapshotBootstrapAnchor",
+            &[
+                "snapshot_height",
+                "snapshot_block_hash",
+                "snapshot_block_creation_time_ms",
+                "snapshot_state_hash",
+            ],
+            &[
+                "snapshot_height",
+                "snapshot_block_hash",
+                "snapshot_block_creation_time_ms",
+                "snapshot_state_hash",
+            ],
+        );
         assert_closed_shape(
             &schemas,
             "SumeragiV2FinalizedNextEpochSnapshot",
@@ -44608,7 +45383,9 @@ mod tests {
         );
         assert_eq!(
             artifact.get("protocol_version").and_then(Value::as_u64),
-            Some(3)
+            Some(u64::from(
+                iroha_data_model::block::consensus_v2::PROTOCOL_VERSION
+            ))
         );
         let context = artifact
             .get("height_context")
@@ -44616,10 +45393,13 @@ mod tests {
             .expect("height context JSON object");
         assert_eq!(
             context.get("protocol_version").and_then(Value::as_u64),
-            Some(3)
+            Some(u64::from(
+                iroha_data_model::block::consensus_v2::PROTOCOL_VERSION
+            ))
         );
         assert!(!context.contains_key("next_epoch_snapshot"));
         assert!(!context.contains_key("parent_commit_qc"));
+        assert!(!context.contains_key("snapshot_bootstrap"));
         let mode = context
             .get("mode")
             .and_then(Value::as_object)
@@ -44634,7 +45414,7 @@ mod tests {
             .expect("adjacently tagged payload encoding");
         assert_eq!(
             encoding.get("encoding").and_then(Value::as_str),
-            Some("plain")
+            Some("reed_solomon16")
         );
         assert_eq!(encoding.get("details"), Some(&Value::Null));
 
@@ -44698,6 +45478,7 @@ mod tests {
                 .and_then(Value::as_array)
                 .is_some_and(|context_id| context_id.len() == 1)
         );
+        assert_eq!(commit_qc.get("proposal_round"), commit_qc.get("round"));
         let execution_commitment = commit_qc
             .get("execution_commitment")
             .and_then(Value::as_object)
@@ -47434,6 +48215,671 @@ mod tests {
             assert!(
                 !paths.contains_key(retired_path),
                 "retired server-side contract deployment path leaked into OpenAPI: {retired_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        let schemas = document
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("OpenAPI schemas");
+
+        assert!(
+            !paths.contains_key("/v1/gov/ballots/zk"),
+            "the legacy ZK ballot route must not enter the first-release OpenAPI"
+        );
+        assert!(
+            !schemas.contains_key("GovernanceZkBallotRequestV1")
+                && !schemas.contains_key("GovernanceZkPublicInputsV1"),
+            "legacy ZK ballot schemas must not enter the first-release OpenAPI"
+        );
+
+        let cases: [(&str, &str, &[&str]); 9] = [
+            (
+                "/v1/ministry/agenda/proposals/draft",
+                "MinistryAgendaProposalDraftRequestV1",
+                &["authority", "proposal"],
+            ),
+            (
+                "/v1/gov/proposals/deploy-contract",
+                "GovernanceProposeDeployContractRequestV1",
+                &[
+                    "abi_hash",
+                    "abi_version",
+                    "code_hash",
+                    "contract_address",
+                    "contract_alias",
+                    "manifest_provenance",
+                    "mode",
+                    "window",
+                ],
+            ),
+            (
+                "/v1/gov/ballots/zk-v1",
+                "GovernanceZkBallotEnvelopeRequestV1",
+                &[
+                    "amount",
+                    "authority",
+                    "backend",
+                    "chain_id",
+                    "direction",
+                    "duration_blocks",
+                    "election_id",
+                    "envelope_b64",
+                    "nullifier",
+                    "owner",
+                    "root_hint",
+                ],
+            ),
+            (
+                "/v1/gov/ballots/zk-v1/ballot-proof",
+                "GovernanceZkBallotProofRequestV1",
+                &["authority", "ballot", "chain_id", "election_id"],
+            ),
+            (
+                "/v1/gov/ballots/plain",
+                "GovernancePlainBallotRequestV1",
+                &[
+                    "amount",
+                    "authority",
+                    "chain_id",
+                    "direction",
+                    "duration_blocks",
+                    "owner",
+                    "referendum_id",
+                ],
+            ),
+            (
+                "/v1/gov/parliament/ballots",
+                "GovernanceParliamentBallotRequestV1",
+                &["authority", "body", "chain_id", "decision", "proposal_id"],
+            ),
+            (
+                "/v1/gov/finalize",
+                "GovernanceFinalizeRequestV1",
+                &["proposal_id", "referendum_id"],
+            ),
+            (
+                "/v1/gov/enact",
+                "GovernanceEnactRequestV1",
+                &["proposal_id"],
+            ),
+            (
+                "/v1/gov/protected-namespaces",
+                "GovernanceProtectedNamespacesRequestV1",
+                &["authority", "namespaces"],
+            ),
+        ];
+
+        for (path, schema_name, expected_properties) in cases {
+            let request_ref = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("post"))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("requestBody"))
+                .and_then(Value::as_object)
+                .and_then(|body| body.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("missing governance request schema for `{path}`"));
+            assert_eq!(
+                request_ref,
+                format!("#/components/schemas/{schema_name}"),
+                "{path}"
+            );
+
+            let schema = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{schema_name}`"));
+            assert_eq!(
+                schema.get("additionalProperties"),
+                Some(&Value::Bool(false)),
+                "{schema_name}"
+            );
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{schema_name}` properties"));
+            let mut actual_properties = properties.keys().map(String::as_str).collect::<Vec<_>>();
+            actual_properties.sort_unstable();
+            assert_eq!(actual_properties, expected_properties, "{schema_name}");
+        }
+
+        for (schema_name, expected_required) in [
+            (
+                "GovernanceProposeDeployContractRequestV1",
+                &["abi_hash", "abi_version", "code_hash"][..],
+            ),
+            (
+                "GovernanceZkBallotEnvelopeRequestV1",
+                &[
+                    "authority",
+                    "backend",
+                    "chain_id",
+                    "election_id",
+                    "envelope_b64",
+                ][..],
+            ),
+            (
+                "GovernanceZkBallotProofRequestV1",
+                &["authority", "ballot", "chain_id", "election_id"][..],
+            ),
+            (
+                "GovernancePlainBallotRequestV1",
+                &[
+                    "amount",
+                    "authority",
+                    "chain_id",
+                    "direction",
+                    "duration_blocks",
+                    "owner",
+                    "referendum_id",
+                ][..],
+            ),
+            (
+                "GovernanceParliamentBallotRequestV1",
+                &["authority", "body", "chain_id", "decision", "proposal_id"][..],
+            ),
+            (
+                "GovernanceFinalizeRequestV1",
+                &["proposal_id", "referendum_id"][..],
+            ),
+            ("GovernanceEnactRequestV1", &["proposal_id"][..]),
+            (
+                "GovernanceProtectedNamespacesRequestV1",
+                &["namespaces"][..],
+            ),
+            (
+                "MinistryAgendaProposalDraftRequestV1",
+                &["authority", "proposal"][..],
+            ),
+        ] {
+            let schema = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{schema_name}`"));
+            let mut actual_required = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("missing `{schema_name}` required set"))
+                .iter()
+                .map(|value| value.as_str().expect("required field is a string"))
+                .collect::<Vec<_>>();
+            actual_required.sort_unstable();
+            assert_eq!(actual_required, expected_required, "{schema_name}");
+        }
+
+        let deploy = schemas
+            .get("GovernanceProposeDeployContractRequestV1")
+            .and_then(Value::as_object)
+            .expect("deploy request schema");
+        assert_eq!(
+            deploy.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(2),
+            "deploy target must be exactly one address or alias"
+        );
+        for target_case in deploy
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("deploy target variants")
+        {
+            let target_case = target_case.as_object().expect("deploy target variant");
+            let required = target_case
+                .get("required")
+                .and_then(Value::as_array)
+                .and_then(|required| required.first())
+                .and_then(Value::as_str)
+                .expect("selected deploy target");
+            assert_eq!(
+                target_case
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(required))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("minLength"))
+                    .and_then(Value::as_u64),
+                Some(1),
+                "selected deploy target `{required}` must be nonempty"
+            );
+        }
+        let deploy_properties = deploy
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("deploy request properties");
+        assert_eq!(
+            deploy_properties
+                .get("abi_version")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some("1"),
+            "first-release deploy requests must advertise exactly ABI V1"
+        );
+        assert_eq!(
+            deploy_properties
+                .get("mode")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum")),
+            Some(&norito::json!(["Zk", "Plain", null])),
+            "deploy voting mode must use the closed canonical wire labels"
+        );
+        for field in ["code_hash", "abi_hash"] {
+            assert_eq!(
+                deploy_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some(GOVERNANCE_HASH_LITERAL_PATTERN),
+                "deploy `{field}` must document every accepted canonicalizable hash form"
+            );
+        }
+        let ballot = schemas
+            .get("GovernanceBallotProofV1")
+            .and_then(Value::as_object)
+            .expect("GovernanceBallotProofV1 schema");
+        assert_eq!(
+            ballot.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let mut ballot_properties = ballot
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("GovernanceBallotProofV1 properties")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        ballot_properties.sort_unstable();
+        assert_eq!(
+            ballot_properties,
+            [
+                "amount",
+                "backend",
+                "direction",
+                "duration_blocks",
+                "envelope_bytes",
+                "nullifier",
+                "owner",
+                "root_hint",
+            ]
+        );
+
+        let u64_maximum = Value::from(u64::MAX);
+        let governance_window = schemas
+            .get("GovernanceAtWindowV1")
+            .and_then(Value::as_object)
+            .expect("GovernanceAtWindowV1 schema");
+        assert!(
+            governance_window
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(
+                    |description| description.contains("upper") && description.contains("lower")
+                ),
+            "window ordering must be explicit"
+        );
+        for field in ["lower", "upper"] {
+            assert_eq!(
+                governance_window
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(field))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maximum")),
+                Some(&u64_maximum),
+                "window `{field}` must publish the exact u64 maximum"
+            );
+        }
+        for (schema_name, field) in [
+            ("GovernanceBallotProofV1", "duration_blocks"),
+            ("GovernanceZkBallotEnvelopeRequestV1", "duration_blocks"),
+        ] {
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(field))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maximum")),
+                Some(&u64_maximum),
+                "{schema_name}.{field} must publish the exact u64 maximum"
+            );
+        }
+        assert_eq!(
+            schemas
+                .get("GovernancePlainBallotRequestV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("duration_blocks"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some(GOVERNANCE_U64_DECIMAL_PATTERN),
+            "plain-ballot duration must publish the exact canonical u64 grammar"
+        );
+
+        for schema_name in [
+            "GovernanceBallotProofV1",
+            "GovernanceZkBallotEnvelopeRequestV1",
+        ] {
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get("backend"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some(GOVERNANCE_EXACT_TOKEN_PATTERN),
+                "{schema_name}.backend must be an exact nonempty token"
+            );
+        }
+
+        for (schema_name, fields) in [
+            ("GovernanceZkBallotEnvelopeRequestV1", &["chain_id"][..]),
+            ("GovernanceZkBallotProofRequestV1", &["chain_id"][..]),
+            ("GovernancePlainBallotRequestV1", &["chain_id"][..]),
+            ("GovernanceParliamentBallotRequestV1", &["chain_id"][..]),
+        ] {
+            for field in fields {
+                assert_eq!(
+                    schemas
+                        .get(schema_name)
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("properties"))
+                        .and_then(Value::as_object)
+                        .and_then(|properties| properties.get(*field))
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("pattern"))
+                        .and_then(Value::as_str),
+                    Some(GOVERNANCE_EXACT_TOKEN_PATTERN),
+                    "{schema_name}.{field} must publish the runtime's exact token grammar"
+                );
+            }
+        }
+
+        for (schema_name, field) in [
+            ("GovernanceZkBallotEnvelopeRequestV1", "election_id"),
+            ("GovernanceZkBallotProofRequestV1", "election_id"),
+            ("GovernancePlainBallotRequestV1", "referendum_id"),
+        ] {
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(field))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some(GOVERNANCE_SELECTOR_V1_PATTERN),
+                "{schema_name}.{field} must publish the canonical V1 selector grammar"
+            );
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(field))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maxLength"))
+                    .and_then(Value::as_u64),
+                Some(iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64),
+                "{schema_name}.{field} must publish the selector byte ceiling"
+            );
+        }
+
+        assert_eq!(
+            schemas
+                .get("GovernanceParliamentBallotRequestV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("decision"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum")),
+            Some(&norito::json!(["approve", "reject", "abstain"])),
+            "Parliament decisions must expose only the exact lowercase wire labels"
+        );
+
+        assert_eq!(
+            schemas
+                .get("GovernanceEnactRequestV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("proposal_id"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some(GOVERNANCE_LOWER_HEX32_PATTERN),
+            "enactment must accept only the exact committed proposal-key grammar"
+        );
+        for field in ["referendum_id", "proposal_id"] {
+            let finalization_id = schemas
+                .get("GovernanceFinalizeRequestV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .expect("finalization identifier schema");
+            assert_eq!(
+                finalization_id.get("pattern").and_then(Value::as_str),
+                Some(GOVERNANCE_LOWER_HEX32_PATTERN),
+                "finalization {field} must use the exact committed proposal-key grammar"
+            );
+            assert_eq!(
+                finalization_id.get("minLength").and_then(Value::as_u64),
+                Some(64),
+                "finalization {field} must publish the exact digest length"
+            );
+            assert_eq!(
+                finalization_id.get("maxLength").and_then(Value::as_u64),
+                Some(64),
+                "finalization {field} must publish the exact digest length"
+            );
+        }
+
+        let provenance_properties = schemas
+            .get("GovernanceManifestProvenanceV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("manifest provenance properties");
+        for field in ["signer", "signature"] {
+            assert_eq!(
+                provenance_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("type"))
+                    .and_then(Value::as_str),
+                Some("string"),
+                "manifest provenance `{field}` must be a typed public string"
+            );
+        }
+        assert_eq!(
+            schemas
+                .get("GovernancePlainBallotRequestV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("duration_blocks"))
+                .and_then(Value::as_object)
+                .and_then(|duration| duration.get("type"))
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        assert_eq!(
+            schemas
+                .get("GovernanceZkBallotEnvelopeRequestV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("direction"))
+                .and_then(Value::as_object)
+                .and_then(|direction| direction.get("enum")),
+            Some(&norito::json!(["Aye", "Nay", "Abstain", null])),
+            "ZK-v1 direction must match the closed runtime ballot enum"
+        );
+
+        for schema_name in [
+            "GovernanceProposeDeployContractRequestV1",
+            "GovernanceZkBallotEnvelopeRequestV1",
+            "GovernanceZkBallotProofRequestV1",
+            "GovernanceBallotProofV1",
+            "GovernancePlainBallotRequestV1",
+            "GovernanceParliamentBallotRequestV1",
+            "GovernanceFinalizeRequestV1",
+            "GovernanceEnactRequestV1",
+            "GovernanceProtectedNamespacesRequestV1",
+            "MinistryAgendaProposalDraftRequestV1",
+            "MinistryAgendaProposalV1",
+            "MinistryAgendaProposalSummaryV1",
+            "MinistryAgendaProposalTargetV1",
+            "MinistryAgendaEvidenceAttachmentV1",
+            "MinistryAgendaProposalSubmitterV1",
+        ] {
+            let encoded = norito::json::to_json(
+                schemas
+                    .get(schema_name)
+                    .unwrap_or_else(|| panic!("missing `{schema_name}`")),
+            )
+            .expect("schema JSON");
+            for forbidden in [
+                "private_key",
+                "privateKey",
+                "private_key_hex",
+                "privateKeyHex",
+                "private_key_bytes",
+                "privateKeyBytes",
+                "private_key_seed",
+                "privateKeySeed",
+                "private_key_multihash",
+                "privateKeyMultihash",
+                "private_key_algorithm",
+                "privateKeyAlgorithm",
+            ] {
+                assert!(
+                    !encoded.contains(forbidden),
+                    "`{schema_name}` leaked retired signing field `{forbidden}`"
+                );
+            }
+        }
+        for schema_name in [
+            "GovernanceProposeDeployContractRequestV1",
+            "GovernanceFinalizeRequestV1",
+            "GovernanceEnactRequestV1",
+        ] {
+            assert!(
+                !schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .is_some_and(|properties| properties.contains_key("authority")),
+                "`{schema_name}` must not restore retired server-side authority"
+            );
+        }
+    }
+
+    #[test]
+    fn governance_read_path_parameters_publish_exact_runtime_grammars() {
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+
+        for (path, method, parameter_name, expected_pattern) in [
+            (
+                "/v1/ministry/agenda/proposals/{proposal_id}",
+                "get",
+                "proposal_id",
+                "^AC-[0-9]{4}-[0-9]{3}$",
+            ),
+            (
+                "/v1/gov/proposals/{id}",
+                "get",
+                "id",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
+            ),
+            (
+                "/v1/validation-fee/proposals/{proposal_id}",
+                "get",
+                "proposal_id",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
+            ),
+            (
+                "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft",
+                "post",
+                "proposal_id",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
+            ),
+            (
+                "/v1/gov/locks/{rid}",
+                "get",
+                "rid",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            ),
+            (
+                "/v1/gov/referenda/{id}",
+                "get",
+                "id",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            ),
+            (
+                "/v1/gov/tally/{id}",
+                "get",
+                "id",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            ),
+        ] {
+            let parameters = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get(method))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("parameters"))
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("missing {method} parameters for `{path}`"));
+            let pattern = parameters
+                .iter()
+                .filter_map(Value::as_object)
+                .find(|parameter| {
+                    parameter.get("name").and_then(Value::as_str) == Some(parameter_name)
+                })
+                .and_then(|parameter| parameter.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str);
+            assert_eq!(
+                pattern,
+                Some(expected_pattern),
+                "`{path}` must publish the exact runtime selector grammar"
             );
         }
     }

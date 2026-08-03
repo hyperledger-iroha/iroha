@@ -479,7 +479,7 @@ fn trigger_management_requires_permission() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn add() {
-                ledger::trigger::create(Json::parse("{\"id\":\"t1\"}"));
+                ledger::trigger::register(Json::parse("{\"id\":\"t1\"}"));
                 ledger::trigger::set_enabled(Name::parse("t1"), 1);
             }
         }
@@ -630,8 +630,8 @@ fn compile_register_domain_emits_syscall_0x10() {
 }
 
 #[test]
-fn compile_zk_verify_batch_emits_syscall_0x68() {
-    // Ensure the kotodama intrinsic lowers to SCALL 0x68
+fn compile_zk_verify_batch_emits_syscall_0x64() {
+    // Ensure the Kotodama intrinsic lowers to SCALL 0x64.
     let src = r#"
         seiyaku VerifyBatch {
             kotoage fn verify(bytes p) authorize("ZkVerifier") {
@@ -641,11 +641,11 @@ fn compile_zk_verify_batch_emits_syscall_0x68() {
     "#;
     let compiler = Compiler::new();
     let bytes = compiler.compile_source(src).expect("compile ok");
-    let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x68);
+    let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x64);
     let needle = word.to_le_bytes();
     assert!(
         bytes.windows(4).any(|w| w == needle),
-        "expected SCALL imm8=0x68 (zk_verify_batch) in compiled bytecode"
+        "expected SCALL imm8=0x64 (zk_verify_batch) in compiled bytecode"
     );
 }
 

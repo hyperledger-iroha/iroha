@@ -16,21 +16,20 @@ private val LOW_ORDER_X25519_CHECK_PRIVATE_KEY = ByteArray(32) { 1 }
 
 /** Shielded asset registration mode accepted by `zk::RegisterZkAsset`. */
 enum class ZkAssetMode(@JvmField val bridgeCode: Int, @JvmField val wireName: String) {
-    ZK_NATIVE(0, "ZkNative"),
-    HYBRID(1, "Hybrid");
+    HYBRID(0, "Hybrid");
 
     companion object {
         @JvmStatic
         fun fromWireName(value: String?): ZkAssetMode {
             val normalized = requireText(value, "mode")
             return entries.firstOrNull { it.wireName == normalized }
-                ?: throw IllegalArgumentException("mode must be ZkNative or Hybrid")
+                ?: throw IllegalArgumentException("mode must be Hybrid")
         }
     }
 }
 
 /**
- * X25519/XChaCha20-Poly1305 encrypted note payload carried by `zk::Shield`.
+ * X25519/XChaCha20-Poly1305 encrypted confidential-note payload.
  *
  * Ciphertext is capped at [MAX_CIPHERTEXT_BYTES] because the encrypted payload
  * is a compact note descriptor, not an arbitrary attachment channel.
@@ -396,7 +395,6 @@ class RegisterZkAssetInstruction private constructor(
     @JvmField val mode: ZkAssetMode,
     @JvmField val allowShield: Boolean,
     @JvmField val allowUnshield: Boolean,
-    @JvmField val transferVerifyingKey: String?,
     @JvmField val unshieldVerifyingKey: String?,
     @JvmField val shieldVerifyingKey: String?,
     override val arguments: Map<String, String>,
@@ -405,10 +403,9 @@ class RegisterZkAssetInstruction private constructor(
 
     class Builder internal constructor() {
         private var asset: String? = null
-        private var mode: ZkAssetMode = ZkAssetMode.ZK_NATIVE
+        private var mode: ZkAssetMode = ZkAssetMode.HYBRID
         private var allowShield: Boolean = true
         private var allowUnshield: Boolean = true
-        private var transferVerifyingKey: String? = null
         private var unshieldVerifyingKey: String? = null
         private var shieldVerifyingKey: String? = null
 
@@ -428,10 +425,6 @@ class RegisterZkAssetInstruction private constructor(
             this.allowUnshield = allowUnshield
         }
 
-        fun setTransferVerifyingKey(verifyingKey: String?) = apply {
-            this.transferVerifyingKey = optionalVerifyingKeyId(verifyingKey, "transferVerifyingKey")
-        }
-
         fun setUnshieldVerifyingKey(verifyingKey: String?) = apply {
             this.unshieldVerifyingKey = optionalVerifyingKeyId(verifyingKey, "unshieldVerifyingKey")
         }
@@ -447,7 +440,6 @@ class RegisterZkAssetInstruction private constructor(
                 mode,
                 allowShield,
                 allowUnshield,
-                transferVerifyingKey,
                 unshieldVerifyingKey,
                 shieldVerifyingKey,
                 linkedMapOf(
@@ -456,7 +448,6 @@ class RegisterZkAssetInstruction private constructor(
                     "mode" to mode.wireName,
                     "allow_shield" to allowShield.toString(),
                     "allow_unshield" to allowUnshield.toString(),
-                    "vk_transfer" to (transferVerifyingKey ?: ""),
                     "vk_unshield" to (unshieldVerifyingKey ?: ""),
                     "vk_shield" to (shieldVerifyingKey ?: ""),
                 ),
@@ -470,12 +461,14 @@ class RegisterZkAssetInstruction private constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterZkAssetInstruction {
+            require("vk_transfer" !in arguments) {
+                "Instruction argument 'vk_transfer' is no longer supported"
+            }
             val builder = builder()
                 .setAsset(requireArgument(arguments, "asset"))
                 .setMode(ZkAssetMode.fromWireName(requireArgument(arguments, "mode")))
                 .setAllowShield(parseBoolean(requireArgument(arguments, "allow_shield"), "allow_shield"))
                 .setAllowUnshield(parseBoolean(requireArgument(arguments, "allow_unshield"), "allow_unshield"))
-            optionalArgument(arguments, "vk_transfer")?.let { builder.setTransferVerifyingKey(it) }
             optionalArgument(arguments, "vk_unshield")?.let { builder.setUnshieldVerifyingKey(it) }
             optionalArgument(arguments, "vk_shield")?.let { builder.setShieldVerifyingKey(it) }
             return builder.build()
@@ -496,214 +489,6 @@ class RegisterZkAssetInstruction private constructor(
                 "false" -> false
                 else -> throw IllegalArgumentException("$name must be 'true' or 'false'")
             }
-    }
-}
-
-/** Typed representation of `zk::Shield`. */
-class ShieldInstruction private constructor(
-    @JvmField val asset: String,
-    @JvmField val from: String,
-    @JvmField val amount: String,
-    noteCommitment: ByteArray,
-    @JvmField val encryptedPayload: ConfidentialEncryptedPayload,
-    override val arguments: Map<String, String>,
-) : InstructionTemplate {
-    private val _noteCommitment = noteCommitment.copyOf()
-
-    override val kind: InstructionKind get() = InstructionKind.CUSTOM
-
-    val noteCommitment: ByteArray get() = _noteCommitment.copyOf()
-
-    fun noteCommitmentBytes(): ByteArray = noteCommitment
-
-    class Builder internal constructor() {
-        private var asset: String? = null
-        private var from: String? = null
-        private var amount: String? = null
-        private var noteCommitment: ByteArray? = null
-        private var encryptedPayload: ConfidentialEncryptedPayload? = null
-
-        fun setAsset(asset: String?) = apply {
-            this.asset = requireText(asset, "asset")
-        }
-
-        fun setFrom(from: String?) = apply {
-            this.from = requireText(from, "from")
-        }
-
-        fun setAmount(amount: String?) = apply {
-            this.amount = canonicalQuantity(amount, "amount")
-        }
-
-        /** Sets an already validated Kotodama V1 quantity. */
-        fun setAmount(amount: KotodamaQuantity?) = setAmount(amount?.toString())
-
-        fun setNoteCommitment(noteCommitment: ByteArray?) = apply {
-            this.noteCommitment = fixedNonZeroBytes(noteCommitment, 32, "noteCommitment")
-        }
-
-        fun setEncryptedPayload(encryptedPayload: ConfidentialEncryptedPayload?) = apply {
-            this.encryptedPayload = requireNotNull(encryptedPayload) {
-                "encryptedPayload must be provided"
-            }
-        }
-
-        fun build(): ShieldInstruction {
-            val selectedAsset = checkNotNull(asset) { "asset must be provided" }
-            val selectedFrom = checkNotNull(from) { "from must be provided" }
-            val selectedAmount = checkNotNull(amount) { "amount must be provided" }
-            val selectedCommitment = checkNotNull(noteCommitment) { "noteCommitment must be provided" }
-            val selectedPayload = checkNotNull(encryptedPayload) { "encryptedPayload must be provided" }
-            return ShieldInstruction(
-                selectedAsset,
-                selectedFrom,
-                selectedAmount,
-                selectedCommitment,
-                selectedPayload,
-                linkedMapOf(
-                    "action" to "Shield",
-                    "asset" to selectedAsset,
-                    "from" to selectedFrom,
-                    "amount" to selectedAmount,
-                    "note_commitment" to hexLower(selectedCommitment),
-                    "payload_ephemeral" to hexLower(selectedPayload.ephemeralPublicKey),
-                    "payload_nonce" to hexLower(selectedPayload.nonce),
-                    "payload_ciphertext" to Base64.getEncoder().encodeToString(selectedPayload.ciphertext),
-                ),
-            )
-        }
-    }
-
-    companion object {
-        @JvmStatic
-        fun builder(): Builder = Builder()
-
-        /**
-         * Intentionally unsupported. `zk::Shield` carries a 32-byte note commitment and a binary
-         * X25519/XChaCha20-Poly1305 encrypted payload that cannot be reconstructed from a generic
-         * string argument map. Build instances through [builder] instead.
-         */
-        @JvmStatic
-        fun fromArguments(arguments: Map<String, String>): ShieldInstruction =
-            throw UnsupportedOperationException(
-                "ShieldInstruction cannot be built from an argument map: its note commitment and " +
-                    "encrypted payload are binary fields. Use ShieldInstruction.builder().",
-            )
-    }
-}
-
-/**
- * Typed representation of `zk::Unshield`.
- *
- * Any private change commitment is authenticated by the proof and derived by the node; callers do
- * not supply an output list.
- */
-class UnshieldInstruction private constructor(
-    @JvmField val asset: String,
-    @JvmField val to: String,
-    @JvmField val publicAmount: String,
-    inputs: List<ByteArray>,
-    @JvmField val proof: ProofAttachment,
-    rootHint: ByteArray?,
-    override val arguments: Map<String, String>,
-) : InstructionTemplate {
-    private val _inputs = inputs.map { it.copyOf() }
-    private val _rootHint = rootHint?.copyOf()
-
-    override val kind: InstructionKind get() = InstructionKind.CUSTOM
-
-    val inputs: List<ByteArray> get() = _inputs.map { it.copyOf() }
-
-    val rootHint: ByteArray? get() = _rootHint?.copyOf()
-
-    fun inputNullifiers(): List<ByteArray> = inputs
-
-    fun rootHintBytes(): ByteArray? = rootHint
-
-    class Builder internal constructor() {
-        private var asset: String? = null
-        private var to: String? = null
-        private var publicAmount: String? = null
-        private val inputs = mutableListOf<ByteArray>()
-        private var proof: ProofAttachment? = null
-        private var rootHint: ByteArray? = null
-
-        fun setAsset(asset: String?) = apply {
-            this.asset = requireText(asset, "asset")
-        }
-
-        fun setTo(to: String?) = apply {
-            this.to = requireText(to, "to")
-        }
-
-        fun setPublicAmount(publicAmount: String?) = apply {
-            this.publicAmount = canonicalQuantity(publicAmount, "publicAmount")
-        }
-
-        fun setPublicAmount(publicAmount: KotodamaQuantity?) =
-            setPublicAmount(publicAmount?.toString())
-
-        fun setInputs(inputs: List<ByteArray>?) = apply {
-            this.inputs.clear()
-            require(inputs != null && inputs.isNotEmpty()) { "inputs must contain at least one nullifier" }
-            inputs.forEachIndexed { index, input ->
-                this.inputs.add(fixedNonZeroBytes(input, 32, "inputs[$index]"))
-            }
-        }
-
-        fun addInput(input: ByteArray?) = apply {
-            inputs.add(fixedNonZeroBytes(input, 32, "inputs[${inputs.size}]"))
-        }
-
-        fun setProof(proof: ProofAttachment?) = apply {
-            this.proof = requireNotNull(proof) { "proof must be provided" }
-        }
-
-        fun setRootHint(rootHint: ByteArray?) = apply {
-            this.rootHint = rootHint?.let { fixedBytes(it, 32, "rootHint") }
-        }
-
-        fun build(): UnshieldInstruction {
-            val selectedAsset = checkNotNull(asset) { "asset must be provided" }
-            val selectedTo = checkNotNull(to) { "to must be provided" }
-            val selectedAmount = checkNotNull(publicAmount) { "publicAmount must be provided" }
-            check(inputs.isNotEmpty()) { "inputs must contain at least one nullifier" }
-            val selectedProof = checkNotNull(proof) { "proof must be provided" }
-            return UnshieldInstruction(
-                selectedAsset,
-                selectedTo,
-                selectedAmount,
-                inputs,
-                selectedProof,
-                rootHint,
-                linkedMapOf(
-                    "action" to "Unshield",
-                    "asset" to selectedAsset,
-                    "to" to selectedTo,
-                    "public_amount" to selectedAmount,
-                    "inputs" to inputs.joinToString(",") { hexLower(it) },
-                    "proof" to selectedProof.toNativeJson(),
-                    "root_hint" to (rootHint?.let { hexLower(it) } ?: ""),
-                ),
-            )
-        }
-    }
-
-    companion object {
-        @JvmStatic
-        fun builder(): Builder = Builder()
-
-        /**
-         * Intentionally unsupported. `zk::Unshield` carries binary input nullifiers and a proof
-         * attachment that cannot be reconstructed from a generic string argument map. Build
-         * instances through [builder] instead.
-         */
-        @JvmStatic
-        fun fromArguments(arguments: Map<String, String>): UnshieldInstruction =
-            throw UnsupportedOperationException(
-                "UnshieldInstruction cannot be built from an argument map: its nullifiers and " +
-                    "proof attachment are binary fields. Use UnshieldInstruction.builder().",
-            )
     }
 }
 

@@ -138,27 +138,6 @@ fn escrow_and_merkle_host_boundaries_reject_private_secondary_arguments() {
 }
 
 #[test]
-fn single_argument_anonymous_escrow_calls_ignore_unrelated_private_registers() {
-    for syscall in [
-        syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
-        syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
-    ] {
-        let mut vm = IVM::new(10_000);
-        vm.load_program(&raw_zk_program(&[scall(syscall)]))
-            .expect("load ZK syscall fixture");
-        vm.set_host(DefaultHost::new());
-        vm.set_register(11, 7);
-        vm.registers.set_tag(11, true);
-
-        assert_ne!(
-            vm.run(),
-            Err(VMError::PrivacyViolation),
-            "single-argument syscall {syscall:#x} treated unrelated private r11 as public input"
-        );
-    }
-}
-
-#[test]
 fn load_private_address_fails() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_zk_mode(true);

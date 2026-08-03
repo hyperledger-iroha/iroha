@@ -114,13 +114,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<escrow::DrawdownAssetLock>,
     InstructionRegistry::register_slice::<escrow::CancelAssetLock>,
     InstructionRegistry::register_slice::<escrow::ExpireAssetLock>,
-    InstructionRegistry::register_slice::<escrow::OpenAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::AcceptAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::MarkAnonymousEscrowPaymentSent>,
-    InstructionRegistry::register_slice::<escrow::ReleaseAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::CancelAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::OpenAnonymousEscrowDispute>,
-    InstructionRegistry::register_slice::<escrow::ResolveAnonymousEscrowDispute>,
     InstructionRegistry::register_slice::<vpn::OpenVpnLeaseEscrow>,
     InstructionRegistry::register_slice::<vpn::SettleVpnLease>,
     InstructionRegistry::register_slice::<vpn::RefundExpiredVpnLease>,
@@ -208,6 +201,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<contract_alias::SetContractAlias>,
     InstructionRegistry::register_slice::<musubi::RegisterMusubiNamespaceBindingV1>,
     InstructionRegistry::register_slice::<musubi::RegisterMusubiArchiveV1>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiProviderBundleAttestationV1>,
     InstructionRegistry::register_slice::<musubi::AddMusubiArchiveLocationV1>,
     InstructionRegistry::register_slice::<musubi::RetireMusubiArchiveLocationV1>,
     InstructionRegistry::register_slice::<musubi::PublishMusubiReleaseV1>,
@@ -350,9 +344,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<zk::RegisterZkAsset>,
     InstructionRegistry::register_slice::<zk::ScheduleConfidentialPolicyTransition>,
     InstructionRegistry::register_slice::<zk::CancelConfidentialPolicyTransition>,
-    InstructionRegistry::register_slice::<zk::Shield>,
-    InstructionRegistry::register_slice::<zk::ZkTransfer>,
-    InstructionRegistry::register_slice::<zk::Unshield>,
     InstructionRegistry::register_slice::<zk::CreateElection>,
     InstructionRegistry::register_slice::<zk::SubmitBallot>,
     InstructionRegistry::register_slice::<zk::FinalizeElection>,
@@ -485,6 +476,7 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
         registry;
         RegisterMusubiNamespaceBindingV1,
         RegisterMusubiArchiveV1,
+        RegisterMusubiProviderBundleAttestationV1,
         AddMusubiArchiveLocationV1,
         RetireMusubiArchiveLocationV1,
         PublishMusubiReleaseV1,
@@ -1147,9 +1139,9 @@ mod tests {
 
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "cac7fc565a6a5a5b25be028218e08cb46973b96bfc24dd488c56c9b84bbdc297";
+            "68123bb16922f819106520b25bc0e3df75196a2e271f99f37edc7171bf736839";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "8b3425102fdceb1cf4e61ef19ec6db5474d365918d1fe233255aa47e08de47b8";
+            "8420134d76274e6ed35c8d0960d2da7f20738fb83fbdf24f86bebd6a5d93e5a9";
 
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
@@ -2139,6 +2131,101 @@ mod tests {
                 registry.decode(retired, &[]).is_none(),
                 "retired ZK-ACE instruction wire unexpectedly remains decodable: {retired}"
             );
+        }
+    }
+
+    #[test]
+    fn default_registry_excludes_retired_confidential_instructions() {
+        let retired_wires = [
+            ["iroha_data_model::isi::zk::", "Shield"].concat(),
+            ["iroha_data_model::isi::zk::", "ZkTransfer"].concat(),
+            ["iroha_data_model::isi::zk::", "Unshield"].concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "OpenAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "AcceptAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "MarkAnonymous",
+                "EscrowPaymentSent",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "ReleaseAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "CancelAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "OpenAnonymous",
+                "EscrowDispute",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "ResolveAnonymous",
+                "EscrowDispute",
+            ]
+            .concat(),
+        ];
+        let registry = default();
+
+        for retired in &retired_wires {
+            assert!(
+                !registry.contains(retired),
+                "retired confidential wire must not be registered: {retired}"
+            );
+            assert!(
+                registry.decode(retired, &[]).is_none(),
+                "retired confidential wire must not be dispatchable: {retired}"
+            );
+        }
+
+        for specialized in [
+            std::any::type_name::<offline::TopUpKagemushaRecursiveV4>(),
+            std::any::type_name::<offline::RedeemKagemushaRecursiveV4>(),
+        ] {
+            assert!(
+                registry.contains(specialized),
+                "protocol-bound confidential instruction must remain registered: {specialized}"
+            );
+            assert_eq!(registry.wire_id(specialized), Some(specialized));
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn structured_json_rejects_retired_confidential_dispatch() {
+        for name in [
+            "Shield".to_owned(),
+            "ZkTransfer".to_owned(),
+            "Unshield".to_owned(),
+            ["OpenAnonymous", "AssetEscrow"].concat(),
+            ["AcceptAnonymous", "AssetEscrow"].concat(),
+            ["MarkAnonymous", "EscrowPaymentSent"].concat(),
+            ["ReleaseAnonymous", "AssetEscrow"].concat(),
+            ["CancelAnonymous", "AssetEscrow"].concat(),
+            ["OpenAnonymous", "EscrowDispute"].concat(),
+            ["ResolveAnonymous", "EscrowDispute"].concat(),
+        ] {
+            let retired = format!(r#"{{"name":"{name}","params":{{}}}}"#);
+            norito::json::from_str::<InstructionBox>(&retired)
+                .expect_err("retired confidential JSON must not dispatch");
         }
     }
 

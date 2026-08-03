@@ -1524,7 +1524,7 @@ fn slot_root_index(degree: usize, slot: usize) -> Result<usize, ZkAmsMkheErrorV1
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
     let exponent = mod_pow_usize(SLOT_GALOIS_GENERATOR_V1, slot, 2 * degree);
-    if exponent == 0 || exponent % 2 == 0 {
+    if exponent == 0 || exponent.is_multiple_of(2) {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
     Ok((exponent - 1) / 2)

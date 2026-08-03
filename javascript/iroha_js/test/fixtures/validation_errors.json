@@ -131,13 +131,13 @@
   },
   "governanceFinalizeReferendum_referendum_required": {
     "code": "ERR_INVALID_STRING",
-    "path": "governanceFinalizeReferendum.referendum_id",
-    "message": "governanceFinalizeReferendum.referendum_id is required"
+    "path": "governanceFinalizeReferendum.referendumId",
+    "message": "governanceFinalizeReferendum.referendumId is required"
   },
   "governanceFinalizeReferendum_proposal_required": {
     "code": "ERR_INVALID_STRING",
-    "path": "governanceFinalizeReferendum.proposal_id",
-    "message": "governanceFinalizeReferendum.proposal_id is required"
+    "path": "governanceFinalizeReferendum.proposalId",
+    "message": "governanceFinalizeReferendum.proposalId is required"
   },
   "governanceEnactProposal_window_lower_required": {
     "code": "ERR_INVALID_NUMERIC",

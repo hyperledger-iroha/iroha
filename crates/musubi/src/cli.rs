@@ -8,7 +8,7 @@ use crate::{command, output::ErrorCode};
 ///
 /// The returned value is the stable process exit status. The library never
 /// terminates the process itself, which keeps parsing and output testable.
-pub(crate) fn run() -> i32 {
+pub fn run() -> i32 {
     let invocation = command::invoke(std::env::args_os());
     let Ok(rendered) = invocation.output.render(invocation.format) else {
         return ErrorCode::Internal.exit_code();

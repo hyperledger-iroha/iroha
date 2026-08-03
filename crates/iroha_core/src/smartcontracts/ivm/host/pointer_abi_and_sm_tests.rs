@@ -131,7 +131,14 @@ fn pointer_abi_transfer_asset_enqueues_isi() {
         .preload_input(off_dataspace, &dataspace_tlv)
         .expect("preload input");
 
-    let state = scoped_transfer_state(&from, &to, asset_def.clone(), AssetBalancePolicy::Global);
+    let state = scoped_transfer_state(
+        &from,
+        &to,
+        asset_def.clone(),
+        "coin",
+        AssetBalancePolicy::Global,
+        None,
+    );
     let view = state.view();
     let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(from.clone());
     host.set_query_state(&view);

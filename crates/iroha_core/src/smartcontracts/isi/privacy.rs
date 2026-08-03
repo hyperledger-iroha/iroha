@@ -27,7 +27,7 @@ use iroha_data_model::{
         },
     },
     permission::Permission,
-    prelude::{Account, AccountId, Quantity, Register, Transfer},
+    prelude::{Account, AccountId, Quantity, Register},
     privacy::{
         BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1, BootleLanternIssuerPolicyLifecycleV1,
         BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
@@ -832,10 +832,12 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
             )));
         }
 
-        state_transaction
-            .world
-            .asset_definition(&self.bootstrap.asset_definition_id)
-            .map_err(Error::from)?;
+        super::asset::isi::validate_committed_public_balance_scope(
+            state_transaction,
+            &self.bootstrap.asset_definition_id,
+            self.bootstrap.public_balance_scope,
+            "Orchard pool bootstrap",
+        )?;
         if state_transaction
             .world
             .accounts
@@ -898,6 +900,7 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
         let pool_state = PrivacyOrchardPoolStateV1::bootstrap(
             bootstrap_digest,
             self.bootstrap.asset_definition_id.clone(),
+            self.bootstrap.public_balance_scope,
             self.bootstrap.reserve_account.clone(),
         )
         .map_err(invalid_privacy_parameter)?;
@@ -1026,6 +1029,14 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
             .world
             .asset_definition(self.bootstrap.asset_definition_id())
             .map_err(Error::from)?;
+        if let Some(public_balance_scope) = self.bootstrap.public_balance_scope() {
+            super::asset::isi::validate_committed_public_balance_scope(
+                state_transaction,
+                self.bootstrap.asset_definition_id(),
+                public_balance_scope,
+                "private-IVM pool bootstrap",
+            )?;
+        }
         if let Some(reserve_account) = self.bootstrap.reserve_account()
             && state_transaction
                 .world
@@ -4733,6 +4744,9 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.bootstrap_digest() != snapshot.bootstrap_digest()
                     || effect.asset_definition_id() != snapshot.state().asset_definition_id()
                     || effect.asset_definition_id() != &statement.asset_definition_id
+                    || effect.public_balance_scope()
+                        != snapshot.state().public_balance_scope()
+                    || effect.public_balance_scope() != statement.public_balance_scope
                     || effect.reserve_account() != snapshot.state().reserve_account()
                     || effect.anchor() != statement.anchor
                     || effect.anchor_epoch() != statement.anchor_epoch
@@ -4857,28 +4871,29 @@ impl Execute for SubmitPrivacyProofV1 {
                     let amount = Quantity::from(balance.amount);
                     match balance.direction {
                         PrivacyValueBalanceDirectionV1::IntoPool => {
-                            let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
-                                    state_transaction,
-                                    effect.asset_definition_id(),
-                                    authority,
-                                )?;
-                            Transfer::asset_quantity(
-                                source_asset_id,
+                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                                state_transaction,
+                                authority,
+                                self.envelope.statement_digest,
+                                effect.asset_definition_id(),
+                                effect.public_balance_scope(),
+                                authority,
+                                effect.reserve_account(),
                                 amount,
-                                effect.reserve_account().clone(),
                             )
-                            .execute(authority, state_transaction)?;
+                            ?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
-                            let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
-                                    state_transaction,
-                                    effect.asset_definition_id(),
-                                    effect.reserve_account(),
-                                )?;
-                            Transfer::asset_quantity(source_asset_id, amount, authority.clone())
-                                .execute(effect.reserve_account(), state_transaction)?;
+                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                                state_transaction,
+                                authority,
+                                self.envelope.statement_digest,
+                                effect.asset_definition_id(),
+                                effect.public_balance_scope(),
+                                effect.reserve_account(),
+                                authority,
+                                amount,
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::Balanced => unreachable!(
                             "directional Orchard bridge checked before transfer dispatch"
@@ -4914,10 +4929,12 @@ impl Execute for SubmitPrivacyProofV1 {
                         "native proof-managed effect has no trusted pool snapshot".into(),
                     )
                 })?;
-                let (asset_definition_id, statement_anchor_is_valid, value_balance) = match &self
-                    .envelope
-                    .statement
-                {
+                let (
+                    asset_definition_id,
+                    statement_anchor_is_valid,
+                    value_balance,
+                    public_balance_scope,
+                ) = match &self.envelope.statement {
                     PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) => (
                         &statement.asset_definition_id,
                         snapshot.contains_retained_root(
@@ -4925,15 +4942,18 @@ impl Execute for SubmitPrivacyProofV1 {
                             statement.output_set_root.history_commitment(),
                         ),
                         None,
+                        None,
                     ),
                     PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => (
                         &statement.asset_definition_id,
                         snapshot.contains_retained_root(statement.root_epoch, statement.state_root),
                         Some(statement.value_balance),
+                        Some(statement.public_balance_scope),
                     ),
                     PrivacyStatementV1::PqMaspStarkV0(statement) => (
                         &statement.asset_definition_id,
                         snapshot.contains_retained_root(statement.anchor_epoch, statement.anchor),
+                        None,
                         None,
                     ),
                     _ => {
@@ -4955,6 +4975,9 @@ impl Execute for SubmitPrivacyProofV1 {
                         })?
                     || effect.next_root() == effect.current_root()
                     || effect.value_balance() != value_balance
+                    || effect.public_balance_scope() != public_balance_scope
+                    || effect.public_balance_scope()
+                        != snapshot.bootstrap().public_balance_scope()
                 {
                     return Err(Error::InvariantViolation(
                         "native proof-managed effect is inconsistent with trusted state or its statement"
@@ -5284,30 +5307,37 @@ impl Execute for SubmitPrivacyProofV1 {
                     && balance.direction != PrivacyValueBalanceDirectionV1::Balanced
                 {
                     let amount = Quantity::from(balance.amount);
+                    let public_balance_scope = effect.public_balance_scope().ok_or_else(|| {
+                        Error::InvariantViolation(
+                            "directional proof-managed bridge has no committed public balance scope"
+                                .into(),
+                        )
+                    })?;
                     match balance.direction {
                         PrivacyValueBalanceDirectionV1::IntoPool => {
-                            let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
-                                    state_transaction,
-                                    effect.asset_definition_id(),
-                                    authority,
-                                )?;
-                            Transfer::asset_quantity(
-                                source_asset_id,
+                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                                state_transaction,
+                                authority,
+                                self.envelope.statement_digest,
+                                effect.asset_definition_id(),
+                                public_balance_scope,
+                                authority,
+                                reserve_account,
                                 amount,
-                                reserve_account.clone(),
                             )
-                            .execute(authority, state_transaction)?;
+                            ?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
-                            let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
-                                    state_transaction,
-                                    effect.asset_definition_id(),
-                                    reserve_account,
-                                )?;
-                            Transfer::asset_quantity(source_asset_id, amount, authority.clone())
-                                .execute(reserve_account, state_transaction)?;
+                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                                state_transaction,
+                                authority,
+                                self.envelope.statement_digest,
+                                effect.asset_definition_id(),
+                                public_balance_scope,
+                                reserve_account,
+                                authority,
+                                amount,
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::Balanced => unreachable!(
                             "directional proof-managed bridge checked before transfer dispatch"
@@ -5368,6 +5398,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.source != statement.source
                     || effect.destination != statement.destination
                     || effect.asset_definition_id != statement.asset_definition_id
+                    || effect.public_balance_scope != statement.public_balance_scope
                     || effect.amount != statement.amount
                     || effect.replay_nullifier != statement.replay_nullifier
                     || effect.policy_id != policy.policy_id
@@ -5415,17 +5446,20 @@ impl Execute for SubmitPrivacyProofV1 {
                     expected_action_index,
                 )
                 .map_err(invalid_privacy_parameter)?;
-                let source_asset_id = crate::smartcontracts::world::isi::privacy_public_asset_id(
-                    state_transaction,
-                    &effect.asset_definition_id,
-                    &effect.source,
-                )?;
                 let amount = Quantity::from(effect.amount);
 
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
-                Transfer::asset_quantity(source_asset_id, amount, effect.destination)
-                    .execute(&effect.source, state_transaction)?;
+                super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                    state_transaction,
+                    authority,
+                    self.envelope.statement_digest,
+                    &effect.asset_definition_id,
+                    effect.public_balance_scope,
+                    &effect.source,
+                    &effect.destination,
+                    amount,
+                )?;
                 state_transaction
                     .world
                     .privacy_nullifiers
@@ -7241,6 +7275,7 @@ mod tests {
             PrivacyIvmPrivateNotePoolBootstrapV1 {
                 pool_id: statement.pool_id,
                 asset_definition_id: statement.asset_definition_id.clone(),
+                public_balance_scope: statement.public_balance_scope,
                 reserve_account: ALICE_ID.clone(),
                 program_id: statement.program_id,
                 initial_note_commitments: vec![input_commitment],
@@ -7359,6 +7394,7 @@ mod tests {
                     next_epoch: successor.epoch(),
                     transition: transition(),
                     value_balance: Some(statement.value_balance),
+                    public_balance_scope: Some(statement.public_balance_scope),
                 },
             )
         };
@@ -7472,6 +7508,7 @@ mod tests {
                     successor_state: pq_successor.clone(),
                 },
                 value_balance: None,
+                public_balance_scope: None,
             },
         );
         let pq_config_key =

@@ -16953,7 +16953,7 @@ impl Metrics {
         let mut lanes = self
             .da_receipt_metric_lanes
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(lane) = da_receipt_metric_lane(&mut lanes, lane_id) else {
             return;
         };
@@ -17011,7 +17011,7 @@ impl Metrics {
         let mut lanes = self
             .da_receipt_metric_lanes
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(lane) = da_receipt_metric_lane(&mut lanes, lane_id) else {
             return;
         };
@@ -17029,7 +17029,7 @@ impl Metrics {
         let mut lanes = self
             .da_receipt_metric_lanes
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for lane_id in lane_ids {
             if lanes.remove(&lane_id).is_none() {
                 continue;
@@ -17053,7 +17053,7 @@ impl Metrics {
     pub fn da_receipt_cursor_status(&self) -> Vec<DaReceiptCursorStatus> {
         self.da_receipt_metric_lanes
             .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .filter_map(|(&lane_id, lane)| {
                 lane.cursor.map(|cursor| DaReceiptCursorStatus {

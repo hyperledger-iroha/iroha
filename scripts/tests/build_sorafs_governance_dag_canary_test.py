@@ -38,6 +38,11 @@ from sorafs_rollout_runner_test_support import write_topology_qualification  # n
 PUBLIC_HEAD = "a" * 64
 CHECKPOINT = "b" * 64
 POLICY = "c" * 64
+RECEIVER_POLICY = "d" * 64
+REPLAY_NAMESPACE = "e" * 64
+REPLICA_SET = "f" * 64
+KUBO_INGRESS_BINDING = "12" * 32
+SIGNED_HEAD_INGRESS_BINDING = "34" * 32
 GENERATED_AT = 1_800_100_000
 
 
@@ -80,6 +85,26 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--public-head-cid-hex", PUBLIC_HEAD])
     if kind in MODULE.POLICY_DIGEST_KINDS:
         args.extend(["--policy-digest-hex", POLICY])
+    if kind in MODULE.INGRESS_QUALIFICATION_DIGEST_KINDS:
+        args.extend(
+            [
+                "--receiver-policy-digest-hex",
+                RECEIVER_POLICY,
+                "--replay-namespace-digest-hex",
+                REPLAY_NAMESPACE,
+                "--replica-set-digest-hex",
+                REPLICA_SET,
+            ]
+        )
+    if kind in MODULE.INGRESS_BINDING_DIGEST_KINDS:
+        args.extend(
+            [
+                "--kubo-ingress-binding-digest-hex",
+                KUBO_INGRESS_BINDING,
+                "--signed-head-ingress-binding-digest-hex",
+                SIGNED_HEAD_INGRESS_BINDING,
+            ]
+        )
     for claim in MODULE.TRUE_CLAIMS[kind]:
         args.extend(["--verified-claim", claim])
     if kind == "ingest_service":
@@ -110,7 +135,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     elif kind == "observability":
         for metric in MODULE.REQUIRED_METRICS:
             args.extend(["--metric", metric])
-    elif kind == "ipfs_ipns_e2e":
+    elif kind == "publication_e2e":
         args.extend(["--block-count", "8"])
         for block_ref in block_refs(8):
             args.extend(["--block-ref", block_ref])
@@ -142,6 +167,13 @@ def test_builds_payload_free_publisher_service_canary(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.governance_dag.publisher_service_canary.v1"
     assert payload["public_head_cid_hex"] == PUBLIC_HEAD
     assert payload["policy_digest_hex"] == POLICY
+    assert payload["kubo_unixfs_profile"] == CHECKER.KUBO_UNIXFS_PROFILE
+    assert payload["unixfs_chunk_size_bytes"] == CHECKER.KUBO_UNIXFS_CHUNK_SIZE_BYTES
+    assert payload["ingress_enforcement"] == CHECKER.INGRESS_ENFORCEMENT
+    assert payload["replay_posture"] == CHECKER.REPLAY_POSTURE
+    assert payload["receiver_policy_digest_hex"] == RECEIVER_POLICY
+    assert payload["replay_namespace_digest_hex"] == REPLAY_NAMESPACE
+    assert payload["replica_set_digest_hex"] == REPLICA_SET
     assert payload["payload_kind_count"] == len(MODULE.REQUIRED_PAYLOAD_KINDS)
     assert payload["payload_kinds"] == list(MODULE.REQUIRED_PAYLOAD_KINDS)
     assert payload["block_count"] == 8
@@ -153,6 +185,113 @@ def test_builds_payload_free_publisher_service_canary(tmp_path: Path) -> None:
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "publisher_service"
     assert errors == []
+
+
+def test_generated_canaries_encode_fixed_first_release_constants(tmp_path: Path) -> None:
+    for kind in (
+        "mirror_datastore",
+        "observability",
+        "governance_approval",
+        "dashboard_api",
+        "publication_e2e",
+    ):
+        assert MODULE.main(args_for(kind, tmp_path)) == 0
+
+    mirror = json.loads(canary_path(tmp_path, "mirror_datastore").read_text("utf-8"))
+    assert mirror["retention_max_entries"] == CHECKER.MIRROR_RETENTION_MAX_ENTRIES
+    assert mirror["retention_max_bytes"] == CHECKER.MIRROR_RETENTION_MAX_BYTES
+    assert mirror["fresh_checkpoint_coherent_reads_verified"] is True
+    assert mirror["liveness_bound_reader_verified"] is True
+
+    observability = json.loads(
+        canary_path(tmp_path, "observability").read_text("utf-8")
+    )
+    assert (
+        observability["audit_max_entries_per_poll"]
+        == CHECKER.STEADY_AUDIT_MAX_ENTRIES_PER_POLL
+    )
+    assert (
+        observability["audit_max_bytes_per_poll"]
+        == CHECKER.STEADY_AUDIT_MAX_BYTES_PER_POLL
+    )
+
+    approval = json.loads(
+        canary_path(tmp_path, "governance_approval").read_text("utf-8")
+    )
+    assert approval["receiver_policy_digest_hex"] == RECEIVER_POLICY
+    assert approval["replay_namespace_digest_hex"] == REPLAY_NAMESPACE
+    assert approval["replica_set_digest_hex"] == REPLICA_SET
+    assert approval["kubo_ingress_binding_digest_hex"] == KUBO_INGRESS_BINDING
+    assert (
+        approval["signed_head_ingress_binding_digest_hex"]
+        == SIGNED_HEAD_INGRESS_BINDING
+    )
+    assert approval["retention_max_entries"] == CHECKER.MIRROR_RETENTION_MAX_ENTRIES
+    assert approval["retention_max_bytes"] == CHECKER.MIRROR_RETENTION_MAX_BYTES
+
+    dashboard = json.loads(canary_path(tmp_path, "dashboard_api").read_text("utf-8"))
+    assert dashboard["fresh_checkpoint_coherent_reads_verified"] is True
+    assert dashboard["reader_withdrawal_verified"] is True
+
+    publication = json.loads(
+        canary_path(tmp_path, "publication_e2e").read_text("utf-8")
+    )
+    assert publication["post_loss_same_cid_repair_verified"] is True
+    assert publication["bounded_rotating_audit_verified"] is True
+    assert publication["fresh_torii_reads_verified"] is True
+    assert publication["stopped_service_reads_rejected"] is True
+
+
+@pytest.mark.parametrize(
+    "option",
+    (
+        "--receiver-policy-digest-hex",
+        "--replay-namespace-digest-hex",
+        "--replica-set-digest-hex",
+        "--kubo-ingress-binding-digest-hex",
+        "--signed-head-ingress-binding-digest-hex",
+    ),
+)
+def test_ingress_qualification_digests_are_required_before_write(
+    option: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("publisher_service", tmp_path)
+    index = args.index(option)
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert f"{option} must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "publisher_service").exists()
+
+
+@pytest.mark.parametrize(
+    "option",
+    (
+        "--policy-digest-hex",
+        "--receiver-policy-digest-hex",
+        "--replay-namespace-digest-hex",
+        "--replica-set-digest-hex",
+        "--kubo-ingress-binding-digest-hex",
+        "--signed-head-ingress-binding-digest-hex",
+    ),
+)
+def test_security_identity_digests_reject_zero_before_write(
+    option: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("publisher_service", tmp_path)
+    args[args.index(option) + 1] = "0" * 64
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert f"{option} must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "publisher_service").exists()
 
 
 def test_generated_canaries_pass_full_governance_dag_gate(tmp_path: Path) -> None:
@@ -297,11 +436,11 @@ def test_publisher_block_ref_inventory_rejects_placeholder_marker(
     assert not canary_path(tmp_path, "publisher_service").exists()
 
 
-def test_ipfs_block_ref_inventory_must_match_block_count(
+def test_publication_block_ref_inventory_must_match_block_count(
     tmp_path: Path,
     capsys,
 ) -> None:
-    args = args_for("ipfs_ipns_e2e", tmp_path)
+    args = args_for("publication_e2e", tmp_path)
     index = args.index("--block-ref")
     del args[index : index + 2]
 
@@ -309,14 +448,14 @@ def test_ipfs_block_ref_inventory_must_match_block_count(
 
     captured = capsys.readouterr()
     assert "--block-ref unique values must match --block-count" in captured.err
-    assert not canary_path(tmp_path, "ipfs_ipns_e2e").exists()
+    assert not canary_path(tmp_path, "publication_e2e").exists()
 
 
-def test_ipfs_block_ref_inventory_must_use_production_family(
+def test_publication_block_ref_inventory_must_use_production_family(
     tmp_path: Path,
     capsys,
 ) -> None:
-    args = args_for("ipfs_ipns_e2e", tmp_path)
+    args = args_for("publication_e2e", tmp_path)
     args[args.index("--block-ref") + 1] = "governance-block-00"
 
     assert MODULE.main(args) == 2
@@ -326,7 +465,7 @@ def test_ipfs_block_ref_inventory_must_use_production_family(
         "--block-ref must match canonical lowercase `governance-dag-block-*`"
         in captured.err
     )
-    assert not canary_path(tmp_path, "ipfs_ipns_e2e").exists()
+    assert not canary_path(tmp_path, "publication_e2e").exists()
 
 
 def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fmt,
@@ -17,6 +18,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
+use axum::http::{Request, Version, header, request::Parts};
 use ed25519_dalek::VerifyingKey as DalekVerifyingKey;
 use hex::ToHex;
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
@@ -107,7 +109,7 @@ impl Write for GovernanceCarBuffer {
 unsafe extern "C" {
     fn geteuid() -> std::os::raw::c_uint;
 }
-const GOVERNANCE_DAG_SINK_FILESYSTEM: &str = "filesystem";
+pub(crate) const GOVERNANCE_DAG_SINK_FILESYSTEM: &str = "filesystem";
 const GOVERNANCE_PUBLICATION_STATE_FILE: &str = "governance-publication-state-v1.json";
 const GOVERNANCE_PUBLICATION_INITIALIZED_FILE: &str = ".governance-publication-initialized-v1";
 const GOVERNANCE_PUBLICATION_INITIALIZED_BODY: &[u8] =
@@ -117,7 +119,7 @@ const GOVERNANCE_PUBLICATION_STATE_SCHEMA: &str =
 const GOVERNANCE_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publish_index.v1";
 // Public index metadata is root-relative; the retained descriptor is the filesystem authority.
-const GOVERNANCE_DAG_LOGICAL_ROOT: &str = ".";
+pub(crate) const GOVERNANCE_DAG_LOGICAL_ROOT: &str = ".";
 const GOVERNANCE_CAR_QUEUE_FILE: &str = "car-queue.json";
 const GOVERNANCE_CAR_QUEUE_SCHEMA: &str = "sorafs.governance_dag.local_car_queue.v1";
 const GOVERNANCE_CAR_SEGMENT_SCHEMA: &str = "sorafs.governance_dag.local_car_segment.v1";
@@ -125,14 +127,53 @@ const GOVERNANCE_CAR_PLAN_SCHEMA: &str = "sorafs.governance_dag.local_car_plan.v
 const GOVERNANCE_PUBLICATION_SOURCES_DIR: &str = "publication-sources";
 const GOVERNANCE_CAR_SEGMENTS_DIR: &str = "car-segments";
 const GOVERNANCE_RUNTIME_DAG_INDEX_FILE: &str = "runtime-dag-index.json";
-const GOVERNANCE_RUNTIME_DAG_INDEX_SCHEMA: &str = "sorafs.governance_dag.runtime_signed_index.v1";
-const GOVERNANCE_RUNTIME_DAG_DIR: &str = "runtime-dag";
-const GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR: &str = "blocks";
+pub(crate) const GOVERNANCE_RUNTIME_DAG_INDEX_SCHEMA: &str =
+    "sorafs.governance_dag.runtime_signed_index.v1";
+pub(crate) const GOVERNANCE_RUNTIME_DAG_INDEX_FIELDS_V1: &[&str] = &[
+    "schema",
+    "source",
+    "root",
+    "generated_at",
+    "signer_handle",
+    "publisher_peer_id",
+    "publisher_peer_id_hex",
+    "publisher_public_key_hex",
+    "signer_revision",
+    "signer_policy_digest_hex",
+    "checkpoint_store_handle",
+    "checkpoint_store_revision",
+    "checkpoint_store_policy_digest_hex",
+    "head_block_cid_hex",
+    "head_generated_at",
+    "block_count",
+    "by_encoded_blake3",
+    "by_source_payload_blake3",
+    "by_payload_kind",
+    "blocks",
+];
+pub(crate) const GOVERNANCE_RUNTIME_DAG_INDEX_BLOCK_FIELDS_V1: &[&str] = &[
+    "position",
+    "sequence",
+    "payload_kind",
+    "encoded_blake3",
+    "encoded_len",
+    "source_payload_blake3",
+    "source_payload_len",
+    "submission_publisher_account_digest_hex",
+    "submission_origin",
+    "encoded_path",
+    "json_path",
+    "node_cid_hex",
+    "prev_node_cid_hex",
+    "block_cid_hex",
+    "prev_block_cid_hex",
+    "block_path",
+    "published_at_unix",
+];
+pub(crate) const GOVERNANCE_RUNTIME_DAG_DIR: &str = "runtime-dag";
+pub(crate) const GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR: &str = "blocks";
 const GOVERNANCE_RUNTIME_DAG_HEAD_FILE: &str = "head.to";
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR: &str = ".runtime-dag-producer-transaction-v1";
-const GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGED_BLOCK_FILE: &str = "block.to";
-const GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGED_HEAD_FILE: &str = "head.to";
-const GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGED_INDEX_FILE: &str = "index.json";
 const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_FILE: &str =
     "runtime-dag-qualification-history.to";
 const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR: &str =
@@ -140,11 +181,20 @@ const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR: &str =
 const GOVERNANCE_FENCED_PRIVACY_HEAD_CACHE_FILE: &str = "fenced-privacy-head.to";
 const GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_FILE: &str = "fenced-privacy-head-sync.to";
 const GOVERNANCE_FENCED_PRIVACY_PENDING_FILE: &str = "fenced-privacy-pending.to";
+const GOVERNANCE_PUBLICATION_STORE_DIR_V1: &str = "governance-publication-authority-v1";
+const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_DIR_V1: &str =
+    "governance-runtime-qualification-v1";
+const GOVERNANCE_RUNTIME_DAG_STAGING_STORE_DIR_V1: &str = "governance-runtime-staging-v1";
+const GOVERNANCE_RUNTIME_DAG_COMMITTED_STORE_DIR_V1: &str = "governance-runtime-committed-v1";
+const GOVERNANCE_FENCED_PRIVACY_STORE_DIR_V1: &str = "governance-fenced-privacy-v1";
 const GOVERNANCE_FENCED_PRIVACY_HEAD_CACHE_VERSION_V1: u8 = 1;
 const GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_VERSION_V1: u8 = 1;
 const GOVERNANCE_FENCED_PRIVACY_PENDING_VERSION_V1: u8 = 1;
+const GOVERNANCE_FENCED_PRIVACY_STATE_VERSION_V1: u8 = 1;
 const GOVERNANCE_PUBLISHER_LOCK_FILE: &str = ".governance-publisher.lock";
-const GOVERNANCE_MUTABLE_INDEX_MAX_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const GOVERNANCE_MUTABLE_INDEX_MAX_BYTES: usize = 64 * 1024 * 1024;
+const GOVERNANCE_RUNTIME_DAG_HEAD_MAX_BYTES_V1: usize = 64 * 1024;
+const GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_MAX_BYTES_V1: usize = 65 * 1024 * 1024;
 const GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES: usize =
     GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1;
 const GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -155,20 +205,34 @@ const GOVERNANCE_CAR_SOURCE_TOTAL_MAX_BYTES: usize = GOVERNANCE_CAR_SOURCE_ENCOD
 const GOVERNANCE_CAR_ARCHIVE_MAX_BYTES: usize = 160 * 1024 * 1024;
 const GOVERNANCE_PUBLICATION_STATE_MAX_BYTES: usize = 160 * 1024 * 1024;
 const GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP: usize = 131_072;
-const GOVERNANCE_PUBLICATION_ORPHAN_SOURCE_KIND_SLACK: usize = 1;
-const GOVERNANCE_PUBLICATION_ORPHAN_SOURCE_PAIR_SLACK: usize = 1;
-const GOVERNANCE_PUBLICATION_ORPHAN_CAR_FILE_SLACK: usize = 6;
-const GOVERNANCE_PUBLICATION_ORPHAN_ATOMIC_TEMP_SLACK: usize = 1;
+const GOVERNANCE_PUBLICATION_INTERRUPTED_IDENTITY_ALLOWANCE: usize = 1;
+const GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT: usize = 4;
+const GOVERNANCE_PUBLICATION_CAR_ARTIFACT_COUNT: usize = 6;
+const GOVERNANCE_PUBLICATION_ATOMIC_TEMP_ALLOWANCE: usize = 1;
+const GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR: &str =
+    ".governance-publication-recovery-quarantine-v1";
+const GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP: usize = 16;
+const GOVERNANCE_PUBLICATION_SOURCE_WRITE_ORDER: [&str; 4] = [
+    "payload.to",
+    "payload.to.blake3",
+    "payload.json",
+    "payload.json.blake3",
+];
+const GOVERNANCE_PUBLICATION_CAR_WRITE_ORDER: [&str; 6] = [
+    ".car",
+    ".car.blake3",
+    ".plan.json",
+    ".plan.json.blake3",
+    ".json",
+    ".json.blake3",
+];
 const GOVERNANCE_RELATIVE_PATH_MAX_BYTES: usize = 4_096;
 const GOVERNANCE_RELATIVE_PATH_MAX_COMPONENTS: usize = 64;
 const GOVERNANCE_RELATIVE_PATH_COMPONENT_MAX_BYTES: usize = 255;
 const GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES: usize = GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1;
 const GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES: usize =
     GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1;
-const GOVERNANCE_FENCED_PRIVACY_HEAD_MAX_BYTES: usize = 4 * 1024;
-const GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_MAX_BYTES: usize = 4 * 1024;
-const GOVERNANCE_FENCED_PRIVACY_PENDING_MAX_BYTES: usize = 4 * 1024;
-const GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1: usize = 131_072;
+pub(crate) const GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1: usize = 131_072;
 const GOVERNANCE_RUNTIME_DAG_TOTAL_BYTES_HARD_CAP_V1: u64 = 1024 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_MAX_FUTURE_SKEW_SECS_V1: u64 = 60;
 const GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1: usize = 16;
@@ -176,11 +240,14 @@ const GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1: usize = 512 * 1024 *
 const GOVERNANCE_RUNTIME_DAG_DECODE_MAX_TOTAL_ELEMENTS_V1: usize = 4_000_000;
 pub(crate) const GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_VERSION_V1: u8 = 1;
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_INTENT_VERSION_V1: u8 = 1;
+const GOVERNANCE_RUNTIME_DAG_STAGING_STATE_VERSION_V1: u8 = 1;
+const GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_VERSION_V1: u8 = 1;
 const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_VERSION_V1: u8 = 1;
+const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STATE_VERSION_V1: u8 = 1;
 const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_TRANSITION_VERSION_V1: u8 = 1;
 const GOVERNANCE_RUNTIME_DAG_KEY_TRANSITION_VERSION_V1: u8 = 1;
 const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVE_VERSION_V1: u8 = 1;
-const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STATE_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVE_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ACTIVE_MAX_V1: usize = 64;
 const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVE_MAX_TRANSITIONS_V1: usize = 64;
@@ -192,6 +259,50 @@ const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_TOTAL_MAX_V1: u64 =
 const GOVERNANCE_DAG_SEALED_STATE_MAX_BYTES_V1: usize = 192 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_SEALED_MAX_BYTES_V1: usize = 64 * 1024;
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_INTENT_SEALED_MAX_BYTES_V1: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+struct GovernanceTwoSlotStoreSpecV1 {
+    directory_name: &'static str,
+    semantic_domain: &'static [u8],
+    stable_nonce: &'static [u8],
+    max_payload_bytes: usize,
+}
+
+const GOVERNANCE_PUBLICATION_STORE_SPEC_V1: GovernanceTwoSlotStoreSpecV1 =
+    GovernanceTwoSlotStoreSpecV1 {
+        directory_name: GOVERNANCE_PUBLICATION_STORE_DIR_V1,
+        semantic_domain: b"sorafs.governance.publication-authority.v1",
+        stable_nonce: b"sorafs.governance.publication-authority.local-store.v1",
+        max_payload_bytes: GOVERNANCE_PUBLICATION_STATE_MAX_BYTES,
+    };
+const GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_SPEC_V1: GovernanceTwoSlotStoreSpecV1 =
+    GovernanceTwoSlotStoreSpecV1 {
+        directory_name: GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_DIR_V1,
+        semantic_domain: b"sorafs.governance.runtime-dag.qualification-state.v1",
+        stable_nonce: b"sorafs.governance.runtime-dag.qualification.local-store.v1",
+        max_payload_bytes: GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STATE_MAX_BYTES_V1,
+    };
+const GOVERNANCE_RUNTIME_DAG_STAGING_STORE_SPEC_V1: GovernanceTwoSlotStoreSpecV1 =
+    GovernanceTwoSlotStoreSpecV1 {
+        directory_name: GOVERNANCE_RUNTIME_DAG_STAGING_STORE_DIR_V1,
+        semantic_domain: b"sorafs.governance.runtime-dag.staging-transaction.v1",
+        stable_nonce: b"sorafs.governance.runtime-dag.staging.local-store.v1",
+        max_payload_bytes: governance_rooted_fs::TWO_SLOT_MAX_PAYLOAD_BYTES_V1,
+    };
+const GOVERNANCE_RUNTIME_DAG_COMMITTED_STORE_SPEC_V1: GovernanceTwoSlotStoreSpecV1 =
+    GovernanceTwoSlotStoreSpecV1 {
+        directory_name: GOVERNANCE_RUNTIME_DAG_COMMITTED_STORE_DIR_V1,
+        semantic_domain: b"sorafs.governance.runtime-dag.committed-state.v1",
+        stable_nonce: b"sorafs.governance.runtime-dag.committed.local-store.v1",
+        max_payload_bytes: GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_MAX_BYTES_V1,
+    };
+const GOVERNANCE_FENCED_PRIVACY_STORE_SPEC_V1: GovernanceTwoSlotStoreSpecV1 =
+    GovernanceTwoSlotStoreSpecV1 {
+        directory_name: GOVERNANCE_FENCED_PRIVACY_STORE_DIR_V1,
+        semantic_domain: b"sorafs.governance.fenced-privacy.state.v1",
+        stable_nonce: b"sorafs.governance.fenced-privacy.local-store.v1",
+        max_payload_bytes: 16 * 1024,
+    };
 
 /// Public, non-secret qualification returned by a Governance DAG runtime provider.
 ///
@@ -258,7 +369,7 @@ pub trait GovernanceDagRuntimeSigner: Send + Sync + fmt::Debug {
 /// Authenticated Governance DAG endpoint class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GovernanceDagAuthenticationScope {
-    /// Kubo/IPFS/IPNS control-plane request.
+    /// Kubo/IPFS control-plane request.
     Ipfs,
     /// Signed-head compare-and-swap request.
     SignedHead,
@@ -279,6 +390,369 @@ impl GovernanceDagAuthenticationScope {
             Self::Ipfs => 1,
             Self::SignedHead => 2,
         }
+    }
+}
+
+const GOVERNANCE_DAG_REQUEST_INGRESS_ENDPOINT_DOMAIN_V1: &[u8] =
+    b"sorafs.governance-dag.request-ingress-endpoint.v1\0";
+const GOVERNANCE_DAG_REQUEST_INGRESS_BINDING_DOMAIN_V1: &[u8] =
+    b"sorafs.governance-dag.request-ingress-binding.v1\0";
+
+/// Receiver posture required from every first-release Governance DAG endpoint.
+///
+/// There is deliberately no permissive or signer-only variant. A provider can
+/// qualify only an endpoint whose backend is reachable exclusively through the
+/// authenticated V1 receiver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GovernanceDagRequestIngressEnforcementV1 {
+    /// The authenticated receiver is the backend's exclusive ingress.
+    ExclusiveAuthenticatedReceiver = 1,
+}
+
+impl GovernanceDagRequestIngressEnforcementV1 {
+    /// Stable first-release wire identifier.
+    #[must_use]
+    pub const fn wire_id(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Replay posture required from every first-release Governance DAG receiver.
+///
+/// The store must implement one atomic nonce consume shared by every ingress
+/// replica, seal committed evidence durably, and retain it until the signed
+/// envelope expires. Process-local memory is not a qualifying implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GovernanceDagRequestReplayPostureV1 {
+    /// Shared, sealed, atomic nonce consumption retained through expiry.
+    SharedSealedAtomicConsumeUntilExpiry = 1,
+}
+
+impl GovernanceDagRequestReplayPostureV1 {
+    /// Stable first-release wire identifier.
+    #[must_use]
+    pub const fn wire_id(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Stable validation failure for a live Governance DAG ingress qualification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceDagRequestIngressQualificationErrorV1 {
+    /// The canonical endpoint URL or endpoint digest is invalid.
+    InvalidEndpointBinding,
+    /// The runtime provider revision or public-policy digest is invalid.
+    InvalidProviderQualification,
+    /// The request-auth public key or timing policy is invalid.
+    InvalidAuthenticationPolicy,
+    /// The admitted request-body ceiling is zero.
+    InvalidRequestBodyLimit,
+    /// The receiver's public policy identity is zero.
+    InvalidReceiverPolicy,
+    /// The shared sealed replay namespace identity is zero.
+    InvalidReplayNamespace,
+    /// The complete ingress replica-set identity is zero.
+    InvalidReplicaSet,
+}
+
+impl fmt::Display for GovernanceDagRequestIngressQualificationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidEndpointBinding => {
+                "Governance DAG request-ingress endpoint binding is invalid"
+            }
+            Self::InvalidProviderQualification => {
+                "Governance DAG request-ingress provider qualification is invalid"
+            }
+            Self::InvalidAuthenticationPolicy => {
+                "Governance DAG request-ingress authentication policy is invalid"
+            }
+            Self::InvalidRequestBodyLimit => "Governance DAG request-ingress body limit is invalid",
+            Self::InvalidReceiverPolicy => {
+                "Governance DAG request-ingress receiver policy is invalid"
+            }
+            Self::InvalidReplayNamespace => {
+                "Governance DAG request-ingress replay namespace is invalid"
+            }
+            Self::InvalidReplicaSet => "Governance DAG request-ingress replica set is invalid",
+        })
+    }
+}
+
+impl std::error::Error for GovernanceDagRequestIngressQualificationErrorV1 {}
+
+/// Compute the exact public binding for one configured request-ingress endpoint.
+///
+/// IPFS endpoints bind their normalized base URL with exactly one trailing
+/// slash. Signed-head endpoints bind the exact normalized URL. Credentials,
+/// query strings, fragments, percent-escaped paths, non-HTTP schemes, and
+/// hostless URLs are rejected.
+/// The digest is domain-separated by endpoint scope.
+///
+/// # Errors
+///
+/// Returns a stable error when `endpoint` cannot name a canonical public
+/// Governance DAG endpoint.
+pub fn governance_dag_request_ingress_endpoint_binding_v1(
+    scope: GovernanceDagAuthenticationScope,
+    endpoint: &str,
+) -> Result<[u8; 32], GovernanceDagRequestIngressQualificationErrorV1> {
+    let url = canonical_governance_dag_request_ingress_endpoint_url_v1(scope, endpoint)?;
+    let canonical = url.as_str().as_bytes();
+    let canonical_len = u32::try_from(canonical.len())
+        .map_err(|_| GovernanceDagRequestIngressQualificationErrorV1::InvalidEndpointBinding)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GOVERNANCE_DAG_REQUEST_INGRESS_ENDPOINT_DOMAIN_V1);
+    hasher.update(&[GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1]);
+    hasher.update(&[scope.signing_tag()]);
+    hasher.update(&canonical_len.to_be_bytes());
+    hasher.update(canonical);
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn canonical_governance_dag_request_ingress_endpoint_url_v1(
+    scope: GovernanceDagAuthenticationScope,
+    endpoint: &str,
+) -> Result<Url, GovernanceDagRequestIngressQualificationErrorV1> {
+    if endpoint.is_empty()
+        || endpoint.trim() != endpoint
+        || endpoint.contains('\\')
+        || endpoint.chars().any(char::is_control)
+    {
+        return Err(GovernanceDagRequestIngressQualificationErrorV1::InvalidEndpointBinding);
+    }
+    let mut url = Url::parse(endpoint)
+        .map_err(|_| GovernanceDagRequestIngressQualificationErrorV1::InvalidEndpointBinding)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.host_str().is_none()
+        || url.port_or_known_default().is_none()
+        || url.path().contains('%')
+    {
+        return Err(GovernanceDagRequestIngressQualificationErrorV1::InvalidEndpointBinding);
+    }
+    if scope == GovernanceDagAuthenticationScope::Ipfs {
+        let path = url.path().trim_end_matches('/');
+        let normalized_path = if path.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("{path}/")
+        };
+        url.set_path(&normalized_path);
+    }
+    Ok(url)
+}
+
+/// Exact public request policy expected from one qualified ingress provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovernanceDagRequestIngressBindingV1 {
+    scope: GovernanceDagAuthenticationScope,
+    endpoint_binding: [u8; 32],
+    public_key: [u8; 32],
+    max_body_bytes: u64,
+    max_envelope_lifetime_secs: u64,
+    max_future_skew_secs: u64,
+}
+
+impl GovernanceDagRequestIngressBindingV1 {
+    /// Validate and construct one exact ingress binding.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero endpoint binding or body limit, a malformed Ed25519 key,
+    /// and request-auth timing outside the first-release bounds.
+    pub fn try_new(
+        scope: GovernanceDagAuthenticationScope,
+        endpoint_binding: [u8; 32],
+        public_key: [u8; 32],
+        max_body_bytes: u64,
+        max_envelope_lifetime_secs: u64,
+        max_future_skew_secs: u64,
+    ) -> Result<Self, GovernanceDagRequestIngressQualificationErrorV1> {
+        if endpoint_binding == [0; 32] {
+            return Err(GovernanceDagRequestIngressQualificationErrorV1::InvalidEndpointBinding);
+        }
+        if max_body_bytes == 0 {
+            return Err(GovernanceDagRequestIngressQualificationErrorV1::InvalidRequestBodyLimit);
+        }
+        GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            public_key,
+            max_envelope_lifetime_secs,
+            max_future_skew_secs,
+        )
+        .map_err(|_| {
+            GovernanceDagRequestIngressQualificationErrorV1::InvalidAuthenticationPolicy
+        })?;
+        Ok(Self {
+            scope,
+            endpoint_binding,
+            public_key,
+            max_body_bytes,
+            max_envelope_lifetime_secs,
+            max_future_skew_secs,
+        })
+    }
+
+    /// Endpoint class bound by this policy.
+    #[must_use]
+    pub const fn scope(self) -> GovernanceDagAuthenticationScope {
+        self.scope
+    }
+
+    /// Domain-separated digest of the exact normalized endpoint.
+    #[must_use]
+    pub const fn endpoint_binding(self) -> [u8; 32] {
+        self.endpoint_binding
+    }
+
+    /// Raw canonical Ed25519 request-auth key.
+    #[must_use]
+    pub const fn public_key(self) -> [u8; 32] {
+        self.public_key
+    }
+
+    /// Maximum complete request body admitted by the receiver.
+    #[must_use]
+    pub const fn max_body_bytes(self) -> u64 {
+        self.max_body_bytes
+    }
+
+    /// Maximum signed-envelope lifetime in seconds.
+    #[must_use]
+    pub const fn max_envelope_lifetime_secs(self) -> u64 {
+        self.max_envelope_lifetime_secs
+    }
+
+    /// Maximum accepted future issuance skew in seconds.
+    #[must_use]
+    pub const fn max_future_skew_secs(self) -> u64 {
+        self.max_future_skew_secs
+    }
+
+    /// Domain-separated digest of the complete endpoint, key, body, and timing policy.
+    ///
+    /// Rollout evidence uses this identity to bind deployment approval to the
+    /// exact policy qualified by the runtime provider rather than to a
+    /// collection of unanchored boolean claims.
+    #[must_use]
+    pub fn binding_digest(self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(GOVERNANCE_DAG_REQUEST_INGRESS_BINDING_DOMAIN_V1);
+        hasher.update(&[GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1]);
+        hasher.update(&[self.scope.signing_tag()]);
+        hasher.update(&self.endpoint_binding);
+        hasher.update(&self.public_key);
+        hasher.update(&self.max_body_bytes.to_be_bytes());
+        hasher.update(&self.max_envelope_lifetime_secs.to_be_bytes());
+        hasher.update(&self.max_future_skew_secs.to_be_bytes());
+        *hasher.finalize().as_bytes()
+    }
+}
+
+/// Live provider proof that an exact endpoint enforces receiver authentication
+/// and shared sealed replay consumption.
+///
+/// Construction has no signer-only or process-local posture. Providers must
+/// return this value only after actively checking that the exact endpoint is
+/// exclusively receiver-fronted and that every ingress replica atomically
+/// consumes the same sealed replay namespace through envelope expiry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovernanceDagRequestIngressQualificationV1 {
+    provider: GovernanceDagRuntimeProviderQualificationV1,
+    binding: GovernanceDagRequestIngressBindingV1,
+    receiver_policy_digest: [u8; 32],
+    replay_namespace_digest: [u8; 32],
+    replica_set_digest: [u8; 32],
+    enforcement: GovernanceDagRequestIngressEnforcementV1,
+    replay_posture: GovernanceDagRequestReplayPostureV1,
+}
+
+impl GovernanceDagRequestIngressQualificationV1 {
+    /// Validate and construct one live first-release ingress qualification.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero runtime, receiver-policy, replay-namespace, or replica-set
+    /// identities. The only constructible posture is exclusive V1 receiver
+    /// enforcement with shared sealed atomic replay consumption.
+    pub fn try_new(
+        provider: GovernanceDagRuntimeProviderQualificationV1,
+        binding: GovernanceDagRequestIngressBindingV1,
+        receiver_policy_digest: [u8; 32],
+        replay_namespace_digest: [u8; 32],
+        replica_set_digest: [u8; 32],
+    ) -> Result<Self, GovernanceDagRequestIngressQualificationErrorV1> {
+        if !provider.is_valid() {
+            return Err(
+                GovernanceDagRequestIngressQualificationErrorV1::InvalidProviderQualification,
+            );
+        }
+        if receiver_policy_digest == [0; 32] {
+            return Err(GovernanceDagRequestIngressQualificationErrorV1::InvalidReceiverPolicy);
+        }
+        if replay_namespace_digest == [0; 32] {
+            return Err(GovernanceDagRequestIngressQualificationErrorV1::InvalidReplayNamespace);
+        }
+        if replica_set_digest == [0; 32] {
+            return Err(GovernanceDagRequestIngressQualificationErrorV1::InvalidReplicaSet);
+        }
+        Ok(Self {
+            provider,
+            binding,
+            receiver_policy_digest,
+            replay_namespace_digest,
+            replica_set_digest,
+            enforcement: GovernanceDagRequestIngressEnforcementV1::ExclusiveAuthenticatedReceiver,
+            replay_posture:
+                GovernanceDagRequestReplayPostureV1::SharedSealedAtomicConsumeUntilExpiry,
+        })
+    }
+
+    /// Runtime adapter revision and public-policy identity.
+    #[must_use]
+    pub const fn provider(self) -> GovernanceDagRuntimeProviderQualificationV1 {
+        self.provider
+    }
+
+    /// Exact endpoint, key, body, and timing binding.
+    #[must_use]
+    pub const fn binding(self) -> GovernanceDagRequestIngressBindingV1 {
+        self.binding
+    }
+
+    /// Public identity of the installed receiver policy.
+    #[must_use]
+    pub const fn receiver_policy_digest(self) -> [u8; 32] {
+        self.receiver_policy_digest
+    }
+
+    /// Stable identity of the shared sealed replay namespace.
+    #[must_use]
+    pub const fn replay_namespace_digest(self) -> [u8; 32] {
+        self.replay_namespace_digest
+    }
+
+    /// Public digest of the complete ingress replica set sharing that namespace.
+    #[must_use]
+    pub const fn replica_set_digest(self) -> [u8; 32] {
+        self.replica_set_digest
+    }
+
+    /// Required exclusive receiver posture.
+    #[must_use]
+    pub const fn enforcement(self) -> GovernanceDagRequestIngressEnforcementV1 {
+        self.enforcement
+    }
+
+    /// Required shared sealed replay posture.
+    #[must_use]
+    pub const fn replay_posture(self) -> GovernanceDagRequestReplayPostureV1 {
+        self.replay_posture
     }
 }
 
@@ -622,49 +1096,93 @@ pub fn canonicalize_governance_dag_outbound_http_request_v1<'a>(
     .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)
 }
 
+/// A complete HTTP request authorized for Governance DAG backend dispatch.
+///
+/// Construction is restricted to [`GovernanceDagHttpRequestReceiverV1`]. The
+/// receiver consumes the original typed HTTP request, verifies its transport
+/// authority, signature, and replay state, and removes the public
+/// authentication-envelope headers. Its returned URI is the canonical
+/// origin-form path and query, so a backend cannot reinterpret a matching
+/// absolute-form authority.
+#[derive(Debug)]
+pub struct GovernanceDagVerifiedHttpRequestV1<B> {
+    request: Request<B>,
+    descriptor: GovernanceDagCanonicalRequestV1,
+}
+
+impl<B> GovernanceDagVerifiedHttpRequestV1<B> {
+    /// Exact canonical descriptor authenticated for this request.
+    #[must_use]
+    pub const fn descriptor(&self) -> &GovernanceDagCanonicalRequestV1 {
+        &self.descriptor
+    }
+
+    /// Borrow the sanitized request that may be dispatched to the backend.
+    #[must_use]
+    pub const fn request(&self) -> &Request<B> {
+        &self.request
+    }
+
+    /// Consume the authorization capability and recover the sanitized request.
+    #[must_use]
+    pub fn into_request(self) -> Request<B> {
+        self.request
+    }
+}
+
 /// Reusable receiver boundary for authenticated Governance DAG HTTP requests.
 ///
-/// The receiver partitions real header pairs into the fixed
-/// selected-public-header set and exactly eight authentication fields, derives
-/// each canonical descriptor from its exact byte body, and verifies request
-/// binding, timing, the pinned Ed25519 signature, and one-use replay state
-/// before returning. It is transport-agnostic and does not itself install a
-/// receiver in Kubo, IPFS, IPNS, or a head service.
+/// The receiver consumes one actual [`Request`] so the method, URI, headers,
+/// and finalized body cannot be supplied from different request objects. It
+/// derives the canonical absolute URL from the qualified endpoint and the
+/// typed request parts, requires an unambiguous HTTP/1.x `Host`, validates any
+/// URI authority against that host and endpoint, and rejects every unsigned
+/// semantic header before signature or replay verification.
 ///
-/// Replay state is deliberately caller-owned, bounded, and borrowed for this
-/// receiver's lifetime. Deployments must retain one receiver/cache for the
-/// lifetime of the corresponding pinned policy.
-// Production qualification remains blocked until deployment-owned Kubo/head
-// ingress installs this boundary and sealed cross-replica state replaces the
-// process-local replay memory.
+/// Replay state is deliberately caller-owned and borrowed for this receiver's
+/// lifetime. A production implementation must supply an atomic shared sealed
+/// store used by every replica in the qualified ingress set. The concrete
+/// process-local cache in this crate is suitable only for isolated validation
+/// and tests and cannot support a production ingress qualification.
 #[derive(Debug)]
 pub struct GovernanceDagHttpRequestReceiverV1<'a> {
-    scope: GovernanceDagAuthenticationScope,
-    max_body_bytes: u64,
-    policy: &'a GovernanceDagRequestAuthenticationPolicyV1,
-    replay_cache: &'a mut GovernanceDagRequestAuthenticationReplayCacheV1,
+    endpoint: Url,
+    binding: GovernanceDagRequestIngressBindingV1,
+    policy: GovernanceDagRequestAuthenticationPolicyV1,
+    replay_store: &'a mut dyn GovernanceDagRequestAuthenticationReplayStoreV1,
 }
 
 impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
-    /// Bind one endpoint scope, request-size ceiling, policy, and replay cache.
+    /// Bind one exact endpoint policy and replay store.
     ///
     /// # Errors
     ///
-    /// Rejects a zero request-size ceiling before any request can be accepted.
+    /// Rejects a noncanonical endpoint or a binding that does not commit to the
+    /// exact normalized endpoint and authentication policy.
     pub fn try_new(
-        scope: GovernanceDagAuthenticationScope,
-        max_body_bytes: u64,
-        policy: &'a GovernanceDagRequestAuthenticationPolicyV1,
-        replay_cache: &'a mut GovernanceDagRequestAuthenticationReplayCacheV1,
+        endpoint: &str,
+        binding: GovernanceDagRequestIngressBindingV1,
+        replay_store: &'a mut dyn GovernanceDagRequestAuthenticationReplayStoreV1,
     ) -> Result<Self, GovernanceDagRequestAuthenticationErrorV1> {
-        if max_body_bytes == 0 {
-            return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest);
+        let endpoint =
+            canonical_governance_dag_request_ingress_endpoint_url_v1(binding.scope(), endpoint)
+                .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?;
+        let endpoint_binding =
+            governance_dag_request_ingress_endpoint_binding_v1(binding.scope(), endpoint.as_str())
+                .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?;
+        if binding.endpoint_binding() != endpoint_binding {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::RequestMismatch);
         }
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            binding.public_key(),
+            binding.max_envelope_lifetime_secs(),
+            binding.max_future_skew_secs(),
+        )?;
         Ok(Self {
-            scope,
-            max_body_bytes,
+            endpoint,
+            binding,
             policy,
-            replay_cache,
+            replay_store,
         })
     }
 
@@ -672,43 +1190,174 @@ impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
     ///
     /// # Errors
     ///
-    /// Returns a stable, payload-free rejection and does not return a
-    /// descriptor until every structural, timing, signature, and replay check
-    /// succeeds.
-    pub fn verify_http_request<'h>(
+    /// Returns a stable, payload-free rejection and retains ownership of the
+    /// request until every transport, structural, timing, signature, and replay
+    /// check succeeds.
+    pub fn verify_http_request<B: AsRef<[u8]>>(
         &mut self,
-        method: &str,
-        canonical_url: &str,
-        headers: impl IntoIterator<Item = (&'h str, &'h [u8])>,
-        body: &[u8],
+        request: Request<B>,
         now_unix_secs: u64,
-    ) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagRequestAuthenticationErrorV1> {
+    ) -> Result<GovernanceDagVerifiedHttpRequestV1<B>, GovernanceDagRequestAuthenticationErrorV1>
+    {
+        let (mut parts, body) = request.into_parts();
+        let canonical_url = canonical_governance_dag_request_url_from_parts_v1(
+            &self.endpoint,
+            self.binding.scope(),
+            &parts,
+        )?;
+        let canonical_url_parts = Url::parse(&canonical_url)
+            .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?;
+        let canonical_origin_form = match canonical_url_parts.query() {
+            Some(query) => format!("{}?{query}", canonical_url_parts.path()),
+            None => canonical_url_parts.path().to_owned(),
+        };
+        parts.uri = canonical_origin_form
+            .parse()
+            .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?;
+        let body_bytes = body.as_ref();
         let (selected_headers, authentication_headers) = partition_governance_dag_http_headers_v1(
-            headers,
-            body,
+            parts
+                .headers
+                .iter()
+                .filter(|(name, _)| name.as_str() != header::HOST.as_str())
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+            body_bytes,
             GovernanceDagAuthenticationHeaderDispositionV1::Retain,
         )?;
-        let request = GovernanceDagCanonicalRequestV1::try_from_http_parts(
-            self.scope,
-            method,
-            canonical_url,
+        let descriptor = GovernanceDagCanonicalRequestV1::try_from_http_parts(
+            self.binding.scope(),
+            parts.method.as_str(),
+            &canonical_url,
             selected_headers,
-            body,
-            self.max_body_bytes,
+            body_bytes,
+            self.binding.max_body_bytes(),
         )
         .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?;
         let envelope =
             parse_governance_dag_request_authentication_headers_v1(authentication_headers)?;
         verify_governance_dag_request_authentication_v1(
-            &request,
+            &descriptor,
             &envelope,
-            self.scope,
-            self.policy,
+            self.binding.scope(),
+            &self.policy,
             now_unix_secs,
-            self.replay_cache,
+            self.replay_store,
         )?;
-        Ok(request)
+        for name in GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1 {
+            parts.headers.remove(name);
+        }
+        Ok(GovernanceDagVerifiedHttpRequestV1 {
+            request: Request::from_parts(parts, body),
+            descriptor,
+        })
     }
+}
+
+fn canonical_governance_dag_request_url_from_parts_v1(
+    endpoint: &Url,
+    scope: GovernanceDagAuthenticationScope,
+    parts: &Parts,
+) -> Result<String, GovernanceDagRequestAuthenticationErrorV1> {
+    if parts.version == Version::HTTP_09 {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority);
+    }
+    let mut host_values = parts.headers.get_all(header::HOST).iter();
+    let host = host_values.next();
+    if host_values.next().is_some() {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority);
+    }
+    if matches!(parts.version, Version::HTTP_10 | Version::HTTP_11) && host.is_none() {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority);
+    }
+
+    let host_origin = host
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority)
+                .and_then(|authority| {
+                    governance_dag_request_authority_origin_v1(endpoint, authority)
+                })
+        })
+        .transpose()?;
+    let uri_origin = parts
+        .uri
+        .authority()
+        .map(|authority| governance_dag_request_authority_origin_v1(endpoint, authority.as_str()))
+        .transpose()?;
+    if parts
+        .uri
+        .scheme_str()
+        .is_some_and(|scheme| scheme != endpoint.scheme())
+        || host_origin
+            .as_ref()
+            .is_some_and(|origin| origin != &endpoint.origin())
+        || uri_origin
+            .as_ref()
+            .is_some_and(|origin| origin != &endpoint.origin())
+        || host_origin
+            .as_ref()
+            .zip(uri_origin.as_ref())
+            .is_some_and(|(host, uri)| host != uri)
+        || (host_origin.is_none() && uri_origin.is_none())
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::AuthorityMismatch);
+    }
+
+    let path_and_query = parts
+        .uri
+        .path_and_query()
+        .ok_or(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?
+        .as_str();
+    if !path_and_query.starts_with('/') {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest);
+    }
+    let canonical_url = format!(
+        "{}{path_and_query}",
+        endpoint.origin().ascii_serialization()
+    );
+    if !governance_request_auth_url_is_canonical(&canonical_url) {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest);
+    }
+    let url = Url::parse(&canonical_url)
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?;
+    if url.path().contains('%') {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest);
+    }
+    let within_endpoint = match scope {
+        GovernanceDagAuthenticationScope::SignedHead => url == *endpoint,
+        GovernanceDagAuthenticationScope::Ipfs => url.path().starts_with(endpoint.path()),
+    };
+    if !within_endpoint {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::RequestMismatch);
+    }
+    Ok(canonical_url)
+}
+
+fn governance_dag_request_authority_origin_v1(
+    endpoint: &Url,
+    authority: &str,
+) -> Result<url::Origin, GovernanceDagRequestAuthenticationErrorV1> {
+    if authority.is_empty()
+        || authority.trim() != authority
+        || authority.contains(['/', '\\', '?', '#', '@'])
+        || authority.chars().any(char::is_control)
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority);
+    }
+    let url = Url::parse(&format!("{}://{authority}/", endpoint.scheme()))
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority)?;
+    if url.host_str().is_none()
+        || url.port_or_known_default().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority);
+    }
+    Ok(url.origin())
 }
 
 type GovernanceDagHttpHeaderRefV1<'a> = (&'a str, &'a [u8]);
@@ -765,8 +1414,10 @@ fn partition_governance_dag_http_headers_v1<'a>(
         {
             return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader);
         }
-        // Every remaining header is ordinary public HTTP metadata. It is
-        // intentionally excluded from the signed descriptor.
+        // The backend must never receive unsigned semantic-extension or proxy
+        // metadata. HTTP framing is handled explicitly above; every other
+        // accepted header is in the fixed signed allow-list.
+        return Err(GovernanceDagRequestAuthenticationErrorV1::UnexpectedHeader);
     }
     Ok((selected, authentication))
 }
@@ -894,8 +1545,14 @@ pub enum GovernanceDagRequestAuthenticationErrorV1 {
     NoncanonicalHeader,
     /// A credential or pre-existing authentication-prefix header was supplied.
     ForbiddenHeader,
+    /// An unsigned header outside the fixed request contract was supplied.
+    UnexpectedHeader,
     /// HTTP framing is ambiguous or disagrees with the finalized byte body.
     InvalidFraming,
+    /// HTTP transport authority is absent, duplicated, or malformed.
+    InvalidAuthority,
+    /// HTTP `Host` or URI authority does not match the qualified endpoint.
+    AuthorityMismatch,
     /// The method, URL, selected headers, or body commitment is noncanonical.
     NoncanonicalRequest,
     /// The envelope does not bind the receiver's exact request, scope, or key.
@@ -914,6 +1571,8 @@ pub enum GovernanceDagRequestAuthenticationErrorV1 {
     Replay,
     /// The bounded replay cache cannot accept another live nonce.
     ReplayCacheFull,
+    /// The deployment-owned shared sealed replay store is unavailable.
+    ReplayStoreUnavailable,
 }
 
 impl fmt::Display for GovernanceDagRequestAuthenticationErrorV1 {
@@ -943,8 +1602,17 @@ impl fmt::Display for GovernanceDagRequestAuthenticationErrorV1 {
             Self::ForbiddenHeader => {
                 "Governance DAG request contains a forbidden credential or authentication header"
             }
+            Self::UnexpectedHeader => {
+                "Governance DAG request contains an unsigned header outside the fixed contract"
+            }
             Self::InvalidFraming => {
                 "Governance DAG request HTTP framing is ambiguous or inconsistent"
+            }
+            Self::InvalidAuthority => {
+                "Governance DAG request HTTP transport authority is invalid"
+            }
+            Self::AuthorityMismatch => {
+                "Governance DAG request HTTP transport authority does not match the qualified endpoint"
             }
             Self::NoncanonicalRequest => {
                 "Governance DAG request is not canonical or bounded"
@@ -972,6 +1640,9 @@ impl fmt::Display for GovernanceDagRequestAuthenticationErrorV1 {
             }
             Self::ReplayCacheFull => {
                 "Governance DAG request-auth replay state reached its bounded capacity"
+            }
+            Self::ReplayStoreUnavailable => {
+                "Governance DAG request-auth shared sealed replay store is unavailable"
             }
         })
     }
@@ -1043,11 +1714,34 @@ impl GovernanceDagRequestAuthenticationPolicyV1 {
     }
 }
 
-/// Caller-owned bounded live-nonce cache for V1 replay rejection.
+/// Replay-consumption boundary used by the V1 authenticated receiver.
 ///
-/// Receivers should retain one cache for each independently pinned
-/// authentication policy. The cache never evicts a live nonce to admit another
-/// request; capacity pressure therefore fails closed.
+/// Production implementations must atomically consume one nonce in a shared,
+/// durably sealed namespace visible to every qualified ingress replica and
+/// retain the evidence through `expires_at_unix_secs`. An unavailable or
+/// ambiguous store must fail closed.
+pub trait GovernanceDagRequestAuthenticationReplayStoreV1: fmt::Debug {
+    /// Atomically reject or consume one live nonce.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GovernanceDagRequestAuthenticationErrorV1::Replay`] when the
+    /// nonce was already consumed, and a fail-closed store error when durable
+    /// consumption cannot be proven.
+    fn consume_nonce(
+        &mut self,
+        nonce: [u8; 32],
+        expires_at_unix_secs: u64,
+        now_unix_secs: u64,
+    ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1>;
+}
+
+/// Caller-owned process-local bounded live-nonce cache for V1 validation.
+///
+/// This cache never evicts a live nonce to admit another request; capacity
+/// pressure therefore fails closed. It is useful for isolated receivers and
+/// tests, but it is neither shared nor sealed and must not be cited as evidence
+/// for a production [`GovernanceDagRequestIngressQualificationV1`].
 #[derive(Debug)]
 pub struct GovernanceDagRequestAuthenticationReplayCacheV1 {
     entries: BTreeMap<[u8; 32], u64>,
@@ -1098,6 +1792,19 @@ impl GovernanceDagRequestAuthenticationReplayCacheV1 {
         }
         self.entries.insert(nonce, expires_at_unix_secs);
         Ok(())
+    }
+}
+
+impl GovernanceDagRequestAuthenticationReplayStoreV1
+    for GovernanceDagRequestAuthenticationReplayCacheV1
+{
+    fn consume_nonce(
+        &mut self,
+        nonce: [u8; 32],
+        expires_at_unix_secs: u64,
+        now_unix_secs: u64,
+    ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
+        self.consume(nonce, expires_at_unix_secs, now_unix_secs)
     }
 }
 
@@ -1360,7 +2067,34 @@ pub fn verify_governance_dag_request_authentication_v1(
     expected_scope: GovernanceDagAuthenticationScope,
     policy: &GovernanceDagRequestAuthenticationPolicyV1,
     now_unix_secs: u64,
-    replay_cache: &mut GovernanceDagRequestAuthenticationReplayCacheV1,
+    replay_store: &mut dyn GovernanceDagRequestAuthenticationReplayStoreV1,
+) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
+    verify_governance_dag_request_authentication_without_replay_v1(
+        request,
+        envelope,
+        expected_scope,
+        policy,
+        now_unix_secs,
+    )?;
+    replay_store.consume_nonce(
+        envelope.nonce(),
+        envelope.expires_at_unix_secs(),
+        now_unix_secs,
+    )
+}
+
+/// Verify every request-auth property except receiver-side nonce consumption.
+///
+/// This exists only for the outbound service's non-authoritative signer sanity
+/// check. An ingress receiver must call
+/// [`verify_governance_dag_request_authentication_v1`] so the shared sealed
+/// replay store is atomically consumed before backend dispatch.
+pub(crate) fn verify_governance_dag_request_authentication_without_replay_v1(
+    request: &GovernanceDagCanonicalRequestV1,
+    envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+    expected_scope: GovernanceDagAuthenticationScope,
+    policy: &GovernanceDagRequestAuthenticationPolicyV1,
+    now_unix_secs: u64,
 ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
     if request.scope() != expected_scope
         || envelope.scope() != expected_scope
@@ -1402,8 +2136,7 @@ pub fn verify_governance_dag_request_authentication_v1(
     );
     signature
         .verify(&public_key, &signing_payload)
-        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::SignatureVerification)?;
-    replay_cache.consume(envelope.nonce(), expires_at, now_unix_secs)
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::SignatureVerification)
 }
 
 fn parse_governance_request_auth_decimal_header_v1(
@@ -1444,25 +2177,29 @@ fn append_governance_request_auth_field(bytes: &mut Vec<u8>, field: &[u8]) {
     bytes.extend_from_slice(field);
 }
 
-/// Rotation-aware runtime authenticator for Governance DAG publication.
+/// Rotation-aware, receiver-qualified runtime authenticator for Governance DAG publication.
 ///
 /// Implementations own an Ed25519 HSM signing boundary and return only the
 /// public signed envelope for a complete canonical request. The adapter never
 /// receives a `reqwest` client, builder, body owner, or mutable header map and
 /// therefore cannot inject bearer tokens, cookies, mTLS credentials, or other
-/// opaque request authority.
+/// opaque request authority. First-release providers must additionally own the
+/// live deployment proof that the exact backend endpoint is exclusively
+/// receiver-fronted and that all ingress replicas share one sealed atomic
+/// replay namespace.
 pub trait GovernanceDagRequestAuthenticator: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this authenticator.
     fn handle(&self) -> &str;
 
-    /// Qualify the active adapter and its public policy revision.
+    /// Actively qualify the adapter, receiver, endpoint, and replay store.
     ///
-    /// Implementations must fail when the credential boundary is unavailable,
-    /// revoked, stale, test-marked, or otherwise not production-ready.
-    fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
-
-    /// Raw Ed25519 public key bound to the opaque HSM handle.
-    fn public_key(&self) -> [u8; 32];
+    /// Implementations must probe the exact receiver and shared sealed replay
+    /// namespace before returning. They must fail when the credential boundary,
+    /// receiver, replica set, or replay store is unavailable, bypassable,
+    /// revoked, stale, test-marked, process-local, or otherwise not
+    /// production-ready. Returning configuration text without a live probe
+    /// violates this trust-boundary contract.
+    fn ingress_qualification(&self) -> Result<GovernanceDagRequestIngressQualificationV1, String>;
 
     /// Sign one exact bounded canonical outbound request descriptor.
     ///
@@ -1762,6 +2499,14 @@ struct FencedPrivacyAuthoritativeHeadSyncV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct FencedPrivacyStateV1 {
+    version: u8,
+    pending: Option<FencedPrivacyPendingRequestV1>,
+    publication_cache: Option<FencedPrivacyPublicationCacheV1>,
+    authoritative_head_sync: Option<FencedPrivacyAuthoritativeHeadSyncV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagProviderBindingV1 {
     signer_handle: String,
     signer_revision: u64,
@@ -1824,6 +2569,12 @@ struct RuntimeDagQualificationHistoryV1 {
     archived_through_generation: u64,
     archive_tail_transition_digest: [u8; 32],
     transitions: Vec<RuntimeDagQualificationTransitionV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct RuntimeDagQualificationStateV1 {
+    version: u8,
+    history: Option<RuntimeDagQualificationHistoryV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -1902,11 +2653,136 @@ struct RuntimeDagProducerPublishIntentV1 {
     index: RuntimeDagProducerStagedArtifactV1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagProducerStagedTransactionV1 {
     block_bytes: Vec<u8>,
     head_bytes: Vec<u8>,
     index_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct RuntimeDagProducerStagedEnvelopeV1 {
+    intent: RuntimeDagProducerPublishIntentV1,
+    transaction: RuntimeDagProducerStagedTransactionV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct RuntimeDagProducerStagingStateV1 {
+    version: u8,
+    staged: Option<RuntimeDagProducerStagedEnvelopeV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct RuntimeDagCommittedStateV1 {
+    version: u8,
+    head_bytes: Option<Vec<u8>>,
+    index_bytes: Option<Vec<u8>>,
+}
+
+/// One exact authenticated publication-authority generation for local readers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GovernancePublicationSnapshotV1 {
+    store_generation: u64,
+    store_record_digest: [u8; 32],
+    canonical_bytes: Vec<u8>,
+}
+
+impl GovernancePublicationSnapshotV1 {
+    /// Return the fixed-store generation and complete record digest.
+    #[cfg(test)]
+    pub(crate) fn store_identity(&self) -> (u64, [u8; 32]) {
+        (self.store_generation, self.store_record_digest)
+    }
+
+    /// Borrow the canonical authoritative publication JSON bytes.
+    #[cfg(test)]
+    pub(crate) fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    /// Consume the snapshot without cloning its potentially large canonical
+    /// publication body.
+    pub(crate) fn into_parts(self) -> (Vec<u8>, u64, [u8; 32]) {
+        (
+            self.canonical_bytes,
+            self.store_generation,
+            self.store_record_digest,
+        )
+    }
+}
+
+/// One exact authenticated runtime-DAG head/index generation for local readers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeDagCommittedSnapshotV1 {
+    store_generation: u64,
+    store_record_digest: [u8; 32],
+    head_bytes: Vec<u8>,
+    index_bytes: Vec<u8>,
+}
+
+impl RuntimeDagCommittedSnapshotV1 {
+    /// Return the fixed-store generation and complete record digest.
+    pub(crate) fn store_identity(&self) -> (u64, [u8; 32]) {
+        (self.store_generation, self.store_record_digest)
+    }
+
+    /// Borrow the canonical signed-head bytes committed with the index.
+    pub(crate) fn head_bytes(&self) -> &[u8] {
+        &self.head_bytes
+    }
+
+    /// Borrow the canonical runtime-index bytes committed with the head.
+    pub(crate) fn index_bytes(&self) -> &[u8] {
+        &self.index_bytes
+    }
+}
+
+/// One read-only runtime-DAG generation authenticated by an exact sealed
+/// producer checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthenticatedRuntimeDagSnapshotV1 {
+    committed: RuntimeDagCommittedSnapshotV1,
+    checkpoint_generation: u64,
+    checkpoint_revision: [u8; 32],
+}
+
+impl AuthenticatedRuntimeDagSnapshotV1 {
+    /// Return the fixed-store generation and complete record digest.
+    #[cfg(test)]
+    pub(crate) fn store_identity(&self) -> (u64, [u8; 32]) {
+        self.committed.store_identity()
+    }
+
+    /// Borrow the canonical signed-head bytes.
+    #[cfg(test)]
+    pub(crate) fn head_bytes(&self) -> &[u8] {
+        self.committed.head_bytes()
+    }
+
+    /// Borrow the canonical runtime-index bytes.
+    #[cfg(test)]
+    pub(crate) fn index_bytes(&self) -> &[u8] {
+        self.committed.index_bytes()
+    }
+
+    /// Return the sealed producer-checkpoint generation and revision digest.
+    #[cfg(test)]
+    pub(crate) fn checkpoint_identity(&self) -> (u64, [u8; 32]) {
+        (self.checkpoint_generation, self.checkpoint_revision)
+    }
+
+    /// Consume the authenticated snapshot without cloning its signed head or
+    /// potentially large runtime index.
+    pub(crate) fn into_parts(self) -> (Vec<u8>, Vec<u8>, u64, [u8; 32], u64, [u8; 32]) {
+        (
+            self.committed.head_bytes,
+            self.committed.index_bytes,
+            self.committed.store_generation,
+            self.committed.store_record_digest,
+            self.checkpoint_generation,
+            self.checkpoint_revision,
+        )
+    }
 }
 
 /// Persists governance artefacts on the filesystem for downstream ingestion.
@@ -1914,6 +2790,7 @@ struct RuntimeDagProducerStagedTransactionV1 {
 pub(crate) struct FilesystemGovernancePublisher {
     root: PathBuf,
     root_guard: GovernanceFilesystemRootGuard,
+    publication_state_store: governance_rooted_fs::TwoSlotStoreV1,
     runtime_dag_signer: Option<GovernanceRuntimeDagSigner>,
     runtime_dag_checkpoint_store: Option<GovernanceRuntimeDagCheckpointStore>,
     fenced_privacy_publisher: Option<QualifiedFencedTransparencyPublisherV1>,
@@ -2054,14 +2931,13 @@ impl FilesystemGovernancePublisher {
         validate_atomic_output_path(&root.join(".governance-root-probe"))?;
         let root_lock = acquire_governance_publisher_lock(&root)?;
         root_guard.revalidate()?;
-        root_guard
-            .rooted_directory()
-            .remove_atomic_temps_for(GOVERNANCE_PUBLICATION_STATE_FILE)?;
-        root_guard
-            .rooted_directory()
-            .remove_atomic_temps_for(GOVERNANCE_PUBLICATION_INITIALIZED_FILE)?;
-        root_guard.revalidate()?;
-        let marker_present =
+        reject_governance_publication_recovery_quarantine(&root_guard).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("governance publication recovery is quarantined: {error}"),
+            )
+        })?;
+        let (publication_state_store, marker_present) =
             initialize_governance_publication_authority_if_pristine(&root, &root_guard).map_err(
                 |error| {
                     io::Error::new(
@@ -2070,7 +2946,7 @@ impl FilesystemGovernancePublisher {
                     )
                 },
             )?;
-        let (publication_state, _) = read_governance_publication_state(&root, &root_guard)
+        let (publication_state, _) = read_governance_publication_state(&publication_state_store)
             .map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -2100,6 +2976,7 @@ impl FilesystemGovernancePublisher {
         Ok(Self {
             root,
             root_guard,
+            publication_state_store,
             runtime_dag_signer: None,
             runtime_dag_checkpoint_store: None,
             fenced_privacy_publisher: None,
@@ -2194,7 +3071,9 @@ impl FilesystemGovernancePublisher {
             return Ok(());
         }
 
-        if let Some((history, _)) = read_runtime_dag_qualification_history(&self.root, None)? {
+        if let Some((history, _)) =
+            read_runtime_dag_qualification_history(&self.root, &self.root_guard, None)?
+        {
             let tail =
                 runtime_dag_history_tail_transition(&self.root, &history)?.ok_or_else(|| {
                     GovernancePublishError::other(
@@ -2250,11 +3129,16 @@ impl FilesystemGovernancePublisher {
         let (predecessor_index_digest, successor_index_digest, _) =
             canonical_runtime_dag_index_for_transition(
                 &self.root,
+                &self.root_guard,
                 &previous_binding,
                 &next_binding,
                 &predecessor,
             )?;
-        let existing = read_runtime_dag_qualification_history(&self.root, Some(&previous_binding))?;
+        let existing = read_runtime_dag_qualification_history(
+            &self.root,
+            &self.root_guard,
+            Some(&previous_binding),
+        )?;
         let (mut history, summary, predecessor_history) = match existing {
             Some((history, summary)) => {
                 let predecessor = history.clone();
@@ -2383,7 +3267,7 @@ impl FilesystemGovernancePublisher {
         reconcile_runtime_dag_producer_state(&self.root, &self.root_guard, signer, store)?;
         let binding = runtime_dag_provider_binding(signer, store);
         let Some((mut history, summary)) =
-            read_runtime_dag_qualification_history(&self.root, Some(&binding))?
+            read_runtime_dag_qualification_history(&self.root, &self.root_guard, Some(&binding))?
         else {
             return Ok(0);
         };
@@ -2559,6 +3443,7 @@ impl FilesystemGovernancePublisher {
         json_bytes: &[u8],
         labels: JsonMap,
     ) -> Result<(PathBuf, PathBuf), GovernancePublishError> {
+        reject_governance_publication_recovery_quarantine(&self.root_guard)?;
         validate_governance_car_source_lengths(encoded.len(), json_bytes.len())?;
         let digest_hex = blake3::hash(encoded).to_hex().to_string();
         let json_blake3 = blake3::hash(json_bytes).to_hex().to_string();
@@ -2578,8 +3463,8 @@ impl FilesystemGovernancePublisher {
         let encoded_path = resolve_index_path(&self.root, &encoded_relative)?;
         let json_path = resolve_index_path(&self.root, &json_relative)?;
 
-        let (mut publication_state, _current_state_bytes) =
-            read_governance_publication_state(&self.root, &self.root_guard)?;
+        let (mut publication_state, publication_snapshot) =
+            read_governance_publication_state(&self.publication_state_store)?;
         let publish_index = match publication_state.remove("publish_index") {
             Some(JsonValue::Object(index)) => index,
             _ => {
@@ -2671,16 +3556,17 @@ impl FilesystemGovernancePublisher {
             }
             persist_prepared_governance_car_segment(&self.root_guard, &prepared_segment)?;
             write_prepared_governance_publication_state(
-                &self.root,
-                &self.root_guard,
+                &self.publication_state_store,
+                &publication_snapshot,
                 &prepared_state,
-                write_atomic,
             )
+            .map(drop)
         })();
         if let Err(error) = persistence {
-            if let Err(reconcile_error) =
-                reconcile_current_governance_publication_artifacts(&self.root, &self.root_guard)
-            {
+            if let Err(reconcile_error) = reconcile_current_governance_publication_artifacts(
+                &self.root_guard,
+                &self.publication_state_store,
+            ) {
                 return Err(GovernancePublishError::other(format!(
                     "governance publication failed ({error}); bounded orphan reconciliation also failed ({reconcile_error})"
                 )));
@@ -3046,6 +3932,14 @@ impl GovernanceFilesystemRootGuard {
         &self.rooted_directory
     }
 
+    /// Return a path-free digest of the retained physical root identity.
+    pub(crate) fn identity_digest(&self) -> io::Result<[u8; 32]> {
+        self.revalidate()?;
+        let digest = self.rooted_directory.identity_digest()?;
+        self.revalidate()?;
+        Ok(digest)
+    }
+
     /// Revalidate every retained ancestor and root identity.
     pub(crate) fn revalidate(&self) -> io::Result<()> {
         #[cfg(unix)]
@@ -3294,6 +4188,90 @@ fn pdp_decision_label(decision: PdpTerminalDecisionV1) -> &'static str {
     }
 }
 
+fn governance_two_slot_label_digest_v1(kind: &[u8], value: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.governance.local-two-slot.binding-label.v1\0");
+    hasher.update(
+        &u64::try_from(kind.len())
+            .expect("fixed governance two-slot label kind fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(kind);
+    hasher.update(
+        &u64::try_from(value.len())
+            .expect("fixed governance two-slot label value fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(value);
+    *hasher.finalize().as_bytes()
+}
+
+fn governance_two_slot_config_v1(
+    spec: GovernanceTwoSlotStoreSpecV1,
+) -> Result<governance_rooted_fs::TwoSlotStoreConfigV1, GovernancePublishError> {
+    governance_rooted_fs::TwoSlotStoreConfigV1::try_new(
+        spec.directory_name,
+        governance_two_slot_label_digest_v1(b"domain", spec.semantic_domain),
+        governance_two_slot_label_digest_v1(b"stable-caller-nonce", spec.stable_nonce),
+        spec.max_payload_bytes,
+    )
+    .map_err(Into::into)
+}
+
+fn open_governance_two_slot_store_v1(
+    root_guard: &GovernanceFilesystemRootGuard,
+    spec: GovernanceTwoSlotStoreSpecV1,
+    initial_payload: &[u8],
+) -> Result<governance_rooted_fs::TwoSlotStoreV1, GovernancePublishError> {
+    root_guard.revalidate()?;
+    let store = root_guard
+        .rooted_directory()
+        .open_or_create_two_slot_store_v1(governance_two_slot_config_v1(spec)?, initial_payload)?;
+    root_guard.revalidate()?;
+    Ok(store)
+}
+
+fn load_governance_two_slot_store_v1(
+    store: &governance_rooted_fs::TwoSlotStoreV1,
+    label: &str,
+) -> Result<governance_rooted_fs::TwoSlotSnapshotV1, GovernancePublishError> {
+    store.load().map_err(|error| {
+        GovernancePublishError::other(format!("failed to load {label} two-slot state: {error}"))
+    })
+}
+
+fn compare_and_swap_governance_two_slot_store_v1(
+    store: &governance_rooted_fs::TwoSlotStoreV1,
+    expected: &governance_rooted_fs::TwoSlotSnapshotV1,
+    payload: &[u8],
+    label: &str,
+) -> Result<governance_rooted_fs::TwoSlotSnapshotV1, GovernancePublishError> {
+    store.compare_and_swap(expected, payload).map_err(|error| {
+        GovernancePublishError::other(format!("failed to commit {label} two-slot state: {error}"))
+    })
+}
+
+fn encode_governance_two_slot_value_v1<T: norito::NoritoSerialize>(
+    value: &T,
+    label: &str,
+) -> Result<Vec<u8>, GovernancePublishError> {
+    norito::to_bytes(value).map_err(|error| {
+        GovernancePublishError::other(format!("failed to encode {label}: {error}"))
+    })
+}
+
+fn decode_governance_two_slot_value_v1<T>(
+    snapshot: &governance_rooted_fs::TwoSlotSnapshotV1,
+    label: &str,
+) -> Result<T, GovernancePublishError>
+where
+    for<'de> T: norito::NoritoDeserialize<'de>,
+    T: norito::NoritoSerialize,
+{
+    decode_canonical_runtime_dag(snapshot.payload(), label)
+}
+
+#[cfg(test)]
 fn write_atomic(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
@@ -3414,7 +4392,7 @@ fn governance_source_pair_id(
     )))
 }
 
-fn governance_source_pair_relative_paths(
+pub(crate) fn governance_source_pair_relative_paths(
     payload_kind: &str,
     encoded_len: u64,
     encoded_blake3: &str,
@@ -3532,14 +4510,29 @@ fn write_rooted_atomic(
     path: &Path,
     data: &[u8],
 ) -> io::Result<()> {
+    isolate_recoverable_atomic_state_for_target(
+        root_guard,
+        path,
+        GOVERNANCE_PUBLICATION_STATE_MAX_BYTES,
+        "mutable-state-recovery",
+    )
+    .map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("governance mutable-state recovery failed: {error}"),
+        )
+    })?;
     let (directory, name) = rooted_target(root_guard, path, true)?;
-    let target_name = name.to_str().ok_or_else(|| {
+    name.to_str().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "governance atomic target name is not canonical UTF-8",
         )
     })?;
-    directory.remove_atomic_temps_for(target_name)?;
+    // Crash-temporary reclamation is a recovery operation, not part of a new
+    // write. The unique create-only name below cannot collide with an older
+    // process, so a new transaction never needs to delete a stale pathname as
+    // a side effect.
     let temporary_name = rooted_atomic_temp_name(&name)?;
     directory.atomic_replace_current(&name, &temporary_name, data)?;
     root_guard.revalidate()
@@ -3551,14 +4544,27 @@ fn write_rooted_atomic_expected(
     data: &[u8],
     expected: governance_rooted_fs::ExpectedFile,
 ) -> io::Result<()> {
+    isolate_recoverable_atomic_state_for_target(
+        root_guard,
+        path,
+        GOVERNANCE_PUBLICATION_STATE_MAX_BYTES,
+        "mutable-state-recovery",
+    )
+    .map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("governance mutable-state recovery failed: {error}"),
+        )
+    })?;
     let (directory, name) = rooted_target(root_guard, path, true)?;
-    let target_name = name.to_str().ok_or_else(|| {
+    name.to_str().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "governance atomic target name is not canonical UTF-8",
         )
     })?;
-    directory.remove_atomic_temps_for(target_name)?;
+    // See `write_rooted_atomic`: stale-name recovery is deliberately separate
+    // from the transaction that creates this process's unique temporary.
     let temporary_name = rooted_atomic_temp_name(&name)?;
     directory.atomic_write(&name, &temporary_name, data, expected)?;
     root_guard.revalidate()
@@ -3583,6 +4589,54 @@ fn write_rooted_digest_sidecar(
     let mut body = blake3::hash(data).to_hex().to_string();
     body.push('\n');
     write_rooted_atomic(root_guard, &digest_sidecar_path_for(path), body.as_bytes())
+}
+
+fn ensure_rooted_digest_sidecar_immutable(
+    root_guard: &GovernanceFilesystemRootGuard,
+    path: &Path,
+    data: &[u8],
+) -> Result<(), GovernancePublishError> {
+    let sidecar_path = digest_sidecar_path_for(path);
+    let mut body = blake3::hash(data).to_hex().to_string();
+    body.push('\n');
+    match read_rooted_governance_state_file(
+        root_guard,
+        &sidecar_path,
+        GOVERNANCE_DIGEST_SIDECAR_BYTES,
+    ) {
+        Ok(current) => {
+            if current.bytes() != body.as_bytes() {
+                return Err(GovernancePublishError::other(format!(
+                    "immutable governance digest sidecar for `{}` is substituted",
+                    path.display()
+                )));
+            }
+            current.binding().verify()?;
+            return Ok(());
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    write_rooted_atomic_expected(
+        root_guard,
+        &sidecar_path,
+        body.as_bytes(),
+        governance_rooted_fs::ExpectedFile::Missing,
+    )?;
+    let readback = read_rooted_governance_state_file(
+        root_guard,
+        &sidecar_path,
+        GOVERNANCE_DIGEST_SIDECAR_BYTES,
+    )?;
+    if readback.bytes() != body.as_bytes() {
+        return Err(GovernancePublishError::other(format!(
+            "immutable governance digest sidecar for `{}` diverged after creation",
+            path.display()
+        )));
+    }
+    readback.binding().verify()?;
+    Ok(())
 }
 
 fn verify_rooted_digest_sidecar(
@@ -4324,6 +5378,25 @@ impl GovernanceRuntimeDagSigner {
         Ok(())
     }
 
+    /// Return the exact retained, non-secret signer binding without exposing
+    /// filesystem paths or the signer provider itself.
+    #[must_use]
+    pub(crate) fn binding(
+        &self,
+    ) -> (
+        &str,
+        GovernanceDagRuntimeProviderQualificationV1,
+        &[u8],
+        [u8; 32],
+    ) {
+        (
+            &self.handle,
+            self.qualification,
+            &self.publisher_peer_id,
+            self.public_key,
+        )
+    }
+
     fn publisher_peer_id_hex(&self) -> String {
         hex::encode(&self.publisher_peer_id)
     }
@@ -4728,17 +5801,23 @@ fn governance_publication_artifact_roots_present(
 fn initialize_governance_publication_authority_if_pristine(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
-) -> Result<bool, GovernancePublishError> {
+) -> Result<(governance_rooted_fs::TwoSlotStoreV1, bool), GovernancePublishError> {
     reject_legacy_governance_publication_authorities(root, root_guard)?;
     let marker_present = read_governance_publication_initialization_marker(root, root_guard)?;
-    let authority_present = root_guard
+    let authority_present = match root_guard
         .rooted_directory()
-        .file_identity(OsStr::new(GOVERNANCE_PUBLICATION_STATE_FILE))?
-        .is_some();
-    if authority_present {
-        return Ok(marker_present);
-    }
-    if marker_present || governance_publication_artifact_roots_present(root_guard)? {
+        .open_directory(OsStr::new(GOVERNANCE_PUBLICATION_STORE_DIR_V1))
+    {
+        Ok(directory) => {
+            drop(directory);
+            true
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    if !authority_present
+        && (marker_present || governance_publication_artifact_roots_present(root_guard)?)
+    {
         return Err(GovernancePublishError::other(
             "authoritative governance publication state is missing from an initialized root",
         ));
@@ -4751,20 +5830,13 @@ fn initialize_governance_publication_authority_if_pristine(
             "serialize initial governance publication state: {error}"
         ))
     })?;
-    write_prepared_governance_publication_state(
-        root,
+    let store = open_governance_two_slot_store_v1(
         root_guard,
+        GOVERNANCE_PUBLICATION_STORE_SPEC_V1,
         body.as_bytes(),
-        |root_guard, path, body| {
-            write_rooted_atomic_expected(
-                root_guard,
-                path,
-                body,
-                governance_rooted_fs::ExpectedFile::Missing,
-            )
-        },
     )?;
-    Ok(false)
+    let _ = read_governance_publication_state(&store)?;
+    Ok((store, marker_present))
 }
 
 fn write_governance_publication_initialization_marker(
@@ -4786,11 +5858,49 @@ fn write_governance_publication_initialization_marker(
     Ok(())
 }
 
+fn reject_legacy_atomic_state_names(
+    directory: &governance_rooted_fs::RootedDirectory,
+    targets: &[&str],
+    label: &str,
+) -> Result<(), GovernancePublishError> {
+    for name in directory.child_names_bounded(GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP)? {
+        let Some(name_utf8) = name.to_str() else {
+            continue;
+        };
+        let legacy = targets.iter().any(|target| {
+            governance_rooted_fs::is_atomic_temp_candidate_for(name_utf8, target)
+                || governance_rooted_fs::is_atomic_retained_candidate_for(name_utf8, target)
+        });
+        if legacy {
+            return Err(GovernancePublishError::other(format!(
+                "legacy {label} atomic state `{name_utf8}` is unsupported; archive or remove it offline before first-release initialization"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn reject_legacy_governance_publication_authorities(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
 ) -> Result<(), GovernancePublishError> {
-    for file in [GOVERNANCE_PUBLISH_INDEX_FILE, GOVERNANCE_CAR_QUEUE_FILE] {
+    reject_legacy_atomic_state_names(
+        root_guard.rooted_directory(),
+        &[
+            GOVERNANCE_PUBLICATION_STATE_FILE,
+            GOVERNANCE_PUBLISH_INDEX_FILE,
+            GOVERNANCE_CAR_QUEUE_FILE,
+            "governance-publication-state-v1.json.blake3",
+            "publish-index.json.blake3",
+            "car-queue.json.blake3",
+        ],
+        "governance publication authority",
+    )?;
+    for file in [
+        GOVERNANCE_PUBLICATION_STATE_FILE,
+        GOVERNANCE_PUBLISH_INDEX_FILE,
+        GOVERNANCE_CAR_QUEUE_FILE,
+    ] {
         match read_rooted_governance_state_file(root_guard, &root.join(file), 1) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Ok(_) | Err(_) => {
@@ -4799,30 +5909,32 @@ fn reject_legacy_governance_publication_authorities(
                 )));
             }
         }
+        let sidecar = digest_sidecar_path_for(&root.join(file));
+        match read_rooted_governance_state_file(root_guard, &sidecar, 1) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) | Err(_) => {
+                return Err(GovernancePublishError::other(format!(
+                    "legacy governance publication authority sidecar `{}` is unsupported; remove it before first-release initialization",
+                    sidecar.display()
+                )));
+            }
+        }
     }
     Ok(())
 }
 
 fn read_governance_publication_state(
-    root: &Path,
-    root_guard: &GovernanceFilesystemRootGuard,
-) -> Result<(JsonMap, usize), GovernancePublishError> {
-    reject_legacy_governance_publication_authorities(root, root_guard)?;
-    let path = root.join(GOVERNANCE_PUBLICATION_STATE_FILE);
-    let snapshot = match read_rooted_governance_state_file(
-        root_guard,
-        &path,
-        GOVERNANCE_PUBLICATION_STATE_MAX_BYTES,
-    ) {
-        Ok(snapshot) => snapshot,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(GovernancePublishError::other(
-                "authoritative governance publication state is missing after initialization",
-            ));
-        }
-        Err(error) => return Err(error.into()),
-    };
-    let value: JsonValue = json::from_slice(snapshot.bytes()).map_err(|error| {
+    store: &governance_rooted_fs::TwoSlotStoreV1,
+) -> Result<(JsonMap, governance_rooted_fs::TwoSlotSnapshotV1), GovernancePublishError> {
+    let snapshot = load_governance_two_slot_store_v1(store, "governance publication authority")?;
+    let state = decode_governance_publication_state_snapshot(&snapshot)?;
+    Ok((state, snapshot))
+}
+
+fn decode_governance_publication_state_snapshot(
+    snapshot: &governance_rooted_fs::TwoSlotSnapshotV1,
+) -> Result<JsonMap, GovernancePublishError> {
+    let value: JsonValue = json::from_slice(snapshot.payload()).map_err(|error| {
         GovernancePublishError::other(format!(
             "failed to parse authoritative governance publication state: {error}"
         ))
@@ -4833,8 +5945,70 @@ fn read_governance_publication_state(
         ));
     };
     validate_governance_publication_state(&state)?;
-    snapshot.binding().verify()?;
-    Ok((state, snapshot.bytes().len()))
+    let canonical = json::to_json_pretty(&JsonValue::Object(state.clone())).map_err(|error| {
+        GovernancePublishError::other(format!(
+            "failed to canonicalize authoritative governance publication state: {error}"
+        ))
+    })?;
+    if canonical.as_bytes() != snapshot.payload() {
+        return Err(GovernancePublishError::other(
+            "authoritative governance publication state is not canonical JSON",
+        ));
+    }
+    let logical_generation =
+        required_governance_u64(&state, "generation", "governance publication state")?;
+    if logical_generation.checked_add(1) != Some(snapshot.generation()) {
+        return Err(GovernancePublishError::other(
+            "authoritative governance publication generation does not match its fixed-store generation",
+        ));
+    }
+    Ok(state)
+}
+
+/// Load one exact publication-authority generation through a retained root.
+///
+/// An entirely pristine root is reported as `None`; once initialization state
+/// or immutable publication history exists, a missing typed authority fails
+/// closed.
+pub(crate) fn load_governance_publication_snapshot_v1(
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<Option<GovernancePublicationSnapshotV1>, GovernancePublishError> {
+    let root = root_guard.root();
+    root_guard.revalidate()?;
+    reject_legacy_governance_publication_authorities(root, root_guard)?;
+    match root_guard
+        .rooted_directory()
+        .open_directory(OsStr::new(GOVERNANCE_PUBLICATION_STORE_DIR_V1))
+    {
+        Ok(directory) => drop(directory),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if read_governance_publication_initialization_marker(root, root_guard)?
+                || governance_publication_artifact_roots_present(root_guard)?
+            {
+                return Err(GovernancePublishError::other(
+                    "authoritative governance publication state is missing from an initialized root",
+                ));
+            }
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let config = governance_two_slot_config_v1(GOVERNANCE_PUBLICATION_STORE_SPEC_V1)?;
+    let snapshot = root_guard
+        .rooted_directory()
+        .load_existing_two_slot_store_v1(config)
+        .map_err(|error| {
+            GovernancePublishError::other(format!(
+                "failed to load governance publication two-slot state: {error}"
+            ))
+        })?;
+    decode_governance_publication_state_snapshot(&snapshot)?;
+    root_guard.revalidate()?;
+    Ok(Some(GovernancePublicationSnapshotV1 {
+        store_generation: snapshot.generation(),
+        store_record_digest: snapshot.record_digest(),
+        canonical_bytes: snapshot.payload().to_vec(),
+    }))
 }
 
 #[cfg(test)]
@@ -4843,7 +6017,15 @@ fn commit_governance_publication_state(
     root_guard: &GovernanceFilesystemRootGuard,
     state: JsonMap,
 ) -> Result<(), GovernancePublishError> {
-    commit_governance_publication_state_with(root, root_guard, state, write_atomic)
+    let (store, _) = initialize_governance_publication_authority_if_pristine(root, root_guard)?;
+    let (current, snapshot) = read_governance_publication_state(&store)?;
+    if current.get("generation") != state.get("generation") {
+        return Err(GovernancePublishError::other(
+            "governance publication state predecessor generation is stale",
+        ));
+    }
+    let body = prepare_governance_publication_state(state)?;
+    write_prepared_governance_publication_state(&store, &snapshot, &body).map(drop)
 }
 
 #[cfg(test)]
@@ -4856,8 +6038,20 @@ fn commit_governance_publication_state_with<F>(
 where
     F: FnOnce(&GovernanceFilesystemRootGuard, &Path, &[u8]) -> io::Result<()>,
 {
+    let (store, _) = initialize_governance_publication_authority_if_pristine(root, root_guard)?;
+    let (current, snapshot) = read_governance_publication_state(&store)?;
+    if current.get("generation") != state.get("generation") {
+        return Err(GovernancePublishError::other(
+            "governance publication state predecessor generation is stale",
+        ));
+    }
     let body = prepare_governance_publication_state(state)?;
-    write_prepared_governance_publication_state(root, root_guard, &body, writer)
+    writer(
+        root_guard,
+        &root.join(GOVERNANCE_PUBLICATION_STATE_FILE),
+        &body,
+    )?;
+    write_prepared_governance_publication_state(&store, &snapshot, &body).map(drop)
 }
 
 fn prepare_governance_publication_state(
@@ -4894,34 +6088,28 @@ fn prepare_governance_publication_state(
     Ok(body.into_bytes())
 }
 
-fn write_prepared_governance_publication_state<F>(
-    root: &Path,
-    root_guard: &GovernanceFilesystemRootGuard,
+fn write_prepared_governance_publication_state(
+    store: &governance_rooted_fs::TwoSlotStoreV1,
+    expected: &governance_rooted_fs::TwoSlotSnapshotV1,
     body: &[u8],
-    writer: F,
-) -> Result<(), GovernancePublishError>
-where
-    F: FnOnce(&GovernanceFilesystemRootGuard, &Path, &[u8]) -> io::Result<()>,
-{
+) -> Result<governance_rooted_fs::TwoSlotSnapshotV1, GovernancePublishError> {
     if body.is_empty() || body.len() > GOVERNANCE_PUBLICATION_STATE_MAX_BYTES {
         return Err(GovernancePublishError::other(format!(
             "prepared authoritative governance publication state exceeds {GOVERNANCE_PUBLICATION_STATE_MAX_BYTES} bytes"
         )));
     }
-    let path = root.join(GOVERNANCE_PUBLICATION_STATE_FILE);
-    writer(root_guard, &path, body)?;
-    let readback = read_rooted_governance_state_file(
-        root_guard,
-        &path,
-        GOVERNANCE_PUBLICATION_STATE_MAX_BYTES,
+    let committed = compare_and_swap_governance_two_slot_store_v1(
+        store,
+        expected,
+        body,
+        "governance publication authority",
     )?;
-    if readback.bytes() != body {
+    if committed.payload() != body {
         return Err(GovernancePublishError::other(
             "authoritative governance publication state readback diverged",
         ));
     }
-    readback.binding().verify()?;
-    Ok(())
+    Ok(committed)
 }
 
 fn require_exact_governance_fields(
@@ -5624,6 +6812,7 @@ struct GovernancePublicationArtifactInventory {
     source_pair_dirs: BTreeSet<String>,
     source_files: BTreeSet<String>,
     car_files: BTreeSet<String>,
+    next_position: usize,
 }
 
 fn governance_publication_artifact_inventory(
@@ -5636,6 +6825,7 @@ fn governance_publication_artifact_inventory(
         .and_then(|index| index.get("entries"))
         .and_then(JsonValue::as_array)
         .ok_or_else(|| GovernancePublishError::other("publication entries are missing"))?;
+    inventory.next_position = entries.len();
     for (position, entry) in entries.iter().enumerate() {
         let entry = entry.as_object().ok_or_else(|| {
             GovernancePublishError::other(format!(
@@ -5730,7 +6920,80 @@ fn is_canonical_governance_source_artifact_name(name: &str) -> bool {
     )
 }
 
-fn is_canonical_governance_car_artifact_name(name: &str) -> bool {
+fn reject_governance_publication_recovery_quarantine(
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<(), GovernancePublishError> {
+    let root_directory = root_guard.rooted_directory();
+    let quarantine = match root_directory
+        .open_directory(OsStr::new(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR))
+    {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let entry_count = quarantine
+        .child_names_bounded(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP)
+        .map(|entries| entries.len())
+        .map_err(|error| {
+            GovernancePublishError::other(format!(
+                "governance publication recovery quarantine exceeds its {}-entry hard cap or cannot be inspected ({error}); stop the publisher and clear `{GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR}` offline",
+                GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP
+            ))
+        })?;
+    Err(GovernancePublishError::other(format!(
+        "governance publication recovery quarantine contains {entry_count} preserved entries; stop the publisher, inspect them, and clear `{GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR}` offline before restart"
+    )))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn prepare_governance_publication_recovery_quarantine(
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<governance_rooted_fs::RootedDirectory, GovernancePublishError> {
+    reject_governance_publication_recovery_quarantine(root_guard)?;
+    let root_directory = root_guard.rooted_directory();
+    let quarantine = root_directory
+        .open_or_create_directory(OsStr::new(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR))?;
+    if !quarantine
+        .child_names_bounded(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP)?
+        .is_empty()
+    {
+        return Err(GovernancePublishError::other(
+            "governance publication recovery quarantine was populated during creation; offline inspection is required",
+        ));
+    }
+    root_guard.revalidate()?;
+    Ok(quarantine)
+}
+
+fn governance_publication_atomic_temp_target_name(name: &str) -> Option<&str> {
+    let name = name.strip_prefix('.')?;
+    let (target_name, suffix) = name.rsplit_once(".tmp-")?;
+    if target_name.is_empty() {
+        return None;
+    }
+    let (pid, counter) = suffix.split_once('-')?;
+    if pid.is_empty()
+        || counter.is_empty()
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !counter.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(target_name)
+}
+
+fn governance_artifact_roles_form_write_prefix<const N: usize>(
+    present: &BTreeSet<String>,
+    write_order: &[&str; N],
+) -> bool {
+    present.len() <= N
+        && write_order
+            .iter()
+            .take(present.len())
+            .all(|role| present.contains(*role))
+}
+
+fn canonical_governance_car_artifact_base(name: &str) -> Option<&str> {
     const SUFFIXES: [&str; 6] = [
         ".plan.json.blake3",
         ".json.blake3",
@@ -5739,28 +7002,288 @@ fn is_canonical_governance_car_artifact_name(name: &str) -> bool {
         ".json",
         ".car",
     ];
-    let Some(base) = SUFFIXES.iter().find_map(|suffix| name.strip_suffix(suffix)) else {
-        return false;
-    };
-    let Some((position, pair_id)) = base.split_once('_') else {
-        return false;
-    };
-    position.len() == 20
+    let base = SUFFIXES
+        .iter()
+        .find_map(|suffix| name.strip_suffix(suffix))?;
+    let (position, pair_id) = base.split_once('_')?;
+    (position.len() == 20
         && position.bytes().all(|byte| byte.is_ascii_digit())
-        && is_canonical_governance_source_pair_directory(pair_id)
+        && is_canonical_governance_source_pair_directory(pair_id))
+    .then_some(base)
 }
 
-fn reconcile_governance_publication_source_artifacts(
+#[cfg(test)]
+fn is_canonical_governance_car_artifact_name(name: &str) -> bool {
+    canonical_governance_car_artifact_base(name).is_some()
+}
+
+#[derive(Debug)]
+struct GovernancePublicationPlannedFileRemoval {
+    directory: governance_rooted_fs::RootedDirectory,
+    binding: governance_rooted_fs::FileBinding,
+    rollback_rank: usize,
+    expected_bytes: Vec<u8>,
+    quarantine_slot: OsString,
+}
+
+#[derive(Debug)]
+struct GovernancePublicationPlannedDirectoryRemoval {
+    parent: governance_rooted_fs::RootedDirectory,
+    retained: governance_rooted_fs::RootedDirectory,
+    quarantine_slot: OsString,
+}
+
+#[derive(Debug, Default)]
+struct GovernancePublicationArtifactCleanupPlan {
+    authority_files: Vec<GovernancePublicationPlannedFileRemoval>,
+    source_files: Vec<GovernancePublicationPlannedFileRemoval>,
+    source_pair_dirs: Vec<GovernancePublicationPlannedDirectoryRemoval>,
+    source_kind_dirs: Vec<GovernancePublicationPlannedDirectoryRemoval>,
+    source_root: Option<GovernancePublicationPlannedDirectoryRemoval>,
+    car_files: Vec<GovernancePublicationPlannedFileRemoval>,
+    car_root: Option<GovernancePublicationPlannedDirectoryRemoval>,
+}
+
+#[derive(Debug)]
+struct GovernanceInterruptedPublicationIdentity {
+    payload_kind: String,
+    pair_id: String,
+    source_roles_complete: bool,
+    verified_source: Option<PublishIndexEntryForCar>,
+}
+
+impl GovernanceInterruptedPublicationIdentity {
+    fn verified_source(&self) -> Result<&PublishIndexEntryForCar, GovernancePublishError> {
+        self.verified_source.as_ref().ok_or_else(|| {
+            GovernancePublishError::other(
+                "interrupted governance publication CAR persistence requires a complete verified source pair",
+            )
+        })
+    }
+}
+
+fn plan_governance_publication_file_removal(
+    directory: &governance_rooted_fs::RootedDirectory,
+    name: &OsStr,
+    max_bytes: usize,
+    expected_bytes: Option<&[u8]>,
+    rollback_rank: usize,
+    quarantine_slot: OsString,
+) -> Result<GovernancePublicationPlannedFileRemoval, GovernancePublishError> {
+    let snapshot = directory.read_file(name, max_bytes)?;
+    if let Some(expected_bytes) = expected_bytes {
+        if snapshot.bytes() != expected_bytes {
+            return Err(GovernancePublishError::other(
+                "interrupted governance publication CAR role diverges from its canonical source projection",
+            ));
+        }
+    }
+    let expected_identity = snapshot.binding().identity();
+    let expected_bytes = snapshot.bytes().to_vec();
+    let binding = directory
+        .removal_file_binding(name, max_bytes)?
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "uncommitted governance publication artifact disappeared during reconciliation",
+            )
+        })?;
+    if binding.identity() != expected_identity {
+        return Err(GovernancePublishError::other(
+            "interrupted governance publication artifact changed after exact comparison",
+        ));
+    }
+    Ok(GovernancePublicationPlannedFileRemoval {
+        directory: directory.clone(),
+        binding,
+        rollback_rank,
+        expected_bytes,
+        quarantine_slot,
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn plan_private_governance_file_removal(
+    directory: &governance_rooted_fs::RootedDirectory,
+    name: &OsStr,
+    max_bytes: usize,
+    rollback_rank: usize,
+    quarantine_slot: OsString,
+) -> Result<GovernancePublicationPlannedFileRemoval, GovernancePublishError> {
+    let snapshot = directory.read_private_file(name, max_bytes)?;
+    let expected_identity = snapshot.binding().identity();
+    let expected_bytes = snapshot.bytes().to_vec();
+    let binding = directory
+        .private_removal_file_binding(name, max_bytes)?
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "private governance recovery artifact disappeared during reconciliation",
+            )
+        })?;
+    if binding.identity() != expected_identity {
+        return Err(GovernancePublishError::other(
+            "private governance recovery artifact changed after exact comparison",
+        ));
+    }
+    Ok(GovernancePublicationPlannedFileRemoval {
+        directory: directory.clone(),
+        binding,
+        rollback_rank,
+        expected_bytes,
+        quarantine_slot,
+    })
+}
+
+fn governance_source_artifact_max_bytes(target: &str) -> Option<usize> {
+    match target {
+        "payload.to" => Some(GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES),
+        "payload.json" => Some(GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES),
+        "payload.to.blake3" | "payload.json.blake3" => Some(GOVERNANCE_DIGEST_SIDECAR_BYTES),
+        _ => None,
+    }
+}
+
+fn governance_car_artifact_max_bytes(role: &str) -> Option<usize> {
+    match role {
+        ".car" => Some(GOVERNANCE_CAR_ARCHIVE_MAX_BYTES),
+        ".plan.json" => Some(GOVERNANCE_MUTABLE_INDEX_MAX_BYTES),
+        ".json" => Some(GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1),
+        ".car.blake3" | ".plan.json.blake3" | ".json.blake3" => {
+            Some(GOVERNANCE_DIGEST_SIDECAR_BYTES)
+        }
+        _ => None,
+    }
+}
+
+fn governance_digest_sidecar_body(data: &[u8]) -> Vec<u8> {
+    let mut body = blake3::hash(data).to_hex().to_string();
+    body.push('\n');
+    body.into_bytes()
+}
+
+fn expected_interrupted_governance_car_role<'a>(
+    prepared: &'a PreparedGovernanceCarSegment,
+    role: &str,
+) -> Option<Cow<'a, [u8]>> {
+    match role {
+        ".car" => Some(Cow::Borrowed(prepared.car_bytes.as_slice())),
+        ".car.blake3" => Some(Cow::Owned(governance_digest_sidecar_body(
+            &prepared.car_bytes,
+        ))),
+        ".plan.json" => Some(Cow::Borrowed(prepared.plan_body.as_bytes())),
+        ".plan.json.blake3" => Some(Cow::Owned(governance_digest_sidecar_body(
+            prepared.plan_body.as_bytes(),
+        ))),
+        ".json" => Some(Cow::Borrowed(prepared.manifest_body.as_bytes())),
+        ".json.blake3" => Some(Cow::Owned(governance_digest_sidecar_body(
+            prepared.manifest_body.as_bytes(),
+        ))),
+        _ => None,
+    }
+}
+
+fn governance_artifact_rollback_rank<const N: usize>(
+    role: &str,
+    is_temporary: bool,
+    write_order: &[&str; N],
+) -> Result<usize, GovernancePublishError> {
+    let position = write_order
+        .iter()
+        .position(|candidate| *candidate == role)
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "interrupted governance publication role is outside its canonical write order",
+            )
+        })?;
+    Ok(if is_temporary { N + position } else { position })
+}
+
+fn verify_complete_interrupted_source_pair(
+    root_guard: &GovernanceFilesystemRootGuard,
+    identity: &mut GovernanceInterruptedPublicationIdentity,
+    position: usize,
+) -> Result<(), GovernancePublishError> {
+    if !identity.source_roles_complete {
+        return Ok(());
+    }
+    let pair_root = root_guard
+        .root()
+        .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+        .join(&identity.payload_kind)
+        .join(&identity.pair_id);
+    let encoded_path = pair_root.join("payload.to");
+    let json_path = pair_root.join("payload.json");
+    let encoded = read_rooted_governance_state_file(
+        root_guard,
+        &encoded_path,
+        GOVERNANCE_CAR_SOURCE_ENCODED_MAX_BYTES,
+    )?;
+    let json = read_rooted_governance_state_file(
+        root_guard,
+        &json_path,
+        GOVERNANCE_CAR_SOURCE_JSON_MAX_BYTES,
+    )?;
+    validate_governance_car_source_lengths(encoded.bytes().len(), json.bytes().len())?;
+    verify_rooted_digest_sidecar(root_guard, &encoded_path, encoded.bytes())?;
+    verify_rooted_digest_sidecar(root_guard, &json_path, json.bytes())?;
+    let encoded_digest = blake3::hash(encoded.bytes()).to_hex().to_string();
+    let json_digest = blake3::hash(json.bytes()).to_hex().to_string();
+    let expected_pair_id = governance_source_pair_id(
+        &identity.payload_kind,
+        u64::try_from(encoded.bytes().len()).map_err(|_| {
+            GovernancePublishError::other("interrupted encoded source length exceeds u64")
+        })?,
+        &encoded_digest,
+        u64::try_from(json.bytes().len()).map_err(|_| {
+            GovernancePublishError::other("interrupted JSON source length exceeds u64")
+        })?,
+        &json_digest,
+    )?;
+    if expected_pair_id != identity.pair_id {
+        return Err(GovernancePublishError::other(
+            "interrupted governance publication source bytes do not match their composite identity",
+        ));
+    }
+    encoded.binding().verify()?;
+    json.binding().verify()?;
+    root_guard.revalidate()?;
+    identity.verified_source = Some(PublishIndexEntryForCar {
+        position,
+        newly_inserted: true,
+        payload_kind: identity.payload_kind.clone(),
+        encoded_path: format!(
+            "{GOVERNANCE_PUBLICATION_SOURCES_DIR}/{}/{}/payload.to",
+            identity.payload_kind, identity.pair_id
+        ),
+        json_path: format!(
+            "{GOVERNANCE_PUBLICATION_SOURCES_DIR}/{}/{}/payload.json",
+            identity.payload_kind, identity.pair_id
+        ),
+        encoded_blake3: encoded_digest,
+        encoded_len: encoded.bytes().len(),
+        json_blake3: json_digest,
+        json_len: json.bytes().len(),
+    });
+    Ok(())
+}
+
+fn plan_governance_publication_source_artifacts(
     root_guard: &GovernanceFilesystemRootGuard,
     inventory: &GovernancePublicationArtifactInventory,
-) -> Result<(), GovernancePublishError> {
+) -> Result<
+    (
+        GovernancePublicationArtifactCleanupPlan,
+        Option<GovernanceInterruptedPublicationIdentity>,
+    ),
+    GovernancePublishError,
+> {
+    let mut plan = GovernancePublicationArtifactCleanupPlan::default();
     let root_directory = root_guard.rooted_directory();
     let sources =
         match root_directory.open_directory(OsStr::new(GOVERNANCE_PUBLICATION_SOURCES_DIR)) {
             Ok(directory) => directory,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 if inventory.source_files.is_empty() {
-                    return Ok(());
+                    return Ok((plan, None));
                 }
                 return Err(GovernancePublishError::other(
                     "committed governance publication source directory is missing",
@@ -5771,10 +7294,12 @@ fn reconcile_governance_publication_source_artifacts(
     let kind_bound = inventory
         .source_kind_dirs
         .len()
-        .checked_add(GOVERNANCE_PUBLICATION_ORPHAN_SOURCE_KIND_SLACK)
+        .checked_add(GOVERNANCE_PUBLICATION_INTERRUPTED_IDENTITY_ALLOWANCE)
         .ok_or_else(|| GovernancePublishError::other("publication source scan bound overflowed"))?
         .max(1);
     let mut seen = BTreeSet::new();
+    let mut interrupted_identity = None;
+    let mut interrupted_empty_kind = None::<String>;
     for kind_name in sources.child_names_bounded(kind_bound)? {
         let kind = kind_name.to_str().ok_or_else(|| {
             GovernancePublishError::other("governance publication source kind is not UTF-8")
@@ -5788,12 +7313,16 @@ fn reconcile_governance_publication_source_artifacts(
             .filter(|pair| pair.starts_with(&format!("{kind_relative}/")))
             .count();
         let pair_bound = expected_pair_count
-            .checked_add(GOVERNANCE_PUBLICATION_ORPHAN_SOURCE_PAIR_SLACK)
+            .checked_add(usize::from(
+                interrupted_identity.is_none() && interrupted_empty_kind.is_none(),
+            ))
             .ok_or_else(|| {
                 GovernancePublishError::other("publication source-pair scan bound overflowed")
             })?
             .max(1);
-        for pair_name in kind_directory.child_names_bounded(pair_bound)? {
+        let pair_names = kind_directory.child_names_bounded(pair_bound)?;
+        let kind_was_empty = pair_names.is_empty();
+        for pair_name in pair_names {
             let pair = pair_name.to_str().ok_or_else(|| {
                 GovernancePublishError::other(
                     "governance publication source-pair identity is not UTF-8",
@@ -5806,59 +7335,182 @@ fn reconcile_governance_publication_source_artifacts(
             }
             let pair_directory = kind_directory.open_directory(&pair_name)?;
             let pair_relative = format!("{kind_relative}/{pair}");
-            pair_directory.remove_atomic_temps_matching(
-                4 + GOVERNANCE_PUBLICATION_ORPHAN_ATOMIC_TEMP_SLACK,
-                is_canonical_governance_source_artifact_name,
-            )?;
-            for file_name in pair_directory.child_names_bounded(4)? {
+            let committed_pair = inventory.source_pair_dirs.contains(&pair_relative);
+            if !committed_pair
+                && (interrupted_identity.is_some() || interrupted_empty_kind.is_some())
+            {
+                return Err(GovernancePublishError::other(
+                    "more than one interrupted governance publication source-pair identity is present",
+                ));
+            }
+            if !committed_pair && inventory.next_position >= GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP {
+                return Err(GovernancePublishError::other(
+                    "interrupted governance publication exists after the publication entry hard cap",
+                ));
+            }
+            let file_bound = GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT
+                .checked_add(GOVERNANCE_PUBLICATION_ATOMIC_TEMP_ALLOWANCE)
+                .ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "publication source artifact scan bound overflowed",
+                    )
+                })?;
+            let mut canonical_source_files = BTreeSet::new();
+            let mut source_temporary_target = None::<String>;
+            for file_name in pair_directory.child_names_bounded(file_bound)? {
                 let file = file_name.to_str().ok_or_else(|| {
                     GovernancePublishError::other(
                         "governance publication source artifact name is not UTF-8",
                     )
                 })?;
-                if !is_canonical_governance_source_artifact_name(file) {
+                let (target, is_temporary) =
+                    if let Some(target) = governance_publication_atomic_temp_target_name(file) {
+                        (target, true)
+                    } else {
+                        (file, false)
+                    };
+                if !is_canonical_governance_source_artifact_name(target) {
                     return Err(GovernancePublishError::other(
                         "governance publication source artifact name is noncanonical",
                     ));
                 }
-                let relative = format!("{pair_relative}/{file}");
-                if inventory.source_files.contains(&relative) {
+                let target_relative = format!("{pair_relative}/{target}");
+                if committed_pair {
+                    if is_temporary || !inventory.source_files.contains(&target_relative) {
+                        return Err(GovernancePublishError::other(
+                            "committed governance publication source directory contains an uncommitted artifact",
+                        ));
+                    }
                     if pair_directory.file_identity(&file_name)?.is_none() {
                         return Err(GovernancePublishError::other(
                             "committed governance publication source artifact disappeared during reconciliation",
                         ));
                     }
-                    seen.insert(relative);
+                    seen.insert(target_relative);
                 } else {
-                    pair_directory.remove_file_if_exists(&file_name)?;
+                    if is_temporary {
+                        if source_temporary_target.replace(target.to_owned()).is_some() {
+                            return Err(GovernancePublishError::other(
+                                "interrupted governance publication has more than one source atomic temporary",
+                            ));
+                        }
+                    } else {
+                        canonical_source_files.insert(target.to_owned());
+                    }
+                    let max_bytes =
+                        governance_source_artifact_max_bytes(target).ok_or_else(|| {
+                            GovernancePublishError::other(
+                                "interrupted governance publication source role has no byte bound",
+                            )
+                        })?;
+                    let rollback_rank = governance_artifact_rollback_rank(
+                        target,
+                        is_temporary,
+                        &GOVERNANCE_PUBLICATION_SOURCE_WRITE_ORDER,
+                    )?;
+                    plan.source_files
+                        .push(plan_governance_publication_file_removal(
+                            &pair_directory,
+                            &file_name,
+                            max_bytes,
+                            None,
+                            rollback_rank,
+                            OsString::from(format!("source-file-{rollback_rank:02}")),
+                        )?);
                 }
             }
-            drop(pair_directory);
-            if !inventory.source_pair_dirs.contains(&pair_relative) {
-                kind_directory.remove_empty_directory_if_exists(&pair_name)?;
+            if !committed_pair {
+                if !governance_artifact_roles_form_write_prefix(
+                    &canonical_source_files,
+                    &GOVERNANCE_PUBLICATION_SOURCE_WRITE_ORDER,
+                ) {
+                    return Err(GovernancePublishError::other(
+                        "interrupted governance publication source roles are not an exact write prefix",
+                    ));
+                }
+                if source_temporary_target
+                    .as_ref()
+                    .is_some_and(|temporary_target| {
+                        GOVERNANCE_PUBLICATION_SOURCE_WRITE_ORDER.get(canonical_source_files.len())
+                            != Some(&temporary_target.as_str())
+                    })
+                {
+                    return Err(GovernancePublishError::other(
+                        "interrupted governance publication source atomic temporary is not the exact next write role",
+                    ));
+                }
+                let source_roles_complete = canonical_source_files.len()
+                    == GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT;
+                interrupted_identity = Some(GovernanceInterruptedPublicationIdentity {
+                    payload_kind: kind.to_owned(),
+                    pair_id: pair.to_owned(),
+                    source_roles_complete,
+                    verified_source: None,
+                });
+                plan.source_pair_dirs
+                    .push(GovernancePublicationPlannedDirectoryRemoval {
+                        parent: kind_directory.clone(),
+                        retained: pair_directory,
+                        quarantine_slot: OsString::from("source-pair"),
+                    });
             }
         }
-        drop(kind_directory);
         if !inventory.source_kind_dirs.contains(&kind_relative) {
-            sources.remove_empty_directory_if_exists(&kind_name)?;
+            if kind_was_empty {
+                // `resolve_parent` durably creates each component in order, so
+                // a crash may leave one new kind before its pair directory.
+                if inventory.next_position >= GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP {
+                    return Err(GovernancePublishError::other(
+                        "interrupted governance publication source kind exists after the publication entry hard cap",
+                    ));
+                }
+                if interrupted_identity.is_some() || interrupted_empty_kind.is_some() {
+                    return Err(GovernancePublishError::other(
+                        "more than one interrupted governance publication source prefix is present",
+                    ));
+                }
+                interrupted_empty_kind = Some(kind.to_owned());
+            } else if interrupted_identity
+                .as_ref()
+                .is_none_or(|identity| identity.payload_kind != kind)
+            {
+                return Err(GovernancePublishError::other(
+                    "uncommitted governance publication source kind has no exact source-pair identity",
+                ));
+            }
+            plan.source_kind_dirs
+                .push(GovernancePublicationPlannedDirectoryRemoval {
+                    parent: sources.clone(),
+                    retained: kind_directory,
+                    quarantine_slot: OsString::from("source-kind"),
+                });
         }
     }
-    drop(sources);
     if seen != inventory.source_files {
         return Err(GovernancePublishError::other(
             "one or more committed governance publication source artifacts are missing",
         ));
     }
-    if inventory.source_files.is_empty() {
-        root_directory
-            .remove_empty_directory_if_exists(OsStr::new(GOVERNANCE_PUBLICATION_SOURCES_DIR))?;
+    if let Some(identity) = interrupted_identity.as_mut() {
+        verify_complete_interrupted_source_pair(root_guard, identity, inventory.next_position)?;
     }
-    Ok(())
+    plan.source_files
+        .sort_by(|left, right| right.rollback_rank.cmp(&left.rollback_rank));
+    if inventory.source_files.is_empty() {
+        plan.source_root = Some(GovernancePublicationPlannedDirectoryRemoval {
+            parent: root_directory.clone(),
+            retained: sources,
+            quarantine_slot: OsString::from("source-root"),
+        });
+    }
+    Ok((plan, interrupted_identity))
 }
 
-fn reconcile_governance_publication_car_artifacts(
+fn plan_governance_publication_car_artifacts(
     root_guard: &GovernanceFilesystemRootGuard,
     inventory: &GovernancePublicationArtifactInventory,
+    interrupted_identity: Option<&GovernanceInterruptedPublicationIdentity>,
+    plan: &mut GovernancePublicationArtifactCleanupPlan,
 ) -> Result<(), GovernancePublishError> {
     let root_directory = root_guard.rooted_directory();
     let car_segments = match root_directory.open_directory(OsStr::new(GOVERNANCE_CAR_SEGMENTS_DIR))
@@ -5877,48 +7529,468 @@ fn reconcile_governance_publication_car_artifacts(
     let file_bound = inventory
         .car_files
         .len()
-        .checked_add(GOVERNANCE_PUBLICATION_ORPHAN_CAR_FILE_SLACK)
+        .checked_add(GOVERNANCE_PUBLICATION_CAR_ARTIFACT_COUNT)
+        .and_then(|bound| bound.checked_add(GOVERNANCE_PUBLICATION_ATOMIC_TEMP_ALLOWANCE))
         .ok_or_else(|| GovernancePublishError::other("publication CAR scan bound overflowed"))?
         .max(1);
     let mut seen = BTreeSet::new();
-    let temp_scan_bound = file_bound
-        .checked_add(GOVERNANCE_PUBLICATION_ORPHAN_ATOMIC_TEMP_SLACK)
-        .ok_or_else(|| {
-            GovernancePublishError::other("publication CAR temp scan bound overflowed")
-        })?;
-    car_segments
-        .remove_atomic_temps_matching(temp_scan_bound, is_canonical_governance_car_artifact_name)?;
+    let mut interrupted_car_base = None::<String>;
+    let mut interrupted_car_roles = BTreeSet::new();
+    let mut interrupted_car_temporary_role = None::<String>;
+    let mut interrupted_car_artifacts = Vec::<(OsString, String, bool)>::new();
     for file_name in car_segments.child_names_bounded(file_bound)? {
         let file = file_name.to_str().ok_or_else(|| {
             GovernancePublishError::other("governance CAR artifact name is not UTF-8")
         })?;
-        if !is_canonical_governance_car_artifact_name(file) {
+        let (target, is_temporary) =
+            if let Some(target) = governance_publication_atomic_temp_target_name(file) {
+                (target, true)
+            } else {
+                (file, false)
+            };
+        let Some(base) = canonical_governance_car_artifact_base(target) else {
             return Err(GovernancePublishError::other(
                 "governance CAR artifact name is noncanonical",
             ));
-        }
-        let relative = format!("{GOVERNANCE_CAR_SEGMENTS_DIR}/{file}");
-        if inventory.car_files.contains(&relative) {
+        };
+        let target_relative = format!("{GOVERNANCE_CAR_SEGMENTS_DIR}/{target}");
+        if !is_temporary && inventory.car_files.contains(&target_relative) {
             if car_segments.file_identity(&file_name)?.is_none() {
                 return Err(GovernancePublishError::other(
                     "committed governance CAR artifact disappeared during reconciliation",
                 ));
             }
-            seen.insert(relative);
+            seen.insert(target_relative);
         } else {
-            car_segments.remove_file_if_exists(&file_name)?;
+            if inventory.car_files.contains(&target_relative) {
+                return Err(GovernancePublishError::other(
+                    "committed governance CAR artifact has an uncommitted atomic temporary",
+                ));
+            }
+            if interrupted_car_base
+                .as_ref()
+                .is_some_and(|existing| existing != base)
+            {
+                return Err(GovernancePublishError::other(
+                    "interrupted governance publication CAR roles span more than one artifact base",
+                ));
+            }
+            interrupted_car_base = Some(base.to_owned());
+            let role = target
+                .strip_prefix(base)
+                .ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "interrupted governance CAR role is not bound to its canonical base",
+                    )
+                })?
+                .to_owned();
+            if is_temporary {
+                if interrupted_car_temporary_role
+                    .replace(role.clone())
+                    .is_some()
+                {
+                    return Err(GovernancePublishError::other(
+                        "interrupted governance publication has more than one CAR atomic temporary",
+                    ));
+                }
+            } else {
+                interrupted_car_roles.insert(role.clone());
+            }
+            interrupted_car_artifacts.push((file_name, role, is_temporary));
         }
     }
-    drop(car_segments);
     if seen != inventory.car_files {
         return Err(GovernancePublishError::other(
             "one or more committed governance CAR artifacts are missing",
         ));
     }
+    if let Some(base) = interrupted_car_base {
+        if !governance_artifact_roles_form_write_prefix(
+            &interrupted_car_roles,
+            &GOVERNANCE_PUBLICATION_CAR_WRITE_ORDER,
+        ) {
+            return Err(GovernancePublishError::other(
+                "interrupted governance publication CAR roles are not an exact write prefix",
+            ));
+        }
+        if interrupted_car_temporary_role
+            .as_ref()
+            .is_some_and(|temporary_role| {
+                GOVERNANCE_PUBLICATION_CAR_WRITE_ORDER.get(interrupted_car_roles.len())
+                    != Some(&temporary_role.as_str())
+            })
+        {
+            return Err(GovernancePublishError::other(
+                "interrupted governance publication CAR atomic temporary is not the exact next write role",
+            ));
+        }
+        let (position, pair_id) = base.split_once('_').ok_or_else(|| {
+            GovernancePublishError::other(
+                "interrupted governance publication CAR base is noncanonical",
+            )
+        })?;
+        let position = position.parse::<usize>().map_err(|_| {
+            GovernancePublishError::other(
+                "interrupted governance publication CAR position exceeds host limits",
+            )
+        })?;
+        if position != inventory.next_position {
+            return Err(GovernancePublishError::other(format!(
+                "interrupted governance publication CAR position {position} is not the exact expected next position {}",
+                inventory.next_position
+            )));
+        }
+        let identity = interrupted_identity.ok_or_else(|| {
+            GovernancePublishError::other(
+                "interrupted governance publication CAR artifacts have no source-pair identity",
+            )
+        })?;
+        if pair_id != identity.pair_id {
+            return Err(GovernancePublishError::other(
+                "interrupted governance publication source and CAR identities diverge",
+            ));
+        }
+        let verified_source = identity.verified_source()?;
+        // Every durable CAR role was atomically promoted and therefore must
+        // equal the deterministic projection of the complete source pair.
+        // Only the exact next atomic temporary may contain partial bytes.
+        let (files, file_records) =
+            governance_car_segment_files(root_guard.root(), root_guard, verified_source)?;
+        let prepared = prepare_governance_car_segment(
+            root_guard.root(),
+            verified_source,
+            files,
+            file_records,
+        )?;
+        for (file_name, role, is_temporary) in interrupted_car_artifacts {
+            let max_bytes = governance_car_artifact_max_bytes(&role).ok_or_else(|| {
+                GovernancePublishError::other(
+                    "interrupted governance publication CAR role has no byte bound",
+                )
+            })?;
+            let expected = if is_temporary {
+                None
+            } else {
+                Some(
+                    expected_interrupted_governance_car_role(&prepared, &role).ok_or_else(
+                        || {
+                            GovernancePublishError::other(
+                                "interrupted governance publication CAR role has no canonical source projection",
+                            )
+                        },
+                    )?,
+                )
+            };
+            let rollback_rank = governance_artifact_rollback_rank(
+                &role,
+                is_temporary,
+                &GOVERNANCE_PUBLICATION_CAR_WRITE_ORDER,
+            )?;
+            plan.car_files
+                .push(plan_governance_publication_file_removal(
+                    &car_segments,
+                    &file_name,
+                    max_bytes,
+                    expected.as_deref(),
+                    rollback_rank,
+                    OsString::from(format!("car-file-{rollback_rank:02}")),
+                )?);
+        }
+        plan.car_files
+            .sort_by(|left, right| right.rollback_rank.cmp(&left.rollback_rank));
+    }
     if inventory.car_files.is_empty() {
-        root_directory.remove_empty_directory_if_exists(OsStr::new(GOVERNANCE_CAR_SEGMENTS_DIR))?;
+        plan.car_root = Some(GovernancePublicationPlannedDirectoryRemoval {
+            parent: root_directory.clone(),
+            retained: car_segments,
+            quarantine_slot: OsString::from("car-root"),
+        });
     }
     Ok(())
+}
+
+fn apply_governance_publication_cleanup_plan(
+    root_guard: &GovernanceFilesystemRootGuard,
+    plan: GovernancePublicationArtifactCleanupPlan,
+) -> Result<(), GovernancePublishError> {
+    apply_governance_publication_cleanup_plan_with(root_guard, plan, |_| Ok(()))
+}
+
+#[cfg(windows)]
+fn apply_governance_publication_cleanup_plan_with<AfterStep>(
+    root_guard: &GovernanceFilesystemRootGuard,
+    plan: GovernancePublicationArtifactCleanupPlan,
+    mut after_step: AfterStep,
+) -> Result<(), GovernancePublishError>
+where
+    AfterStep: FnMut(usize) -> Result<(), GovernancePublishError>,
+{
+    let GovernancePublicationArtifactCleanupPlan {
+        authority_files,
+        source_files,
+        source_pair_dirs,
+        source_kind_dirs,
+        source_root,
+        car_files,
+        car_root,
+    } = plan;
+    root_guard.revalidate()?;
+    let mut completed_steps = 0_usize;
+    let mut record_step = || -> Result<(), GovernancePublishError> {
+        completed_steps = completed_steps.checked_add(1).ok_or_else(|| {
+            GovernancePublishError::other("governance publication cleanup step overflowed")
+        })?;
+        after_step(completed_steps)
+    };
+
+    for removal in authority_files {
+        let GovernancePublicationPlannedFileRemoval {
+            directory,
+            binding,
+            expected_bytes: _,
+            quarantine_slot: _,
+            ..
+        } = removal;
+        directory.remove_file_binding(binding)?;
+        record_step()?;
+    }
+
+    // Persistence writes source roles before CAR roles. Rollback is the exact
+    // inverse: discard the next CAR temporary, remove durable CAR roles in
+    // reverse order, and only then unwind the source prefix.
+    for removal in car_files {
+        let GovernancePublicationPlannedFileRemoval {
+            directory,
+            binding,
+            expected_bytes: _,
+            quarantine_slot: _,
+            ..
+        } = removal;
+        directory.remove_file_binding(binding)?;
+        record_step()?;
+    }
+    if let Some(removal) = car_root {
+        let GovernancePublicationPlannedDirectoryRemoval {
+            parent,
+            retained,
+            quarantine_slot: _,
+        } = removal;
+        parent.remove_empty_directory_binding(retained)?;
+        record_step()?;
+    }
+
+    for removal in source_files {
+        let GovernancePublicationPlannedFileRemoval {
+            directory,
+            binding,
+            expected_bytes: _,
+            quarantine_slot: _,
+            ..
+        } = removal;
+        directory.remove_file_binding(binding)?;
+        record_step()?;
+    }
+    for removal in source_pair_dirs
+        .into_iter()
+        .chain(source_kind_dirs)
+        .chain(source_root)
+    {
+        let GovernancePublicationPlannedDirectoryRemoval {
+            parent,
+            retained,
+            quarantine_slot: _,
+        } = removal;
+        parent.remove_empty_directory_binding(retained)?;
+        record_step()?;
+    }
+    root_guard.revalidate()?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn apply_governance_publication_cleanup_plan_with<AfterStep>(
+    root_guard: &GovernanceFilesystemRootGuard,
+    plan: GovernancePublicationArtifactCleanupPlan,
+    mut after_step: AfterStep,
+) -> Result<(), GovernancePublishError>
+where
+    AfterStep: FnMut(usize) -> Result<(), GovernancePublishError>,
+{
+    let planned_count = plan
+        .authority_files
+        .len()
+        .checked_add(plan.source_files.len())
+        .and_then(|count| count.checked_add(plan.source_pair_dirs.len()))
+        .and_then(|count| count.checked_add(plan.source_kind_dirs.len()))
+        .and_then(|count| count.checked_add(usize::from(plan.source_root.is_some())))
+        .and_then(|count| count.checked_add(plan.car_files.len()))
+        .and_then(|count| count.checked_add(usize::from(plan.car_root.is_some())))
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance publication recovery quarantine entry count overflowed",
+            )
+        })?;
+    if planned_count > GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP {
+        return Err(GovernancePublishError::other(format!(
+            "governance publication recovery requires {planned_count} quarantine entries, above the {}-entry hard cap",
+            GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP
+        )));
+    }
+    let mut slots = BTreeSet::new();
+    for removal in plan
+        .authority_files
+        .iter()
+        .chain(&plan.source_files)
+        .chain(&plan.car_files)
+    {
+        slots.insert(removal.quarantine_slot.clone());
+    }
+    for removal in plan
+        .source_pair_dirs
+        .iter()
+        .chain(&plan.source_kind_dirs)
+        .chain(plan.source_root.iter())
+        .chain(plan.car_root.iter())
+    {
+        slots.insert(removal.quarantine_slot.clone());
+    }
+    if slots.len() != planned_count {
+        return Err(GovernancePublishError::other(
+            "governance publication recovery quarantine slots are not one-to-one",
+        ));
+    }
+    if planned_count == 0 {
+        root_guard.revalidate()?;
+        return Ok(());
+    }
+
+    let quarantine = prepare_governance_publication_recovery_quarantine(root_guard)?;
+    let GovernancePublicationArtifactCleanupPlan {
+        authority_files,
+        source_files,
+        source_pair_dirs,
+        source_kind_dirs,
+        source_root,
+        car_files,
+        car_root,
+    } = plan;
+    root_guard.revalidate()?;
+    let mut completed_steps = 0_usize;
+    let mut record_step = || -> Result<(), GovernancePublishError> {
+        completed_steps = completed_steps.checked_add(1).ok_or_else(|| {
+            GovernancePublishError::other("governance publication cleanup step overflowed")
+        })?;
+        after_step(completed_steps)
+    };
+
+    for removal in authority_files {
+        let GovernancePublicationPlannedFileRemoval {
+            directory,
+            binding,
+            expected_bytes,
+            quarantine_slot,
+            ..
+        } = removal;
+        let isolated =
+            directory.isolate_file_binding(binding, &quarantine, quarantine_slot.as_os_str())?;
+        if isolated.bytes() != expected_bytes.as_slice() {
+            return Err(GovernancePublishError::other(
+                "isolated governance authority temporary changed after exact comparison; the quarantine was preserved for offline inspection",
+            ));
+        }
+        isolated.binding().verify()?;
+        record_step()?;
+    }
+
+    // Persistence writes source roles before CAR roles. Rollback isolates the
+    // exact inverse prefix into a durable, bounded quarantine. POSIX has no
+    // conditional unlink-by-descriptor, so no quarantined pathname is ever
+    // unlinked while a same-UID process could substitute it.
+    for removal in car_files {
+        let GovernancePublicationPlannedFileRemoval {
+            directory,
+            binding,
+            expected_bytes,
+            quarantine_slot,
+            ..
+        } = removal;
+        let isolated =
+            directory.isolate_file_binding(binding, &quarantine, quarantine_slot.as_os_str())?;
+        if isolated.bytes() != expected_bytes.as_slice() {
+            return Err(GovernancePublishError::other(
+                "isolated governance CAR artifact changed after exact comparison; the quarantine was preserved for offline inspection",
+            ));
+        }
+        isolated.binding().verify()?;
+        record_step()?;
+    }
+    if let Some(removal) = car_root {
+        removal.parent.isolate_empty_directory_binding(
+            removal.retained,
+            &quarantine,
+            removal.quarantine_slot.as_os_str(),
+        )?;
+        record_step()?;
+    }
+
+    for removal in source_files {
+        let GovernancePublicationPlannedFileRemoval {
+            directory,
+            binding,
+            expected_bytes,
+            quarantine_slot,
+            ..
+        } = removal;
+        let isolated =
+            directory.isolate_file_binding(binding, &quarantine, quarantine_slot.as_os_str())?;
+        if isolated.bytes() != expected_bytes.as_slice() {
+            return Err(GovernancePublishError::other(
+                "isolated governance source artifact changed after exact comparison; the quarantine was preserved for offline inspection",
+            ));
+        }
+        isolated.binding().verify()?;
+        record_step()?;
+    }
+    for removal in source_pair_dirs
+        .into_iter()
+        .chain(source_kind_dirs)
+        .chain(source_root)
+    {
+        removal.parent.isolate_empty_directory_binding(
+            removal.retained,
+            &quarantine,
+            removal.quarantine_slot.as_os_str(),
+        )?;
+        record_step()?;
+    }
+    root_guard.revalidate()?;
+    let isolated_slots = quarantine
+        .child_names_bounded(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if isolated_slots != slots {
+        return Err(GovernancePublishError::other(
+            "governance publication recovery quarantine changed during isolation; offline inspection is required",
+        ));
+    }
+    let isolated_count = isolated_slots.len();
+    Err(GovernancePublishError::other(format!(
+        "isolated {isolated_count} interrupted governance publication entries into `{GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR}`; stop the publisher, inspect them, and clear the quarantine offline before restart"
+    )))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn apply_governance_publication_cleanup_plan_with<AfterStep>(
+    _root_guard: &GovernanceFilesystemRootGuard,
+    _plan: GovernancePublicationArtifactCleanupPlan,
+    _after_step: AfterStep,
+) -> Result<(), GovernancePublishError>
+where
+    AfterStep: FnMut(usize) -> Result<(), GovernancePublishError>,
+{
+    Err(GovernancePublishError::other(
+        "governance publication recovery is unsupported on this platform",
+    ))
 }
 
 fn governance_publish_entry_for_integrity(
@@ -6051,22 +8123,32 @@ fn reconcile_governance_publication_artifacts(
     state: &JsonMap,
 ) -> Result<(), GovernancePublishError> {
     let inventory = governance_publication_artifact_inventory(state)?;
-    reconcile_governance_publication_source_artifacts(root_guard, &inventory)?;
-    reconcile_governance_publication_car_artifacts(root_guard, &inventory)?;
+    // Reconciliation is deliberately two-phase: retain an identity-bound,
+    // read-only cleanup plan first, then prove every authority-bound byte
+    // before applying any removal from an interrupted publication.
+    let (mut cleanup_plan, interrupted_identity) =
+        plan_governance_publication_source_artifacts(root_guard, &inventory)?;
+    plan_governance_publication_car_artifacts(
+        root_guard,
+        &inventory,
+        interrupted_identity.as_ref(),
+        &mut cleanup_plan,
+    )?;
     verify_governance_publication_artifact_integrity(root_guard.root(), root_guard, state)?;
     root_guard.revalidate()?;
+    apply_governance_publication_cleanup_plan(root_guard, cleanup_plan)?;
     Ok(())
 }
 
 fn reconcile_current_governance_publication_artifacts(
-    root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
+    store: &governance_rooted_fs::TwoSlotStoreV1,
 ) -> Result<(), GovernancePublishError> {
-    let (state, _) = read_governance_publication_state(root, root_guard)?;
+    let (state, _) = read_governance_publication_state(store)?;
     reconcile_governance_publication_artifacts(root_guard, &state)
 }
 
-fn validate_governance_car_source_lengths(
+pub(crate) fn validate_governance_car_source_lengths(
     encoded_len: usize,
     json_len: usize,
 ) -> Result<usize, GovernancePublishError> {
@@ -6303,7 +8385,7 @@ fn index_path_string(root: &Path, path: &Path) -> String {
 fn assemble_governance_car_queue(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
-    mut queue: JsonMap,
+    queue: JsonMap,
     entry: &PublishIndexEntryForCar,
 ) -> Result<JsonMap, GovernancePublishError> {
     let segment = assemble_governance_car_segment(root, root_guard, entry)?;
@@ -7008,8 +9090,7 @@ fn append_runtime_signed_dag_payload(
     root_guard.revalidate()?;
     validate_existing_runtime_dag_root(root, signer, checkpoint_store)?;
     root_guard.revalidate()?;
-    let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-    let mut index = read_runtime_dag_index(signer, checkpoint_store, &index_path)?;
+    let mut index = read_runtime_dag_index(root, root_guard, signer, checkpoint_store)?;
     let mut blocks = match index.remove("blocks") {
         Some(JsonValue::Array(blocks)) => blocks,
         Some(_) => {
@@ -7162,8 +9243,6 @@ fn append_runtime_signed_dag_payload(
     let head_bytes = norito::to_bytes(&head).map_err(|err| {
         GovernancePublishError::other(format!("encode governance runtime DAG head: {err}"))
     })?;
-    let head_path = runtime_dag_head_path(root);
-
     let mut entry = JsonMap::new();
     entry.insert("position".into(), JsonValue::from(block_position));
     entry.insert("sequence".into(), JsonValue::from(sequence));
@@ -7231,15 +9310,8 @@ fn append_runtime_signed_dag_payload(
     entry.insert("published_at_unix".into(), JsonValue::from(timestamp));
     blocks.push(JsonValue::Object(entry));
 
-    let index_bytes = build_runtime_dag_index_bytes(
-        root,
-        signer,
-        checkpoint_store,
-        index,
-        blocks,
-        &head,
-        &head_path,
-    )?;
+    let index_bytes =
+        build_runtime_dag_index_bytes(signer, checkpoint_store, index, blocks, &head)?;
     root_guard.revalidate()?;
     commit_runtime_dag_producer_transaction(
         root,
@@ -7257,16 +9329,18 @@ fn append_runtime_signed_dag_payload(
 }
 
 fn read_runtime_dag_index(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
-    index_path: &Path,
 ) -> Result<JsonMap, GovernancePublishError> {
-    match read_bounded_governance_state_file(index_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
-        Ok(bytes) => {
+    let committed_store = open_runtime_dag_committed_store_v1(root, root_guard)?;
+    let (committed, _) = load_runtime_dag_committed_state_v1(&committed_store)?;
+    match committed.index_bytes {
+        Some(bytes) => {
             let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
                 GovernancePublishError::other(format!(
-                    "failed to parse governance runtime DAG index `{}`: {err}",
-                    index_path.display()
+                    "failed to parse governance runtime DAG committed index: {err}"
                 ))
             })?;
             let JsonValue::Object(map) = value else {
@@ -7279,6 +9353,11 @@ fn read_runtime_dag_index(
             {
                 return Err(GovernancePublishError::other(
                     "governance runtime DAG index uses an unsupported schema",
+                ));
+            }
+            if map.contains_key("head_path") {
+                return Err(GovernancePublishError::other(
+                    "governance runtime DAG index contains the obsolete loose-head authority field",
                 ));
             }
             if map.get("source").and_then(JsonValue::as_str) != Some(GOVERNANCE_DAG_SINK_FILESYSTEM)
@@ -7301,10 +9380,9 @@ fn read_runtime_dag_index(
                     "governance runtime DAG index is not canonical JSON",
                 ));
             }
-            verify_digest_sidecar(index_path, &bytes)?;
             Ok(map)
         }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+        None => {
             let mut map = JsonMap::new();
             map.insert(
                 "schema".into(),
@@ -7320,7 +9398,6 @@ fn read_runtime_dag_index(
             map.insert("blocks".into(), JsonValue::Array(Vec::new()));
             Ok(map)
         }
-        Err(err) => Err(err.into()),
     }
 }
 
@@ -7809,6 +9886,25 @@ fn add_runtime_dag_audit_bytes(total: &mut u64, len: usize) -> Result<(), Govern
     Ok(())
 }
 
+fn validate_runtime_dag_immutable_file_inventory(
+    root: &Path,
+) -> Result<(), GovernancePublishError> {
+    let root_guard = GovernanceFilesystemRootGuard::capture_source(root)?;
+    let runtime_root = root_guard
+        .rooted_directory()
+        .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_DIR))?;
+    for name in runtime_root.child_names_bounded(1)? {
+        if name == OsStr::new(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR) {
+            continue;
+        }
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG immutable root contains an unexpected mutable or malformed artifact",
+        ));
+    }
+    root_guard.revalidate()?;
+    Ok(())
+}
+
 fn validate_existing_runtime_dag_root(
     root: &Path,
     signer: &GovernanceRuntimeDagSigner,
@@ -7824,13 +9920,13 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
 ) -> Result<Vec<AuthoritativeAppealFinanceWeeklyRollup>, GovernancePublishError> {
-    let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-    let index_exists = match fs::symlink_metadata(&index_path) {
-        Ok(_) => true,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error.into()),
-    };
-    if !index_exists {
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
+    let committed_store = open_runtime_dag_committed_store_v1(root, &root_guard)?;
+    let (committed, _) = load_runtime_dag_committed_state_v1(&committed_store)?;
+    let (Some(head_bytes), Some(index_bytes)) = (
+        committed.head_bytes.as_ref(),
+        committed.index_bytes.as_ref(),
+    ) else {
         let runtime_root = root.join(GOVERNANCE_RUNTIME_DAG_DIR);
         if fs::symlink_metadata(&runtime_root).is_ok() {
             return Err(GovernancePublishError::other(
@@ -7838,9 +9934,9 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
             ));
         }
         return Ok(Vec::new());
-    }
+    };
 
-    let index = read_runtime_dag_index(signer, store, &index_path)?;
+    let index = read_runtime_dag_index(root, &root_guard, signer, store)?;
     let current_binding = runtime_dag_provider_binding(signer, store);
     let indexed_blocks = index
         .get("blocks")
@@ -7863,12 +9959,7 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
     let latest_allowed = current_unix_timestamp_seconds()
         .saturating_add(GOVERNANCE_RUNTIME_DAG_MAX_FUTURE_SKEW_SECS_V1);
     let mut total_bytes = 0_u64;
-    add_runtime_dag_audit_bytes(
-        &mut total_bytes,
-        usize::try_from(fs::metadata(&index_path)?.len()).map_err(|_| {
-            GovernancePublishError::other("governance runtime DAG index length exceeds usize")
-        })?,
-    )?;
+    add_runtime_dag_audit_bytes(&mut total_bytes, index_bytes.len())?;
     let mut blocks = Vec::with_capacity(indexed_blocks.len());
     let mut indexed_block_paths = Vec::with_capacity(indexed_blocks.len());
     let mut expected_by_encoded_blake3 = JsonMap::new();
@@ -8055,13 +10146,9 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
         }
     }
 
-    let head_path = runtime_dag_head_path(root);
-    let head_bytes =
-        read_bounded_governance_state_file(&head_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES)?;
-    verify_digest_sidecar(&head_path, &head_bytes)?;
     add_runtime_dag_audit_bytes(&mut total_bytes, head_bytes.len())?;
     let head: GovernanceDagHeadV1 =
-        decode_canonical_runtime_dag(&head_bytes, "governance runtime DAG head")?;
+        decode_canonical_runtime_dag(head_bytes, "governance runtime DAG head")?;
     head.validate().map_err(|error| {
         GovernancePublishError::other(format!(
             "governance runtime DAG head validation failed: {error}"
@@ -8085,7 +10172,6 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
             != hex::encode(&head.head_block_cid)
         || required_runtime_u64(&index, "generated_at")? != head.generated_at
         || required_runtime_u64(&index, "head_generated_at")? != head.generated_at
-        || required_runtime_string(&index, "head_path")? != index_path_string(root, &head_path)
     {
         return Err(GovernancePublishError::other(
             "governance runtime DAG index and signed head are inconsistent",
@@ -8112,21 +10198,7 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
             ));
         }
     }
-    let runtime_root = root.join(GOVERNANCE_RUNTIME_DAG_DIR);
-    let runtime_root_metadata = fs::symlink_metadata(&runtime_root)?;
-    if !runtime_root_metadata.file_type().is_dir() {
-        return Err(GovernancePublishError::other(
-            "governance runtime DAG path is not a directory",
-        ));
-    }
-    for entry in fs::read_dir(&runtime_root)? {
-        let path = entry?.path();
-        if path != blocks_dir && path != head_path && path != digest_sidecar_path_for(&head_path) {
-            return Err(GovernancePublishError::other(
-                "governance runtime DAG contains an orphan head or transaction artifact",
-            ));
-        }
-    }
+    validate_runtime_dag_immutable_file_inventory(root)?;
     Ok(authoritative_weekly_rollups)
 }
 
@@ -8479,6 +10551,158 @@ fn parse_runtime_dag_qualification_archive_name(name: &str) -> Option<(u64, [u8;
     Some((generation, digest.as_slice().try_into().ok()?))
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn runtime_dag_qualification_archive_temp_inventory(
+    directory: &governance_rooted_fs::RootedDirectory,
+    next_generation: u64,
+) -> Result<Vec<(OsString, usize)>, GovernancePublishError> {
+    let canonical_entries = usize::try_from(
+        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVE_CHAIN_MAX_V1.saturating_mul(2),
+    )
+    .map_err(|_| {
+        GovernancePublishError::other(
+            "governance runtime DAG qualification archive inventory bound exceeds host limits",
+        )
+    })?;
+    let inventory_limit = canonical_entries
+        .checked_add(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP)
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance runtime DAG qualification archive recovery bound overflowed",
+            )
+        })?;
+    let mut temporaries = Vec::new();
+    for name in directory.child_names_bounded(inventory_limit)? {
+        let name_utf8 = name.to_str().ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance runtime DAG qualification archive name is not UTF-8",
+            )
+        })?;
+        let Some(target) = governance_publication_atomic_temp_target_name(name_utf8) else {
+            if name_utf8.starts_with('.') && name_utf8.contains(".tmp-") {
+                return Err(GovernancePublishError::other(format!(
+                    "governance runtime DAG qualification archive temporary `{name_utf8}` is noncanonical; offline inspection is required"
+                )));
+            }
+            continue;
+        };
+        let (archive_name, max_bytes) = target.strip_suffix(".blake3").map_or(
+            (
+                target,
+                GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVE_MAX_BYTES_V1,
+            ),
+            |archive| (archive, GOVERNANCE_DIGEST_SIDECAR_BYTES),
+        );
+        let Some((generation, digest)) = parse_runtime_dag_qualification_archive_name(archive_name)
+        else {
+            return Err(GovernancePublishError::other(format!(
+                "governance runtime DAG qualification archive temporary `{name_utf8}` claims a noncanonical target; offline inspection is required"
+            )));
+        };
+        let canonical = format!("{generation:020}_{}.to", hex::encode(digest));
+        if generation != next_generation || archive_name != canonical {
+            return Err(GovernancePublishError::other(format!(
+                "governance runtime DAG qualification archive temporary `{name_utf8}` is outside the exact next-generation namespace; offline inspection is required"
+            )));
+        }
+        temporaries.push((name, max_bytes));
+    }
+    if temporaries.len() > GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG qualification archive temporaries exceed the recovery quarantine bound",
+        ));
+    }
+    Ok(temporaries)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn isolate_runtime_dag_qualification_archive_temps(
+    root_guard: &GovernanceFilesystemRootGuard,
+    checkpoint: &RuntimeDagProducerCheckpointV1,
+) -> Result<(), GovernancePublishError> {
+    reject_governance_publication_recovery_quarantine(root_guard)?;
+    let next_generation = checkpoint
+        .qualification_archive_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance runtime DAG qualification archive generation exhausted",
+            )
+        })?;
+    let directory = match root_guard.rooted_directory().open_directory(OsStr::new(
+        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR,
+    )) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let temporaries =
+        runtime_dag_qualification_archive_temp_inventory(&directory, next_generation)?;
+    let mut plan = GovernancePublicationArtifactCleanupPlan::default();
+    for (name, max_bytes) in temporaries {
+        let rollback_rank = plan.authority_files.len();
+        plan.authority_files
+            .push(plan_private_governance_file_removal(
+                &directory,
+                &name,
+                max_bytes,
+                rollback_rank,
+                OsString::from(format!(
+                    "runtime-dag-qualification-archive-{rollback_rank:02}"
+                )),
+            )?);
+    }
+    root_guard.revalidate()?;
+    apply_governance_publication_cleanup_plan(root_guard, plan)
+}
+
+#[cfg(windows)]
+fn isolate_runtime_dag_qualification_archive_temps(
+    root_guard: &GovernanceFilesystemRootGuard,
+    checkpoint: &RuntimeDagProducerCheckpointV1,
+) -> Result<(), GovernancePublishError> {
+    let next_generation = checkpoint
+        .qualification_archive_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance runtime DAG qualification archive generation exhausted",
+            )
+        })?;
+    let directory = match root_guard.rooted_directory().open_directory(OsStr::new(
+        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR,
+    )) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let temporaries =
+        runtime_dag_qualification_archive_temp_inventory(&directory, next_generation)?;
+    for (name, _) in temporaries {
+        let target = name
+            .to_str()
+            .and_then(governance_publication_atomic_temp_target_name)
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "validated qualification archive temporary lost its target",
+                )
+            })?;
+        directory.remove_atomic_temps_for(target)?;
+    }
+    root_guard.revalidate()?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn isolate_runtime_dag_qualification_archive_temps(
+    _root_guard: &GovernanceFilesystemRootGuard,
+    _checkpoint: &RuntimeDagProducerCheckpointV1,
+) -> Result<(), GovernancePublishError> {
+    Err(GovernancePublishError::other(
+        "governance runtime DAG qualification archive recovery is unsupported on this platform",
+    ))
+}
+
 fn staged_runtime_dag_qualification_archive(
     root: &Path,
     checkpoint: &RuntimeDagProducerCheckpointV1,
@@ -8539,9 +10763,7 @@ fn write_runtime_dag_qualification_state<T: norito::NoritoSerialize>(
     }
     let replacement = match read_rooted_governance_state_file(root_guard, path, max_bytes) {
         Ok(current) if current.bytes() == bytes => {
-            if immutable {
-                verify_rooted_digest_sidecar(root_guard, path, current.bytes())?;
-            }
+            current.binding().verify()?;
             None
         }
         Ok(_) if immutable => {
@@ -8575,7 +10797,11 @@ fn write_runtime_dag_qualification_state<T: norito::NoritoSerialize>(
     if let Some(expected) = replacement {
         write_rooted_atomic_expected(root_guard, path, &bytes, expected)?;
     }
-    write_digest_sidecar(root_guard, path, &bytes)?;
+    if immutable {
+        ensure_rooted_digest_sidecar_immutable(root_guard, path, &bytes)?;
+    } else {
+        write_digest_sidecar(root_guard, path, &bytes)?;
+    }
     let readback = read_rooted_governance_state_file(root_guard, path, max_bytes)?;
     verify_rooted_digest_sidecar(root_guard, path, readback.bytes())?;
     if readback.bytes() != bytes {
@@ -8583,6 +10809,7 @@ fn write_runtime_dag_qualification_state<T: norito::NoritoSerialize>(
             "governance runtime DAG qualification state durable readback diverged",
         ));
     }
+    readback.binding().verify()?;
     Ok(bytes)
 }
 
@@ -8618,9 +10845,39 @@ fn read_runtime_dag_qualification_archive(
     }
     if missing_sidecar {
         let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
-        write_digest_sidecar(&root_guard, &path, &bytes)?;
+        ensure_rooted_digest_sidecar_immutable(&root_guard, &path, &bytes)?;
         verify_digest_sidecar(&path, &bytes)?;
     }
+    Ok(archive)
+}
+
+fn read_runtime_dag_qualification_archive_read_only(
+    root_guard: &GovernanceFilesystemRootGuard,
+    generation: u64,
+    digest: [u8; 32],
+    root_digest: [u8; 32],
+) -> Result<RuntimeDagQualificationArchiveV1, GovernancePublishError> {
+    root_guard.revalidate()?;
+    let path = runtime_dag_qualification_archive_path(root_guard.root(), generation, digest);
+    let snapshot = read_rooted_governance_state_file(
+        root_guard,
+        &path,
+        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVE_MAX_BYTES_V1,
+    )?;
+    verify_rooted_digest_sidecar(root_guard, &path, snapshot.bytes())?;
+    let archive: RuntimeDagQualificationArchiveV1 = decode_canonical_runtime_dag(
+        snapshot.bytes(),
+        "governance runtime DAG qualification archive",
+    )?;
+    if validate_runtime_dag_qualification_archive(&archive, root_digest)? != digest
+        || archive.body.archive_generation != generation
+    {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG qualification archive path, generation, or digest is substituted",
+        ));
+    }
+    snapshot.binding().verify()?;
+    root_guard.revalidate()?;
     Ok(archive)
 }
 
@@ -8630,6 +10887,27 @@ fn validate_runtime_dag_qualification_history(
     expected_binding: Option<&RuntimeDagProviderBindingV1>,
     allowed_unindexed_archive: Option<(u64, [u8; 32])>,
 ) -> Result<RuntimeDagQualificationSummary, GovernancePublishError> {
+    validate_runtime_dag_qualification_history_with_guard(
+        root,
+        history,
+        expected_binding,
+        allowed_unindexed_archive,
+        None,
+    )
+}
+
+fn validate_runtime_dag_qualification_history_with_guard(
+    root: &Path,
+    history: &RuntimeDagQualificationHistoryV1,
+    expected_binding: Option<&RuntimeDagProviderBindingV1>,
+    allowed_unindexed_archive: Option<(u64, [u8; 32])>,
+    read_only_root_guard: Option<&GovernanceFilesystemRootGuard>,
+) -> Result<RuntimeDagQualificationSummary, GovernancePublishError> {
+    if read_only_root_guard.is_some_and(|guard| guard.root() != root) {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG qualification history root differs from its retained read root",
+        ));
+    }
     let root_digest = runtime_dag_producer_root_digest(root)?;
     if history.version != GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_VERSION_V1
         || history.root_digest != root_digest
@@ -8650,12 +10928,20 @@ fn validate_runtime_dag_qualification_history(
     let mut archive_generation = history.archive_generation;
     let mut archive_digest = history.archive_digest;
     while archive_generation != 0 {
-        let archive = read_runtime_dag_qualification_archive(
-            root,
-            archive_generation,
-            archive_digest,
-            root_digest,
-        )?;
+        let archive = match read_only_root_guard {
+            Some(root_guard) => read_runtime_dag_qualification_archive_read_only(
+                root_guard,
+                archive_generation,
+                archive_digest,
+                root_digest,
+            )?,
+            None => read_runtime_dag_qualification_archive(
+                root,
+                archive_generation,
+                archive_digest,
+                root_digest,
+            )?,
+        };
         archive_digest = archive.body.predecessor_archive_digest;
         archive_generation = archive_generation.checked_sub(1).ok_or_else(|| {
             GovernancePublishError::other(
@@ -8738,8 +11024,10 @@ fn validate_runtime_dag_qualification_history(
     }
 
     if history.archive_generation != 0
-        && (history.archived_through_generation + 1 != expected_generation
-            || history.archive_tail_transition_digest != expected_predecessor.unwrap_or([0; 32])
+        && (!runtime_dag_generation_immediately_precedes(
+            history.archived_through_generation,
+            expected_generation,
+        ) || history.archive_tail_transition_digest != expected_predecessor.unwrap_or([0; 32])
             || history.archive_digest != expected_archive_digest)
     {
         return Err(GovernancePublishError::other(
@@ -8791,28 +11079,73 @@ fn validate_runtime_dag_qualification_history(
     let allowed_unindexed_archive = allowed_unindexed_archive.map(|(generation, digest)| {
         runtime_dag_qualification_archive_path(root, generation, digest)
     });
-    match fs::read_dir(&archives_dir) {
-        Ok(entries) => {
-            for entry in entries {
-                let path = entry?.path();
-                let expected = expected_archive_paths
-                    .iter()
-                    .any(|archive| path == *archive || path == digest_sidecar_path_for(archive))
-                    || allowed_unindexed_archive.as_ref().is_some_and(|archive| {
-                        path == *archive || path == digest_sidecar_path_for(archive)
-                    });
-                if !expected {
+    if let Some(root_guard) = read_only_root_guard {
+        let mut expected_names = BTreeSet::new();
+        for archive in expected_archive_paths
+            .iter()
+            .chain(allowed_unindexed_archive.iter())
+        {
+            for path in [archive.clone(), digest_sidecar_path_for(archive)] {
+                expected_names.insert(
+                    path.file_name()
+                        .ok_or_else(|| {
+                            GovernancePublishError::other(
+                                "governance runtime DAG qualification archive has no canonical file name",
+                            )
+                        })?
+                        .to_os_string(),
+                );
+            }
+        }
+        match root_guard.rooted_directory().open_directory(OsStr::new(
+            GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR,
+        )) {
+            Ok(directory) => {
+                let bound = expected_names.len().checked_add(1).ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "governance runtime DAG qualification archive inventory bound overflowed",
+                    )
+                })?;
+                let actual = directory
+                    .child_names_bounded(bound)?
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                if actual != expected_names {
                     return Err(GovernancePublishError::other(
-                        "governance runtime DAG qualification archive directory contains an unindexed fork or duplicate",
+                        "governance runtime DAG qualification archive directory contains an unindexed, missing, or duplicate artifact",
                     ));
                 }
             }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && expected_names.is_empty() => {}
+            Err(error) => return Err(error.into()),
         }
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound && expected_archive_paths.is_empty() => {}
-        Err(error) => return Err(error.into()),
+    } else {
+        match fs::read_dir(&archives_dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    let path = entry?.path();
+                    let expected = expected_archive_paths.iter().any(|archive| {
+                        path == *archive || path == digest_sidecar_path_for(archive)
+                    }) || allowed_unindexed_archive.as_ref().is_some_and(
+                        |archive| path == *archive || path == digest_sidecar_path_for(archive),
+                    );
+                    if !expected {
+                        return Err(GovernancePublishError::other(
+                            "governance runtime DAG qualification archive directory contains an unindexed fork or duplicate",
+                        ));
+                    }
+                }
+            }
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound && expected_archive_paths.is_empty() => {
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
 
+    if let Some(root_guard) = read_only_root_guard {
+        root_guard.revalidate()?;
+    }
     Ok(RuntimeDagQualificationSummary {
         transition_generation,
         transition_digest: expected_predecessor.unwrap_or([0; 32]),
@@ -8821,8 +11154,115 @@ fn validate_runtime_dag_qualification_history(
     })
 }
 
+fn runtime_dag_generation_immediately_precedes(previous: u64, next: u64) -> bool {
+    previous.checked_add(1) == Some(next)
+}
+
+fn reject_legacy_runtime_dag_qualification_state(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<(), GovernancePublishError> {
+    reject_legacy_atomic_state_names(
+        root_guard.rooted_directory(),
+        &[
+            GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_FILE,
+            "runtime-dag-qualification-history.to.blake3",
+        ],
+        "governance runtime DAG qualification authority",
+    )?;
+    for path in [
+        runtime_dag_qualification_history_path(root),
+        digest_sidecar_path_for(&runtime_dag_qualification_history_path(root)),
+    ] {
+        match read_rooted_governance_state_file(root_guard, &path, 1) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) | Err(_) => {
+                return Err(GovernancePublishError::other(format!(
+                    "legacy mutable governance runtime DAG qualification state `{}` is unsupported; remove it before first-release initialization",
+                    path.display()
+                )));
+            }
+        }
+    }
+    root_guard.revalidate()?;
+    Ok(())
+}
+
+fn open_runtime_dag_qualification_store_v1(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<governance_rooted_fs::TwoSlotStoreV1, GovernancePublishError> {
+    if root != root_guard.root() {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG qualification root differs from its retained root guard",
+        ));
+    }
+    root_guard.revalidate()?;
+    reject_legacy_runtime_dag_qualification_state(root, root_guard)?;
+    let store_present = match root_guard.rooted_directory().open_directory(OsStr::new(
+        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_DIR_V1,
+    )) {
+        Ok(directory) => {
+            drop(directory);
+            true
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    if !store_present {
+        match root_guard.rooted_directory().open_directory(OsStr::new(
+            GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR,
+        )) {
+            Ok(directory) => {
+                drop(directory);
+                return Err(GovernancePublishError::other(
+                    "governance runtime DAG qualification archives exist without their typed history state",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let initial = encode_governance_two_slot_value_v1(
+        &RuntimeDagQualificationStateV1 {
+            version: GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STATE_VERSION_V1,
+            history: None,
+        },
+        "initial governance runtime DAG qualification state",
+    )?;
+    open_governance_two_slot_store_v1(
+        root_guard,
+        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_SPEC_V1,
+        &initial,
+    )
+}
+
+fn load_runtime_dag_qualification_state_v1(
+    store: &governance_rooted_fs::TwoSlotStoreV1,
+) -> Result<
+    (
+        RuntimeDagQualificationStateV1,
+        governance_rooted_fs::TwoSlotSnapshotV1,
+    ),
+    GovernancePublishError,
+> {
+    let snapshot =
+        load_governance_two_slot_store_v1(store, "governance runtime DAG qualification state")?;
+    let state: RuntimeDagQualificationStateV1 = decode_governance_two_slot_value_v1(
+        &snapshot,
+        "governance runtime DAG qualification state",
+    )?;
+    if state.version != GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STATE_VERSION_V1 {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG qualification state version is unsupported",
+        ));
+    }
+    Ok((state, snapshot))
+}
+
 fn read_runtime_dag_qualification_history(
     root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
     expected_binding: Option<&RuntimeDagProviderBindingV1>,
 ) -> Result<
     Option<(
@@ -8831,11 +11271,17 @@ fn read_runtime_dag_qualification_history(
     )>,
     GovernancePublishError,
 > {
-    read_runtime_dag_qualification_history_allowing_archive(root, expected_binding, None)
+    read_runtime_dag_qualification_history_allowing_archive(
+        root,
+        root_guard,
+        expected_binding,
+        None,
+    )
 }
 
 fn read_runtime_dag_qualification_history_allowing_archive(
     root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
     expected_binding: Option<&RuntimeDagProviderBindingV1>,
     allowed_unindexed_archive: Option<(u64, [u8; 32])>,
 ) -> Result<
@@ -8845,18 +11291,57 @@ fn read_runtime_dag_qualification_history_allowing_archive(
     )>,
     GovernancePublishError,
 > {
-    let path = runtime_dag_qualification_history_path(root);
-    let bytes = match read_bounded_governance_state_file(
-        &path,
-        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_MAX_BYTES_V1,
-    ) {
-        Ok(bytes) => bytes,
+    let store = open_runtime_dag_qualification_store_v1(root, root_guard)?;
+    let (state, _) = load_runtime_dag_qualification_state_v1(&store)?;
+    let Some(history) = state.history else {
+        match root_guard.rooted_directory().open_directory(OsStr::new(
+            GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR,
+        )) {
+            Ok(directory) => {
+                drop(directory);
+                return Err(GovernancePublishError::other(
+                    "governance runtime DAG qualification archives exist without their authenticated history head",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        return Ok(None);
+    };
+    let summary = validate_runtime_dag_qualification_history(
+        root,
+        &history,
+        expected_binding,
+        allowed_unindexed_archive,
+    )?;
+    Ok(Some((history, summary)))
+}
+
+fn read_existing_runtime_dag_qualification_history_v1(
+    root_guard: &GovernanceFilesystemRootGuard,
+    expected_binding: &RuntimeDagProviderBindingV1,
+) -> Result<
+    Option<(
+        RuntimeDagQualificationHistoryV1,
+        RuntimeDagQualificationSummary,
+    )>,
+    GovernancePublishError,
+> {
+    let root = root_guard.root();
+    root_guard.revalidate()?;
+    reject_legacy_runtime_dag_qualification_state(root, root_guard)?;
+    match root_guard.rooted_directory().open_directory(OsStr::new(
+        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_DIR_V1,
+    )) {
+        Ok(directory) => drop(directory),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            match fs::symlink_metadata(root.join(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR))
-            {
-                Ok(_) => {
+            match root_guard.rooted_directory().open_directory(OsStr::new(
+                GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR,
+            )) {
+                Ok(directory) => {
+                    drop(directory);
                     return Err(GovernancePublishError::other(
-                        "governance runtime DAG qualification archives exist without their authenticated history head",
+                        "governance runtime DAG qualification archives exist without their typed history state",
                     ));
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -8865,30 +11350,49 @@ fn read_runtime_dag_qualification_history_allowing_archive(
             return Ok(None);
         }
         Err(error) => return Err(error.into()),
-    };
-    let missing_sidecar = match verify_digest_sidecar(&path, &bytes) {
-        Ok(()) => false,
-        Err(_error)
-            if fs::symlink_metadata(digest_sidecar_path_for(&path))
-                .is_err_and(|sidecar_error| sidecar_error.kind() == io::ErrorKind::NotFound) =>
-        {
-            true
+    }
+    let config = governance_two_slot_config_v1(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_SPEC_V1)?;
+    let snapshot = root_guard
+        .rooted_directory()
+        .load_existing_two_slot_store_v1(config)
+        .map_err(|error| {
+            GovernancePublishError::other(format!(
+                "failed to load governance runtime DAG qualification state read-only: {error}"
+            ))
+        })?;
+    let state: RuntimeDagQualificationStateV1 = decode_governance_two_slot_value_v1(
+        &snapshot,
+        "governance runtime DAG qualification state read-only snapshot",
+    )?;
+    if state.version != GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STATE_VERSION_V1 {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG qualification state version is unsupported",
+        ));
+    }
+    let Some(history) = state.history else {
+        match root_guard.rooted_directory().open_directory(OsStr::new(
+            GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR,
+        )) {
+            Ok(directory) => {
+                drop(directory);
+                return Err(GovernancePublishError::other(
+                    "governance runtime DAG qualification archives exist without their authenticated history head",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
-        Err(error) => return Err(error),
+        root_guard.revalidate()?;
+        return Ok(None);
     };
-    let history: RuntimeDagQualificationHistoryV1 =
-        decode_canonical_runtime_dag(&bytes, "governance runtime DAG qualification history")?;
-    let summary = validate_runtime_dag_qualification_history(
+    let summary = validate_runtime_dag_qualification_history_with_guard(
         root,
         &history,
-        expected_binding,
-        allowed_unindexed_archive,
+        Some(expected_binding),
+        None,
+        Some(root_guard),
     )?;
-    if missing_sidecar {
-        let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
-        write_digest_sidecar(&root_guard, &path, &bytes)?;
-        verify_digest_sidecar(&path, &bytes)?;
-    }
+    root_guard.revalidate()?;
     Ok(Some((history, summary)))
 }
 
@@ -8897,8 +11401,9 @@ fn runtime_dag_qualification_summary(
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
 ) -> Result<RuntimeDagQualificationSummary, GovernancePublishError> {
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
     let binding = runtime_dag_provider_binding(signer, store);
-    read_runtime_dag_qualification_history(root, Some(&binding)).map(|history| {
+    read_runtime_dag_qualification_history(root, &root_guard, Some(&binding)).map(|history| {
         history.map_or(RuntimeDagQualificationSummary::EMPTY, |(_, summary)| {
             summary
         })
@@ -8925,15 +11430,20 @@ fn runtime_dag_history_tail_transition(
 }
 
 fn runtime_dag_full_transition_lineage(
-    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
     history: &RuntimeDagQualificationHistoryV1,
 ) -> Result<Vec<RuntimeDagQualificationTransitionV1>, GovernancePublishError> {
+    root_guard.revalidate()?;
     let mut archives = Vec::new();
     let mut generation = history.archive_generation;
     let mut digest = history.archive_digest;
     while generation != 0 {
-        let archive =
-            read_runtime_dag_qualification_archive(root, generation, digest, history.root_digest)?;
+        let archive = read_runtime_dag_qualification_archive_read_only(
+            root_guard,
+            generation,
+            digest,
+            history.root_digest,
+        )?;
         digest = archive.body.predecessor_archive_digest;
         generation = generation.checked_sub(1).ok_or_else(|| {
             GovernancePublishError::other(
@@ -8970,6 +11480,7 @@ fn runtime_dag_full_transition_lineage(
             "governance runtime DAG key-transition lineage is empty or exceeds its V1 bound",
         ));
     }
+    root_guard.revalidate()?;
     Ok(transitions)
 }
 
@@ -8977,8 +11488,16 @@ fn runtime_dag_authority_lineage(
     root: &Path,
     current_binding: &RuntimeDagProviderBindingV1,
 ) -> Result<RuntimeDagAuthorityLineageV1, GovernancePublishError> {
+    let root_guard = GovernanceFilesystemRootGuard::capture_source(root)?;
+    runtime_dag_authority_lineage_read_only(&root_guard, current_binding)
+}
+
+fn runtime_dag_authority_lineage_read_only(
+    root_guard: &GovernanceFilesystemRootGuard,
+    current_binding: &RuntimeDagProviderBindingV1,
+) -> Result<RuntimeDagAuthorityLineageV1, GovernancePublishError> {
     let Some((history, qualification)) =
-        read_runtime_dag_qualification_history(root, Some(current_binding))?
+        read_existing_runtime_dag_qualification_history_v1(root_guard, current_binding)?
     else {
         return Ok(RuntimeDagAuthorityLineageV1 {
             segments: vec![RuntimeDagAuthoritySegmentV1 {
@@ -8990,7 +11509,7 @@ fn runtime_dag_authority_lineage(
             qualification: RuntimeDagQualificationSummary::EMPTY,
         });
     };
-    let transitions = runtime_dag_full_transition_lineage(root, &history)?;
+    let transitions = runtime_dag_full_transition_lineage(root_guard, &history)?;
     let first = transitions.first().ok_or_else(|| {
         GovernancePublishError::other(
             "governance runtime DAG key-transition history has no first authority segment",
@@ -9147,7 +11666,17 @@ pub(crate) fn validate_runtime_dag_snapshot_authority_lineage<'a>(
     blocks: impl IntoIterator<Item = &'a GovernanceDagBlockV1>,
     head: &GovernanceDagHeadV1,
 ) -> Result<(), GovernancePublishError> {
-    validate_runtime_dag_producer_checkpoint_shape(checkpoint, root)?;
+    let root_guard = GovernanceFilesystemRootGuard::capture_source(root)?;
+    validate_runtime_dag_snapshot_authority_lineage_read_only(&root_guard, checkpoint, blocks, head)
+}
+
+fn validate_runtime_dag_snapshot_authority_lineage_read_only<'a>(
+    root_guard: &GovernanceFilesystemRootGuard,
+    checkpoint: &RuntimeDagProducerCheckpointV1,
+    blocks: impl IntoIterator<Item = &'a GovernanceDagBlockV1>,
+    head: &GovernanceDagHeadV1,
+) -> Result<(), GovernancePublishError> {
+    root_guard.revalidate()?;
     let blocks = blocks.into_iter().collect::<Vec<_>>();
     let block_count = u64::try_from(blocks.len()).map_err(|_| {
         GovernancePublishError::other("governance runtime DAG snapshot block count exceeds u64")
@@ -9161,7 +11690,22 @@ pub(crate) fn validate_runtime_dag_snapshot_authority_lineage<'a>(
         ));
     }
     let authority_lineage =
-        runtime_dag_authority_lineage(root, &runtime_dag_checkpoint_binding(checkpoint))?;
+        authenticated_runtime_dag_authority_lineage_read_only(root_guard, checkpoint)?;
+    validate_runtime_dag_authority_lineage_for_chain(&authority_lineage, &blocks, head)?;
+    root_guard.revalidate()?;
+    Ok(())
+}
+
+fn authenticated_runtime_dag_authority_lineage_read_only(
+    root_guard: &GovernanceFilesystemRootGuard,
+    checkpoint: &RuntimeDagProducerCheckpointV1,
+) -> Result<RuntimeDagAuthorityLineageV1, GovernancePublishError> {
+    root_guard.revalidate()?;
+    validate_runtime_dag_producer_checkpoint_shape(checkpoint, root_guard.root())?;
+    let authority_lineage = runtime_dag_authority_lineage_read_only(
+        root_guard,
+        &runtime_dag_checkpoint_binding(checkpoint),
+    )?;
     let qualification = authority_lineage.qualification;
     if checkpoint.qualification_transition_generation != qualification.transition_generation
         || checkpoint.qualification_transition_digest != qualification.transition_digest
@@ -9172,27 +11716,32 @@ pub(crate) fn validate_runtime_dag_snapshot_authority_lineage<'a>(
             "governance runtime DAG snapshot authority lineage diverges from its sealed checkpoint",
         ));
     }
-    validate_runtime_dag_authority_lineage_for_chain(&authority_lineage, &blocks, head)
+    root_guard.revalidate()?;
+    Ok(authority_lineage)
 }
 
 fn canonical_runtime_dag_index_for_transition(
     root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
     previous: &RuntimeDagProviderBindingV1,
     next: &RuntimeDagProviderBindingV1,
     checkpoint: &RuntimeDagProducerCheckpointV1,
 ) -> Result<([u8; 32], [u8; 32], Option<Vec<u8>>), GovernancePublishError> {
-    let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
+    let committed_store = open_runtime_dag_committed_store_v1(root, root_guard)?;
+    let (committed, _) = load_runtime_dag_committed_state_v1(&committed_store)?;
     if checkpoint.block_count == 0 {
-        if fs::symlink_metadata(&index_path).is_ok() {
+        if committed.index_bytes.is_some() {
             return Err(GovernancePublishError::other(
                 "empty governance runtime DAG provider transition found a substituted index",
             ));
         }
         return Ok(([0; 32], [0; 32], None));
     }
-    let bytes =
-        read_bounded_governance_state_file(&index_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES)?;
-    verify_digest_sidecar(&index_path, &bytes)?;
+    let bytes = committed.index_bytes.ok_or_else(|| {
+        GovernancePublishError::other(
+            "governance runtime DAG provider transition predecessor index is missing",
+        )
+    })?;
     if *blake3::hash(&bytes).as_bytes() != checkpoint.index_bytes_digest {
         return Err(GovernancePublishError::other(
             "governance runtime DAG provider transition predecessor index digest is substituted",
@@ -9250,6 +11799,7 @@ fn canonical_runtime_dag_index_for_transition(
 
 fn canonical_runtime_dag_successor_index_from_transition(
     root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
     transition: &RuntimeDagQualificationTransitionV1,
 ) -> Result<Option<Vec<u8>>, GovernancePublishError> {
     if transition.body.block_count == 0 {
@@ -9262,9 +11812,11 @@ fn canonical_runtime_dag_successor_index_from_transition(
         }
         return Ok(None);
     }
-    let path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-    let bytes = read_bounded_governance_state_file(&path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES)?;
-    verify_digest_sidecar(&path, &bytes)?;
+    let committed_store = open_runtime_dag_committed_store_v1(root, root_guard)?;
+    let (committed, _) = load_runtime_dag_committed_state_v1(&committed_store)?;
+    let bytes = committed.index_bytes.ok_or_else(|| {
+        GovernancePublishError::other("governance runtime DAG transition recovery index is missing")
+    })?;
     let current_digest = *blake3::hash(&bytes).as_bytes();
     let value: JsonValue = json::from_slice(&bytes).map_err(|error| {
         GovernancePublishError::other(format!(
@@ -9397,7 +11949,8 @@ fn install_runtime_dag_provider_transition(
             "governance runtime DAG provider transition successor does not match the injected providers",
         ));
     }
-    let successor_index = canonical_runtime_dag_successor_index_from_transition(root, transition)?;
+    let successor_index =
+        canonical_runtime_dag_successor_index_from_transition(root, root_guard, transition)?;
     let next_checkpoint = runtime_dag_checkpoint_from_transition(transition, transition_digest);
     validate_runtime_dag_producer_checkpoint_shape(&next_checkpoint, root)?;
     let next_record = runtime_dag_producer_checkpoint_record(&next_checkpoint)?;
@@ -9439,14 +11992,46 @@ fn install_runtime_dag_provider_transition(
     }
     if let Some(successor_index) = successor_index {
         root_guard.revalidate()?;
-        write_runtime_dag_transaction_file(
-            root_guard,
-            &root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE),
-            &successor_index,
-            GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
-            Some(transition.body.predecessor_index_digest),
-            false,
-        )?;
+        let committed_store = open_runtime_dag_committed_store_v1(root, root_guard)?;
+        let (current, snapshot) = load_runtime_dag_committed_state_v1(&committed_store)?;
+        let head_bytes = current.head_bytes.ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance runtime DAG provider transition committed head is missing",
+            )
+        })?;
+        let current_index = current.index_bytes.ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance runtime DAG provider transition committed index is missing",
+            )
+        })?;
+        if *blake3::hash(&head_bytes).as_bytes() != transition.body.head_bytes_digest {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG provider transition committed head is substituted",
+            ));
+        }
+        if current_index != successor_index {
+            if *blake3::hash(&current_index).as_bytes() != transition.body.predecessor_index_digest
+            {
+                return Err(GovernancePublishError::other(
+                    "governance runtime DAG provider transition committed index is neither its predecessor nor successor",
+                ));
+            }
+            let next = RuntimeDagCommittedStateV1 {
+                version: GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_VERSION_V1,
+                head_bytes: Some(head_bytes),
+                index_bytes: Some(successor_index),
+            };
+            let bytes = encode_governance_two_slot_value_v1(
+                &next,
+                "governance runtime DAG provider-transition committed state",
+            )?;
+            compare_and_swap_governance_two_slot_store_v1(
+                &committed_store,
+                &snapshot,
+                &bytes,
+                "governance runtime DAG provider-transition committed state",
+            )?;
+        }
     }
     root_guard.revalidate()?;
     validate_existing_runtime_dag_root(root, signer, store)?;
@@ -9469,7 +12054,8 @@ fn recover_runtime_dag_provider_transition(
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
 ) -> Result<(), GovernancePublishError> {
-    let Some((history, summary)) = read_runtime_dag_qualification_history(root, None)? else {
+    let Some((history, summary)) = read_runtime_dag_qualification_history(root, root_guard, None)?
+    else {
         return Ok(());
     };
     let transition = runtime_dag_history_tail_transition(root, &history)?.ok_or_else(|| {
@@ -9510,53 +12096,37 @@ fn write_runtime_dag_qualification_history(
     expected_binding: &RuntimeDagProviderBindingV1,
     predecessor: Option<&RuntimeDagQualificationHistoryV1>,
 ) -> Result<RuntimeDagQualificationSummary, GovernancePublishError> {
-    let path = runtime_dag_qualification_history_path(root);
-    match (
-        predecessor,
-        read_bounded_governance_state_file(
-            &path,
-            GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_MAX_BYTES_V1,
-        ),
-    ) {
-        (Some(predecessor), Ok(bytes)) => {
-            verify_digest_sidecar(&path, &bytes)?;
-            let current: RuntimeDagQualificationHistoryV1 = decode_canonical_runtime_dag(
-                &bytes,
-                "governance runtime DAG qualification history predecessor",
-            )?;
-            if current != *predecessor {
-                return Err(GovernancePublishError::other(
-                    "governance runtime DAG qualification history predecessor was substituted",
-                ));
-            }
-        }
-        (None, Err(error)) if error.kind() == io::ErrorKind::NotFound => {}
-        (Some(_), Err(error)) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(GovernancePublishError::other(
-                "governance runtime DAG qualification history predecessor disappeared",
-            ));
-        }
-        (None, Ok(_)) => {
-            return Err(GovernancePublishError::other(
-                "governance runtime DAG qualification history creation refuses an existing predecessor",
-            ));
-        }
-        (_, Err(error)) => return Err(error.into()),
+    let store = open_runtime_dag_qualification_store_v1(root, root_guard)?;
+    let (current, snapshot) = load_runtime_dag_qualification_state_v1(&store)?;
+    if current.history.as_ref() != predecessor {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG qualification history predecessor was substituted",
+        ));
     }
-    write_runtime_dag_qualification_state(
-        root_guard,
-        &path,
-        history,
-        GOVERNANCE_RUNTIME_DAG_QUALIFICATION_HISTORY_MAX_BYTES_V1,
-        false,
+    let summary =
+        validate_runtime_dag_qualification_history(root, history, Some(expected_binding), None)?;
+    let next = RuntimeDagQualificationStateV1 {
+        version: GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STATE_VERSION_V1,
+        history: Some(history.clone()),
+    };
+    let bytes =
+        encode_governance_two_slot_value_v1(&next, "governance runtime DAG qualification state")?;
+    if bytes.len() > GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STATE_MAX_BYTES_V1 {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG qualification state exceeds its canonical byte bound",
+        ));
+    }
+    let committed = compare_and_swap_governance_two_slot_store_v1(
+        &store,
+        &snapshot,
+        &bytes,
+        "governance runtime DAG qualification state",
     )?;
-    let (readback, summary) = read_runtime_dag_qualification_history(root, Some(expected_binding))?
-        .ok_or_else(|| {
-            GovernancePublishError::other(
-                "governance runtime DAG qualification history disappeared after install",
-            )
-        })?;
-    if readback != *history {
+    let readback: RuntimeDagQualificationStateV1 = decode_governance_two_slot_value_v1(
+        &committed,
+        "governance runtime DAG qualification state readback",
+    )?;
+    if readback != next {
         return Err(GovernancePublishError::other(
             "governance runtime DAG qualification history readback is substituted",
         ));
@@ -9608,6 +12178,7 @@ fn recover_runtime_dag_qualification_compaction(
             "governance runtime DAG qualification compaction checkpoint belongs to another provider binding",
         ));
     }
+    isolate_runtime_dag_qualification_archive_temps(root_guard, &checkpoint)?;
     let allowed_archive = (checkpoint.qualification_archive_generation != 0).then_some((
         checkpoint.qualification_archive_generation,
         checkpoint.qualification_archive_digest,
@@ -9615,6 +12186,7 @@ fn recover_runtime_dag_qualification_compaction(
     let (history, summary, staged_archive) =
         match read_runtime_dag_qualification_history_allowing_archive(
             root,
+            root_guard,
             Some(&binding),
             allowed_archive,
         ) {
@@ -9636,6 +12208,7 @@ fn recover_runtime_dag_qualification_compaction(
                 };
                 match read_runtime_dag_qualification_history_allowing_archive(
                     root,
+                    root_guard,
                     Some(&binding),
                     Some(staged),
                 ) {
@@ -9997,23 +12570,20 @@ fn local_runtime_dag_producer_checkpoint(
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
 ) -> Result<Option<RuntimeDagProducerCheckpointV1>, GovernancePublishError> {
-    let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-    match fs::symlink_metadata(&index_path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            validate_existing_runtime_dag_root(root, signer, store)?;
-            return Ok(None);
-        }
-        Err(error) => return Err(error.into()),
-        Ok(_) => {}
-    }
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
+    let committed_store = open_runtime_dag_committed_store_v1(root, &root_guard)?;
+    let (committed, _) = load_runtime_dag_committed_state_v1(&committed_store)?;
     validate_existing_runtime_dag_root(root, signer, store)?;
-    let index_bytes =
-        read_bounded_governance_state_file(&index_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES)?;
-    let head_bytes = read_bounded_governance_state_file(
-        &runtime_dag_head_path(root),
-        GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
-    )?;
-    runtime_dag_producer_checkpoint(root, signer, store, &head_bytes, &index_bytes).map(Some)
+    match (committed.head_bytes, committed.index_bytes) {
+        (Some(head_bytes), Some(index_bytes)) => {
+            runtime_dag_producer_checkpoint(root, signer, store, &head_bytes, &index_bytes)
+                .map(Some)
+        }
+        (None, None) => Ok(None),
+        _ => Err(GovernancePublishError::other(
+            "governance runtime DAG committed head/index state is torn",
+        )),
+    }
 }
 
 fn validate_runtime_dag_producer_intent_bounds(
@@ -10119,7 +12689,11 @@ fn validate_runtime_dag_producer_intent_metadata(
             &intent.block,
             GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES,
         ),
-        ("head", &intent.head, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES),
+        (
+            "head",
+            &intent.head,
+            GOVERNANCE_RUNTIME_DAG_HEAD_MAX_BYTES_V1,
+        ),
         ("index", &intent.index, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES),
     ] {
         let byte_len = usize::try_from(descriptor.byte_len).map_err(|_| {
@@ -10207,138 +12781,799 @@ fn runtime_dag_producer_staging_revision(
     Ok(*hasher.finalize().as_bytes())
 }
 
-fn runtime_dag_producer_staging_paths(root: &Path) -> [PathBuf; 3] {
-    let staging_root = root.join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR);
-    [
-        staging_root.join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGED_BLOCK_FILE),
-        staging_root.join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGED_HEAD_FILE),
-        staging_root.join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGED_INDEX_FILE),
-    ]
-}
-
-fn ensure_runtime_dag_producer_staging_root(
+fn reject_legacy_runtime_dag_mutable_state(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
 ) -> Result<(), GovernancePublishError> {
-    let _ = runtime_dag_producer_staging_directory(root, root_guard, true)?;
+    reject_legacy_atomic_state_names(
+        root_guard.rooted_directory(),
+        &[
+            GOVERNANCE_RUNTIME_DAG_INDEX_FILE,
+            "runtime-dag-index.json.blake3",
+        ],
+        "governance runtime DAG committed authority",
+    )?;
+    for path in [
+        root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE),
+        digest_sidecar_path_for(&root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE)),
+        runtime_dag_head_path(root),
+        digest_sidecar_path_for(&runtime_dag_head_path(root)),
+    ] {
+        match read_rooted_governance_state_file(root_guard, &path, 1) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) | Err(_) => {
+                return Err(GovernancePublishError::other(format!(
+                    "legacy mutable governance runtime DAG state `{}` is unsupported; remove it before first-release initialization",
+                    path.display()
+                )));
+            }
+        }
+    }
+    match root_guard
+        .rooted_directory()
+        .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR))
+    {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Ok(directory) => {
+            drop(directory);
+            return Err(GovernancePublishError::other(format!(
+                "legacy mutable governance runtime DAG staging directory `{GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR}` is unsupported; remove it before first-release initialization"
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    }
+    match root_guard
+        .rooted_directory()
+        .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_DIR))
+    {
+        Ok(runtime_directory) => reject_legacy_atomic_state_names(
+            &runtime_directory,
+            &[GOVERNANCE_RUNTIME_DAG_HEAD_FILE, "head.to.blake3"],
+            "governance runtime DAG committed head authority",
+        )?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    root_guard.revalidate()?;
     Ok(())
 }
 
-fn runtime_dag_producer_staging_directory(
+fn open_runtime_dag_staging_store_v1(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
-    create: bool,
-) -> Result<governance_rooted_fs::RootedDirectory, GovernancePublishError> {
+) -> Result<governance_rooted_fs::TwoSlotStoreV1, GovernancePublishError> {
     if root != root_guard.root() {
         return Err(GovernancePublishError::other(
-            "governance runtime DAG producer root differs from its retained root guard",
+            "governance runtime DAG staging root differs from its retained root guard",
+        ));
+    }
+    reject_legacy_runtime_dag_mutable_state(root, root_guard)?;
+    let initial = encode_governance_two_slot_value_v1(
+        &RuntimeDagProducerStagingStateV1 {
+            version: GOVERNANCE_RUNTIME_DAG_STAGING_STATE_VERSION_V1,
+            staged: None,
+        },
+        "initial governance runtime DAG staging state",
+    )?;
+    open_governance_two_slot_store_v1(
+        root_guard,
+        GOVERNANCE_RUNTIME_DAG_STAGING_STORE_SPEC_V1,
+        &initial,
+    )
+}
+
+fn load_runtime_dag_staging_state_v1(
+    store: &governance_rooted_fs::TwoSlotStoreV1,
+) -> Result<
+    (
+        RuntimeDagProducerStagingStateV1,
+        governance_rooted_fs::TwoSlotSnapshotV1,
+    ),
+    GovernancePublishError,
+> {
+    let snapshot =
+        load_governance_two_slot_store_v1(store, "governance runtime DAG staging state")?;
+    let state: RuntimeDagProducerStagingStateV1 =
+        decode_governance_two_slot_value_v1(&snapshot, "governance runtime DAG staging state")?;
+    if state.version != GOVERNANCE_RUNTIME_DAG_STAGING_STATE_VERSION_V1 {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG staging state version is unsupported",
+        ));
+    }
+    Ok((state, snapshot))
+}
+
+fn open_runtime_dag_committed_store_v1(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<governance_rooted_fs::TwoSlotStoreV1, GovernancePublishError> {
+    if root != root_guard.root() {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG committed root differs from its retained root guard",
+        ));
+    }
+    reject_legacy_runtime_dag_mutable_state(root, root_guard)?;
+    let initial = encode_governance_two_slot_value_v1(
+        &RuntimeDagCommittedStateV1 {
+            version: GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_VERSION_V1,
+            head_bytes: None,
+            index_bytes: None,
+        },
+        "initial governance runtime DAG committed state",
+    )?;
+    open_governance_two_slot_store_v1(
+        root_guard,
+        GOVERNANCE_RUNTIME_DAG_COMMITTED_STORE_SPEC_V1,
+        &initial,
+    )
+}
+
+fn load_runtime_dag_committed_state_v1(
+    store: &governance_rooted_fs::TwoSlotStoreV1,
+) -> Result<
+    (
+        RuntimeDagCommittedStateV1,
+        governance_rooted_fs::TwoSlotSnapshotV1,
+    ),
+    GovernancePublishError,
+> {
+    let snapshot =
+        load_governance_two_slot_store_v1(store, "governance runtime DAG committed state")?;
+    let state: RuntimeDagCommittedStateV1 =
+        decode_governance_two_slot_value_v1(&snapshot, "governance runtime DAG committed state")?;
+    validate_runtime_dag_committed_state_v1(&state)?;
+    Ok((state, snapshot))
+}
+
+fn validate_runtime_dag_committed_state_v1(
+    state: &RuntimeDagCommittedStateV1,
+) -> Result<(), GovernancePublishError> {
+    if state.version != GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_VERSION_V1
+        || state.head_bytes.is_some() != state.index_bytes.is_some()
+        || state.head_bytes.as_ref().is_some_and(|bytes| {
+            bytes.is_empty() || bytes.len() > GOVERNANCE_RUNTIME_DAG_HEAD_MAX_BYTES_V1
+        })
+        || state.index_bytes.as_ref().is_some_and(|bytes| {
+            bytes.is_empty() || bytes.len() > GOVERNANCE_MUTABLE_INDEX_MAX_BYTES
+        })
+    {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG committed state is malformed or outside its byte bounds",
+        ));
+    }
+    Ok(())
+}
+
+/// Load one exact committed runtime-DAG generation through a retained root.
+///
+/// This is the sole read boundary for consumers of mutable head/index state.
+/// The two values are selected from one fixed-slot record, and an empty
+/// initialized store is reported as `None`.
+pub(crate) fn load_runtime_dag_committed_snapshot_v1(
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<Option<RuntimeDagCommittedSnapshotV1>, GovernancePublishError> {
+    let root = root_guard.root();
+    root_guard.revalidate()?;
+    reject_legacy_runtime_dag_mutable_state(root, root_guard)?;
+    match root_guard
+        .rooted_directory()
+        .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_COMMITTED_STORE_DIR_V1))
+    {
+        Ok(directory) => drop(directory),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let config = governance_two_slot_config_v1(GOVERNANCE_RUNTIME_DAG_COMMITTED_STORE_SPEC_V1)?;
+    let snapshot = match root_guard
+        .rooted_directory()
+        .load_existing_two_slot_store_v1(config)
+    {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return Err(GovernancePublishError::other(format!(
+                "failed to load governance runtime DAG committed two-slot state: {error}"
+            )));
+        }
+    };
+    let state: RuntimeDagCommittedStateV1 = decode_governance_two_slot_value_v1(
+        &snapshot,
+        "governance runtime DAG committed reader snapshot",
+    )?;
+    validate_runtime_dag_committed_state_v1(&state)?;
+    root_guard.revalidate()?;
+    match (state.head_bytes, state.index_bytes) {
+        (Some(head_bytes), Some(index_bytes)) => Ok(Some(RuntimeDagCommittedSnapshotV1 {
+            store_generation: snapshot.generation(),
+            store_record_digest: snapshot.record_digest(),
+            head_bytes,
+            index_bytes,
+        })),
+        (None, None) => Ok(None),
+        _ => Err(GovernancePublishError::other(
+            "governance runtime DAG committed state contains a split head/index generation",
+        )),
+    }
+}
+
+fn validate_authenticated_runtime_dag_semantics_v1(
+    root_guard: &GovernanceFilesystemRootGuard,
+    authority_lineage: &RuntimeDagAuthorityLineageV1,
+    snapshot: &RuntimeDagCommittedSnapshotV1,
+    index: &JsonMap,
+    indexed_blocks: &[JsonValue],
+    head: &GovernanceDagHeadV1,
+) -> Result<(), GovernancePublishError> {
+    if indexed_blocks.is_empty() || indexed_blocks.len() > GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1
+    {
+        return Err(GovernancePublishError::other(
+            "authenticated governance runtime DAG block count is outside its V1 bound",
+        ));
+    }
+    let root = root_guard.root();
+    let latest_allowed = current_unix_timestamp_seconds()
+        .saturating_add(GOVERNANCE_RUNTIME_DAG_MAX_FUTURE_SKEW_SECS_V1);
+    let mut total_bytes = 0_u64;
+    add_runtime_dag_audit_bytes(&mut total_bytes, snapshot.index_bytes().len())?;
+    add_runtime_dag_audit_bytes(&mut total_bytes, snapshot.head_bytes().len())?;
+    let mut decoded_blocks = Vec::with_capacity(indexed_blocks.len());
+    let mut expected_by_encoded_blake3 = JsonMap::new();
+    let mut expected_by_source_payload_blake3 = JsonMap::new();
+    let mut expected_by_payload_kind = JsonMap::new();
+    let mut expected_block_names = BTreeSet::new();
+    let mut previous_block_cid: Option<Vec<u8>> = None;
+    let mut previous_node_cid: Option<Vec<u8>> = None;
+
+    for (position, entry) in indexed_blocks.iter().enumerate() {
+        let entry = entry.as_object().ok_or_else(|| {
+            GovernancePublishError::other(
+                "authenticated governance runtime DAG index block is not an object",
+            )
+        })?;
+        let position_u64 = u64::try_from(position).map_err(|_| {
+            GovernancePublishError::other(
+                "authenticated governance runtime DAG position exceeds u64",
+            )
+        })?;
+        if required_runtime_u64(entry, "position")? != position_u64
+            || required_runtime_u64(entry, "sequence")? != position_u64
+        {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG index position or sequence is noncanonical",
+            ));
+        }
+
+        let indexed_block_cid = required_runtime_string(entry, "block_cid_hex")?;
+        let indexed_node_cid = required_runtime_string(entry, "node_cid_hex")?;
+        let indexed_block_cid_bytes = required_runtime_hex(entry, "block_cid_hex")?;
+        let indexed_node_cid_bytes = required_runtime_hex(entry, "node_cid_hex")?;
+        if indexed_block_cid_bytes.len() != 32
+            || indexed_node_cid_bytes.len() != 32
+            || indexed_block_cid != hex::encode(&indexed_block_cid_bytes)
+            || indexed_node_cid != hex::encode(&indexed_node_cid_bytes)
+        {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG block or node CID is noncanonical",
+            ));
+        }
+        let block_path_string = required_runtime_string(entry, "block_path")?;
+        let canonical_block_path = runtime_dag_block_path(root, position_u64, &indexed_block_cid);
+        if block_path_string != index_path_string(root, &canonical_block_path) {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG block path is noncanonical",
+            ));
+        }
+        let block_snapshot = read_rooted_governance_state_file(
+            root_guard,
+            &canonical_block_path,
+            GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES,
+        )?;
+        verify_rooted_digest_sidecar(root_guard, &canonical_block_path, block_snapshot.bytes())?;
+        add_runtime_dag_audit_bytes(&mut total_bytes, block_snapshot.bytes().len())?;
+        let block_len = u64::try_from(block_snapshot.bytes().len()).map_err(|_| {
+            GovernancePublishError::other(
+                "authenticated governance runtime DAG block length exceeds u64",
+            )
+        })?;
+        let block_digest_hex = blake3::hash(block_snapshot.bytes()).to_hex().to_string();
+        if required_runtime_u64(entry, "encoded_len")? != block_len
+            || required_runtime_string(entry, "encoded_blake3")? != block_digest_hex
+        {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG block length or digest is substituted",
+            ));
+        }
+        let block: GovernanceDagBlockV1 = decode_canonical_runtime_dag(
+            block_snapshot.bytes(),
+            "authenticated governance runtime DAG block",
+        )?;
+        block.validate().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "authenticated governance runtime DAG block is invalid: {error}"
+            ))
+        })?;
+        if block.sequence != position_u64
+            || block.timestamp > latest_allowed
+            || indexed_block_cid != hex::encode(&block.block_cid)
+            || indexed_node_cid != hex::encode(&block.node.node_cid)
+            || optional_runtime_string(entry, "prev_block_cid_hex")?
+                != block.prev_block_cid.as_ref().map(hex::encode)
+            || optional_runtime_string(entry, "prev_node_cid_hex")?
+                != block.node.prev_cid.as_ref().map(hex::encode)
+            || block.prev_block_cid != previous_block_cid
+            || block.node.prev_cid != previous_node_cid
+            || required_runtime_u64(entry, "published_at_unix")? != block.timestamp
+        {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG block identity or parent lineage is substituted",
+            ));
+        }
+        previous_block_cid = Some(block.block_cid.clone());
+        previous_node_cid = Some(block.node.node_cid.clone());
+
+        let payload_kind = runtime_dag_payload_kind(&block.node.payload);
+        if !runtime_dag_payload_kind_is_supported(payload_kind)
+            || required_runtime_string(entry, "payload_kind")? != payload_kind
+        {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG payload kind is unsupported or substituted",
+            ));
+        }
+        let submission_account_digest = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| hex::encode(provenance.publisher_account_digest));
+        let submission_origin = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| provenance.origin.label().to_owned());
+        if required_optional_runtime_string(entry, "submission_publisher_account_digest_hex")?
+            != submission_account_digest
+            || required_optional_runtime_string(entry, "submission_origin")? != submission_origin
+        {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG submission provenance is substituted",
+            ));
+        }
+
+        let source_path_string = required_runtime_string(entry, "encoded_path")?;
+        let source_path = resolve_index_path(root, &source_path_string)?;
+        let source_snapshot = read_rooted_governance_state_file(
+            root_guard,
+            &source_path,
+            GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES,
+        )?;
+        verify_rooted_digest_sidecar(root_guard, &source_path, source_snapshot.bytes())?;
+        add_runtime_dag_audit_bytes(&mut total_bytes, source_snapshot.bytes().len())?;
+        let source_len = u64::try_from(source_snapshot.bytes().len()).map_err(|_| {
+            GovernancePublishError::other(
+                "authenticated governance runtime DAG source length exceeds u64",
+            )
+        })?;
+        let source_digest_hex = blake3::hash(source_snapshot.bytes()).to_hex().to_string();
+        if required_runtime_u64(entry, "source_payload_len")? != source_len
+            || required_runtime_string(entry, "source_payload_blake3")? != source_digest_hex
+            || canonical_runtime_source_payload_bytes(&block.node.payload)?
+                != source_snapshot.bytes()
+        {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG source payload is substituted",
+            ));
+        }
+
+        let json_path_string = required_runtime_string(entry, "json_path")?;
+        let json_path = resolve_index_path(root, &json_path_string)?;
+        let json_snapshot = read_rooted_governance_state_file(
+            root_guard,
+            &json_path,
+            GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
+        )?;
+        verify_rooted_digest_sidecar(root_guard, &json_path, json_snapshot.bytes())?;
+        add_runtime_dag_audit_bytes(&mut total_bytes, json_snapshot.bytes().len())?;
+        validate_governance_car_source_lengths(
+            source_snapshot.bytes().len(),
+            json_snapshot.bytes().len(),
+        )?;
+        let json_len = u64::try_from(json_snapshot.bytes().len()).map_err(|_| {
+            GovernancePublishError::other(
+                "authenticated governance runtime DAG JSON source length exceeds u64",
+            )
+        })?;
+        let json_digest_hex = blake3::hash(json_snapshot.bytes()).to_hex().to_string();
+        let expected_source_paths = governance_source_pair_relative_paths(
+            payload_kind,
+            source_len,
+            &source_digest_hex,
+            json_len,
+            &json_digest_hex,
+        )?;
+        if source_path_string != expected_source_paths.0
+            || json_path_string != expected_source_paths.1
+        {
+            return Err(GovernancePublishError::other(
+                "authenticated governance runtime DAG source paths do not bind their immutable bytes",
+            ));
+        }
+
+        append_runtime_index_position(
+            &mut expected_by_encoded_blake3,
+            &block_digest_hex,
+            position_u64,
+        );
+        append_runtime_index_position(
+            &mut expected_by_source_payload_blake3,
+            &source_digest_hex,
+            position_u64,
+        );
+        append_runtime_index_position(&mut expected_by_payload_kind, payload_kind, position_u64);
+        let block_name = canonical_block_path.file_name().ok_or_else(|| {
+            GovernancePublishError::other(
+                "authenticated governance runtime DAG block path has no file name",
+            )
+        })?;
+        expected_block_names.insert(block_name.to_os_string());
+        expected_block_names.insert(
+            digest_sidecar_path_for(&canonical_block_path)
+                .file_name()
+                .ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "authenticated governance runtime DAG block sidecar has no file name",
+                    )
+                })?
+                .to_os_string(),
+        );
+        block_snapshot.binding().verify()?;
+        source_snapshot.binding().verify()?;
+        json_snapshot.binding().verify()?;
+        decoded_blocks.push(block);
+    }
+
+    for (field, expected) in [
+        ("by_encoded_blake3", expected_by_encoded_blake3),
+        (
+            "by_source_payload_blake3",
+            expected_by_source_payload_blake3,
+        ),
+        ("by_payload_kind", expected_by_payload_kind),
+    ] {
+        if index.get(field) != Some(&JsonValue::Object(expected)) {
+            return Err(GovernancePublishError::other(format!(
+                "authenticated governance runtime DAG reverse map `{field}` is substituted"
+            )));
+        }
+    }
+
+    let runtime_root = root_guard
+        .rooted_directory()
+        .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_DIR))?;
+    if runtime_root.child_names_bounded(2)?
+        != vec![OsString::from(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR)]
+    {
+        return Err(GovernancePublishError::other(
+            "authenticated governance runtime DAG immutable root inventory is noncanonical",
+        ));
+    }
+    let blocks_directory =
+        runtime_root.open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR))?;
+    let inventory_bound = GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1
+        .checked_mul(2)
+        .and_then(|bound| bound.checked_add(1))
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "authenticated governance runtime DAG inventory bound overflowed",
+            )
+        })?;
+    let actual_block_names = blocks_directory
+        .child_names_bounded(inventory_bound)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if actual_block_names != expected_block_names {
+        return Err(GovernancePublishError::other(
+            "authenticated governance runtime DAG block inventory contains an unindexed or missing artifact",
+        ));
+    }
+
+    if head.generated_at > latest_allowed {
+        return Err(GovernancePublishError::other(
+            "authenticated governance runtime DAG head is future-dated",
+        ));
+    }
+    validate_governance_dag_head_against_rotatable_chain_v1(head, &decoded_blocks).map_err(
+        |error| {
+            GovernancePublishError::other(format!(
+                "authenticated governance runtime DAG head does not authenticate its chain: {error}"
+            ))
+        },
+    )?;
+    let authority_blocks = decoded_blocks.iter().collect::<Vec<_>>();
+    validate_runtime_dag_authority_lineage_for_chain(authority_lineage, &authority_blocks, head)?;
+    root_guard.revalidate()?;
+    Ok(())
+}
+
+/// Load a runtime-DAG generation bracketed by one exact sealed producer
+/// checkpoint without initializing or reconciling any local state.
+///
+/// An authenticated genesis checkpoint returns `None`. A non-genesis
+/// checkpoint requires one typed head/index generation whose canonical bytes,
+/// digests, count, CID, root, and provider bindings all match the checkpoint.
+pub(crate) fn load_authenticated_runtime_dag_snapshot_v1(
+    root_guard: &GovernanceFilesystemRootGuard,
+    signer: &GovernanceRuntimeDagSigner,
+    store: &GovernanceRuntimeDagCheckpointStore,
+) -> Result<Option<AuthenticatedRuntimeDagSnapshotV1>, GovernancePublishError> {
+    let root = root_guard.root();
+    root_guard.revalidate()?;
+    signer.assert_qualification()?;
+    store.assert_qualification()?;
+    match root_guard
+        .rooted_directory()
+        .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_COMMITTED_STORE_DIR_V1))
+    {
+        Ok(directory) => drop(directory),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(GovernancePublishError::other(
+                "sealed governance runtime DAG checkpoint has no initialized typed committed store",
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    let checkpoint_record_a = store
+        .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)?
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "sealed governance runtime DAG producer checkpoint is missing",
+            )
+        })?;
+    if store
+        .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)?
+        .is_some()
+    {
+        return Err(GovernancePublishError::other(
+            "sealed governance runtime DAG producer transaction is active",
+        ));
+    }
+    let checkpoint = decode_runtime_dag_unqualified_checkpoint_record(&checkpoint_record_a, root)?;
+    let expected_binding = runtime_dag_provider_binding(signer, store);
+    if runtime_dag_checkpoint_binding(&checkpoint) != expected_binding {
+        return Err(GovernancePublishError::other(
+            "sealed governance runtime DAG producer checkpoint belongs to another qualified provider binding",
+        ));
+    }
+    let authority_lineage =
+        authenticated_runtime_dag_authority_lineage_read_only(root_guard, &checkpoint)?;
+
+    // The fixed-store generation is intentionally not derived from the block
+    // count. A qualified provider transition rewrites the authenticated index
+    // binding without appending a block and therefore advances this store
+    // independently. The sealed checkpoint instead binds the exact head/index
+    // byte digests, block count, CID, and current provider identities below.
+    let committed = load_runtime_dag_committed_snapshot_v1(root_guard)?;
+    match committed.as_ref() {
+        Some(snapshot)
+            if checkpoint.block_count == 0
+                || checkpoint.head_bytes_digest
+                    != *blake3::hash(snapshot.head_bytes()).as_bytes()
+                || checkpoint.index_bytes_digest
+                    != *blake3::hash(snapshot.index_bytes()).as_bytes() =>
+        {
+            return Err(GovernancePublishError::other(
+                "typed governance runtime DAG byte generation does not match its sealed producer checkpoint",
+            ));
+        }
+        Some(_) => {}
+        None if checkpoint.block_count != 0 => {
+            return Err(GovernancePublishError::other(
+                "sealed governance runtime DAG producer checkpoint has no typed head/index generation",
+            ));
+        }
+        None => match root_guard
+            .rooted_directory()
+            .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_DIR))
+        {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(directory) => {
+                drop(directory);
+                return Err(GovernancePublishError::other(
+                    "authenticated governance runtime DAG genesis has unindexed immutable artifacts",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        },
+    }
+    if let Some(snapshot) = committed.as_ref() {
+        let head: GovernanceDagHeadV1 = decode_canonical_runtime_dag(
+            snapshot.head_bytes(),
+            "governance runtime DAG reader head",
+        )?;
+        head.validate().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "governance runtime DAG reader head is invalid: {error}"
+            ))
+        })?;
+        let index_value: JsonValue = json::from_slice(snapshot.index_bytes()).map_err(|error| {
+            GovernancePublishError::other(format!(
+                "governance runtime DAG reader index is invalid JSON: {error}"
+            ))
+        })?;
+        let canonical_index = json::to_json_pretty(&index_value).map_err(|error| {
+            GovernancePublishError::other(format!(
+                "governance runtime DAG reader index cannot be canonicalized: {error}"
+            ))
+        })?;
+        if canonical_index.as_bytes() != snapshot.index_bytes() {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG reader index is noncanonical",
+            ));
+        }
+        let index = index_value.as_object().ok_or_else(|| {
+            GovernancePublishError::other("governance runtime DAG reader index is not an object")
+        })?;
+        require_exact_governance_fields(
+            index,
+            GOVERNANCE_RUNTIME_DAG_INDEX_FIELDS_V1,
+            "governance runtime DAG index",
+        )?;
+        if required_runtime_string(index, "schema")? != GOVERNANCE_RUNTIME_DAG_INDEX_SCHEMA
+            || required_runtime_string(index, "source")? != GOVERNANCE_DAG_SINK_FILESYSTEM
+            || required_runtime_string(index, "root")? != GOVERNANCE_DAG_LOGICAL_ROOT
+        {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG reader index identity is invalid",
+            ));
+        }
+        validate_runtime_dag_signer_fields(index, signer)?;
+        validate_runtime_dag_checkpoint_store_fields(index, store)?;
+        let blocks = index
+            .get("blocks")
+            .and_then(JsonValue::as_array)
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "governance runtime DAG reader index blocks are missing",
+                )
+            })?;
+        for block in blocks {
+            let block = block.as_object().ok_or_else(|| {
+                GovernancePublishError::other(
+                    "governance runtime DAG reader index block is not an object",
+                )
+            })?;
+            require_exact_governance_fields(
+                block,
+                GOVERNANCE_RUNTIME_DAG_INDEX_BLOCK_FIELDS_V1,
+                "governance runtime DAG index block",
+            )?;
+        }
+        let indexed_count = u64::try_from(blocks.len()).map_err(|_| {
+            GovernancePublishError::other("governance runtime DAG block count exceeds u64")
+        })?;
+        let head_cid: [u8; 32] = head.head_block_cid.as_slice().try_into().map_err(|_| {
+            GovernancePublishError::other("governance runtime DAG reader head CID is not 32 bytes")
+        })?;
+        if checkpoint.block_count == 0
+            || checkpoint.block_count != head.block_count
+            || checkpoint.block_count != indexed_count
+            || checkpoint.head_block_cid != head_cid
+            || required_runtime_u64(index, "block_count")? != head.block_count
+            || required_runtime_string(index, "head_block_cid_hex")?
+                != hex::encode(&head.head_block_cid)
+            || required_runtime_u64(index, "head_generated_at")? != head.generated_at
+            || required_runtime_u64(index, "generated_at")? != head.generated_at
+        {
+            return Err(GovernancePublishError::other(
+                "typed governance runtime DAG generation does not match its sealed producer checkpoint",
+            ));
+        }
+        validate_authenticated_runtime_dag_semantics_v1(
+            root_guard,
+            &authority_lineage,
+            snapshot,
+            index,
+            blocks,
+            &head,
+        )?;
+    }
+
+    let checkpoint_record_b = store
+        .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)?
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "sealed governance runtime DAG producer checkpoint disappeared during read",
+            )
+        })?;
+    if store
+        .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)?
+        .is_some()
+    {
+        return Err(GovernancePublishError::other(
+            "sealed governance runtime DAG producer transaction changed during read",
+        ));
+    }
+    if checkpoint_record_b != checkpoint_record_a {
+        return Err(GovernancePublishError::other(
+            "sealed governance runtime DAG producer checkpoint changed during read",
         ));
     }
     root_guard.revalidate()?;
-    let staging = if create {
-        root_guard
-            .rooted_directory()
-            .open_or_create_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR))?
-    } else {
-        root_guard
-            .rooted_directory()
-            .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR))?
-    };
-    if create {
-        // Persist both the empty/new staging directory and its entry in the
-        // producer root before a sealed intent can reference child artifacts.
-        staging.sync_all()?;
-        root_guard.rooted_directory().sync_all()?;
-    }
-    root_guard.revalidate()?;
-    Ok(staging)
+    signer.assert_qualification()?;
+    store.assert_qualification()?;
+
+    Ok(
+        committed.map(|committed| AuthenticatedRuntimeDagSnapshotV1 {
+            committed,
+            checkpoint_generation: checkpoint_record_a.generation,
+            checkpoint_revision: checkpoint_record_a.revision,
+        }),
+    )
 }
 
-fn write_runtime_dag_producer_staged_artifact(
-    root_guard: &GovernanceFilesystemRootGuard,
-    path: &Path,
-    bytes: &[u8],
-    max_bytes: usize,
+#[cfg(test)]
+pub(crate) fn write_runtime_dag_committed_snapshot_fixture_v1(
+    root: &Path,
+    head_bytes: Vec<u8>,
+    index_bytes: Vec<u8>,
 ) -> Result<(), GovernancePublishError> {
-    if bytes.is_empty() || bytes.len() > max_bytes {
-        return Err(GovernancePublishError::other(format!(
-            "governance runtime DAG staged artifact `{}` is outside its byte limit",
-            path.display()
-        )));
-    }
-    remove_recoverable_atomic_temps_for_target(root_guard, path)?;
-    remove_recoverable_atomic_temps_for_target(root_guard, &digest_sidecar_path_for(path))?;
-    write_rooted_atomic(root_guard, path, bytes)?;
-    write_rooted_digest_sidecar(root_guard, path, bytes)?;
-    let readback = read_rooted_governance_state_file(root_guard, path, max_bytes)?;
-    verify_rooted_digest_sidecar(root_guard, path, readback.bytes())?;
-    if readback.bytes() != bytes {
-        return Err(GovernancePublishError::other(format!(
-            "governance runtime DAG staged artifact `{}` readback diverged",
-            path.display()
-        )));
-    }
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
+    let store = open_runtime_dag_committed_store_v1(root_guard.root(), &root_guard)?;
+    let (_, snapshot) = load_runtime_dag_committed_state_v1(&store)?;
+    let state = RuntimeDagCommittedStateV1 {
+        version: GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_VERSION_V1,
+        head_bytes: Some(head_bytes),
+        index_bytes: Some(index_bytes),
+    };
+    validate_runtime_dag_committed_state_v1(&state)?;
+    let bytes = encode_governance_two_slot_value_v1(
+        &state,
+        "governance runtime DAG committed test snapshot",
+    )?;
+    compare_and_swap_governance_two_slot_store_v1(
+        &store,
+        &snapshot,
+        &bytes,
+        "governance runtime DAG committed test snapshot",
+    )?;
     Ok(())
 }
 
 fn stage_runtime_dag_producer_transaction(
     root: &Path,
     root_guard: &GovernanceFilesystemRootGuard,
+    intent: &RuntimeDagProducerPublishIntentV1,
     staged: &RuntimeDagProducerStagedTransactionV1,
 ) -> Result<(), GovernancePublishError> {
-    ensure_runtime_dag_producer_staging_root(root, root_guard)?;
-    let paths = runtime_dag_producer_staging_paths(root);
-    for (path, bytes, max_bytes) in [
-        (
-            &paths[0],
-            staged.block_bytes.as_slice(),
-            GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES,
-        ),
-        (
-            &paths[1],
-            staged.head_bytes.as_slice(),
-            GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
-        ),
-        (
-            &paths[2],
-            staged.index_bytes.as_slice(),
-            GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
-        ),
-    ] {
-        root_guard.revalidate()?;
-        write_runtime_dag_producer_staged_artifact(root_guard, path, bytes, max_bytes)?;
+    validate_runtime_dag_producer_intent_bounds(root, intent, staged)?;
+    let store = open_runtime_dag_staging_store_v1(root, root_guard)?;
+    let (current, snapshot) = load_runtime_dag_staging_state_v1(&store)?;
+    let next = RuntimeDagProducerStagingStateV1 {
+        version: GOVERNANCE_RUNTIME_DAG_STAGING_STATE_VERSION_V1,
+        staged: Some(RuntimeDagProducerStagedEnvelopeV1 {
+            intent: intent.clone(),
+            transaction: staged.clone(),
+        }),
+    };
+    if current == next {
+        return Ok(());
     }
-    root_guard.revalidate()?;
+    let bytes =
+        encode_governance_two_slot_value_v1(&next, "governance runtime DAG staging transaction")?;
+    let committed = compare_and_swap_governance_two_slot_store_v1(
+        &store,
+        &snapshot,
+        &bytes,
+        "governance runtime DAG staging transaction",
+    )?;
+    let readback: RuntimeDagProducerStagingStateV1 = decode_governance_two_slot_value_v1(
+        &committed,
+        "governance runtime DAG staging transaction readback",
+    )?;
+    if readback != next {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG staging transaction readback diverged",
+        ));
+    }
     Ok(())
-}
-
-fn read_runtime_dag_producer_staged_artifact(
-    root_guard: &GovernanceFilesystemRootGuard,
-    path: &Path,
-    descriptor: &RuntimeDagProducerStagedArtifactV1,
-    max_bytes: usize,
-    label: &str,
-) -> Result<Vec<u8>, GovernancePublishError> {
-    let byte_len = usize::try_from(descriptor.byte_len).map_err(|_| {
-        GovernancePublishError::other(format!(
-            "sealed governance runtime DAG staged {label} length exceeds host limits"
-        ))
-    })?;
-    if byte_len == 0 || byte_len > max_bytes || descriptor.blake3 == [0; 32] {
-        return Err(GovernancePublishError::other(format!(
-            "sealed governance runtime DAG staged {label} descriptor is malformed"
-        )));
-    }
-    let snapshot = read_rooted_governance_state_file(root_guard, path, max_bytes)?;
-    verify_rooted_digest_sidecar(root_guard, path, snapshot.bytes())?;
-    if snapshot.bytes().len() != byte_len
-        || *blake3::hash(snapshot.bytes()).as_bytes() != descriptor.blake3
-    {
-        return Err(GovernancePublishError::other(format!(
-            "sealed governance runtime DAG staged {label} is substituted"
-        )));
-    }
-    Ok(snapshot.into_bytes())
 }
 
 fn load_runtime_dag_producer_staged_transaction(
@@ -10346,62 +13581,62 @@ fn load_runtime_dag_producer_staged_transaction(
     root_guard: &GovernanceFilesystemRootGuard,
     intent: &RuntimeDagProducerPublishIntentV1,
 ) -> Result<RuntimeDagProducerStagedTransactionV1, GovernancePublishError> {
-    let paths = runtime_dag_producer_staging_paths(root);
-    let staging = runtime_dag_producer_staging_directory(root, root_guard, false)?;
-    let expected = [
-        paths[0].file_name().map(OsStr::to_os_string),
-        digest_sidecar_path_for(&paths[0])
-            .file_name()
-            .map(OsStr::to_os_string),
-        paths[1].file_name().map(OsStr::to_os_string),
-        digest_sidecar_path_for(&paths[1])
-            .file_name()
-            .map(OsStr::to_os_string),
-        paths[2].file_name().map(OsStr::to_os_string),
-        digest_sidecar_path_for(&paths[2])
-            .file_name()
-            .map(OsStr::to_os_string),
-    ];
-    let expected = expected
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| {
-            GovernancePublishError::other(
-                "governance runtime DAG producer staging path has no canonical file name",
-            )
-        })?;
-    for name in staging.child_names()? {
-        if !expected.contains(&name) {
-            return Err(GovernancePublishError::other(
-                "governance runtime DAG producer staging root contains an unexpected artifact",
-            ));
-        }
+    let store = open_runtime_dag_staging_store_v1(root, root_guard)?;
+    let (state, _) = load_runtime_dag_staging_state_v1(&store)?;
+    let envelope = state.staged.ok_or_else(|| {
+        GovernancePublishError::other(
+            "sealed governance runtime DAG producer intent has no staged transaction",
+        )
+    })?;
+    if envelope.intent != *intent {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG staged transaction belongs to another sealed intent",
+        ));
     }
-    let staged = RuntimeDagProducerStagedTransactionV1 {
-        block_bytes: read_runtime_dag_producer_staged_artifact(
-            root_guard,
-            &paths[0],
-            &intent.block,
-            GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES,
-            "block",
-        )?,
-        head_bytes: read_runtime_dag_producer_staged_artifact(
-            root_guard,
-            &paths[1],
-            &intent.head,
-            GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
-            "head",
-        )?,
-        index_bytes: read_runtime_dag_producer_staged_artifact(
-            root_guard,
-            &paths[2],
-            &intent.index,
-            GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
-            "index",
-        )?,
-    };
+    let staged = envelope.transaction;
     validate_runtime_dag_producer_intent_bounds(root, intent, &staged)?;
     Ok(staged)
+}
+
+fn clear_runtime_dag_producer_staged_transaction(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+    intent: &RuntimeDagProducerPublishIntentV1,
+) -> Result<(), GovernancePublishError> {
+    let store = open_runtime_dag_staging_store_v1(root, root_guard)?;
+    let (state, snapshot) = load_runtime_dag_staging_state_v1(&store)?;
+    let Some(envelope) = state.staged else {
+        return Ok(());
+    };
+    if envelope.intent != *intent {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG staging cleanup refuses another active transaction",
+        ));
+    }
+    let cleared = RuntimeDagProducerStagingStateV1 {
+        version: GOVERNANCE_RUNTIME_DAG_STAGING_STATE_VERSION_V1,
+        staged: None,
+    };
+    let bytes = encode_governance_two_slot_value_v1(
+        &cleared,
+        "cleared governance runtime DAG staging state",
+    )?;
+    let committed = compare_and_swap_governance_two_slot_store_v1(
+        &store,
+        &snapshot,
+        &bytes,
+        "cleared governance runtime DAG staging state",
+    )?;
+    let readback: RuntimeDagProducerStagingStateV1 = decode_governance_two_slot_value_v1(
+        &committed,
+        "cleared governance runtime DAG staging state readback",
+    )?;
+    if readback != cleared {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG staging cleanup readback diverged",
+        ));
+    }
+    Ok(())
 }
 
 fn runtime_dag_producer_block_path_from_intent(
@@ -10431,7 +13666,7 @@ fn validate_runtime_dag_producer_file_lengths(
 ) -> Result<(), GovernancePublishError> {
     for (label, len, limit) in [
         ("block", block_len, GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES),
-        ("head", head_len, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES),
+        ("head", head_len, GOVERNANCE_RUNTIME_DAG_HEAD_MAX_BYTES_V1),
         ("index", index_len, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES),
     ] {
         if len == 0 || len > limit {
@@ -10515,66 +13750,14 @@ fn load_and_validate_runtime_dag_producer_staged_transaction(
     Ok(staged)
 }
 
-fn write_runtime_dag_transaction_file(
+#[cfg(windows)]
+fn isolate_recoverable_atomic_state_for_target(
     root_guard: &GovernanceFilesystemRootGuard,
     path: &Path,
-    bytes: &[u8],
-    max_bytes: usize,
-    previous_digest: Option<[u8; 32]>,
-    immutable_new: bool,
+    _max_bytes: usize,
+    _quarantine_slot_prefix: &str,
 ) -> Result<(), GovernancePublishError> {
-    if bytes.is_empty() || bytes.len() > max_bytes {
-        return Err(GovernancePublishError::other(format!(
-            "governance runtime DAG transaction target `{}` is outside its byte limit",
-            path.display()
-        )));
-    }
-    let replacement = match read_rooted_governance_state_file(root_guard, path, max_bytes) {
-        Ok(current) if current.bytes() == bytes => None,
-        Ok(current)
-            if !immutable_new
-                && previous_digest
-                    .is_some_and(|digest| digest == *blake3::hash(current.bytes()).as_bytes()) =>
-        {
-            Some(governance_rooted_fs::ExpectedFile::Identity(
-                current.binding(),
-            ))
-        }
-        Ok(_) => {
-            return Err(GovernancePublishError::other(format!(
-                "governance runtime DAG transaction refuses to overwrite substituted `{}`",
-                path.display()
-            )));
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            // A retained sealed intent proves the exact target bytes and its
-            // predecessor revision. A crash after rename but before the
-            // directory entry became durable may therefore be recovered by
-            // recreating a missing mutable target from those authenticated
-            // bytes. Substituted extant bytes remain non-overwritable above.
-            Some(governance_rooted_fs::ExpectedFile::Missing)
-        }
-        Err(error) => return Err(error.into()),
-    };
-    if let Some(expected) = replacement {
-        write_rooted_atomic_expected(root_guard, path, bytes, expected)?;
-    }
-    write_rooted_digest_sidecar(root_guard, path, bytes)?;
-    let readback = read_rooted_governance_state_file(root_guard, path, max_bytes)?;
-    verify_rooted_digest_sidecar(root_guard, path, readback.bytes())?;
-    if readback.bytes() != bytes {
-        return Err(GovernancePublishError::other(format!(
-            "governance runtime DAG transaction target `{}` durable readback diverged",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn remove_recoverable_atomic_temps_for_target(
-    root_guard: &GovernanceFilesystemRootGuard,
-    path: &Path,
-) -> Result<(), GovernancePublishError> {
+    reject_governance_publication_recovery_quarantine(root_guard)?;
     let target_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -10593,23 +13776,93 @@ fn remove_recoverable_atomic_temps_for_target(
     Ok(())
 }
 
-fn remove_recoverable_runtime_dag_transaction_temps(
-    root: &Path,
-    root_guard: &GovernanceFilesystemRootGuard,
-    intent: &RuntimeDagProducerPublishIntentV1,
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn plan_recoverable_atomic_temps_for_target(
+    parent: &governance_rooted_fs::RootedDirectory,
+    target_name: &str,
+    max_bytes: usize,
+    quarantine_slot_prefix: &str,
+    plan: &mut GovernancePublicationArtifactCleanupPlan,
 ) -> Result<(), GovernancePublishError> {
-    let block_path = runtime_dag_producer_block_path_from_intent(root, intent)?;
-    let head_path = runtime_dag_head_path(root);
-    let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-    for path in [&block_path, &head_path, &index_path] {
-        remove_recoverable_atomic_temps_for_target(root_guard, path)?;
-        remove_recoverable_atomic_temps_for_target(root_guard, &digest_sidecar_path_for(path))?;
+    for name in parent.child_names_bounded(GOVERNANCE_PUBLICATION_ENTRY_HARD_CAP)? {
+        let Some(name_utf8) = name.to_str() else {
+            continue;
+        };
+        let decoded = governance_publication_atomic_temp_target_name(name_utf8);
+        if decoded != Some(target_name) {
+            if name_utf8
+                .strip_prefix('.')
+                .and_then(|name| name.strip_prefix(target_name))
+                .is_some_and(|suffix| suffix.starts_with(".tmp-"))
+            {
+                return Err(GovernancePublishError::other(format!(
+                    "governance atomic temporary name `{name_utf8}` is noncanonical; offline inspection is required"
+                )));
+            }
+            continue;
+        }
+        let rollback_rank = plan.authority_files.len();
+        let removal = plan_governance_publication_file_removal(
+            parent,
+            &name,
+            max_bytes,
+            None,
+            rollback_rank,
+            OsString::from(format!("{quarantine_slot_prefix}-{rollback_rank:06}")),
+        )?;
+        plan.authority_files.push(removal);
     }
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn isolate_recoverable_atomic_state_for_target(
+    root_guard: &GovernanceFilesystemRootGuard,
+    path: &Path,
+    max_bytes: usize,
+    quarantine_slot_prefix: &str,
+) -> Result<(), GovernancePublishError> {
+    reject_governance_publication_recovery_quarantine(root_guard)?;
+    let target_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            GovernancePublishError::other(
+                "governance atomic recovery target name is not canonical UTF-8",
+            )
+        })?;
+    let (parent, _) = match rooted_target(root_guard, path, false) {
+        Ok(target) => target,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut plan = GovernancePublicationArtifactCleanupPlan::default();
+    plan_recoverable_atomic_temps_for_target(
+        &parent,
+        target_name,
+        max_bytes,
+        quarantine_slot_prefix,
+        &mut plan,
+    )?;
+    root_guard.revalidate()?;
+    apply_governance_publication_cleanup_plan(root_guard, plan)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn isolate_recoverable_atomic_state_for_target(
+    _root_guard: &GovernanceFilesystemRootGuard,
+    _path: &Path,
+    _max_bytes: usize,
+    _quarantine_slot_prefix: &str,
+) -> Result<(), GovernancePublishError> {
+    Err(GovernancePublishError::other(
+        "governance atomic recovery is unsupported on this platform",
+    ))
+}
+
 fn validate_runtime_dag_producer_intent_successor(
     root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
     signer: &GovernanceRuntimeDagSigner,
     intent: &RuntimeDagProducerPublishIntentV1,
     staged: &RuntimeDagProducerStagedTransactionV1,
@@ -10740,15 +13993,16 @@ fn validate_runtime_dag_producer_intent_successor(
         ));
     }
 
-    let index_path = root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-    match read_bounded_governance_state_file(&index_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
-        Ok(current) if current == staged.index_bytes => {}
-        Ok(current)
+    let committed_store = open_runtime_dag_committed_store_v1(root, root_guard)?;
+    let (committed, _) = load_runtime_dag_committed_state_v1(&committed_store)?;
+    match committed.index_bytes.as_deref() {
+        Some(current) if current == staged.index_bytes => {}
+        Some(current)
             if previous.is_some_and(|checkpoint| {
-                *blake3::hash(&current).as_bytes() == checkpoint.index_bytes_digest
+                *blake3::hash(current).as_bytes() == checkpoint.index_bytes_digest
             }) =>
         {
-            let previous_value: JsonValue = json::from_slice(&current).map_err(|error| {
+            let previous_value: JsonValue = json::from_slice(current).map_err(|error| {
                 GovernancePublishError::other(format!(
                     "prior governance runtime DAG index is invalid: {error}"
                 ))
@@ -10774,32 +14028,22 @@ fn validate_runtime_dag_producer_intent_successor(
                 ));
             }
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            // The sealed intent was admitted only against the exact predecessor
-            // checkpoint revision and carries the complete successor index.
-            // Recovery may reconstruct a directory entry lost after rename but
-            // before its parent-directory sync became durable.
-        }
-        Ok(_) | Err(_) => {
+        None if previous.is_none() => {}
+        Some(_) | None => {
             return Err(GovernancePublishError::other(
                 "sealed governance runtime DAG successor cannot authenticate the current index boundary",
             ));
         }
     }
 
-    let head_path = runtime_dag_head_path(root);
-    match read_bounded_governance_state_file(&head_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
-        Ok(current) if current == staged.head_bytes => {}
-        Ok(current)
+    match committed.head_bytes.as_deref() {
+        Some(current) if current == staged.head_bytes => {}
+        Some(current)
             if previous.is_some_and(|checkpoint| {
-                *blake3::hash(&current).as_bytes() == checkpoint.head_bytes_digest
+                *blake3::hash(current).as_bytes() == checkpoint.head_bytes_digest
             }) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            // The signed successor head and sealed predecessor revision bind
-            // the recovery bytes even when the renamed directory entry was
-            // lost at the crash boundary.
-        }
-        Ok(_) | Err(_) => {
+        None if previous.is_none() => {}
+        Some(_) | None => {
             return Err(GovernancePublishError::other(
                 "sealed governance runtime DAG successor cannot authenticate the current head boundary",
             ));
@@ -10820,32 +14064,58 @@ fn apply_runtime_dag_producer_intent(
     root_guard.revalidate()?;
     let block_path = runtime_dag_producer_block_path_from_intent(root, intent)?;
     root_guard.revalidate()?;
-    write_runtime_dag_transaction_file(
+    write_immutable_governance_artifact(
         root_guard,
         &block_path,
         &staged.block_bytes,
         GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES,
-        None,
-        true,
     )?;
     root_guard.revalidate()?;
-    write_runtime_dag_transaction_file(
-        root_guard,
-        &runtime_dag_head_path(root),
-        &staged.head_bytes,
-        GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
-        previous.map(|checkpoint| checkpoint.head_bytes_digest),
-        false,
-    )?;
-    root_guard.revalidate()?;
-    write_runtime_dag_transaction_file(
-        root_guard,
-        &root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE),
-        &staged.index_bytes,
-        GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
-        previous.map(|checkpoint| checkpoint.index_bytes_digest),
-        false,
-    )?;
+    let committed_store = open_runtime_dag_committed_store_v1(root, root_guard)?;
+    let (current, snapshot) = load_runtime_dag_committed_state_v1(&committed_store)?;
+    let next = RuntimeDagCommittedStateV1 {
+        version: GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_VERSION_V1,
+        head_bytes: Some(staged.head_bytes.clone()),
+        index_bytes: Some(staged.index_bytes.clone()),
+    };
+    if current != next {
+        let predecessor_matches = match (
+            previous,
+            current.head_bytes.as_deref(),
+            current.index_bytes.as_deref(),
+        ) {
+            (None, None, None) => true,
+            (Some(previous), Some(head), Some(index)) => {
+                *blake3::hash(head).as_bytes() == previous.head_bytes_digest
+                    && *blake3::hash(index).as_bytes() == previous.index_bytes_digest
+            }
+            _ => false,
+        };
+        if !predecessor_matches {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG committed state is not the sealed intent predecessor",
+            ));
+        }
+        let bytes = encode_governance_two_slot_value_v1(
+            &next,
+            "governance runtime DAG committed head/index transaction",
+        )?;
+        let committed = compare_and_swap_governance_two_slot_store_v1(
+            &committed_store,
+            &snapshot,
+            &bytes,
+            "governance runtime DAG committed head/index transaction",
+        )?;
+        let readback: RuntimeDagCommittedStateV1 = decode_governance_two_slot_value_v1(
+            &committed,
+            "governance runtime DAG committed head/index readback",
+        )?;
+        if readback != next {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG committed head/index readback diverged",
+            ));
+        }
+    }
     root_guard.revalidate()?;
     validate_existing_runtime_dag_root(root, signer, store)?;
     let local = local_runtime_dag_producer_checkpoint(root, signer, store)?.ok_or_else(|| {
@@ -10898,6 +14168,7 @@ fn finish_runtime_dag_producer_intent(
             GovernanceDagSealedStateSlot::ProducerPublishIntent,
             intent_record.revision,
         )?;
+        clear_runtime_dag_producer_staged_transaction(root, root_guard, &intent)?;
         signer.assert_qualification()?;
         return store.assert_qualification();
     }
@@ -10914,13 +14185,12 @@ fn finish_runtime_dag_producer_intent(
     )?;
     validate_runtime_dag_producer_intent_successor(
         root,
+        root_guard,
         signer,
         &intent,
         &staged,
         current.as_ref(),
     )?;
-    root_guard.revalidate()?;
-    remove_recoverable_runtime_dag_transaction_temps(root, root_guard, &intent)?;
     root_guard.revalidate()?;
     let filesystem_previous = current
         .as_ref()
@@ -10947,6 +14217,7 @@ fn finish_runtime_dag_producer_intent(
         GovernanceDagSealedStateSlot::ProducerPublishIntent,
         intent_record.revision,
     )?;
+    clear_runtime_dag_producer_staged_transaction(root, root_guard, &intent)?;
     signer.assert_qualification()?;
     store.assert_qualification()
 }
@@ -10958,11 +14229,36 @@ fn reconcile_runtime_dag_producer_state(
     store: &GovernanceRuntimeDagCheckpointStore,
 ) -> Result<(), GovernancePublishError> {
     root_guard.revalidate()?;
+    drop(open_runtime_dag_staging_store_v1(root, root_guard)?);
+    drop(open_runtime_dag_committed_store_v1(root, root_guard)?);
     recover_runtime_dag_qualification_compaction(root, root_guard, signer, store)?;
     recover_runtime_dag_provider_transition(root, root_guard, signer, store)?;
     root_guard.revalidate()?;
-    if let Some(intent) = store.load(GovernanceDagSealedStateSlot::ProducerPublishIntent)? {
-        finish_runtime_dag_producer_intent(root, root_guard, signer, store, intent)?;
+    match store.load(GovernanceDagSealedStateSlot::ProducerPublishIntent)? {
+        Some(intent) => {
+            finish_runtime_dag_producer_intent(root, root_guard, signer, store, intent)?;
+        }
+        None => {
+            // Staging is deliberately installed before its sealed intent. A
+            // crash in that narrow window leaves an unauthoritative local
+            // transaction which must not become an implicit intent on restart.
+            // Conversely, a crash after deleting a completed sealed intent but
+            // before this local clear leaves the same safe cleanup shape.
+            let staging_store = open_runtime_dag_staging_store_v1(root, root_guard)?;
+            let (staging, _) = load_runtime_dag_staging_state_v1(&staging_store)?;
+            drop(staging_store);
+            if let Some(envelope) = staging.staged {
+                if store
+                    .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)?
+                    .is_some()
+                {
+                    return Err(GovernancePublishError::other(
+                        "sealed governance runtime DAG producer intent appeared while reconciling unsealed staging",
+                    ));
+                }
+                clear_runtime_dag_producer_staged_transaction(root, root_guard, &envelope.intent)?;
+            }
+        }
     }
     root_guard.revalidate()?;
     let sealed_record = store.load(GovernanceDagSealedStateSlot::ProducerCheckpoint)?;
@@ -11108,7 +14404,7 @@ fn commit_runtime_dag_producer_transaction(
         ));
     }
     root_guard.revalidate()?;
-    stage_runtime_dag_producer_transaction(root, root_guard, &staged)?;
+    stage_runtime_dag_producer_transaction(root, root_guard, &intent, &staged)?;
     let staged_readback = load_runtime_dag_producer_staged_transaction(root, root_guard, &intent)?;
     if staged_readback != staged {
         return Err(GovernancePublishError::other(
@@ -11194,13 +14490,11 @@ fn runtime_dag_checkpoint_cid(
 }
 
 fn build_runtime_dag_index_bytes(
-    root: &Path,
     signer: &GovernanceRuntimeDagSigner,
     store: &GovernanceRuntimeDagCheckpointStore,
     mut index: JsonMap,
     mut blocks: Vec<JsonValue>,
     head: &GovernanceDagHeadV1,
-    head_path: &Path,
 ) -> Result<Vec<u8>, GovernancePublishError> {
     let mut by_encoded_blake3 = JsonMap::new();
     let mut by_source_payload_blake3 = JsonMap::new();
@@ -11268,10 +14562,6 @@ fn build_runtime_dag_index_bytes(
     index.insert(
         "head_generated_at".into(),
         JsonValue::from(head.generated_at),
-    );
-    index.insert(
-        "head_path".into(),
-        JsonValue::from(index_path_string(root, head_path)),
     );
     index.insert("block_count".into(), JsonValue::from(head.block_count));
     index.insert(
@@ -11725,32 +15015,156 @@ impl FencedPrivacyAuthoritativeHeadSyncV1 {
     }
 }
 
+fn reject_legacy_fenced_privacy_state(
+    root: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<(), GovernancePublishError> {
+    reject_legacy_atomic_state_names(
+        root_guard.rooted_directory(),
+        &[
+            GOVERNANCE_FENCED_PRIVACY_PENDING_FILE,
+            GOVERNANCE_FENCED_PRIVACY_HEAD_CACHE_FILE,
+            GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_FILE,
+        ],
+        "fenced privacy authority",
+    )?;
+    for path in [
+        fenced_privacy_pending_path(root),
+        fenced_privacy_head_cache_path(root),
+        fenced_privacy_head_sync_path(root),
+    ] {
+        match read_rooted_governance_state_file(root_guard, &path, 1) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) | Err(_) => {
+                return Err(GovernancePublishError::other(format!(
+                    "legacy mutable fenced privacy state `{}` is unsupported; remove it before first-release initialization",
+                    path.display()
+                )));
+            }
+        }
+    }
+    root_guard.revalidate()?;
+    Ok(())
+}
+
+fn validate_fenced_privacy_state_v1(
+    state: &FencedPrivacyStateV1,
+) -> Result<(), GovernancePublishError> {
+    if state.version != GOVERNANCE_FENCED_PRIVACY_STATE_VERSION_V1
+        || state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| !pending.has_valid_shape())
+        || state
+            .publication_cache
+            .as_ref()
+            .is_some_and(|cache| !cache.has_valid_shape())
+        || state
+            .authoritative_head_sync
+            .as_ref()
+            .is_some_and(|sync| !sync.has_valid_shape())
+    {
+        return Err(GovernancePublishError::other(
+            "combined fenced privacy state is malformed",
+        ));
+    }
+    if state.pending.as_ref().is_some_and(|pending| {
+        state.publication_cache.as_ref().is_some_and(|cache| {
+            pending.target_handle != cache.target_handle
+                || pending.target_revision != cache.target_revision
+                || pending.target_policy_digest != cache.target_policy_digest
+        }) || state.authoritative_head_sync.as_ref().is_some_and(|sync| {
+            pending.target_handle != sync.reader_handle
+                || pending.target_revision != sync.reader_revision
+                || pending.target_policy_digest != sync.reader_policy_digest
+        })
+    }) || state.publication_cache.as_ref().is_some_and(|cache| {
+        state.authoritative_head_sync.as_ref().is_some_and(|sync| {
+            cache.target_handle != sync.reader_handle
+                || cache.target_revision != sync.reader_revision
+                || cache.target_policy_digest != sync.reader_policy_digest
+        })
+    }) {
+        return Err(GovernancePublishError::other(
+            "combined fenced privacy records belong to different qualified targets",
+        ));
+    }
+    Ok(())
+}
+
+fn open_fenced_privacy_store_v1(
+    root: &Path,
+) -> Result<governance_rooted_fs::TwoSlotStoreV1, GovernancePublishError> {
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
+    reject_legacy_fenced_privacy_state(root, &root_guard)?;
+    let initial = encode_governance_two_slot_value_v1(
+        &FencedPrivacyStateV1 {
+            version: GOVERNANCE_FENCED_PRIVACY_STATE_VERSION_V1,
+            pending: None,
+            publication_cache: None,
+            authoritative_head_sync: None,
+        },
+        "initial combined fenced privacy state",
+    )?;
+    open_governance_two_slot_store_v1(
+        &root_guard,
+        GOVERNANCE_FENCED_PRIVACY_STORE_SPEC_V1,
+        &initial,
+    )
+}
+
+fn load_fenced_privacy_state_v1(
+    store: &governance_rooted_fs::TwoSlotStoreV1,
+) -> Result<
+    (
+        FencedPrivacyStateV1,
+        governance_rooted_fs::TwoSlotSnapshotV1,
+    ),
+    GovernancePublishError,
+> {
+    let snapshot = load_governance_two_slot_store_v1(store, "combined fenced privacy state")?;
+    let state: FencedPrivacyStateV1 =
+        decode_governance_two_slot_value_v1(&snapshot, "combined fenced privacy state")?;
+    validate_fenced_privacy_state_v1(&state)?;
+    Ok((state, snapshot))
+}
+
+fn update_fenced_privacy_state_v1(
+    root: &Path,
+    label: &str,
+    update: impl FnOnce(&mut FencedPrivacyStateV1),
+) -> Result<(), GovernancePublishError> {
+    let store = open_fenced_privacy_store_v1(root)?;
+    let (mut state, snapshot) = load_fenced_privacy_state_v1(&store)?;
+    let predecessor = state.clone();
+    update(&mut state);
+    validate_fenced_privacy_state_v1(&state)?;
+    if state == predecessor {
+        return Ok(());
+    }
+    let bytes = encode_governance_two_slot_value_v1(&state, label)?;
+    if bytes.len() > GOVERNANCE_FENCED_PRIVACY_STORE_SPEC_V1.max_payload_bytes {
+        return Err(GovernancePublishError::other(
+            "combined fenced privacy state exceeds its byte limit",
+        ));
+    }
+    let committed =
+        compare_and_swap_governance_two_slot_store_v1(&store, &snapshot, &bytes, label)?;
+    let readback: FencedPrivacyStateV1 =
+        decode_governance_two_slot_value_v1(&committed, "combined fenced privacy readback")?;
+    if readback != state {
+        return Err(GovernancePublishError::other(
+            "combined fenced privacy state readback diverged",
+        ));
+    }
+    Ok(())
+}
+
 fn read_fenced_privacy_pending_request(
     root: &Path,
 ) -> Result<Option<FencedPrivacyPendingRequestV1>, GovernancePublishError> {
-    let path = fenced_privacy_pending_path(root);
-    let bytes = match read_bounded_governance_state_file(
-        &path,
-        GOVERNANCE_FENCED_PRIVACY_PENDING_MAX_BYTES,
-    ) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let pending =
-        norito::decode_from_bytes::<FencedPrivacyPendingRequestV1>(&bytes).map_err(|_| {
-            GovernancePublishError::other("fenced privacy pending request is not canonical Norito")
-        })?;
-    if norito::to_bytes(&pending)
-        .map_err(|_| GovernancePublishError::other("encode fenced privacy pending request"))?
-        != bytes
-        || !pending.has_valid_shape()
-    {
-        return Err(GovernancePublishError::other(
-            "fenced privacy pending request is malformed",
-        ));
-    }
-    Ok(Some(pending))
+    let store = open_fenced_privacy_store_v1(root)?;
+    Ok(load_fenced_privacy_state_v1(&store)?.0.pending)
 }
 
 fn write_fenced_privacy_pending_request(
@@ -11762,53 +15176,22 @@ fn write_fenced_privacy_pending_request(
             "fenced privacy pending request is malformed",
         ));
     }
-    let bytes = norito::to_bytes(pending)
-        .map_err(|_| GovernancePublishError::other("encode fenced privacy pending request"))?;
-    if bytes.len() > GOVERNANCE_FENCED_PRIVACY_PENDING_MAX_BYTES {
-        return Err(GovernancePublishError::other(
-            "fenced privacy pending request exceeds its byte limit",
-        ));
-    }
-    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
-    write_atomic(&root_guard, &fenced_privacy_pending_path(root), &bytes)?;
-    Ok(())
+    update_fenced_privacy_state_v1(root, "fenced privacy pending request", |state| {
+        state.pending = Some(pending.clone());
+    })
 }
 
 fn remove_fenced_privacy_pending_request(root: &Path) -> Result<(), GovernancePublishError> {
-    let path = fenced_privacy_pending_path(root);
-    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
-    let (parent, name) = rooted_target(&root_guard, &path, false)?;
-    parent.remove_file_if_exists(&name)?;
-    root_guard.revalidate()?;
-    Ok(())
+    update_fenced_privacy_state_v1(root, "cleared fenced privacy pending request", |state| {
+        state.pending = None;
+    })
 }
 
 fn read_fenced_privacy_head_cache(
     root: &Path,
 ) -> Result<Option<FencedPrivacyPublicationCacheV1>, GovernancePublishError> {
-    let path = fenced_privacy_head_cache_path(root);
-    let bytes =
-        match read_bounded_governance_state_file(&path, GOVERNANCE_FENCED_PRIVACY_HEAD_MAX_BYTES) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-    let cache =
-        norito::decode_from_bytes::<FencedPrivacyPublicationCacheV1>(&bytes).map_err(|_| {
-            GovernancePublishError::other(
-                "fenced privacy authoritative-head cache is not canonical Norito",
-            )
-        })?;
-    if norito::to_bytes(&cache).map_err(|_| {
-        GovernancePublishError::other("encode fenced privacy authoritative-head cache")
-    })? != bytes
-        || !cache.has_valid_shape()
-    {
-        return Err(GovernancePublishError::other(
-            "fenced privacy authoritative-head cache is malformed",
-        ));
-    }
-    Ok(Some(cache))
+    let store = open_fenced_privacy_store_v1(root)?;
+    Ok(load_fenced_privacy_state_v1(&store)?.0.publication_cache)
 }
 
 fn write_fenced_privacy_head_cache(
@@ -11820,48 +15203,18 @@ fn write_fenced_privacy_head_cache(
             "fenced privacy authoritative successor cache is malformed",
         ));
     }
-    let bytes = norito::to_bytes(cache).map_err(|_| {
-        GovernancePublishError::other("encode fenced privacy authoritative successor")
-    })?;
-    if bytes.len() > GOVERNANCE_FENCED_PRIVACY_HEAD_MAX_BYTES {
-        return Err(GovernancePublishError::other(
-            "fenced privacy authoritative-head cache exceeds its byte limit",
-        ));
-    }
-    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
-    write_atomic(&root_guard, &fenced_privacy_head_cache_path(root), &bytes)?;
-    Ok(())
+    update_fenced_privacy_state_v1(root, "fenced privacy publication cache", |state| {
+        state.publication_cache = Some(cache.clone());
+    })
 }
 
 fn read_fenced_privacy_head_sync(
     root: &Path,
 ) -> Result<Option<FencedPrivacyAuthoritativeHeadSyncV1>, GovernancePublishError> {
-    let path = fenced_privacy_head_sync_path(root);
-    let bytes = match read_bounded_governance_state_file(
-        &path,
-        GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_MAX_BYTES,
-    ) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let sync = norito::decode_from_bytes::<FencedPrivacyAuthoritativeHeadSyncV1>(&bytes).map_err(
-        |_| {
-            GovernancePublishError::other(
-                "fenced privacy authenticated head cache is not canonical Norito",
-            )
-        },
-    )?;
-    if norito::to_bytes(&sync).map_err(|_| {
-        GovernancePublishError::other("encode fenced privacy authenticated head cache")
-    })? != bytes
-        || !sync.has_valid_shape()
-    {
-        return Err(GovernancePublishError::other(
-            "fenced privacy authenticated head cache is malformed",
-        ));
-    }
-    Ok(Some(sync))
+    let store = open_fenced_privacy_store_v1(root)?;
+    Ok(load_fenced_privacy_state_v1(&store)?
+        .0
+        .authoritative_head_sync)
 }
 
 fn write_fenced_privacy_head_sync(
@@ -11873,17 +15226,9 @@ fn write_fenced_privacy_head_sync(
             "fenced privacy authenticated head cache is malformed",
         ));
     }
-    let bytes = norito::to_bytes(sync).map_err(|_| {
-        GovernancePublishError::other("encode fenced privacy authenticated head cache")
-    })?;
-    if bytes.len() > GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_MAX_BYTES {
-        return Err(GovernancePublishError::other(
-            "fenced privacy authenticated head cache exceeds its byte limit",
-        ));
-    }
-    let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)?;
-    write_atomic(&root_guard, &fenced_privacy_head_sync_path(root), &bytes)?;
-    Ok(())
+    update_fenced_privacy_state_v1(root, "fenced privacy authenticated head sync", |state| {
+        state.authoritative_head_sync = Some(sync.clone());
+    })
 }
 
 fn retain_fenced_privacy_required_ancestor(
@@ -14286,6 +17631,14 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        extract::State,
+        http::{self, StatusCode},
+        response::Response,
+        routing::get,
+    };
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use iroha_data_model::sorafs::transparency::{
         MODERATION_PRIVACY_AGGREGATE_VERSION_V1, MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
@@ -14325,15 +17678,542 @@ mod tests {
         validate_governance_dag_head_against_chain_v1,
     };
     use tempfile::TempDir;
+    use tokio::net::TcpListener;
 
     use super::*;
 
-    fn read_publication_state_fixture(root: &Path) -> JsonValue {
-        json::from_slice(
-            &fs::read(root.join(GOVERNANCE_PUBLICATION_STATE_FILE))
-                .expect("read authoritative governance publication state"),
+    fn request_ingress_test_public_key() -> [u8; 32] {
+        KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("derive request-ingress test key")
+            .public_key()
+            .to_bytes()
+            .1
+            .try_into()
+            .expect("Ed25519 public key width")
+    }
+
+    fn request_ingress_test_binding() -> GovernanceDagRequestIngressBindingV1 {
+        let scope = GovernanceDagAuthenticationScope::Ipfs;
+        GovernanceDagRequestIngressBindingV1::try_new(
+            scope,
+            governance_dag_request_ingress_endpoint_binding_v1(
+                scope,
+                "https://governance.example/ipfs/",
+            )
+            .expect("canonical ingress endpoint"),
+            request_ingress_test_public_key(),
+            1_048_576,
+            30,
+            5,
         )
-        .expect("decode authoritative governance publication state")
+        .expect("valid request-ingress binding")
+    }
+
+    fn request_receiver_test_key_pair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("derive request-receiver test key")
+    }
+
+    fn request_receiver_test_envelope(
+        key_pair: &KeyPair,
+        descriptor: &GovernanceDagCanonicalRequestV1,
+        issued_at_unix_secs: u64,
+        nonce: [u8; 32],
+    ) -> GovernanceDagRequestAuthenticationEnvelopeV1 {
+        let public_key = key_pair
+            .public_key()
+            .to_bytes()
+            .1
+            .try_into()
+            .expect("Ed25519 public key width");
+        let expires_at_unix_secs = issued_at_unix_secs + 15;
+        let payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
+            descriptor,
+            issued_at_unix_secs,
+            expires_at_unix_secs,
+            nonce,
+            public_key,
+        );
+        let signature = IrohaSignature::try_new(key_pair.private_key(), &payload)
+            .expect("sign request-receiver fixture")
+            .payload()
+            .try_into()
+            .expect("Ed25519 signature width");
+        GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
+            descriptor,
+            issued_at_unix_secs,
+            expires_at_unix_secs,
+            nonce,
+            public_key,
+            signature,
+        )
+        .expect("construct request-receiver envelope")
+    }
+
+    fn request_receiver_test_descriptor(endpoint: &str) -> GovernanceDagCanonicalRequestV1 {
+        GovernanceDagCanonicalRequestV1::try_from_http_parts(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "GET",
+            endpoint,
+            [
+                ("accept", b"*/*".as_slice()),
+                ("accept-encoding", b"identity".as_slice()),
+                ("user-agent", b"iroha-gdag-receiver-test/1".as_slice()),
+            ],
+            b"",
+            1_048_576,
+        )
+        .expect("construct canonical request-receiver descriptor")
+    }
+
+    fn request_receiver_test_binding_for_endpoint(
+        endpoint: &str,
+        public_key: [u8; 32],
+    ) -> GovernanceDagRequestIngressBindingV1 {
+        GovernanceDagRequestIngressBindingV1::try_new(
+            GovernanceDagAuthenticationScope::SignedHead,
+            governance_dag_request_ingress_endpoint_binding_v1(
+                GovernanceDagAuthenticationScope::SignedHead,
+                endpoint,
+            )
+            .expect("bind request-receiver endpoint"),
+            public_key,
+            1_048_576,
+            30,
+            5,
+        )
+        .expect("construct request-receiver binding")
+    }
+
+    fn request_receiver_http1_request(
+        client: &reqwest::Client,
+        endpoint: &str,
+        envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+    ) -> reqwest::RequestBuilder {
+        let mut request = client
+            .get(endpoint)
+            .header(header::ACCEPT, "*/*")
+            .header(header::ACCEPT_ENCODING, "identity")
+            .header(header::USER_AGENT, "iroha-gdag-receiver-test/1");
+        for (name, value) in governance_dag_request_authentication_headers_v1(envelope) {
+            request = request.header(name, value);
+        }
+        request
+    }
+
+    fn request_receiver_test_response(status: StatusCode) -> Response {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = status;
+        response
+    }
+
+    #[derive(Clone)]
+    struct RequestReceiverHttp1State {
+        endpoint: Arc<str>,
+        binding: GovernanceDagRequestIngressBindingV1,
+        replay_store: Arc<Mutex<GovernanceDagRequestAuthenticationReplayCacheV1>>,
+        backend_calls: Arc<AtomicU64>,
+        now_unix_secs: u64,
+    }
+
+    async fn request_receiver_http1_handler(
+        State(state): State<RequestReceiverHttp1State>,
+        request: Request<Body>,
+    ) -> Response {
+        let (parts, body) = request.into_parts();
+        let max_body_bytes = match usize::try_from(state.binding.max_body_bytes()) {
+            Ok(max_body_bytes) => max_body_bytes,
+            Err(_) => return request_receiver_test_response(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        let body = match to_bytes(body, max_body_bytes).await {
+            Ok(body) => body,
+            Err(_) => return request_receiver_test_response(StatusCode::PAYLOAD_TOO_LARGE),
+        };
+        let request = Request::from_parts(parts, body);
+        let mut replay_store = match state.replay_store.lock() {
+            Ok(replay_store) => replay_store,
+            Err(_) => return request_receiver_test_response(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        let mut receiver = match GovernanceDagHttpRequestReceiverV1::try_new(
+            state.endpoint.as_ref(),
+            state.binding,
+            &mut *replay_store,
+        ) {
+            Ok(receiver) => receiver,
+            Err(_) => return request_receiver_test_response(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        match receiver.verify_http_request(request, state.now_unix_secs) {
+            Ok(verified) => {
+                if !verified.request().headers().contains_key(header::HOST)
+                    || verified.request().uri().scheme().is_some()
+                    || verified.request().uri().authority().is_some()
+                    || verified
+                        .request()
+                        .headers()
+                        .keys()
+                        .any(|name| governance_request_auth_header_has_prefix_v1(name.as_str()))
+                {
+                    return request_receiver_test_response(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+                state.backend_calls.fetch_add(1, Ordering::SeqCst);
+                request_receiver_test_response(StatusCode::NO_CONTENT)
+            }
+            Err(GovernanceDagRequestAuthenticationErrorV1::Replay) => {
+                request_receiver_test_response(StatusCode::CONFLICT)
+            }
+            Err(GovernanceDagRequestAuthenticationErrorV1::UnexpectedHeader) => {
+                request_receiver_test_response(StatusCode::BAD_REQUEST)
+            }
+            Err(
+                GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority
+                | GovernanceDagRequestAuthenticationErrorV1::AuthorityMismatch,
+            ) => request_receiver_test_response(StatusCode::MISDIRECTED_REQUEST),
+            Err(_) => request_receiver_test_response(StatusCode::UNAUTHORIZED),
+        }
+    }
+
+    #[test]
+    fn request_ingress_endpoint_binding_is_normalized_scoped_and_fail_closed() {
+        let ipfs_without_slash = governance_dag_request_ingress_endpoint_binding_v1(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "https://governance.example/ipfs",
+        )
+        .expect("canonical IPFS base");
+        let ipfs_with_slash = governance_dag_request_ingress_endpoint_binding_v1(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "https://governance.example/ipfs/",
+        )
+        .expect("canonical IPFS base with slash");
+        assert_eq!(ipfs_without_slash, ipfs_with_slash);
+        assert_ne!(
+            ipfs_with_slash,
+            governance_dag_request_ingress_endpoint_binding_v1(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "https://governance.example/ipfs/",
+            )
+            .expect("canonical signed-head endpoint")
+        );
+        for invalid in [
+            "ftp://governance.example/ipfs/",
+            "https://user@governance.example/ipfs/",
+            "https://governance.example/ipfs/?token=public",
+            "https://governance.example/ipfs/#fragment",
+            "https://governance.example/ipfs/%2Fadmin",
+        ] {
+            assert_eq!(
+                governance_dag_request_ingress_endpoint_binding_v1(
+                    GovernanceDagAuthenticationScope::Ipfs,
+                    invalid,
+                ),
+                Err(GovernanceDagRequestIngressQualificationErrorV1::InvalidEndpointBinding)
+            );
+        }
+    }
+
+    #[test]
+    fn request_ingress_binding_digest_commits_every_policy_field() {
+        let binding = request_ingress_test_binding();
+        let digest = binding.binding_digest();
+        assert_ne!(digest, [0; 32]);
+
+        let variants = [
+            GovernanceDagRequestIngressBindingV1::try_new(
+                GovernanceDagAuthenticationScope::SignedHead,
+                binding.endpoint_binding(),
+                binding.public_key(),
+                binding.max_body_bytes(),
+                binding.max_envelope_lifetime_secs(),
+                binding.max_future_skew_secs(),
+            )
+            .expect("changed scope"),
+            GovernanceDagRequestIngressBindingV1::try_new(
+                binding.scope(),
+                [0x11; 32],
+                binding.public_key(),
+                binding.max_body_bytes(),
+                binding.max_envelope_lifetime_secs(),
+                binding.max_future_skew_secs(),
+            )
+            .expect("changed endpoint"),
+            GovernanceDagRequestIngressBindingV1::try_new(
+                binding.scope(),
+                binding.endpoint_binding(),
+                KeyPair::try_from_seed(vec![0xA8; 32], Algorithm::Ed25519)
+                    .expect("derive alternate request-ingress key")
+                    .public_key()
+                    .to_bytes()
+                    .1
+                    .try_into()
+                    .expect("Ed25519 public key width"),
+                binding.max_body_bytes(),
+                binding.max_envelope_lifetime_secs(),
+                binding.max_future_skew_secs(),
+            )
+            .expect("changed public key"),
+            GovernanceDagRequestIngressBindingV1::try_new(
+                binding.scope(),
+                binding.endpoint_binding(),
+                binding.public_key(),
+                binding.max_body_bytes() + 1,
+                binding.max_envelope_lifetime_secs(),
+                binding.max_future_skew_secs(),
+            )
+            .expect("changed body limit"),
+            GovernanceDagRequestIngressBindingV1::try_new(
+                binding.scope(),
+                binding.endpoint_binding(),
+                binding.public_key(),
+                binding.max_body_bytes(),
+                binding.max_envelope_lifetime_secs() + 1,
+                binding.max_future_skew_secs(),
+            )
+            .expect("changed lifetime"),
+            GovernanceDagRequestIngressBindingV1::try_new(
+                binding.scope(),
+                binding.endpoint_binding(),
+                binding.public_key(),
+                binding.max_body_bytes(),
+                binding.max_envelope_lifetime_secs(),
+                binding.max_future_skew_secs() + 1,
+            )
+            .expect("changed future skew"),
+        ];
+        for variant in variants {
+            assert_ne!(variant.binding_digest(), digest);
+        }
+    }
+
+    #[tokio::test]
+    async fn request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind request-receiver HTTP/1 fixture");
+        let address = listener
+            .local_addr()
+            .expect("read request-receiver fixture address");
+        let endpoint = format!("http://{address}/head");
+        let key_pair = request_receiver_test_key_pair();
+        let public_key = key_pair
+            .public_key()
+            .to_bytes()
+            .1
+            .try_into()
+            .expect("Ed25519 public key width");
+        let binding = request_receiver_test_binding_for_endpoint(&endpoint, public_key);
+        let backend_calls = Arc::new(AtomicU64::new(0));
+        let now_unix_secs = 1_700_000_000;
+        let state = RequestReceiverHttp1State {
+            endpoint: Arc::from(endpoint.as_str()),
+            binding,
+            replay_store: Arc::new(Mutex::new(
+                GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            )),
+            backend_calls: Arc::clone(&backend_calls),
+            now_unix_secs,
+        };
+        let router = Router::new()
+            .route("/head", get(request_receiver_http1_handler))
+            .with_state(state);
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router.into_make_service())
+                .await
+                .expect("serve request-receiver HTTP/1 fixture");
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .http1_only()
+            .build()
+            .expect("construct HTTP/1 request-receiver client");
+        let descriptor = request_receiver_test_descriptor(&endpoint);
+        let envelope =
+            request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x31; 32]);
+
+        let accepted = request_receiver_http1_request(&client, &endpoint, &envelope)
+            .send()
+            .await
+            .expect("send authenticated HTTP/1 request");
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+        assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+
+        let replay = request_receiver_http1_request(&client, &endpoint, &envelope)
+            .send()
+            .await
+            .expect("replay authenticated HTTP/1 request");
+        assert_eq!(replay.status(), StatusCode::CONFLICT);
+        assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+
+        let extension_envelope =
+            request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x32; 32]);
+        let extension = request_receiver_http1_request(&client, &endpoint, &extension_envelope)
+            .header("x-original-url", "/bypass")
+            .send()
+            .await
+            .expect("send unsigned semantic-extension request");
+        assert_eq!(extension.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+
+        let wrong_host_envelope =
+            request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x33; 32]);
+        let wrong_host = request_receiver_http1_request(&client, &endpoint, &wrong_host_envelope)
+            .header(header::HOST, "attacker.invalid")
+            .send()
+            .await
+            .expect("send mismatched-Host HTTP/1 request");
+        assert_eq!(wrong_host.status(), StatusCode::MISDIRECTED_REQUEST);
+        assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+
+        let authority = endpoint
+            .strip_prefix("http://")
+            .and_then(|endpoint| endpoint.strip_suffix("/head"))
+            .expect("fixture endpoint has canonical authority");
+        let absolute_envelope =
+            request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x34; 32]);
+        let mut absolute_form = Request::builder()
+            .method("GET")
+            .uri(endpoint.as_str())
+            .version(Version::HTTP_11)
+            .header(header::HOST, authority)
+            .header(header::ACCEPT, "*/*")
+            .header(header::ACCEPT_ENCODING, "identity")
+            .header(header::USER_AGENT, "iroha-gdag-receiver-test/1")
+            .body(Vec::new())
+            .expect("construct absolute-form request");
+        for (name, value) in governance_dag_request_authentication_headers_v1(&absolute_envelope) {
+            absolute_form.headers_mut().insert(
+                http::HeaderName::from_bytes(name.as_bytes()).expect("canonical auth header name"),
+                http::HeaderValue::from_str(&value).expect("canonical auth header value"),
+            );
+        }
+        let mut absolute_replay_store = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let mut absolute_receiver = GovernanceDagHttpRequestReceiverV1::try_new(
+            &endpoint,
+            binding,
+            &mut absolute_replay_store,
+        )
+        .expect("construct absolute-form receiver");
+        let absolute_verified = absolute_receiver
+            .verify_http_request(absolute_form, now_unix_secs)
+            .expect("matching absolute-form authority authenticates");
+        assert_eq!(absolute_verified.descriptor(), &descriptor);
+        assert!(absolute_verified.request().uri().scheme().is_none());
+        assert!(absolute_verified.request().uri().authority().is_none());
+        assert_eq!(
+            absolute_verified
+                .request()
+                .uri()
+                .path_and_query()
+                .map(http::uri::PathAndQuery::as_str),
+            Some("/head")
+        );
+        assert_eq!(
+            absolute_verified
+                .request()
+                .headers()
+                .get(header::HOST)
+                .and_then(|value| value.to_str().ok()),
+            Some(authority)
+        );
+        assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+
+        let duplicate_envelope =
+            request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x35; 32]);
+        let mut duplicate_host = Request::builder()
+            .method("GET")
+            .uri("/head")
+            .version(Version::HTTP_11)
+            .header(header::HOST, authority)
+            .header(header::ACCEPT, "*/*")
+            .header(header::ACCEPT_ENCODING, "identity")
+            .header(header::USER_AGENT, "iroha-gdag-receiver-test/1")
+            .body(Vec::new())
+            .expect("construct duplicate-Host request");
+        duplicate_host.headers_mut().append(
+            header::HOST,
+            axum::http::HeaderValue::from_str(authority).expect("canonical fixture authority"),
+        );
+        for (name, value) in governance_dag_request_authentication_headers_v1(&duplicate_envelope) {
+            duplicate_host.headers_mut().insert(
+                axum::http::HeaderName::from_bytes(name.as_bytes())
+                    .expect("canonical auth header name"),
+                axum::http::HeaderValue::from_str(&value).expect("canonical auth header value"),
+            );
+        }
+        let mut duplicate_replay_store = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let mut duplicate_receiver = GovernanceDagHttpRequestReceiverV1::try_new(
+            &endpoint,
+            binding,
+            &mut duplicate_replay_store,
+        )
+        .expect("construct duplicate-Host receiver");
+        let duplicate_error = duplicate_receiver
+            .verify_http_request(duplicate_host, now_unix_secs)
+            .expect_err("duplicate Host must fail before backend dispatch");
+        assert_eq!(
+            duplicate_error,
+            GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority
+        );
+        assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+
+        server.abort();
+    }
+
+    #[test]
+    fn request_ingress_qualification_requires_receiver_replay_and_replica_proofs() {
+        let provider = GovernanceDagRuntimeProviderQualificationV1::new(7, [0xB1; 32]);
+        let binding = request_ingress_test_binding();
+        for (receiver, replay, replicas, expected) in [
+            (
+                [0; 32],
+                [0xB3; 32],
+                [0xB4; 32],
+                GovernanceDagRequestIngressQualificationErrorV1::InvalidReceiverPolicy,
+            ),
+            (
+                [0xB2; 32],
+                [0; 32],
+                [0xB4; 32],
+                GovernanceDagRequestIngressQualificationErrorV1::InvalidReplayNamespace,
+            ),
+            (
+                [0xB2; 32],
+                [0xB3; 32],
+                [0; 32],
+                GovernanceDagRequestIngressQualificationErrorV1::InvalidReplicaSet,
+            ),
+        ] {
+            assert_eq!(
+                GovernanceDagRequestIngressQualificationV1::try_new(
+                    provider, binding, receiver, replay, replicas,
+                ),
+                Err(expected)
+            );
+        }
+        let qualification = GovernanceDagRequestIngressQualificationV1::try_new(
+            provider, binding, [0xB2; 32], [0xB3; 32], [0xB4; 32],
+        )
+        .expect("complete ingress proof");
+        assert_eq!(
+            qualification.enforcement(),
+            GovernanceDagRequestIngressEnforcementV1::ExclusiveAuthenticatedReceiver
+        );
+        assert_eq!(
+            qualification.replay_posture(),
+            GovernanceDagRequestReplayPostureV1::SharedSealedAtomicConsumeUntilExpiry
+        );
+    }
+
+    fn read_publication_snapshot_fixture(root: &Path) -> GovernancePublicationSnapshotV1 {
+        let root_guard = GovernanceFilesystemRootGuard::capture_source(root)
+            .expect("retain read-only publication fixture root");
+        load_governance_publication_snapshot_v1(&root_guard)
+            .expect("read authoritative governance publication snapshot")
+            .expect("publication fixture is initialized")
+    }
+
+    fn read_publication_state_fixture(root: &Path) -> JsonValue {
+        let snapshot = read_publication_snapshot_fixture(root);
+        norito::json::from_slice(snapshot.canonical_bytes())
+            .expect("decode authoritative governance publication state")
     }
 
     fn read_publication_section_fixture(root: &Path, section: &str) -> JsonValue {
@@ -14528,6 +18408,8 @@ mod tests {
         fail_after_next_intent_cas: AtomicBool,
         fail_before_next_checkpoint_cas: AtomicBool,
         fail_after_next_checkpoint_cas: AtomicBool,
+        producer_checkpoint_load_count: AtomicU64,
+        producer_checkpoint_second_load: Mutex<Option<GovernanceDagSealedStateRecord>>,
     }
 
     impl TestRuntimeDagCheckpointStore {
@@ -14548,6 +18430,18 @@ mod tests {
                 GovernanceDagSealedStateSlot::ProducerPublishIntent => 3,
             }
         }
+
+        fn return_producer_checkpoint_on_second_load(
+            &self,
+            record: GovernanceDagSealedStateRecord,
+        ) {
+            *self
+                .producer_checkpoint_second_load
+                .lock()
+                .expect("lock producer checkpoint race fixture") = Some(record);
+            self.producer_checkpoint_load_count
+                .store(0, Ordering::SeqCst);
+        }
     }
 
     impl GovernanceDagSealedCheckpointStore for TestRuntimeDagCheckpointStore {
@@ -14563,6 +18457,19 @@ mod tests {
             &self,
             slot: GovernanceDagSealedStateSlot,
         ) -> Result<Option<GovernanceDagSealedStateRecord>, String> {
+            if slot == GovernanceDagSealedStateSlot::ProducerCheckpoint
+                && self
+                    .producer_checkpoint_load_count
+                    .fetch_add(1, Ordering::SeqCst)
+                    == 1
+                && let Some(record) = self
+                    .producer_checkpoint_second_load
+                    .lock()
+                    .map_err(|_| "poisoned".to_owned())?
+                    .take()
+            {
+                return Ok(Some(record));
+            }
             let state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
             Ok(state.records[Self::slot_index(slot)].clone())
         }
@@ -15262,11 +19169,23 @@ mod tests {
         assert_empty_publication_authority(root);
         assert!(
             !root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE).exists(),
-            "runtime DAG index must remain absent"
+            "legacy runtime DAG index must remain absent"
         );
+        assert_eq!(
+            read_fenced_privacy_head_cache(root).expect("read combined fenced privacy state"),
+            None,
+            "authoritative-head cache must remain logically absent"
+        );
+    }
+
+    fn assert_fenced_privacy_pending_logically_cleared(root: &Path) {
         assert!(
-            !fenced_privacy_head_cache_path(root).exists(),
-            "authoritative-head cache must remain absent"
+            !fenced_privacy_pending_path(root).exists(),
+            "the retired standalone pending journal must remain absent"
+        );
+        assert_eq!(
+            read_fenced_privacy_pending_request(root).expect("read combined fenced privacy state"),
+            None
         );
     }
 
@@ -15705,8 +19624,11 @@ mod tests {
             .expect("retained root remains valid");
     }
 
-    fn write_car_segment_source_fixture(root: &Path, encoded: &[u8]) -> PublishIndexEntryForCar {
-        let payload_kind = "test_payload";
+    fn write_car_segment_source_fixture_for_kind(
+        root: &Path,
+        payload_kind: &str,
+        encoded: &[u8],
+    ) -> PublishIndexEntryForCar {
         let json = br#"{"status":"ready"}"#;
         let encoded_blake3 = blake3::hash(encoded).to_hex().to_string();
         let json_blake3 = blake3::hash(json).to_hex().to_string();
@@ -15740,6 +19662,156 @@ mod tests {
             json_blake3,
             json_len: json.len(),
         }
+    }
+
+    fn write_car_segment_source_fixture(root: &Path, encoded: &[u8]) -> PublishIndexEntryForCar {
+        write_car_segment_source_fixture_for_kind(root, "test_payload", encoded)
+    }
+
+    fn publication_artifact_paths_for_fixture(
+        root: &Path,
+        entry: &PublishIndexEntryForCar,
+    ) -> Vec<PathBuf> {
+        let encoded = root.join(&entry.encoded_path);
+        let json = root.join(&entry.json_path);
+        let base = root
+            .join(governance_car_segment_relative_base(entry).expect("derive fixture CAR base"));
+        let car = base.with_extension("car");
+        let plan = base.with_extension("plan.json");
+        let manifest = base.with_extension("json");
+        vec![
+            encoded.clone(),
+            digest_sidecar_path_for(&encoded),
+            json.clone(),
+            digest_sidecar_path_for(&json),
+            car.clone(),
+            digest_sidecar_path_for(&car),
+            plan.clone(),
+            digest_sidecar_path_for(&plan),
+            manifest.clone(),
+            digest_sidecar_path_for(&manifest),
+        ]
+    }
+
+    fn seed_complete_uncommitted_publication_fixture(
+        root: &Path,
+        payload_kind: &str,
+        encoded: &[u8],
+        position: usize,
+    ) -> (PublishIndexEntryForCar, Vec<(PathBuf, Vec<u8>)>) {
+        let mut entry = write_car_segment_source_fixture_for_kind(root, payload_kind, encoded);
+        entry.position = position;
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)
+            .expect("retain publication fixture root");
+        assemble_governance_car_queue(root, &root_guard, empty_governance_car_queue(), &entry)
+            .expect("assemble uncommitted publication fixture");
+        drop(root_guard);
+        let snapshots = publication_artifact_paths_for_fixture(root, &entry)
+            .into_iter()
+            .map(|path| {
+                let bytes = fs::read(&path).expect("snapshot uncommitted publication artifact");
+                (path, bytes)
+            })
+            .collect();
+        (entry, snapshots)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn recovery_quarantine_path(root: &Path) -> PathBuf {
+        root.join(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn clear_recovery_quarantine_offline(root: &Path) {
+        let quarantine = recovery_quarantine_path(root);
+        assert!(
+            quarantine.is_dir(),
+            "offline cleanup requires a preserved recovery quarantine"
+        );
+        fs::remove_dir_all(quarantine)
+            .expect("clear recovery quarantine while publisher is stopped");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn finish_recovery_after_offline_quarantine_cleanup(
+        root: &Path,
+    ) -> FilesystemGovernancePublisher {
+        for _ in 0..3 {
+            match FilesystemGovernancePublisher::try_new(root.to_path_buf()) {
+                Ok(publisher) => return publisher,
+                Err(error)
+                    if error
+                        .to_string()
+                        .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR) =>
+                {
+                    clear_recovery_quarantine_offline(root);
+                }
+                Err(error) => panic!("restart after offline quarantine cleanup failed: {error}"),
+            }
+        }
+        panic!("recovery did not converge after bounded offline quarantine cleanup")
+    }
+
+    fn committed_publication_artifact_paths(
+        root: &Path,
+        state: &JsonMap,
+    ) -> Vec<(&'static str, PathBuf)> {
+        let entry = state
+            .get("publish_index")
+            .and_then(|index| index.get("entries"))
+            .and_then(JsonValue::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(JsonValue::as_object)
+            .expect("committed publish entry");
+        let segment = state
+            .get("car_queue")
+            .and_then(|queue| queue.get("segments"))
+            .and_then(JsonValue::as_array)
+            .and_then(|segments| segments.first())
+            .and_then(JsonValue::as_object)
+            .expect("committed CAR segment");
+        let encoded = root.join(
+            entry
+                .get("encoded_path")
+                .and_then(JsonValue::as_str)
+                .expect("committed encoded path"),
+        );
+        let json = root.join(
+            entry
+                .get("json_path")
+                .and_then(JsonValue::as_str)
+                .expect("committed JSON path"),
+        );
+        let car = root.join(
+            segment
+                .get("car_path")
+                .and_then(JsonValue::as_str)
+                .expect("committed CAR path"),
+        );
+        let plan = root.join(
+            segment
+                .get("plan_path")
+                .and_then(JsonValue::as_str)
+                .expect("committed CAR plan path"),
+        );
+        let manifest = root.join(
+            segment
+                .get("manifest_path")
+                .and_then(JsonValue::as_str)
+                .expect("committed CAR manifest path"),
+        );
+        vec![
+            ("encoded source", encoded.clone()),
+            ("encoded source sidecar", digest_sidecar_path_for(&encoded)),
+            ("JSON source", json.clone()),
+            ("JSON source sidecar", digest_sidecar_path_for(&json)),
+            ("CAR archive", car.clone()),
+            ("CAR archive sidecar", digest_sidecar_path_for(&car)),
+            ("CAR plan", plan.clone()),
+            ("CAR plan sidecar", digest_sidecar_path_for(&plan)),
+            ("CAR manifest", manifest.clone()),
+            ("CAR manifest sidecar", digest_sidecar_path_for(&manifest)),
+        ]
     }
 
     #[test]
@@ -16040,6 +20112,8 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
             .expect("retain publication root");
+        let _ = initialize_governance_publication_authority_if_pristine(temp.path(), &root_guard)
+            .expect("initialize typed publication authority before immutable artifacts");
         let fixture = write_car_segment_source_fixture(temp.path(), b"canonical-payload");
         let encoded_path = temp.path().join(&fixture.encoded_path);
         let json_path = temp.path().join(&fixture.json_path);
@@ -16091,7 +20165,14 @@ mod tests {
         .expect_err("injected authoritative rename must fail");
         assert!(
             !temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE).exists(),
-            "failed commit must not expose either nested index"
+            "failed commit must not resurrect the retired flat-file authority"
+        );
+        assert_eq!(
+            read_publication_state_fixture(temp.path())
+                .get("generation")
+                .and_then(JsonValue::as_u64),
+            Some(0),
+            "failed CAS must preserve the typed initial authority"
         );
 
         let retried_queue = assemble_governance_car_queue(
@@ -16161,6 +20242,8 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
             .expect("retain publication root");
+        let _ = initialize_governance_publication_authority_if_pristine(temp.path(), &root_guard)
+            .expect("initialize typed publication authority before immutable artifacts");
 
         let first = write_car_segment_source_fixture(temp.path(), b"publication-a");
         let (first_index, first_entry) = update_publish_index(
@@ -16189,10 +20272,7 @@ mod tests {
         commit_governance_publication_state(temp.path(), &root_guard, first_state)
             .expect("commit publication A");
 
-        let authority_path = temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE);
-        let predecessor_bytes = fs::read(&authority_path).expect("read publication A authority");
-        let predecessor: JsonValue =
-            json::from_slice(&predecessor_bytes).expect("decode publication A authority");
+        let predecessor = read_publication_state_fixture(temp.path());
         assert_eq!(
             predecessor.get("generation").and_then(JsonValue::as_u64),
             Some(1)
@@ -16242,9 +20322,9 @@ mod tests {
         )
         .expect_err("publication B authoritative swap must fail");
         assert_eq!(
-            fs::read(&authority_path).expect("reread authority after failed B commit"),
-            predecessor_bytes,
-            "a failed successor swap must preserve publication A byte-for-byte"
+            read_publication_state_fixture(temp.path()),
+            predecessor,
+            "a failed successor swap must preserve publication A exactly"
         );
         let visible = read_publication_state_fixture(temp.path());
         assert_eq!(
@@ -16655,9 +20735,45 @@ mod tests {
         )
     }
 
+    fn signed_runtime_publisher_with_observable_providers(
+        root: &Path,
+    ) -> (
+        FilesystemGovernancePublisher,
+        Arc<TestRuntimeDagSigner>,
+        Arc<TestRuntimeDagCheckpointStore>,
+    ) {
+        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
+        let signer_provider = Arc::new(TestRuntimeDagSigner::new(
+            "pkcs11:governance-dag:primary",
+            &peer_id,
+            0x31,
+        ));
+        let signer = GovernanceRuntimeDagSigner::try_new(
+            "pkcs11:governance-dag:primary".to_owned(),
+            peer_id,
+            signer_provider.public_key(),
+            test_runtime_dag_signer_qualification(),
+            signer_provider.clone(),
+        )
+        .expect("qualify observable runtime DAG signer");
+        let checkpoint_provider = Arc::new(TestRuntimeDagCheckpointStore::default());
+        let checkpoint_store =
+            qualified_test_runtime_dag_checkpoint_store(Arc::clone(&checkpoint_provider));
+        let publisher = FilesystemGovernancePublisher::try_new(root.to_path_buf())
+            .expect("publisher")
+            .with_qualified_runtime_dag_providers(signer, checkpoint_store)
+            .expect("runtime DAG providers");
+        (publisher, signer_provider, checkpoint_provider)
+    }
+
     fn runtime_index(root: &Path) -> JsonValue {
-        let bytes =
-            fs::read(root.join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE)).expect("runtime index exists");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)
+            .expect("retain runtime DAG fixture root");
+        let store = open_runtime_dag_committed_store_v1(root, &root_guard)
+            .expect("open runtime DAG committed fixture store");
+        let (state, _) =
+            load_runtime_dag_committed_state_v1(&store).expect("load committed fixture state");
+        let bytes = state.index_bytes.expect("runtime index exists");
         let index: JsonValue = norito::json::from_slice(&bytes).expect("runtime index parses");
         assert_eq!(
             index.get("root").and_then(JsonValue::as_str),
@@ -16665,6 +20781,18 @@ mod tests {
             "public runtime index must not disclose its host filesystem root"
         );
         index
+    }
+
+    fn runtime_head_bytes(root: &Path) -> Vec<u8> {
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(root)
+            .expect("retain runtime DAG fixture root");
+        let store = open_runtime_dag_committed_store_v1(root, &root_guard)
+            .expect("open runtime DAG committed fixture store");
+        load_runtime_dag_committed_state_v1(&store)
+            .expect("load committed fixture state")
+            .0
+            .head_bytes
+            .expect("runtime head exists")
     }
 
     fn runtime_blocks_from_index(root: &Path, index: &JsonValue) -> Vec<GovernanceDagBlockV1> {
@@ -16683,6 +20811,32 @@ mod tests {
                 norito::decode_from_bytes(&bytes).expect("decode runtime block")
             })
             .collect()
+    }
+
+    fn filesystem_inventory_fixture(root: &Path) -> Vec<(PathBuf, bool, u64)> {
+        fn visit(root: &Path, directory: &Path, inventory: &mut Vec<(PathBuf, bool, u64)>) {
+            let mut entries = fs::read_dir(directory)
+                .expect("enumerate fixture directory")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect fixture directory");
+            entries.sort_by_key(fs::DirEntry::file_name);
+            for entry in entries {
+                let path = entry.path();
+                let metadata = fs::symlink_metadata(&path).expect("read fixture metadata");
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("fixture entry remains below root")
+                    .to_path_buf();
+                inventory.push((relative, metadata.is_dir(), metadata.len()));
+                if metadata.is_dir() {
+                    visit(root, &path, inventory);
+                }
+            }
+        }
+
+        let mut inventory = Vec::new();
+        visit(root, root, &mut inventory);
+        inventory
     }
 
     fn assert_single_runtime_external(root: &Path, kind: &str, encoded: &[u8]) {
@@ -16810,8 +20964,7 @@ mod tests {
             blocks[1].node.payload,
             GovernanceLogPayloadV1::PorWeeklyReport(report)
         );
-        let head_bytes =
-            fs::read(runtime_dag_head_path(temp.path())).expect("read signed runtime head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode signed runtime head");
         validate_governance_dag_head_against_chain_v1(&head, &blocks)
@@ -16941,9 +21094,13 @@ mod tests {
                 .as_ref()
                 .expect("recovered store"),
         );
-        let (_, summary) = read_runtime_dag_qualification_history(temp.path(), Some(&binding))
-            .expect("read transition history")
-            .expect("transition history exists");
+        let (_, summary) = read_runtime_dag_qualification_history(
+            temp.path(),
+            recovered.root_guard(),
+            Some(&binding),
+        )
+        .expect("read transition history")
+        .expect("transition history exists");
         assert_eq!(summary.transition_generation, 1);
         assert_ne!(summary.transition_digest, [0; 32]);
         drop(recovered);
@@ -16989,6 +21146,21 @@ mod tests {
             .expect("rotated checkpoint store");
         validate_existing_runtime_dag_root(temp.path(), current_signer, current_store)
             .expect("an outgoing-signed tip remains valid until the incoming key appends");
+        let rotated_snapshot = load_authenticated_runtime_dag_snapshot_v1(
+            publisher.root_guard(),
+            current_signer,
+            current_store,
+        )
+        .expect("strict reader accepts the current provider binding after rotation")
+        .expect("rotated one-block DAG has a committed snapshot");
+        let rotated_head: GovernanceDagHeadV1 =
+            norito::decode_from_bytes(rotated_snapshot.head_bytes())
+                .expect("decode outgoing-signed rotated head");
+        assert_eq!(
+            rotated_head.head_signature.public_key,
+            initial_public_key.to_vec(),
+            "the strict reader must accept an outgoing-signed tip under the current provider binding"
+        );
         let current_binding = runtime_dag_provider_binding(current_signer, current_store);
         let lineage = runtime_dag_authority_lineage(temp.path(), &current_binding)
             .expect("read authenticated authority lineage");
@@ -17027,13 +21199,26 @@ mod tests {
             blocks[1].block_signature.public_key,
             next_public_key.to_vec()
         );
-        let head_bytes =
-            fs::read(runtime_dag_head_path(temp.path())).expect("read rotated signed head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode rotated signed head");
         assert_eq!(head.head_signature.public_key, next_public_key.to_vec());
         validate_existing_runtime_dag_root(temp.path(), current_signer, current_store)
             .expect("segmented chain validates after the incoming key appends");
+        let incoming_snapshot = load_authenticated_runtime_dag_snapshot_v1(
+            publisher.root_guard(),
+            current_signer,
+            current_store,
+        )
+        .expect("strict reader accepts the incoming authority append")
+        .expect("two-block rotated DAG has a committed snapshot");
+        let incoming_head: GovernanceDagHeadV1 =
+            norito::decode_from_bytes(incoming_snapshot.head_bytes())
+                .expect("decode incoming-signed rotated head");
+        assert_eq!(
+            incoming_head.head_signature.public_key,
+            next_public_key.to_vec()
+        );
         drop(publisher);
 
         let recovered = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
@@ -17107,10 +21292,13 @@ mod tests {
                 .as_ref()
                 .expect("recovered store"),
         );
-        let (history, summary) =
-            read_runtime_dag_qualification_history(temp.path(), Some(&binding))
-                .expect("read compacted history")
-                .expect("compacted history exists");
+        let (history, summary) = read_runtime_dag_qualification_history(
+            temp.path(),
+            recovered.root_guard(),
+            Some(&binding),
+        )
+        .expect("read compacted history")
+        .expect("compacted history exists");
         assert_eq!(history.transitions.len(), 1);
         assert_eq!(history.archived_through_generation, 2);
         assert_eq!(summary.transition_generation, 3);
@@ -17185,10 +21373,13 @@ mod tests {
                 .as_ref()
                 .expect("recovered store"),
         );
-        let (history, summary) =
-            read_runtime_dag_qualification_history(temp.path(), Some(&binding))
-                .expect("read twice-compacted history")
-                .expect("twice-compacted history exists");
+        let (history, summary) = read_runtime_dag_qualification_history(
+            temp.path(),
+            recovered.root_guard(),
+            Some(&binding),
+        )
+        .expect("read twice-compacted history")
+        .expect("twice-compacted history exists");
         assert_eq!(history.transitions.len(), 1);
         assert_eq!(summary.transition_generation, 5);
         assert_eq!(summary.archive_generation, 2);
@@ -17198,6 +21389,82 @@ mod tests {
                 .expect("second idempotent compaction replay"),
             0
         );
+        drop(recovered);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn qualification_archive_crash_temp_is_quarantined_before_history_inventory() {
+        let temp = tempdir().expect("tempdir");
+        let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
+        let publisher =
+            signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
+        let (settlement, encoded) = sample_settlement();
+        publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect("seed signed runtime DAG");
+
+        let checkpoint_record = checkpoint_store
+            .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)
+            .expect("load producer checkpoint")
+            .expect("producer checkpoint exists");
+        let checkpoint =
+            decode_runtime_dag_unqualified_checkpoint_record(&checkpoint_record, temp.path())
+                .expect("decode producer checkpoint");
+        let next_generation = checkpoint
+            .qualification_archive_generation
+            .checked_add(1)
+            .expect("test archive generation");
+        let archive_path =
+            runtime_dag_qualification_archive_path(temp.path(), next_generation, [0xA7; 32]);
+        fs::create_dir_all(archive_path.parent().expect("archive parent"))
+            .expect("create qualification archive directory");
+        let crash_temp = temp_path_for_atomic(&archive_path, 42_000, 7);
+        fs::write(&crash_temp, b"crash-before-archive-rename")
+            .expect("seed qualification archive crash temp");
+        fs::set_permissions(&crash_temp, fs::Permissions::from_mode(0o600))
+            .expect("make archive crash temp private");
+
+        let error = recover_runtime_dag_qualification_compaction(
+            temp.path(),
+            publisher.root_guard(),
+            publisher
+                .runtime_dag_signer
+                .as_ref()
+                .expect("runtime DAG signer"),
+            publisher
+                .runtime_dag_checkpoint_store
+                .as_ref()
+                .expect("runtime DAG checkpoint store"),
+        )
+        .expect_err("recovery must quarantine the archive temp before reading history");
+        assert!(
+            error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected archive-temp recovery error: {error}"
+        );
+        assert!(
+            !crash_temp.exists(),
+            "the crash temp must leave the live archive namespace"
+        );
+        assert_eq!(
+            fs::read_dir(recovery_quarantine_path(temp.path()))
+                .expect("read archive recovery quarantine")
+                .count(),
+            1,
+            "the exact interrupted archive object must be retained offline"
+        );
+
+        drop(publisher);
+        clear_recovery_quarantine_offline(temp.path());
+        let recovered = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("reopen publisher after offline archive-temp cleanup")
+            .with_qualified_runtime_dag_providers(
+                qualified_test_runtime_dag_signer(1, 0x31),
+                qualified_test_runtime_dag_checkpoint_store(checkpoint_store),
+            )
+            .expect("archive-temp recovery converges after offline cleanup");
         drop(recovered);
     }
 
@@ -17234,20 +21501,28 @@ mod tests {
                 .as_ref()
                 .expect("current store"),
         );
-        let (history, _) = read_runtime_dag_qualification_history(temp.path(), Some(&binding))
-            .expect("read qualification history")
-            .expect("qualification history exists");
+        let (history, _) = read_runtime_dag_qualification_history(
+            temp.path(),
+            publisher.root_guard(),
+            Some(&binding),
+        )
+        .expect("read qualification history")
+        .expect("qualification history exists");
         assert_eq!(history.transitions.len(), 3);
         let history_path = runtime_dag_qualification_history_path(temp.path());
-        fs::remove_file(digest_sidecar_path_for(&history_path))
-            .expect("simulate crash before history sidecar install");
-        read_runtime_dag_qualification_history(temp.path(), Some(&binding))
-            .expect("replay signed history with a missing sidecar")
-            .expect("signed history remains present");
         assert!(
-            digest_sidecar_path_for(&history_path).is_file(),
-            "authenticated history replay restores its missing sidecar"
+            !history_path.exists() && !digest_sidecar_path_for(&history_path).exists(),
+            "qualification history is authoritative only inside the typed store"
         );
+        let qualification_store =
+            open_runtime_dag_qualification_store_v1(temp.path(), publisher.root_guard())
+                .expect("open typed qualification store");
+        let stored_history = load_runtime_dag_qualification_state_v1(&qualification_store)
+            .expect("load typed qualification history")
+            .0
+            .history
+            .expect("typed qualification history exists");
+        assert_eq!(stored_history.transitions, history.transitions);
 
         let mut tampered = history.clone();
         tampered.transitions[1].key_transition.incoming_signature[0] ^= 0x80;
@@ -17370,7 +21645,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_publisher_recovers_all_atomic_temp_boundaries_from_sealed_intent() {
+    fn filesystem_publisher_recovers_typed_stage_after_ambiguous_intent_cas() {
         let temp = tempdir().expect("tempdir");
         let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
         checkpoint_store
@@ -17386,41 +21661,15 @@ mod tests {
             assert!(error.to_string().contains("compare-and-swap failed"));
         }
 
-        let intent_record = checkpoint_store
-            .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
-            .expect("load sealed producer intent")
-            .expect("ambiguous CAS retained producer intent");
-        let intent: RuntimeDagProducerPublishIntentV1 =
-            norito::decode_from_bytes(&intent_record.payload).expect("decode producer intent");
-        let block_path = runtime_dag_producer_block_path_from_intent(temp.path(), &intent)
-            .expect("resolve intent block path");
-        let head_path = runtime_dag_head_path(temp.path());
-        let index_path = temp.path().join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-        let mut stale_temps = Vec::new();
-        for (target_index, target) in [&block_path, &head_path, &index_path]
-            .into_iter()
-            .flat_map(|target| [target.clone(), digest_sidecar_path_for(target)])
-            .enumerate()
-        {
-            fs::create_dir_all(target.parent().expect("transaction target parent"))
-                .expect("create transaction target parent");
-            let stale = temp_path_for_atomic(
-                &target,
-                40_000 + u32::try_from(target_index).expect("small target index"),
-                u64::try_from(target_index).expect("small target index"),
-            );
-            fs::write(&stale, b"crash-before-rename").expect("seed stale atomic temp");
-            stale_temps.push(stale);
-        }
-
+        assert!(
+            checkpoint_store
+                .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
+                .expect("load sealed producer intent")
+                .is_some(),
+            "ambiguous CAS must retain the sealed intent"
+        );
         let publisher =
             signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
-        for stale in stale_temps {
-            assert!(
-                !stale.exists(),
-                "sealed recovery must remove only its exact stale transaction temp"
-            );
-        }
         assert!(
             checkpoint_store
                 .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
@@ -17436,8 +21685,8 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_publisher_reconstructs_each_missing_transaction_boundary() {
-        for missing_boundary in 0..6 {
+    fn filesystem_publisher_replays_typed_transaction_from_sealed_intent() {
+        for _replay in 0..1 {
             let temp = tempdir().expect("tempdir");
             let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
             let publisher =
@@ -17499,59 +21748,17 @@ mod tests {
             .expect("decode predecessor checkpoint");
             validate_runtime_dag_producer_intent_successor(
                 temp.path(),
+                &publisher.root_guard,
                 signer,
                 &intent,
                 &staged,
                 Some(&previous),
             )
             .expect("authenticate successor before applying it");
-            apply_runtime_dag_producer_intent(
-                temp.path(),
-                &publisher.root_guard,
-                signer,
-                store,
-                &intent,
-                &staged,
-                Some(&previous),
-            )
-            .expect("materialize all successor transaction files without checkpoint CAS");
-
-            let block_path = runtime_dag_producer_block_path_from_intent(temp.path(), &intent)
-                .expect("resolve successor block path");
-            let head_path = runtime_dag_head_path(temp.path());
-            let index_path = temp.path().join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-            let boundaries = [
-                block_path.clone(),
-                digest_sidecar_path_for(&block_path),
-                head_path.clone(),
-                digest_sidecar_path_for(&head_path),
-                index_path.clone(),
-                digest_sidecar_path_for(&index_path),
-            ];
-            let missing = boundaries
-                .get(missing_boundary)
-                .expect("six transaction boundaries");
-            fs::remove_file(missing).expect("simulate lost renamed transaction boundary");
             drop(publisher);
 
             let recovered =
                 signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
-            assert!(
-                missing.is_file(),
-                "sealed recovery did not reconstruct boundary {missing_boundary}: {}",
-                missing.display()
-            );
-            for primary in [&block_path, &head_path, &index_path] {
-                let max_bytes = if primary == &block_path {
-                    GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES
-                } else {
-                    GOVERNANCE_MUTABLE_INDEX_MAX_BYTES
-                };
-                let bytes = read_bounded_governance_state_file(primary, max_bytes)
-                    .expect("read reconstructed primary");
-                verify_digest_sidecar(primary, &bytes)
-                    .expect("reconstructed primary has its exact digest sidecar");
-            }
             assert!(
                 checkpoint_store
                     .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
@@ -17661,12 +21868,6 @@ mod tests {
                 .expect("load retained producer intent")
                 .is_some()
         );
-        fs::remove_dir_all(
-            temp.path()
-                .join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR),
-        )
-        .expect("simulate loss of staging bytes after committed checkpoint CAS");
-
         let publisher =
             signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
         assert!(
@@ -17681,26 +21882,53 @@ mod tests {
             index.get("block_count").and_then(JsonValue::as_u64),
             Some(1)
         );
+        let staging_store = open_runtime_dag_staging_store_v1(temp.path(), publisher.root_guard())
+            .expect("open typed staging store after recovery");
+        assert!(
+            load_runtime_dag_staging_state_v1(&staging_store)
+                .expect("load typed staging state")
+                .0
+                .staged
+                .is_none(),
+            "committed recovery must clear the exact staged envelope"
+        );
         drop(publisher);
     }
 
     #[test]
     fn runtime_dag_producer_bounds_accept_exact_limits_and_reject_successors() {
-        let mutable_limit = GOVERNANCE_MUTABLE_INDEX_MAX_BYTES;
+        let index_limit = GOVERNANCE_MUTABLE_INDEX_MAX_BYTES;
+        let head_limit = GOVERNANCE_RUNTIME_DAG_HEAD_MAX_BYTES_V1;
         let block_limit = GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES;
-        validate_runtime_dag_producer_file_lengths(block_limit, mutable_limit, mutable_limit)
+        validate_runtime_dag_producer_file_lengths(block_limit, head_limit, index_limit)
             .expect("exact per-file limits are accepted");
         assert!(
             validate_runtime_dag_producer_file_lengths(block_limit + 1, 1, 1).is_err(),
             "block limit + 1 must fail before sealing"
         );
         assert!(
-            validate_runtime_dag_producer_file_lengths(1, mutable_limit + 1, 1).is_err(),
+            validate_runtime_dag_producer_file_lengths(1, head_limit + 1, 1).is_err(),
             "head limit + 1 must fail before sealing"
         );
         assert!(
-            validate_runtime_dag_producer_file_lengths(1, 1, mutable_limit + 1).is_err(),
+            validate_runtime_dag_producer_file_lengths(1, 1, index_limit + 1).is_err(),
             "index limit + 1 must fail before sealing"
+        );
+        let staging_upper_bound = block_limit
+            .checked_add(head_limit)
+            .and_then(|bytes| bytes.checked_add(index_limit))
+            .and_then(|bytes| {
+                bytes.checked_add(GOVERNANCE_RUNTIME_DAG_PRODUCER_INTENT_SEALED_MAX_BYTES_V1)
+            })
+            .expect("staging bound arithmetic");
+        assert!(
+            staging_upper_bound < governance_rooted_fs::TWO_SLOT_MAX_PAYLOAD_BYTES_V1,
+            "the fixed store ceiling must admit one maximum valid staging transaction plus its intent"
+        );
+        assert!(
+            head_limit + index_limit + 64 * 1024
+                < GOVERNANCE_RUNTIME_DAG_COMMITTED_STATE_MAX_BYTES_V1,
+            "the committed mirror must admit maximum head/index bytes plus codec overhead"
         );
         assert!(
             GOVERNANCE_RUNTIME_DAG_BLOCK_MAX_BYTES
@@ -17793,12 +22021,28 @@ mod tests {
             u64::try_from(staged.index_bytes.len()).expect("staged index length fits u64")
         );
 
-        let index_path = runtime_dag_producer_staging_paths(temp.path())[2].clone();
-        let mut substituted = staged.index_bytes;
-        substituted[0] ^= 0x80;
-        fs::write(&index_path, &substituted).expect("substitute staged index");
-        write_digest_sidecar(&root_guard, &index_path, &substituted)
-            .expect("refresh only the unauthenticated sidecar");
+        let staging_store = open_runtime_dag_staging_store_v1(temp.path(), &root_guard)
+            .expect("open typed staging store");
+        let (mut state, snapshot) =
+            load_runtime_dag_staging_state_v1(&staging_store).expect("load typed staging state");
+        state
+            .staged
+            .as_mut()
+            .expect("staged envelope")
+            .transaction
+            .index_bytes[0] ^= 0x80;
+        let substituted = encode_governance_two_slot_value_v1(
+            &state,
+            "substituted governance runtime DAG staging state",
+        )
+        .expect("encode substituted staging state");
+        compare_and_swap_governance_two_slot_store_v1(
+            &staging_store,
+            &snapshot,
+            &substituted,
+            "substituted governance runtime DAG staging state",
+        )
+        .expect("install authenticated-store substitution for recovery test");
 
         let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
             .expect("reopen publisher root")
@@ -17807,7 +22051,10 @@ mod tests {
                 qualified_test_runtime_dag_checkpoint_store(Arc::clone(&checkpoint_store)),
             )
             .expect_err("staged index substitution must fail closed");
-        assert!(error.to_string().contains("staged index is substituted"));
+        assert!(
+            error.to_string().contains("bytes or path are substituted")
+                || error.to_string().contains("staged index")
+        );
         assert!(
             checkpoint_store
                 .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
@@ -17843,17 +22090,542 @@ mod tests {
     }
 
     #[test]
-    fn runtime_dag_staging_root_is_created_through_the_retained_root() {
+    fn runtime_dag_staging_store_is_created_through_the_retained_root() {
         let temp = tempdir().expect("tempdir");
         let publisher =
             FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        ensure_runtime_dag_producer_staging_root(temp.path(), publisher.root_guard())
-            .expect("create and synchronize the producer staging root");
+        let store = open_runtime_dag_staging_store_v1(temp.path(), publisher.root_guard())
+            .expect("create typed producer staging store");
+        assert!(
+            load_runtime_dag_staging_state_v1(&store)
+                .expect("load initial typed staging state")
+                .0
+                .staged
+                .is_none()
+        );
+        assert!(
+            !temp
+                .path()
+                .join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR)
+                .exists(),
+            "the retired mutable staging directory must not be recreated"
+        );
+    }
+
+    #[test]
+    fn authenticated_runtime_dag_reader_is_read_only_for_genesis_and_committed_state() {
+        let genesis = tempdir().expect("genesis tempdir");
+        let genesis_publisher = signed_runtime_publisher(genesis.path());
+        let genesis_signer = genesis_publisher
+            .runtime_dag_signer
+            .as_ref()
+            .expect("genesis signer")
+            .clone();
+        let genesis_store = genesis_publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .expect("genesis checkpoint store")
+            .clone();
+        drop(genesis_publisher);
+        let genesis_reader = GovernanceFilesystemRootGuard::capture_source(genesis.path())
+            .expect("retain genesis root");
+        let genesis_inventory = filesystem_inventory_fixture(genesis.path());
+        assert!(
+            load_authenticated_runtime_dag_snapshot_v1(
+                &genesis_reader,
+                &genesis_signer,
+                &genesis_store,
+            )
+            .expect("authenticate genesis")
+            .is_none()
+        );
+        assert_eq!(
+            filesystem_inventory_fixture(genesis.path()),
+            genesis_inventory,
+            "authenticated genesis read must not create or remove filesystem entries"
+        );
+
+        let committed = tempdir().expect("committed tempdir");
+        let committed_publisher = signed_runtime_publisher(committed.path());
+        let (settlement, encoded) = sample_settlement();
+        committed_publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect("publish committed runtime DAG");
+        let signer = committed_publisher
+            .runtime_dag_signer
+            .as_ref()
+            .expect("committed signer")
+            .clone();
+        let store = committed_publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .expect("committed checkpoint store")
+            .clone();
+        drop(committed_publisher);
+        let reader = GovernanceFilesystemRootGuard::capture_source(committed.path())
+            .expect("retain committed root");
+        let before = filesystem_inventory_fixture(committed.path());
+        let snapshot = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect("authenticate committed runtime DAG")
+            .expect("non-genesis snapshot");
+        assert_eq!(snapshot.head_bytes(), runtime_head_bytes(committed.path()));
+        assert_eq!(
+            snapshot.index_bytes(),
+            json::to_json_pretty(&runtime_index(committed.path()))
+                .expect("encode runtime index")
+                .as_bytes()
+        );
+        assert_ne!(snapshot.store_identity().1, [0; 32]);
+        assert_ne!(snapshot.checkpoint_identity().1, [0; 32]);
+        assert_eq!(
+            filesystem_inventory_fixture(committed.path()),
+            before,
+            "authenticated committed read must not create or remove filesystem entries"
+        );
+    }
+
+    #[test]
+    fn authenticated_runtime_dag_reader_rejects_active_intent_and_substitutions() {
+        let temp = tempdir().expect("tempdir");
+        let (publisher, signer_provider, checkpoint_provider) =
+            signed_runtime_publisher_with_observable_providers(temp.path());
+        let (settlement, encoded) = sample_settlement();
         publisher
-            .root_guard()
-            .rooted_directory()
-            .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR))
-            .expect("staging root remains bound below the retained producer root");
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect("publish committed runtime DAG");
+        let signer = publisher
+            .runtime_dag_signer
+            .as_ref()
+            .expect("runtime signer")
+            .clone();
+        let store = publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .expect("runtime checkpoint store")
+            .clone();
+        drop(publisher);
+        let reader = GovernanceFilesystemRootGuard::capture_source(temp.path())
+            .expect("retain committed root");
+        load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect("baseline authenticated read")
+            .expect("baseline snapshot");
+
+        let stable_checkpoint_record = checkpoint_provider
+            .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)
+            .expect("load stable producer checkpoint")
+            .expect("stable producer checkpoint exists");
+        let mut moved_checkpoint = decode_runtime_dag_unqualified_checkpoint_record(
+            &stable_checkpoint_record,
+            temp.path(),
+        )
+        .expect("decode stable producer checkpoint");
+        moved_checkpoint.index_bytes_digest[0] ^= 0x40;
+        checkpoint_provider.return_producer_checkpoint_on_second_load(
+            runtime_dag_producer_checkpoint_record(&moved_checkpoint)
+                .expect("encode moved producer checkpoint"),
+        );
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("checkpoint A/B movement must fail closed");
+        assert!(error.to_string().contains("changed during read"));
+
+        let active_intent = GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::ProducerPublishIntent,
+            u64::MAX,
+            b"active test producer intent".to_vec(),
+        );
+        {
+            let mut state = checkpoint_provider
+                .state
+                .lock()
+                .expect("lock checkpoint fixture");
+            state.records[TestRuntimeDagCheckpointStore::slot_index(
+                GovernanceDagSealedStateSlot::ProducerPublishIntent,
+            )] = Some(active_intent);
+        }
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("active producer intent must block reads");
+        assert!(error.to_string().contains("transaction is active"));
+        checkpoint_provider
+            .state
+            .lock()
+            .expect("lock checkpoint fixture")
+            .records[TestRuntimeDagCheckpointStore::slot_index(
+            GovernanceDagSealedStateSlot::ProducerPublishIntent,
+        )] = None;
+
+        let checkpoint_index = TestRuntimeDagCheckpointStore::slot_index(
+            GovernanceDagSealedStateSlot::ProducerCheckpoint,
+        );
+        let original_checkpoint_record = checkpoint_provider
+            .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)
+            .expect("load producer checkpoint")
+            .expect("producer checkpoint exists");
+        let mut substituted_checkpoint = decode_runtime_dag_unqualified_checkpoint_record(
+            &original_checkpoint_record,
+            temp.path(),
+        )
+        .expect("decode producer checkpoint");
+        substituted_checkpoint.index_bytes_digest[0] ^= 0x80;
+        checkpoint_provider
+            .state
+            .lock()
+            .expect("lock checkpoint fixture")
+            .records[checkpoint_index] = Some(
+            runtime_dag_producer_checkpoint_record(&substituted_checkpoint)
+                .expect("encode substituted checkpoint"),
+        );
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("checkpoint substitution must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match its sealed producer checkpoint")
+        );
+        checkpoint_provider
+            .state
+            .lock()
+            .expect("lock checkpoint fixture")
+            .records[checkpoint_index] = Some(original_checkpoint_record);
+
+        let writer_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain writer root for typed substitution fixture");
+        let committed_store = open_runtime_dag_committed_store_v1(temp.path(), &writer_guard)
+            .expect("open committed runtime DAG store");
+        let (original_committed, committed_snapshot) =
+            load_runtime_dag_committed_state_v1(&committed_store)
+                .expect("load committed runtime DAG fixture");
+        let mut malformed_committed = original_committed.clone();
+        malformed_committed.index_bytes = Some(vec![b'{'; 1024]);
+        let malformed_bytes = encode_governance_two_slot_value_v1(
+            &malformed_committed,
+            "malformed authenticated runtime DAG fixture",
+        )
+        .expect("encode malformed authenticated runtime DAG fixture");
+        compare_and_swap_governance_two_slot_store_v1(
+            &committed_store,
+            &committed_snapshot,
+            &malformed_bytes,
+            "malformed authenticated runtime DAG fixture",
+        )
+        .expect("commit malformed authenticated runtime DAG fixture");
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("typed index mutation must fail before JSON parsing");
+        assert!(error.to_string().contains("byte generation"));
+        let (_, malformed_snapshot) = load_runtime_dag_committed_state_v1(&committed_store)
+            .expect("load malformed committed runtime DAG fixture");
+        let original_committed_bytes = encode_governance_two_slot_value_v1(
+            &original_committed,
+            "restored authenticated runtime DAG fixture",
+        )
+        .expect("encode restored authenticated runtime DAG fixture");
+        compare_and_swap_governance_two_slot_store_v1(
+            &committed_store,
+            &malformed_snapshot,
+            &original_committed_bytes,
+            "restored authenticated runtime DAG fixture",
+        )
+        .expect("restore authenticated runtime DAG fixture");
+        drop(committed_store);
+        drop(writer_guard);
+
+        let writer_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain writer root for semantic substitution fixture");
+        let committed_store = open_runtime_dag_committed_store_v1(temp.path(), &writer_guard)
+            .expect("open committed runtime DAG store");
+        let (original_committed, committed_snapshot) =
+            load_runtime_dag_committed_state_v1(&committed_store)
+                .expect("load semantic runtime DAG fixture");
+        let mut inconsistent_index: JsonValue = json::from_slice(
+            original_committed
+                .index_bytes
+                .as_deref()
+                .expect("committed index bytes"),
+        )
+        .expect("decode semantic runtime DAG fixture");
+        inconsistent_index
+            .as_object_mut()
+            .expect("runtime index object")
+            .insert("by_payload_kind".into(), JsonValue::Object(JsonMap::new()));
+        let inconsistent_index_bytes = json::to_json_pretty(&inconsistent_index)
+            .expect("encode inconsistent reverse map")
+            .into_bytes();
+        let mut inconsistent_committed = original_committed.clone();
+        inconsistent_committed.index_bytes = Some(inconsistent_index_bytes.clone());
+        let inconsistent_committed_bytes = encode_governance_two_slot_value_v1(
+            &inconsistent_committed,
+            "inconsistent authenticated runtime DAG fixture",
+        )
+        .expect("encode inconsistent runtime DAG fixture");
+        compare_and_swap_governance_two_slot_store_v1(
+            &committed_store,
+            &committed_snapshot,
+            &inconsistent_committed_bytes,
+            "inconsistent authenticated runtime DAG fixture",
+        )
+        .expect("commit inconsistent runtime DAG fixture");
+        let original_checkpoint_record = checkpoint_provider
+            .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)
+            .expect("load original producer checkpoint")
+            .expect("original producer checkpoint exists");
+        let mut inconsistent_checkpoint = decode_runtime_dag_unqualified_checkpoint_record(
+            &original_checkpoint_record,
+            temp.path(),
+        )
+        .expect("decode original producer checkpoint");
+        inconsistent_checkpoint.index_bytes_digest =
+            *blake3::hash(&inconsistent_index_bytes).as_bytes();
+        checkpoint_provider
+            .state
+            .lock()
+            .expect("lock checkpoint fixture")
+            .records[checkpoint_index] = Some(
+            runtime_dag_producer_checkpoint_record(&inconsistent_checkpoint)
+                .expect("encode inconsistent producer checkpoint"),
+        );
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("checkpoint-authenticated reverse-map drift must fail closed");
+        assert!(error.to_string().contains("reverse map `by_payload_kind`"));
+        checkpoint_provider
+            .state
+            .lock()
+            .expect("lock checkpoint fixture")
+            .records[checkpoint_index] = Some(original_checkpoint_record);
+        let (_, inconsistent_snapshot) = load_runtime_dag_committed_state_v1(&committed_store)
+            .expect("load inconsistent committed runtime DAG fixture");
+        let original_committed_bytes = encode_governance_two_slot_value_v1(
+            &original_committed,
+            "restored semantic runtime DAG fixture",
+        )
+        .expect("encode restored semantic runtime DAG fixture");
+        compare_and_swap_governance_two_slot_store_v1(
+            &committed_store,
+            &inconsistent_snapshot,
+            &original_committed_bytes,
+            "restored semantic runtime DAG fixture",
+        )
+        .expect("restore semantic runtime DAG fixture");
+        drop(committed_store);
+        drop(writer_guard);
+
+        let index = runtime_index(temp.path());
+        let block_path = index
+            .get("blocks")
+            .and_then(JsonValue::as_array)
+            .and_then(|blocks| blocks.first())
+            .and_then(|block| block.get("block_path"))
+            .and_then(JsonValue::as_str)
+            .and_then(|path| resolve_index_path(temp.path(), path).ok())
+            .expect("first runtime block path");
+        let json_path = index
+            .get("blocks")
+            .and_then(JsonValue::as_array)
+            .and_then(|blocks| blocks.first())
+            .and_then(|block| block.get("json_path"))
+            .and_then(JsonValue::as_str)
+            .and_then(|path| resolve_index_path(temp.path(), path).ok())
+            .expect("first runtime JSON source path");
+        let original_json = fs::read(&json_path).expect("read original runtime JSON source");
+        let mut substituted_json = original_json.clone();
+        substituted_json.push(b' ');
+        fs::write(&json_path, &substituted_json).expect("substitute runtime JSON source fixture");
+        fs::write(
+            digest_sidecar_path_for(&json_path),
+            format!("{}\n", blake3::hash(&substituted_json).to_hex()),
+        )
+        .expect("bind substituted runtime JSON sidecar");
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("source-pair identity drift must fail closed");
+        assert!(error.to_string().contains("source paths do not bind"));
+        fs::write(&json_path, &original_json).expect("restore runtime JSON source");
+        fs::write(
+            digest_sidecar_path_for(&json_path),
+            format!("{}\n", blake3::hash(&original_json).to_hex()),
+        )
+        .expect("restore runtime JSON sidecar");
+
+        let original_block = fs::read(&block_path).expect("read original runtime block");
+        fs::write(&block_path, b"substituted runtime block")
+            .expect("substitute immutable runtime block fixture");
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("block substitution must fail closed");
+        assert!(
+            error.to_string().contains("digest sidecar")
+                || error.to_string().contains("block length or digest")
+        );
+        fs::write(&block_path, original_block).expect("restore runtime block fixture");
+
+        signer_provider
+            .qualification_revision
+            .store(2, Ordering::SeqCst);
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("provider qualification drift must fail closed");
+        assert!(error.to_string().contains("qualification"));
+    }
+
+    #[test]
+    fn authenticated_runtime_dag_genesis_rejects_orphan_immutable_inventory() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = signed_runtime_publisher(temp.path());
+        let signer = publisher
+            .runtime_dag_signer
+            .as_ref()
+            .expect("genesis signer")
+            .clone();
+        let store = publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .expect("genesis checkpoint store")
+            .clone();
+        drop(publisher);
+        fs::create_dir(temp.path().join(GOVERNANCE_RUNTIME_DAG_DIR))
+            .expect("seed orphan runtime directory");
+        let reader = GovernanceFilesystemRootGuard::capture_source(temp.path())
+            .expect("retain genesis root");
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("orphan immutable inventory must fail closed");
+        assert!(error.to_string().contains("unindexed immutable artifacts"));
+    }
+
+    #[test]
+    fn authenticated_runtime_dag_genesis_authenticates_pre_block_provider_rotation() {
+        let temp = tempdir().expect("tempdir");
+        let checkpoint_provider = Arc::new(TestRuntimeDagCheckpointStore::default());
+        let mut publisher =
+            signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_provider));
+        let next_store = publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .expect("checkpoint store")
+            .clone();
+        publisher
+            .transition_qualified_runtime_dag_providers(
+                qualified_test_runtime_dag_signer(2, 0x32),
+                next_store,
+            )
+            .expect("rotate qualified provider before the first block");
+        let signer = publisher
+            .runtime_dag_signer
+            .as_ref()
+            .expect("rotated signer")
+            .clone();
+        let store = publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .expect("rotated checkpoint store")
+            .clone();
+        drop(publisher);
+        let reader = GovernanceFilesystemRootGuard::capture_source(temp.path())
+            .expect("retain rotated genesis root");
+        assert!(
+            load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+                .expect("authenticate rotated genesis")
+                .is_none()
+        );
+
+        let archives = temp
+            .path()
+            .join(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVES_DIR);
+        fs::create_dir(&archives).expect("create unindexed archive inventory");
+        fs::write(
+            archives.join("unindexed.to"),
+            b"unindexed qualification fork",
+        )
+        .expect("seed unindexed archive");
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("unindexed qualification inventory must fail closed");
+        assert!(error.to_string().contains("unindexed"));
+        fs::remove_dir_all(&archives).expect("remove unindexed archive fixture");
+
+        fs::remove_dir_all(
+            temp.path()
+                .join(GOVERNANCE_RUNTIME_DAG_QUALIFICATION_STORE_DIR_V1),
+        )
+        .expect("remove typed qualification history fixture");
+        let error = load_authenticated_runtime_dag_snapshot_v1(&reader, &signer, &store)
+            .expect_err("missing rotated qualification history must fail closed");
+        assert!(error.to_string().contains("authority lineage diverges"));
+    }
+
+    #[test]
+    fn runtime_dag_staging_transaction_survives_ambiguous_cycle_and_clears_on_restart() {
+        let temp = tempdir().expect("tempdir");
+        let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
+        let publisher =
+            signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
+        let (first, first_encoded) = sample_settlement();
+        publisher
+            .publish_deal_settlement(&first, &first_encoded)
+            .expect("publish first staging cycle");
+
+        let mut successor = first;
+        successor.deal_id = [0xA6; 32];
+        successor.ledger.deal_id = successor.deal_id;
+        successor.ledger.snapshot_id = successor
+            .ledger
+            .derive_snapshot_id()
+            .expect("reseal successor ledger snapshot");
+        successor.settlement_id = successor
+            .derive_settlement_id()
+            .expect("reseal successor settlement");
+        let successor_encoded = norito::to_bytes(&successor).expect("encode successor settlement");
+        checkpoint_store
+            .fail_after_next_intent_cas
+            .store(true, Ordering::SeqCst);
+        publisher
+            .publish_deal_settlement(&successor, &successor_encoded)
+            .expect_err("retain the second sealed staging cycle");
+
+        let intent_record = checkpoint_store
+            .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
+            .expect("load second-cycle intent")
+            .expect("second-cycle intent exists");
+        let intent: RuntimeDagProducerPublishIntentV1 =
+            norito::decode_from_bytes(&intent_record.payload).expect("decode second-cycle intent");
+        load_runtime_dag_producer_staged_transaction(temp.path(), publisher.root_guard(), &intent)
+            .expect("typed staging state retains the exact sealed transaction");
+        let staging_store = open_runtime_dag_staging_store_v1(temp.path(), publisher.root_guard())
+            .expect("open typed staging state");
+        assert!(
+            load_runtime_dag_staging_state_v1(&staging_store)
+                .expect("load typed staging state")
+                .0
+                .staged
+                .is_some()
+        );
+        drop(staging_store);
+        drop(publisher);
+
+        let restarted =
+            signed_runtime_publisher_with_store(temp.path(), Arc::clone(&checkpoint_store));
+        let staging_store = open_runtime_dag_staging_store_v1(temp.path(), restarted.root_guard())
+            .expect("reopen typed staging state after intent recovery");
+        assert!(
+            load_runtime_dag_staging_state_v1(&staging_store)
+                .expect("load recovered typed staging state")
+                .0
+                .staged
+                .is_none(),
+            "the staged transaction is cleared only after the sealed intent completes"
+        );
+        assert!(
+            !temp
+                .path()
+                .join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR)
+                .exists(),
+            "the retired mutable staging directory must not be recreated"
+        );
+        assert_eq!(
+            runtime_index(temp.path())
+                .get("block_count")
+                .and_then(JsonValue::as_u64),
+            Some(2)
+        );
+        assert!(
+            checkpoint_store
+                .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
+                .expect("reload second-cycle intent")
+                .is_none()
+        );
     }
 
     #[test]
@@ -17875,14 +22647,17 @@ mod tests {
     }
 
     #[test]
-    fn runtime_dag_audit_rejects_substituted_generated_at_with_fresh_sidecar() {
+    fn runtime_dag_audit_rejects_substituted_generated_at_in_committed_state() {
         let temp = tempdir().expect("tempdir");
         let publisher = signed_runtime_publisher(temp.path());
         let (settlement, encoded) = sample_settlement();
         publisher
             .publish_deal_settlement(&settlement, &encoded)
             .expect("seed signed runtime DAG");
-        let index_path = temp.path().join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
+        let store = open_runtime_dag_committed_store_v1(temp.path(), publisher.root_guard())
+            .expect("open committed runtime DAG state");
+        let (mut committed, snapshot) =
+            load_runtime_dag_committed_state_v1(&store).expect("load committed runtime DAG state");
         let mut index = runtime_index(temp.path());
         let head_generated_at = index
             .get("head_generated_at")
@@ -17895,9 +22670,18 @@ mod tests {
         let bytes = json::to_json_pretty(&index)
             .expect("encode tampered runtime index")
             .into_bytes();
-        fs::write(&index_path, &bytes).expect("replace runtime index");
-        write_digest_sidecar(publisher.root_guard(), &index_path, &bytes)
-            .expect("replace index sidecar");
+        committed.index_bytes = Some(bytes);
+        let encoded =
+            encode_governance_two_slot_value_v1(&committed, "tampered committed runtime DAG state")
+                .expect("encode tampered committed state");
+        compare_and_swap_governance_two_slot_store_v1(
+            &store,
+            &snapshot,
+            &encoded,
+            "tampered committed runtime DAG state",
+        )
+        .expect("commit internally coherent but semantically substituted state");
+        drop(store);
 
         let error = validate_existing_runtime_dag_root(
             temp.path(),
@@ -17914,18 +22698,119 @@ mod tests {
         assert!(error.to_string().contains("index and signed head"));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn atomic_temp_recovery_deletes_the_exact_opened_windows_object() {
+    fn runtime_dag_store_rejects_legacy_atomic_temp_without_online_cleanup() {
+        for legacy_name in [
+            format!(".{GOVERNANCE_RUNTIME_DAG_INDEX_FILE}.tmp-42000-1"),
+            format!(".{GOVERNANCE_RUNTIME_DAG_INDEX_FILE}.tmp-bad"),
+            format!(".{GOVERNANCE_RUNTIME_DAG_INDEX_FILE}.retained-v1-bad"),
+        ] {
+            let temp = tempdir().expect("tempdir");
+            let stale = temp.path().join(&legacy_name);
+            fs::write(&stale, b"legacy-mutable-state").expect("seed legacy crash temp");
+            let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+                .expect("retain producer root");
+            let error = open_runtime_dag_committed_store_v1(temp.path(), &root_guard)
+                .expect_err("legacy crash temp must fail closed");
+            assert!(error.to_string().contains("legacy"));
+            assert!(
+                stale.exists(),
+                "online startup must not silently delete legacy authority"
+            );
+            assert!(
+                !temp
+                    .path()
+                    .join(GOVERNANCE_RUNTIME_DAG_COMMITTED_STORE_DIR_V1)
+                    .exists(),
+                "legacy rejection must precede typed-store creation for `{legacy_name}`"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_dag_store_rejects_legacy_staging_directory_without_online_cleanup() {
         let temp = tempdir().expect("tempdir");
-        let target = temp.path().join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE);
-        let stale = temp_path_for_atomic(&target, 42_000, 1);
-        fs::write(&stale, b"recover-exact-object").expect("seed matching crash temp");
+        let legacy = temp
+            .path()
+            .join(GOVERNANCE_RUNTIME_DAG_PRODUCER_STAGING_DIR);
+        fs::create_dir(&legacy).expect("seed legacy staging directory");
         let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
-            .expect("retain Windows producer root");
-        remove_recoverable_atomic_temps_for_target(&root_guard, &target)
-            .expect("delete exact matching crash temp");
-        assert!(!stale.exists());
+            .expect("retain producer root");
+
+        let error = open_runtime_dag_staging_store_v1(temp.path(), &root_guard)
+            .expect_err("legacy staging directory must fail closed");
+
+        assert!(error.to_string().contains("legacy mutable"));
+        assert!(
+            legacy.is_dir(),
+            "online startup must not delete the retired staging authority"
+        );
+    }
+
+    #[test]
+    fn runtime_dag_store_rejects_legacy_nested_head_generation_without_online_cleanup() {
+        let temp = tempdir().expect("tempdir");
+        let runtime = temp.path().join(GOVERNANCE_RUNTIME_DAG_DIR);
+        fs::create_dir(&runtime).expect("seed legacy runtime directory");
+        let legacy = runtime.join(format!(
+            ".{GOVERNANCE_RUNTIME_DAG_HEAD_FILE}.retained-v1-0000"
+        ));
+        fs::write(&legacy, b"legacy-head-generation").expect("seed retained legacy head");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain producer root");
+
+        let error = open_runtime_dag_committed_store_v1(temp.path(), &root_guard)
+            .expect_err("legacy retained head must fail closed");
+
+        assert!(error.to_string().contains("legacy"));
+        assert!(
+            legacy.is_file(),
+            "online startup must not delete a retired head generation"
+        );
+    }
+
+    #[test]
+    fn qualification_store_rejects_legacy_history_without_online_cleanup() {
+        let temp = tempdir().expect("tempdir");
+        let legacy = runtime_dag_qualification_history_path(temp.path());
+        fs::write(&legacy, b"legacy-qualification-history")
+            .expect("seed legacy qualification history");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain qualification root");
+
+        let error = open_runtime_dag_qualification_store_v1(temp.path(), &root_guard)
+            .expect_err("legacy qualification history must fail closed");
+
+        assert!(error.to_string().contains("legacy mutable"));
+        assert!(
+            legacy.is_file(),
+            "online startup must not delete retired qualification history"
+        );
+    }
+
+    #[test]
+    fn qualification_archive_adjacency_rejects_u64_exhaustion() {
+        assert!(runtime_dag_generation_immediately_precedes(41, 42));
+        assert!(
+            !runtime_dag_generation_immediately_precedes(u64::MAX, 0),
+            "an exhausted archived generation must not wrap into a valid successor"
+        );
+    }
+
+    #[test]
+    fn fenced_privacy_store_rejects_legacy_pending_state_without_online_cleanup() {
+        let temp = tempdir().expect("tempdir");
+        let legacy = fenced_privacy_pending_path(temp.path());
+        fs::write(&legacy, b"legacy-pending-request").expect("seed legacy pending state");
+
+        let error = open_fenced_privacy_store_v1(temp.path())
+            .expect_err("legacy pending state must fail closed");
+
+        assert!(error.to_string().contains("legacy mutable"));
+        assert!(
+            legacy.is_file(),
+            "online startup must not delete retired privacy authority"
+        );
     }
 
     #[cfg(unix)]
@@ -18765,7 +23650,7 @@ mod tests {
             Some(1)
         );
 
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
         let blocks = runtime_blocks_from_index(temp.path(), &index);
@@ -18896,7 +23781,7 @@ mod tests {
                 .expect("publish settlement into runtime DAG");
         }
 
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head_at_window: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
         assert_eq!(
@@ -18936,7 +23821,7 @@ mod tests {
             assert_eq!(pair[1].node.prev_cid, Some(pair[0].node.node_cid.clone()));
         }
 
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
         assert_eq!(head.block_count, blocks.len() as u64);
@@ -19011,7 +23896,7 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
         let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
@@ -19225,7 +24110,10 @@ mod tests {
             .with_qualified_fenced_privacy_head_reader(qualified_failed_reader)
             .expect_err("failed authenticated read must abort bootstrap");
         assert!(error.to_string().contains("failed authentication"));
-        assert!(!fenced_privacy_head_sync_path(failed_root.path()).exists());
+        assert_eq!(
+            read_fenced_privacy_head_sync(failed_root.path()).expect("read failed bootstrap state"),
+            None
+        );
 
         let malformed_root = tempdir().expect("malformed root");
         let malformed_target = Arc::new(TestFencedTransparencyPublisher::new());
@@ -19243,7 +24131,32 @@ mod tests {
             ))
             .expect_err("malformed authoritative head must abort bootstrap");
         assert!(error.to_string().contains("failed authentication"));
-        assert!(!fenced_privacy_head_sync_path(malformed_root.path()).exists());
+        assert_eq!(
+            read_fenced_privacy_head_sync(malformed_root.path())
+                .expect("read malformed bootstrap state"),
+            None
+        );
+    }
+
+    #[test]
+    fn fenced_privacy_pending_clear_is_typed_and_idempotent() {
+        let temp = tempdir().expect("tempdir");
+        let provider = Arc::new(TestFencedTransparencyPublisher::new());
+        let publisher = qualified_test_fenced_publisher(provider);
+        let request = sample_fenced_request(7, None);
+        let pending = FencedPrivacyPendingRequestV1::from_request(&request, &publisher)
+            .expect("build pending request");
+
+        write_fenced_privacy_pending_request(temp.path(), &pending).expect("persist pending");
+        assert_eq!(
+            read_fenced_privacy_pending_request(temp.path()).expect("read pending"),
+            Some(pending)
+        );
+        remove_fenced_privacy_pending_request(temp.path()).expect("clear pending request");
+        assert_fenced_privacy_pending_logically_cleared(temp.path());
+        remove_fenced_privacy_pending_request(temp.path()).expect("repeat pending clear");
+        assert_fenced_privacy_pending_logically_cleared(temp.path());
+        assert!(!fenced_privacy_pending_path(temp.path()).exists());
     }
 
     #[test]
@@ -19295,8 +24208,15 @@ mod tests {
                 .to_string()
                 .contains("publication cache belongs to a different qualified target")
         );
-        fs::remove_file(fenced_privacy_head_cache_path(temp.path()))
-            .expect("remove retired cache before reader-binding check");
+        update_fenced_privacy_state_v1(
+            temp.path(),
+            "clear retired writer-bound fenced privacy records",
+            |state| {
+                state.pending = None;
+                state.publication_cache = None;
+            },
+        )
+        .expect("clear retired writer-bound records before reader-binding check");
 
         let retired_sync = FencedPrivacyAuthoritativeHeadSyncV1 {
             version: GOVERNANCE_FENCED_PRIVACY_HEAD_SYNC_VERSION_V1,
@@ -19408,7 +24328,10 @@ mod tests {
         assert!(error.to_string().contains("changed after qualification"));
 
         assert_no_privacy_publication_side_effects(temp.path());
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
+        assert_eq!(
+            read_fenced_privacy_pending_request(temp.path()).expect("read pending request"),
+            None
+        );
         assert_eq!(
             read_fenced_privacy_head_sync(temp.path())
                 .expect("read retained synchronized head")
@@ -19473,7 +24396,10 @@ mod tests {
         .expect_err("ancestry alone must not prove a different publication identity");
 
         assert!(error.to_string().contains("failed authentication"));
-        assert!(!fenced_privacy_head_sync_path(temp.path()).exists());
+        assert_eq!(
+            read_fenced_privacy_head_sync(temp.path()).expect("read rejected head sync state"),
+            None
+        );
         assert_eq!(provider.append_count(), 2);
         assert_ne!(
             first_receipt.included_head(),
@@ -19542,7 +24468,7 @@ mod tests {
                 .contains("identity conflicts with an existing publication")
         );
         assert_eq!(provider.append_count(), 1);
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
+        assert_fenced_privacy_pending_logically_cleared(temp.path());
         assert_eq!(
             read_fenced_privacy_head_cache(temp.path())
                 .expect("read cache after conflict")
@@ -19569,7 +24495,10 @@ mod tests {
                 .contains("requires a qualified fused target publisher")
         );
         assert_no_privacy_publication_side_effects(temp.path());
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
+        assert_eq!(
+            read_fenced_privacy_pending_request(temp.path()).expect("read pending request"),
+            None
+        );
     }
 
     #[test]
@@ -19593,8 +24522,14 @@ mod tests {
                 .contains("requires a qualified authenticated authoritative-head reader")
         );
         assert_no_privacy_publication_side_effects(temp.path());
-        assert!(!fenced_privacy_head_sync_path(temp.path()).exists());
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
+        assert_eq!(
+            read_fenced_privacy_head_sync(temp.path()).expect("read head sync state"),
+            None
+        );
+        assert_eq!(
+            read_fenced_privacy_pending_request(temp.path()).expect("read pending request"),
+            None
+        );
     }
 
     #[test]
@@ -19624,7 +24559,9 @@ mod tests {
         assert_eq!(provider.append_count(), 1);
         assert_no_privacy_publication_side_effects(temp.path());
         assert!(
-            fenced_privacy_pending_path(temp.path()).exists(),
+            read_fenced_privacy_pending_request(temp.path())
+                .expect("read ambiguous pending request")
+                .is_some(),
             "ambiguous append must retain its exact pending request"
         );
 
@@ -19639,7 +24576,7 @@ mod tests {
             .expect("recover exact request after malformed receipt");
 
         assert_eq!(provider.append_count(), 1);
-        assert!(!fenced_privacy_pending_path(temp.path()).exists());
+        assert_fenced_privacy_pending_logically_cleared(temp.path());
         let cache = read_fenced_privacy_head_cache(temp.path())
             .expect("read recovered cache")
             .expect("recovered cache exists");
@@ -19824,7 +24761,7 @@ mod tests {
             later_cache.last_disposition,
             FencedPrivacyPublicationDispositionV1::AlreadyIncluded
         );
-        assert!(!fenced_privacy_pending_path(later_anchor_root.path()).exists());
+        assert_fenced_privacy_pending_logically_cleared(later_anchor_root.path());
     }
 
     #[test]
@@ -19894,7 +24831,7 @@ mod tests {
         assert!(stale_error.to_string().contains("fencing token is stale"));
         assert_eq!(provider.append_count(), 1);
         assert_no_privacy_publication_side_effects(stale_root.path());
-        assert!(!fenced_privacy_pending_path(stale_root.path()).exists());
+        assert_fenced_privacy_pending_logically_cleared(stale_root.path());
         assert_eq!(
             read_fenced_privacy_head_cache(winner_root.path())
                 .expect("winner cached head")
@@ -20085,7 +25022,7 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
         let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
@@ -20214,7 +25151,7 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
         let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
@@ -20364,7 +25301,7 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head_bytes = runtime_head_bytes(temp.path());
         let head: GovernanceDagHeadV1 =
             norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
         let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
@@ -20384,19 +25321,59 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_publisher_rejects_malformed_runtime_dag_index() {
+    fn filesystem_publisher_rejects_malformed_runtime_dag_index_in_committed_state() {
         let temp = tempdir().expect("tempdir");
         let publisher = signed_runtime_publisher(temp.path());
-        fs::write(
-            temp.path().join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE),
-            br#"{"schema":"sorafs.governance_dag.wrong","blocks":[]}"#,
-        )
-        .expect("write bad runtime index");
         let (settlement, encoded) = sample_settlement();
-
-        let err = publisher
+        publisher
             .publish_deal_settlement(&settlement, &encoded)
-            .expect_err("malformed runtime DAG index must fail closed");
+            .expect("seed signed runtime DAG");
+        let store = open_runtime_dag_committed_store_v1(temp.path(), publisher.root_guard())
+            .expect("open committed runtime DAG state");
+        let (mut committed, snapshot) =
+            load_runtime_dag_committed_state_v1(&store).expect("load committed runtime DAG state");
+        let mut index: JsonValue = json::from_slice(
+            committed
+                .index_bytes
+                .as_deref()
+                .expect("committed runtime index bytes"),
+        )
+        .expect("decode committed runtime index");
+        index.as_object_mut().expect("runtime index object").insert(
+            "schema".to_owned(),
+            JsonValue::from("sorafs.governance_dag.wrong"),
+        );
+        committed.index_bytes = Some(
+            json::to_json_pretty(&index)
+                .expect("encode malformed runtime index")
+                .into_bytes(),
+        );
+        let bytes = encode_governance_two_slot_value_v1(
+            &committed,
+            "malformed committed runtime DAG state",
+        )
+        .expect("encode malformed committed state");
+        compare_and_swap_governance_two_slot_store_v1(
+            &store,
+            &snapshot,
+            &bytes,
+            "malformed committed runtime DAG state",
+        )
+        .expect("commit malformed semantic fixture");
+        drop(store);
+
+        let err = validate_existing_runtime_dag_root(
+            temp.path(),
+            publisher
+                .runtime_dag_signer
+                .as_ref()
+                .expect("signed publisher"),
+            publisher
+                .runtime_dag_checkpoint_store
+                .as_ref()
+                .expect("signed publisher store"),
+        )
+        .expect_err("malformed runtime DAG index must fail closed");
         assert!(
             err.to_string().contains("unsupported schema"),
             "unexpected error: {err}"
@@ -20440,10 +25417,11 @@ mod tests {
         let json_digest = json_digest.trim();
         assert_eq!(json_digest, blake3::hash(&json_bytes).to_hex().as_str());
 
-        let publication_path = temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE);
-        let publication_bytes = fs::read(&publication_path).expect("read publication state");
-        let publication: JsonValue =
-            norito::json::from_slice(&publication_bytes).expect("publication state json");
+        let publication_snapshot = read_publication_snapshot_fixture(temp.path());
+        let publication_identity = publication_snapshot.store_identity();
+        let publication_bytes = publication_snapshot.canonical_bytes().to_vec();
+        let publication: JsonValue = norito::json::from_slice(&publication_bytes)
+            .expect("decode authoritative publication snapshot");
         assert_eq!(
             publication.get("schema").and_then(JsonValue::as_str),
             Some(GOVERNANCE_PUBLICATION_STATE_SCHEMA)
@@ -20504,7 +25482,7 @@ mod tests {
         );
         assert_eq!(
             entry.get("encoded_path").and_then(JsonValue::as_str),
-            Some(index_path_string(temp.path(), encoded_path).as_str())
+            Some(index_path_string(temp.path(), &encoded_path).as_str())
         );
         assert_eq!(
             entry.get("json_len").and_then(JsonValue::as_u64),
@@ -20654,9 +25632,15 @@ mod tests {
         publisher
             .publish_deal_settlement(&settlement, &encoded)
             .expect("exact duplicate publication is a no-op");
+        let duplicate_snapshot = read_publication_snapshot_fixture(temp.path());
         assert_eq!(
-            fs::read(&publication_path).expect("reread publication state after duplicate"),
-            publication_bytes,
+            duplicate_snapshot.store_identity(),
+            publication_identity,
+            "an exact duplicate must not advance the typed authority identity"
+        );
+        assert_eq!(
+            duplicate_snapshot.canonical_bytes(),
+            publication_bytes.as_slice(),
             "an exact duplicate must not advance or rewrite the authority envelope"
         );
         assert_eq!(
@@ -20677,9 +25661,15 @@ mod tests {
             error.to_string().contains("occupied by different bytes"),
             "unexpected duplicate substitution error: {error}"
         );
+        let rejected_snapshot = read_publication_snapshot_fixture(temp.path());
         assert_eq!(
-            fs::read(&publication_path).expect("reread authority after substituted duplicate"),
-            publication_bytes,
+            rejected_snapshot.store_identity(),
+            publication_identity,
+            "a rejected duplicate must preserve the typed authority identity"
+        );
+        assert_eq!(
+            rejected_snapshot.canonical_bytes(),
+            publication_bytes.as_slice(),
             "a rejected duplicate must leave the authority envelope unchanged"
         );
         assert_eq!(
@@ -20816,7 +25806,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_publisher_rejects_malformed_publication_authority_before_artifact_writes() {
+    fn filesystem_publisher_rejects_legacy_flat_publication_authority_before_artifact_writes() {
         let temp = tempdir().expect("tempdir");
         fs::write(
             temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE),
@@ -20825,8 +25815,13 @@ mod tests {
         .expect("write malformed authoritative publication state");
 
         let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect_err("malformed authority must reject publisher startup");
+            .expect_err("legacy flat authority must reject publisher startup");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("legacy governance publication authority")
+        );
         assert!(
             !temp
                 .path()
@@ -20858,33 +25853,6 @@ mod tests {
                 &orphan,
             )
             .expect("assemble orphan CAR artifacts");
-            let source_directory = temp
-                .path()
-                .join(&orphan.encoded_path)
-                .parent()
-                .expect("source pair parent")
-                .to_path_buf();
-            fs::write(
-                source_directory.join(".payload.to.tmp-42000-1"),
-                b"interrupted source temp",
-            )
-            .expect("seed interrupted source temp");
-            let car_base = temp
-                .path()
-                .join(governance_car_segment_relative_base(&orphan).expect("CAR base"));
-            let car_target = car_base.with_extension("car");
-            let car_target_name = car_target
-                .file_name()
-                .and_then(OsStr::to_str)
-                .expect("canonical CAR target name");
-            fs::write(
-                car_target
-                    .parent()
-                    .expect("CAR parent")
-                    .join(format!(".{car_target_name}.tmp-42000-2")),
-                b"interrupted CAR temp",
-            )
-            .expect("seed interrupted CAR temp");
         }
         assert!(
             temp.path()
@@ -20893,8 +25861,52 @@ mod tests {
         );
         assert!(temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists());
 
-        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect("startup reconciles one bounded interrupted publication");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect_err("Unix recovery must isolate interrupted artifacts before startup");
+            assert!(
+                error
+                    .to_string()
+                    .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+                "unexpected quarantine error: {error}"
+            );
+            let quarantine = recovery_quarantine_path(temp.path());
+            let isolated = fs::read_dir(&quarantine)
+                .expect("read bounded recovery quarantine")
+                .map(|entry| entry.expect("quarantine entry").file_name())
+                .collect::<BTreeSet<_>>();
+            let expected = [
+                "car-file-00",
+                "car-file-01",
+                "car-file-02",
+                "car-file-03",
+                "car-file-04",
+                "car-file-05",
+                "car-root",
+                "source-file-00",
+                "source-file-01",
+                "source-file-02",
+                "source-file-03",
+                "source-kind",
+                "source-pair",
+                "source-root",
+            ]
+            .map(OsString::from)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+            assert_eq!(isolated, expected, "quarantine slots are deterministic");
+            clear_recovery_quarantine_offline(temp.path());
+            drop(
+                FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                    .expect("startup succeeds after offline quarantine cleanup"),
+            );
+        }
+        #[cfg(windows)]
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("Windows exact-handle cleanup reconciles the publication"),
+        );
         assert!(
             !temp
                 .path()
@@ -20906,34 +25918,932 @@ mod tests {
             !temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists(),
             "unreferenced CAR files and their empty directory must be reclaimed"
         );
+    }
+
+    #[test]
+    fn filesystem_publisher_reclaims_only_the_exact_next_car_atomic_temp() {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        let orphan = write_car_segment_source_fixture(temp.path(), b"orphan-publication");
+        let car_base = temp
+            .path()
+            .join(governance_car_segment_relative_base(&orphan).expect("CAR base"));
+        let car_target = car_base.with_extension("car");
+        let car_directory = car_target.parent().expect("CAR directory");
+        fs::create_dir_all(car_directory).expect("create interrupted CAR directory");
+        let car_target_name = car_target
+            .file_name()
+            .and_then(OsStr::to_str)
+            .expect("canonical CAR target name");
+        fs::write(
+            car_directory.join(format!(".{car_target_name}.tmp-42000-1")),
+            b"interrupted CAR temp",
+        )
+        .expect("seed exact next CAR temp");
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect_err("Unix recovery must isolate the exact interrupted temp");
+            assert!(
+                error
+                    .to_string()
+                    .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+                "unexpected quarantine error: {error}"
+            );
+            clear_recovery_quarantine_offline(temp.path());
+            drop(
+                FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                    .expect("startup succeeds after offline quarantine cleanup"),
+            );
+        }
+        #[cfg(windows)]
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("Windows exact-handle cleanup reconciles the interrupted temp"),
+        );
+        assert!(
+            !temp
+                .path()
+                .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+                .exists()
+        );
+        assert!(!temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists());
+    }
+
+    #[test]
+    fn filesystem_publisher_verifies_every_committed_role_before_orphan_cleanup() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            Missing,
+            Corrupt,
+        }
+
+        for mutation in [Mutation::Missing, Mutation::Corrupt] {
+            for role_index in 0..10 {
+                let temp = tempdir().expect("tempdir");
+                let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                    .expect("publisher");
+                let (settlement, encoded) = sample_settlement();
+                publisher
+                    .publish_deal_settlement(&settlement, &encoded)
+                    .expect("publish committed settlement");
+                let state = read_publication_state_fixture(temp.path());
+                let committed = committed_publication_artifact_paths(
+                    temp.path(),
+                    state.as_object().expect("publication state object"),
+                );
+                drop(publisher);
+
+                let (_, orphan_snapshots) = seed_complete_uncommitted_publication_fixture(
+                    temp.path(),
+                    "interrupted_test_payload",
+                    b"interrupted-publication",
+                    1,
+                );
+                let (role, committed_path) = committed
+                    .into_iter()
+                    .nth(role_index)
+                    .expect("committed role index");
+                match mutation {
+                    Mutation::Missing => {
+                        fs::remove_file(&committed_path)
+                            .expect("remove one committed publication role");
+                    }
+                    Mutation::Corrupt => {
+                        fs::write(&committed_path, b"corrupt committed publication artifact")
+                            .expect("corrupt one committed publication role");
+                    }
+                }
+
+                let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                    .expect_err(
+                        "startup must reject a missing or corrupt committed publication role",
+                    );
+                assert_eq!(
+                    error.kind(),
+                    io::ErrorKind::InvalidData,
+                    "unexpected error kind for {mutation:?} {role}: {error}"
+                );
+                for (orphan_path, expected) in &orphan_snapshots {
+                    let actual = fs::read(orphan_path).unwrap_or_else(|error| {
+                        panic!(
+                            "{mutation:?} {role} deleted orphan `{}` before failing: {error}",
+                            orphan_path.display()
+                        )
+                    });
+                    assert_eq!(
+                        actual.as_slice(),
+                        expected.as_slice(),
+                        "{mutation:?} {role} changed orphan `{}` before failing",
+                        orphan_path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_multiple_interrupted_source_pairs_without_cleanup() {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        let first = write_car_segment_source_fixture_for_kind(
+            temp.path(),
+            "interrupted_alpha",
+            b"interrupted-alpha",
+        );
+        let second = write_car_segment_source_fixture_for_kind(
+            temp.path(),
+            "interrupted_beta",
+            b"interrupted-beta",
+        );
+        let snapshots = [first, second]
+            .into_iter()
+            .flat_map(|entry| {
+                let encoded = temp.path().join(entry.encoded_path);
+                let json = temp.path().join(entry.json_path);
+                [
+                    encoded.clone(),
+                    digest_sidecar_path_for(&encoded),
+                    json.clone(),
+                    digest_sidecar_path_for(&json),
+                ]
+            })
+            .map(|path| {
+                let bytes = fs::read(&path).expect("snapshot interrupted source role");
+                (path, bytes)
+            })
+            .collect::<Vec<_>>();
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("multiple interrupted source identities must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        for (path, expected) in snapshots {
+            assert_eq!(
+                fs::read(&path).expect("multiple-source rejection preserves every artifact"),
+                expected,
+                "multiple-source rejection changed `{}`",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_split_interrupted_car_bases_without_cleanup() {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        let (entry, _) = seed_complete_uncommitted_publication_fixture(
+            temp.path(),
+            "interrupted_split_car",
+            b"interrupted-split-car",
+            0,
+        );
+        let original_base = temp
+            .path()
+            .join(governance_car_segment_relative_base(&entry).expect("derive original CAR base"));
+        let pair_id = original_base
+            .file_name()
+            .and_then(OsStr::to_str)
+            .and_then(|base| base.split_once('_'))
+            .map(|(_, pair_id)| pair_id)
+            .expect("fixture CAR pair identity");
+        let alternate_base = temp
+            .path()
+            .join(GOVERNANCE_CAR_SEGMENTS_DIR)
+            .join(format!("{:020}_{pair_id}", 1));
+        for suffix in ["json", "json.blake3"] {
+            let source = original_base.with_extension(suffix);
+            let target = alternate_base.with_extension(suffix);
+            fs::rename(&source, &target).expect("split CAR role across another base");
+        }
+        let snapshots = fs::read_dir(temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR))
+            .expect("read split CAR directory")
+            .map(|entry| {
+                let path = entry.expect("split CAR entry").path();
+                let bytes = fs::read(&path).expect("snapshot split CAR role");
+                (path, bytes)
+            })
+            .chain(
+                publication_artifact_paths_for_fixture(temp.path(), &entry)
+                    .into_iter()
+                    .take(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+                    .map(|path| {
+                        let bytes = fs::read(&path).expect("snapshot split source role");
+                        (path, bytes)
+                    }),
+            )
+            .collect::<Vec<_>>();
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("CAR roles split across bases must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("more than one artifact base"),
+            "unexpected error: {error}"
+        );
+        for (path, expected) in snapshots {
+            assert_eq!(
+                fs::read(&path).expect("split-base rejection preserves every artifact"),
+                expected,
+                "split-base rejection changed `{}`",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_non_next_or_uncorrelated_interrupted_car_without_cleanup() {
+        for (case, replacement_position, replacement_pair_id) in [
+            ("non-next", 1_usize, None),
+            ("uncorrelated", 0_usize, Some("ab".repeat(32))),
+        ] {
+            let temp = tempdir().expect("tempdir");
+            drop(
+                FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                    .expect("initialize empty publication authority"),
+            );
+            let (entry, _) = seed_complete_uncommitted_publication_fixture(
+                temp.path(),
+                "interrupted_identity_check",
+                b"interrupted-identity-check",
+                0,
+            );
+            let original_base = temp.path().join(
+                governance_car_segment_relative_base(&entry).expect("derive original CAR base"),
+            );
+            let original_pair_id = original_base
+                .file_name()
+                .and_then(OsStr::to_str)
+                .and_then(|base| base.split_once('_'))
+                .map(|(_, pair_id)| pair_id)
+                .expect("fixture CAR pair identity");
+            let replacement_pair_id = replacement_pair_id.as_deref().unwrap_or(original_pair_id);
+            let replacement_base = temp
+                .path()
+                .join(GOVERNANCE_CAR_SEGMENTS_DIR)
+                .join(format!("{replacement_position:020}_{replacement_pair_id}"));
+            for suffix in [
+                "car",
+                "car.blake3",
+                "plan.json",
+                "plan.json.blake3",
+                "json",
+                "json.blake3",
+            ] {
+                fs::rename(
+                    original_base.with_extension(suffix),
+                    replacement_base.with_extension(suffix),
+                )
+                .expect("move CAR role to a single invalid interrupted base");
+            }
+            let snapshots = fs::read_dir(temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR))
+                .expect("read invalid CAR directory")
+                .map(|entry| {
+                    let path = entry.expect("invalid CAR entry").path();
+                    let bytes = fs::read(&path).expect("snapshot invalid CAR role");
+                    (path, bytes)
+                })
+                .chain(
+                    publication_artifact_paths_for_fixture(temp.path(), &entry)
+                        .into_iter()
+                        .take(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+                        .map(|path| {
+                            let bytes = fs::read(&path).expect("snapshot source role");
+                            (path, bytes)
+                        }),
+                )
+                .collect::<Vec<_>>();
+
+            let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect_err("invalid interrupted CAR identity must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let message = error.to_string();
+            assert!(
+                message.contains("exact expected next position")
+                    || message.contains("source and CAR identities diverge"),
+                "unexpected {case} error: {error}"
+            );
+            for (path, expected) in snapshots {
+                assert_eq!(
+                    fs::read(&path).expect("identity rejection preserves every artifact"),
+                    expected,
+                    "{case} rejection changed `{}`",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_cleanup_is_restart_safe_after_every_rollback_step() {
+        const CLEANUP_STEPS: usize = GOVERNANCE_PUBLICATION_CAR_ARTIFACT_COUNT
+            + 1
+            + GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT
+            + 3;
+
+        for interrupted_after in 1..=CLEANUP_STEPS {
+            let temp = tempdir().expect("tempdir");
+            drop(
+                FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                    .expect("initialize empty publication authority"),
+            );
+            seed_complete_uncommitted_publication_fixture(
+                temp.path(),
+                "interrupted_rollback_boundary",
+                b"interrupted-rollback-boundary",
+                0,
+            );
+            let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+                .expect("retain rollback fixture root");
+            let state = read_publication_state_fixture(temp.path());
+            let state = state.as_object().expect("publication state object");
+            let inventory = governance_publication_artifact_inventory(state)
+                .expect("derive rollback fixture inventory");
+            let (mut cleanup_plan, interrupted_identity) =
+                plan_governance_publication_source_artifacts(&root_guard, &inventory)
+                    .expect("plan interrupted source rollback");
+            plan_governance_publication_car_artifacts(
+                &root_guard,
+                &inventory,
+                interrupted_identity.as_ref(),
+                &mut cleanup_plan,
+            )
+            .expect("plan interrupted CAR rollback");
+            verify_governance_publication_artifact_integrity(temp.path(), &root_guard, state)
+                .expect("verify empty committed authority");
+            let observed_step = std::cell::Cell::new(0_usize);
+            let error =
+                apply_governance_publication_cleanup_plan_with(&root_guard, cleanup_plan, |step| {
+                    observed_step.set(step);
+                    if step == interrupted_after {
+                        Err(GovernancePublishError::other(
+                            "injected cleanup interruption",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .expect_err("injected rollback interruption must stop cleanup");
+            assert!(error.to_string().contains("injected cleanup interruption"));
+            assert_eq!(observed_step.get(), interrupted_after);
+            drop(root_guard);
+
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let publisher = {
+                let quarantine = recovery_quarantine_path(temp.path());
+                let before_restart = fs::read_dir(&quarantine)
+                    .expect("read interrupted recovery quarantine")
+                    .count();
+                assert_eq!(before_restart, interrupted_after);
+                let restart_error =
+                    FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                        .expect_err("restart must stop at a preserved recovery quarantine");
+                assert!(
+                    restart_error
+                        .to_string()
+                        .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+                    "unexpected restart error: {restart_error}"
+                );
+                assert_eq!(
+                    fs::read_dir(&quarantine)
+                        .expect("reread preserved recovery quarantine")
+                        .count(),
+                    before_restart,
+                    "restart must not mutate a preserved quarantine"
+                );
+                clear_recovery_quarantine_offline(temp.path());
+                finish_recovery_after_offline_quarantine_cleanup(temp.path())
+            };
+            #[cfg(windows)]
+            let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "restart after cleanup step {interrupted_after}/{CLEANUP_STEPS} failed: {error}"
+                    )
+                });
+            assert!(
+                !temp
+                    .path()
+                    .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+                    .exists(),
+                "source residue remained after restarting cleanup step {interrupted_after}"
+            );
+            assert!(
+                !temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists(),
+                "CAR residue remained after restarting cleanup step {interrupted_after}"
+            );
+            drop(publisher);
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn filesystem_publisher_quarantines_same_inode_byte_changes_after_cleanup_planning() {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        let (entry, _) = seed_complete_uncommitted_publication_fixture(
+            temp.path(),
+            "interrupted_byte_change",
+            b"interrupted-byte-change",
+            0,
+        );
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain byte-change fixture root");
+        let state = read_publication_state_fixture(temp.path());
+        let state = state.as_object().expect("publication state object");
+        let inventory = governance_publication_artifact_inventory(state)
+            .expect("derive byte-change fixture inventory");
+        let (mut cleanup_plan, interrupted_identity) =
+            plan_governance_publication_source_artifacts(&root_guard, &inventory)
+                .expect("plan interrupted source rollback");
+        plan_governance_publication_car_artifacts(
+            &root_guard,
+            &inventory,
+            interrupted_identity.as_ref(),
+            &mut cleanup_plan,
+        )
+        .expect("plan interrupted CAR rollback");
+        verify_governance_publication_artifact_integrity(temp.path(), &root_guard, state)
+            .expect("verify empty committed authority");
+
+        let car_roles = publication_artifact_paths_for_fixture(temp.path(), &entry)
+            .into_iter()
+            .skip(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+            .collect::<Vec<_>>();
+        let first_rollback_role = car_roles
+            .last()
+            .expect("complete CAR fixture has a final rollback role");
+        let original = fs::read(first_rollback_role).expect("read planned CAR role");
+        let substituted = vec![b'x'; original.len()];
+        fs::write(first_rollback_role, &substituted)
+            .expect("change planned CAR bytes without replacing its inode");
+
+        let error = apply_governance_publication_cleanup_plan(&root_guard, cleanup_plan)
+            .expect_err("post-plan byte change must stop recovery after isolation");
+        assert!(
+            error.to_string().contains("changed after exact comparison"),
+            "unexpected byte-comparison error: {error}"
+        );
+        assert!(
+            !first_rollback_role.exists(),
+            "the changed live binding must be isolated without unlinking"
+        );
+        assert_eq!(
+            fs::read(recovery_quarantine_path(temp.path()).join("car-file-05"))
+                .expect("read preserved changed CAR role"),
+            substituted,
+            "the changed same-inode bytes must remain available for offline inspection"
+        );
+    }
+
+    #[test]
+    fn filesystem_publisher_rolls_back_the_next_atomic_temp_before_durable_roles() {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        let (entry, _) = seed_complete_uncommitted_publication_fixture(
+            temp.path(),
+            "interrupted_temp_rollback",
+            b"interrupted-temp-rollback",
+            0,
+        );
+        let car_roles = publication_artifact_paths_for_fixture(temp.path(), &entry)
+            .into_iter()
+            .skip(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+            .collect::<Vec<_>>();
+        for path in car_roles.iter().skip(1) {
+            fs::remove_file(path).expect("truncate CAR prefix after its archive");
+        }
+        let next_target = &car_roles[1];
+        let next_name = next_target
+            .file_name()
+            .and_then(OsStr::to_str)
+            .expect("next CAR role name");
+        let next_temp = next_target
+            .parent()
+            .expect("CAR role parent")
+            .join(format!(".{next_name}.tmp-42000-1"));
+        fs::write(&next_temp, b"partially-written-sidecar").expect("seed next atomic temporary");
+
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain temporary rollback root");
+        let state = read_publication_state_fixture(temp.path());
+        let state = state.as_object().expect("publication state object");
+        let inventory = governance_publication_artifact_inventory(state)
+            .expect("derive temporary rollback inventory");
+        let (mut cleanup_plan, interrupted_identity) =
+            plan_governance_publication_source_artifacts(&root_guard, &inventory)
+                .expect("plan temporary source rollback");
+        plan_governance_publication_car_artifacts(
+            &root_guard,
+            &inventory,
+            interrupted_identity.as_ref(),
+            &mut cleanup_plan,
+        )
+        .expect("plan temporary CAR rollback");
+        verify_governance_publication_artifact_integrity(temp.path(), &root_guard, state)
+            .expect("verify empty committed authority");
+        apply_governance_publication_cleanup_plan_with(&root_guard, cleanup_plan, |step| {
+            if step == 1 {
+                Err(GovernancePublishError::other(
+                    "injected post-temporary interruption",
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("cleanup must stop immediately after removing the next temporary");
+        assert!(
+            !next_temp.exists(),
+            "the next temporary must leave the live namespace first"
+        );
+        assert!(
+            car_roles[0].exists(),
+            "the durable CAR prefix must remain after the first rollback step"
+        );
+        drop(root_guard);
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let publisher = {
+            let quarantine = recovery_quarantine_path(temp.path());
+            assert_eq!(
+                fs::read_dir(&quarantine)
+                    .expect("read temporary recovery quarantine")
+                    .count(),
+                1,
+                "the exact next temporary is the first isolated slot"
+            );
+            let restart_error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect_err("restart must require offline cleanup of the isolated temp");
+            assert!(
+                restart_error
+                    .to_string()
+                    .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+                "unexpected restart error: {restart_error}"
+            );
+            clear_recovery_quarantine_offline(temp.path());
+            finish_recovery_after_offline_quarantine_cleanup(temp.path())
+        };
+        #[cfg(windows)]
+        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("restart accepts the preserved durable CAR prefix");
+        assert!(!temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists());
+        assert!(
+            !temp
+                .path()
+                .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+                .exists()
+        );
         drop(publisher);
     }
 
     #[test]
-    fn filesystem_publisher_reclaims_interrupted_authority_temp_at_startup() {
-        let temp = tempdir().expect("tempdir");
-        let stale_temp = temp
-            .path()
-            .join(format!(".{GOVERNANCE_PUBLICATION_STATE_FILE}.tmp-42000-1"));
-        let stale_marker_temp = temp.path().join(format!(
-            ".{GOVERNANCE_PUBLICATION_INITIALIZED_FILE}.tmp-42000-2"
-        ));
-        fs::write(&stale_temp, b"interrupted authoritative state")
-            .expect("seed interrupted authority temp");
-        fs::write(&stale_marker_temp, b"interrupted initialization marker")
-            .expect("seed interrupted marker temp");
+    fn filesystem_publisher_accepts_one_empty_interrupted_kind_and_rejects_two() {
+        let accepted = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(accepted.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        fs::create_dir_all(
+            accepted
+                .path()
+                .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+                .join("interrupted_empty_kind"),
+        )
+        .expect("seed one durably created empty source kind");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let error = FilesystemGovernancePublisher::try_new(accepted.path().to_path_buf())
+                .expect_err("one legitimate empty prefix must be isolated on Unix");
+            assert!(
+                error
+                    .to_string()
+                    .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+                "unexpected quarantine error: {error}"
+            );
+            clear_recovery_quarantine_offline(accepted.path());
+            drop(
+                FilesystemGovernancePublisher::try_new(accepted.path().to_path_buf())
+                    .expect("startup succeeds after offline quarantine cleanup"),
+            );
+        }
+        #[cfg(windows)]
+        drop(
+            FilesystemGovernancePublisher::try_new(accepted.path().to_path_buf())
+                .expect("one empty source-kind prefix is a legitimate interrupted write"),
+        );
+        assert!(
+            !accepted
+                .path()
+                .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+                .exists()
+        );
 
-        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-            .expect("startup reclaims interrupted authority temp");
-        assert!(
-            !stale_temp.exists(),
-            "the canonical authoritative-state temp must be reclaimed before startup reads"
+        let rejected = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(rejected.path().to_path_buf())
+                .expect("initialize second empty publication authority"),
         );
-        assert!(
-            !stale_marker_temp.exists(),
-            "the canonical initialization-marker temp must be reclaimed before startup reads"
+        let source_root = rejected.path().join(GOVERNANCE_PUBLICATION_SOURCES_DIR);
+        for kind in ["interrupted_empty_alpha", "interrupted_empty_beta"] {
+            fs::create_dir_all(source_root.join(kind)).expect("seed excess empty source kind");
+        }
+        let error = FilesystemGovernancePublisher::try_new(rejected.path().to_path_buf())
+            .expect_err("more than one empty source-kind prefix must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        for kind in ["interrupted_empty_alpha", "interrupted_empty_beta"] {
+            assert!(
+                source_root.join(kind).is_dir(),
+                "excess-prefix rejection removed `{kind}`"
+            );
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn filesystem_publisher_rejects_empty_recovery_quarantine_until_offline_cleanup() {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
         );
-        drop(publisher);
+        let quarantine = recovery_quarantine_path(temp.path());
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain empty-quarantine fixture root");
+        drop(
+            prepare_governance_publication_recovery_quarantine(&root_guard)
+                .expect("simulate a crash after durable quarantine creation"),
+        );
+        drop(root_guard);
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("an empty retained quarantine must still block restart");
+        assert!(
+            error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected empty-quarantine error: {error}"
+        );
+        assert_eq!(
+            fs::read_dir(&quarantine)
+                .expect("reread empty recovery quarantine")
+                .count(),
+            0,
+            "restart must preserve an empty quarantine for explicit offline cleanup"
+        );
+        clear_recovery_quarantine_offline(temp.path());
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("restart succeeds after removing the empty quarantine offline"),
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn filesystem_publisher_rejects_saturated_recovery_quarantine_without_mutation() {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        let quarantine = recovery_quarantine_path(temp.path());
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain saturated-quarantine fixture root");
+        drop(
+            prepare_governance_publication_recovery_quarantine(&root_guard)
+                .expect("create durable saturated-quarantine fixture"),
+        );
+        drop(root_guard);
+        for position in 0..=GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP {
+            fs::write(
+                quarantine.join(format!("preserved-{position:02}")),
+                position.to_le_bytes(),
+            )
+            .expect("seed preserved quarantine entry");
+        }
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("a saturated recovery quarantine must block startup");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("hard cap")
+                && error
+                    .to_string()
+                    .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected saturation error: {error}"
+        );
+        assert_eq!(
+            fs::read_dir(&quarantine)
+                .expect("reread saturated quarantine")
+                .count(),
+            GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP + 1,
+            "startup must not mutate a saturated quarantine"
+        );
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_foreign_car_bytes_at_the_expected_base_without_cleanup() {
+        let donor = tempdir().expect("donor tempdir");
+        let (donor_entry, _) = seed_complete_uncommitted_publication_fixture(
+            donor.path(),
+            "foreign_interrupted_payload",
+            b"foreign-interrupted-publication",
+            0,
+        );
+        let donor_roles = publication_artifact_paths_for_fixture(donor.path(), &donor_entry)
+            .into_iter()
+            .skip(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+            .map(|path| fs::read(path).expect("read foreign CAR role"))
+            .collect::<Vec<_>>();
+        assert_eq!(donor_roles.len(), GOVERNANCE_PUBLICATION_CAR_ARTIFACT_COUNT);
+
+        for substituted_role in 0..GOVERNANCE_PUBLICATION_CAR_ARTIFACT_COUNT {
+            let temp = tempdir().expect("tempdir");
+            drop(
+                FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                    .expect("initialize empty publication authority"),
+            );
+            let (entry, _) = seed_complete_uncommitted_publication_fixture(
+                temp.path(),
+                "expected_interrupted_payload",
+                b"expected-interrupted-publication",
+                0,
+            );
+            let target_roles = publication_artifact_paths_for_fixture(temp.path(), &entry)
+                .into_iter()
+                .skip(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+                .collect::<Vec<_>>();
+            assert_ne!(
+                fs::read(&target_roles[substituted_role]).expect("read expected CAR role"),
+                donor_roles[substituted_role],
+                "foreign role fixture unexpectedly matches role {substituted_role}"
+            );
+            fs::write(
+                &target_roles[substituted_role],
+                &donor_roles[substituted_role],
+            )
+            .expect("substitute foreign bytes at expected CAR base");
+            let snapshots = publication_artifact_paths_for_fixture(temp.path(), &entry)
+                .into_iter()
+                .map(|path| {
+                    let bytes = fs::read(&path).expect("snapshot substituted publication role");
+                    (path, bytes)
+                })
+                .collect::<Vec<_>>();
+
+            let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect_err("foreign CAR bytes at the expected base must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("diverges from its canonical source projection"),
+                "unexpected role {substituted_role} error: {error}"
+            );
+            for (path, expected) in snapshots {
+                assert_eq!(
+                    fs::read(&path).expect("content-correlation rejection preserves role"),
+                    expected,
+                    "content-correlation rejection changed `{}` for role {substituted_role}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn governance_atomic_writes_reconcile_stale_names_before_mutation() {
+        let temp = tempdir().expect("tempdir");
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain atomic-write fixture root");
+        let replace_target = temp.path().join("replace-state");
+        let replace_stale = temp.path().join(".replace-state.tmp-42000-1");
+        fs::write(&replace_stale, b"older failed write").expect("seed replacement stale temp");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let error = write_rooted_atomic(&root_guard, &replace_target, b"current write")
+                .expect_err("Unix must quarantine a stale replacement before writing");
+            assert!(
+                error
+                    .to_string()
+                    .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+                "unexpected replacement quarantine error: {error}"
+            );
+            assert!(!replace_target.exists());
+            assert!(!replace_stale.exists());
+            assert_eq!(
+                fs::read(
+                    recovery_quarantine_path(temp.path()).join("mutable-state-recovery-000000")
+                )
+                .expect("read isolated replacement temp"),
+                b"older failed write"
+            );
+            clear_recovery_quarantine_offline(temp.path());
+        }
+        #[cfg(windows)]
+        {
+            write_rooted_atomic(&root_guard, &replace_target, b"current write")
+                .expect("Windows removes the exact opened stale temp before writing");
+            assert_eq!(
+                fs::read(&replace_target).expect("read replacement"),
+                b"current write"
+            );
+            assert!(!replace_stale.exists());
+        }
+
+        let create_target = temp.path().join("create-state");
+        let create_stale = temp.path().join(".create-state.tmp-42000-2");
+        fs::write(&create_stale, b"older failed create").expect("seed create stale temp");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let error = write_rooted_atomic_expected(
+                &root_guard,
+                &create_target,
+                b"current create",
+                governance_rooted_fs::ExpectedFile::Missing,
+            )
+            .expect_err("Missing writes must quarantine a stale create before mutation");
+            assert!(
+                error
+                    .to_string()
+                    .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+                "unexpected create quarantine error: {error}"
+            );
+            assert!(!create_target.exists());
+            assert!(!create_stale.exists());
+            assert_eq!(
+                fs::read(
+                    recovery_quarantine_path(temp.path()).join("mutable-state-recovery-000000")
+                )
+                .expect("read isolated create temp"),
+                b"older failed create"
+            );
+            clear_recovery_quarantine_offline(temp.path());
+        }
+        #[cfg(windows)]
+        {
+            write_rooted_atomic_expected(
+                &root_guard,
+                &create_target,
+                b"current create",
+                governance_rooted_fs::ExpectedFile::Missing,
+            )
+            .expect("Windows removes the exact opened stale temp before create");
+            assert_eq!(
+                fs::read(&create_target).expect("read created target"),
+                b"current create"
+            );
+            assert!(!create_stale.exists());
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_legacy_authority_temp_without_online_cleanup() {
+        for legacy_name in [
+            format!(".{GOVERNANCE_PUBLICATION_STATE_FILE}.tmp-42000-1"),
+            format!(".{GOVERNANCE_PUBLICATION_STATE_FILE}.tmp-bad"),
+            format!(".{GOVERNANCE_PUBLICATION_STATE_FILE}.retained-v1-bad"),
+        ] {
+            let temp = tempdir().expect("tempdir");
+            let stale_temp = temp.path().join(&legacy_name);
+            fs::write(&stale_temp, b"interrupted authoritative state")
+                .expect("seed interrupted authority temp");
+
+            let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect_err("legacy authority temporary must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("legacy governance publication authority"),
+                "unexpected legacy authority error: {error}"
+            );
+            assert!(
+                stale_temp.exists(),
+                "startup must leave unsupported authority state for deliberate offline handling"
+            );
+            assert!(
+                !temp
+                    .path()
+                    .join(GOVERNANCE_PUBLICATION_STORE_DIR_V1)
+                    .exists(),
+                "legacy rejection must precede typed-store creation for `{legacy_name}`"
+            );
+        }
     }
 
     #[test]
@@ -20943,9 +26853,13 @@ mod tests {
             .expect("initialize publication authority");
         assert!(
             temp.path()
-                .join(GOVERNANCE_PUBLICATION_STATE_FILE)
-                .is_file(),
-            "a pristine root must gain an explicit empty authority"
+                .join(GOVERNANCE_PUBLICATION_STORE_DIR_V1)
+                .is_dir(),
+            "a pristine root must gain an explicit typed authority"
+        );
+        assert!(
+            !temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE).exists(),
+            "the retired flat-file authority must not be recreated"
         );
         assert_eq!(
             fs::read(temp.path().join(GOVERNANCE_PUBLICATION_INITIALIZED_FILE))
@@ -20955,6 +26869,91 @@ mod tests {
         let state = read_publication_state_fixture(temp.path());
         assert_eq!(state.get("generation").and_then(JsonValue::as_u64), Some(0));
         drop(publisher);
+        let reader = GovernanceFilesystemRootGuard::capture_source(temp.path())
+            .expect("retain read-only publication root");
+        let snapshot = load_governance_publication_snapshot_v1(&reader)
+            .expect("load typed publication reader snapshot")
+            .expect("typed publication authority exists");
+        assert_eq!(snapshot.store_identity().0, 1);
+        assert_ne!(snapshot.store_identity().1, [0; 32]);
+        let value: JsonValue = json::from_slice(snapshot.canonical_bytes())
+            .expect("decode canonical publication reader bytes");
+        assert_eq!(value.get("generation").and_then(JsonValue::as_u64), Some(0));
+    }
+
+    #[test]
+    fn governance_publication_readers_reject_logical_store_generation_drift() {
+        for substituted_generation in [7_u64, u64::MAX] {
+            let temp = tempdir().expect("tempdir");
+            let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize publication authority");
+            let (mut state, snapshot) =
+                read_governance_publication_state(&publisher.publication_state_store)
+                    .expect("load initial typed authority");
+            state.insert("generation".into(), JsonValue::from(substituted_generation));
+            let bytes = json::to_json_pretty(&JsonValue::Object(state))
+                .expect("encode canonical substituted authority")
+                .into_bytes();
+            compare_and_swap_governance_two_slot_store_v1(
+                &publisher.publication_state_store,
+                &snapshot,
+                &bytes,
+                "substituted governance publication authority",
+            )
+            .expect("commit internally valid substituted authority");
+
+            let error = read_governance_publication_state(&publisher.publication_state_store)
+                .expect_err("publisher read boundary must reject generation drift");
+            assert!(
+                error
+                    .to_string()
+                    .contains("publication generation does not match its fixed-store generation"),
+                "unexpected publisher drift error: {error}"
+            );
+            drop(publisher);
+
+            let reader = GovernanceFilesystemRootGuard::capture_source(temp.path())
+                .expect("retain read-only publication root");
+            let error = load_governance_publication_snapshot_v1(&reader)
+                .expect_err("public read boundary must reject generation drift");
+            assert!(
+                error
+                    .to_string()
+                    .contains("publication generation does not match its fixed-store generation"),
+                "unexpected reader drift error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_restart_preserves_typed_authority_generation() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize publication authority");
+        let (settlement, encoded) = sample_settlement();
+        publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect("advance typed publication authority");
+        let before = read_publication_state_fixture(temp.path());
+        assert_eq!(
+            before.get("generation").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        drop(publisher);
+
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("restart accepts canonical typed authority"),
+        );
+        assert_eq!(
+            read_publication_state_fixture(temp.path()),
+            before,
+            "startup must not mutate the committed typed generation"
+        );
+        assert!(
+            !temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE).exists(),
+            "restart must not recreate the retired flat-file authority"
+        );
     }
 
     #[test]
@@ -20986,13 +26985,13 @@ mod tests {
             })
             .expect("committed CAR segment");
         drop(publisher);
-        fs::remove_file(temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE))
-            .expect("remove authority fixture");
+        fs::remove_dir_all(temp.path().join(GOVERNANCE_PUBLICATION_STORE_DIR_V1))
+            .expect("remove typed authority fixture");
 
         let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
             .expect_err("missing initialized authority must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("state is missing"));
+        assert!(error.to_string().contains("authority is missing"));
         for path in [encoded_path, json_path].into_iter().chain(car_paths) {
             assert!(
                 path.is_file(),

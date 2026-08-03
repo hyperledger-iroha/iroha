@@ -1215,20 +1215,18 @@ fn encoded_chunk_count(
         return Err(CandidateError::InvalidDataAvailabilityLayout);
     }
     let data_chunks = payload_len.div_ceil(chunk_size);
-    match layout.encoding {
-        wire::PayloadEncoding::Plain => Err(CandidateError::InvalidDataAvailabilityLayout),
-        wire::PayloadEncoding::ReedSolomon16 => {
-            let data_shards = usize::from(layout.data_shards);
-            let parity_shards = usize::from(layout.parity_shards);
-            if data_shards == 0 || parity_shards == 0 || !chunk_size.is_multiple_of(2) {
-                return Err(CandidateError::InvalidDataAvailabilityLayout);
-            }
-            let stripes = data_chunks.div_ceil(data_shards);
-            stripes
-                .checked_mul(data_shards.saturating_add(parity_shards))
-                .ok_or(CandidateError::InvalidDataAvailabilityLayout)
-        }
+    let data_shards = usize::from(layout.data_shards);
+    let parity_shards = usize::from(layout.parity_shards);
+    if data_shards == 0 || parity_shards == 0 || !chunk_size.is_multiple_of(2) {
+        return Err(CandidateError::InvalidDataAvailabilityLayout);
     }
+    let stripe_width = data_shards
+        .checked_add(parity_shards)
+        .ok_or(CandidateError::InvalidDataAvailabilityLayout)?;
+    let stripes = data_chunks.div_ceil(data_shards);
+    stripes
+        .checked_mul(stripe_width)
+        .ok_or(CandidateError::InvalidDataAvailabilityLayout)
 }
 
 /// Candidate construction failure.
@@ -2143,20 +2141,7 @@ mod tests {
     }
 
     #[test]
-    fn chunk_count_rejects_plain_and_matches_rs16_stripes() {
-        let plain = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 8,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1024,
-            max_chunk_count: 1024,
-        };
-        assert!(matches!(
-            encoded_chunk_count(plain, 17),
-            Err(CandidateError::InvalidDataAvailabilityLayout)
-        ));
-
+    fn chunk_count_rejects_invalid_rs16_geometry_and_matches_stripes() {
         let rs = wire::DataAvailabilityLayout {
             encoding: wire::PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 8,
@@ -2165,6 +2150,21 @@ mod tests {
             max_payload_size_bytes: 1024,
             max_chunk_count: 1024,
         };
+        for invalid in [
+            wire::DataAvailabilityLayout {
+                data_shards: 0,
+                ..rs
+            },
+            wire::DataAvailabilityLayout {
+                parity_shards: 0,
+                ..rs
+            },
+        ] {
+            assert!(matches!(
+                encoded_chunk_count(invalid, 17),
+                Err(CandidateError::InvalidDataAvailabilityLayout)
+            ));
+        }
         assert_eq!(encoded_chunk_count(rs, 17).expect("one stripe"), 6);
         assert_eq!(encoded_chunk_count(rs, 33).expect("two stripes"), 12);
     }

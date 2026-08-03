@@ -147,6 +147,15 @@ pub use mkhe::{
     zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
     zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
 };
+pub use mkhe::{
+    ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
+    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
+    ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheDirectObjectPublicationReceiptV1,
+    ZkAmsMkheDirectObjectPublicationTransactionV1, ZkAmsMkheDirectObjectPublishedBindingV1,
+    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectReadReceiptV1,
+    ZkAmsMkheDirectObjectSealTokenV1, ZkAmsMkheDirectObjectStagingTokenV1,
+    validate_zk_ams_mkhe_direct_object_v1,
+};
 
 /// Exact number of public T256 scalars in one admission relation instance.
 pub const ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1: usize = 89;

@@ -228,17 +228,16 @@ if (!ballot.accepted) {
 }
 
 const zkOwner = "<i105-account-id>"; // canonical I105 account id for ZK public inputs
-await torii.governanceSubmitZkBallot({
+await torii.governanceSubmitZkBallotV1({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
   electionId: "ref-zk",
-  proof: Buffer.alloc(96, 0xcd),
-  public: {
-    owner: zkOwner,
-    amount: "5000",
-    duration_blocks: 7_200,
-    direction: "Aye",
-  },
+  backend: "halo2/ipa",
+  envelope: Buffer.alloc(96, 0xcd),
+  owner: zkOwner,
+  amount: "5000",
+  durationBlocks: 7_200,
+  direction: "Aye",
 }, { signal: writeController.signal });
 ```
 
@@ -275,8 +274,8 @@ await torii.governancePersistCouncil({
 }, { signal: writeController.signal });
 
 const finalizeDraft = await torii.governanceFinalizeReferendumTyped({
-  referendumId: "ref-mainnet-001",
-  proposalId: "0123abcd...beef",
+  referendumId: "01".repeat(32),
+  proposalId: "01".repeat(32),
 }, { signal: writeController.signal });
 console.log("finalize tx count", finalizeDraft.tx_instructions.length);
 

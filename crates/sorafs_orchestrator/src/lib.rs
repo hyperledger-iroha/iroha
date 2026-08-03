@@ -3541,7 +3541,7 @@ impl From<ComplianceReason> for PolicyFallback {
 }
 
 /// Public report describing the applied anonymity policy and selection outcome.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct PolicyReport {
     /// Policy requested by the caller.
     pub policy: AnonymityPolicy,
@@ -4176,7 +4176,7 @@ fn compare_soranet_candidates(left: &SoranetCandidate, right: &SoranetCandidate)
         .then_with(|| left.identifier.cmp(&right.identifier))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct PolicySummary {
     policy: AnonymityPolicy,
     effective_policy: AnonymityPolicy,
@@ -4969,7 +4969,7 @@ impl FetchMetricsCtx {
             otel,
             telemetry,
             latency_cap_ms: scoreboard_config.latency_cap_ms,
-            policy_summary: policy_summary.clone(),
+            policy_summary: *policy_summary,
             start: Instant::now(),
         })
     }
@@ -9686,7 +9686,7 @@ mod tests {
 
             let session = block_on(orchestrator.fetch_with_scoreboard(&plan, &scoreboard, fetcher))
                 .expect("fire drill fetch");
-            session.policy_report.clone()
+            session.policy_report
         }
 
         let region = "fire-drill";

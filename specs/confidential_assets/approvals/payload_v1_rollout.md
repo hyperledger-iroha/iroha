@@ -11,13 +11,18 @@
 
 ## Inputs Reviewed
 
-1. **Swift bindings & submitters** — `ShieldRequest`/`UnshieldRequest`, async submitters, and Tx builder helpers landed with parity tests and docs.【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:389】【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1006】
+1. **SDK bindings & submitters** — confidential memo-envelope utilities and
+   proof-bound transaction builders landed with parity tests and docs. The
+   retired generic `ShieldRequest` is not an approved first-release surface;
+   public-to-confidential ingress requires Kagemusha V4 top-up evidence.
 2. **CLI ergonomics** — `iroha app zk envelope` helper covers encode/inspect workflows plus failure diagnostics, aligned with the roadmap ergonomics requirement.【crates/iroha_cli/src/zk.rs:1256】
 3. **Deterministic fixtures & parity suites** — shared fixture + Rust/Swift validation to keep Norito bytes/error surfaces aligned.【fixtures/confidential/encrypted_payload_v1.json:1】【crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1】【IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73】
 
 ## Decision
 
-- **Approve payload v1 rollout** for SDKs and CLI, enabling Swift wallets to originate confidential envelopes without bespoke plumbing.
+- **Approve payload v1 memo-envelope rollout** for SDKs and CLI. This approval
+  covers encrypted recipient payload handling only; it does not authorize a
+  proofless Shield instruction or make an envelope an amount/commitment proof.
 - **Conditions:** 
   - Keep parity fixtures under CI drift alerts (tied to `scripts/check_norito_bindings_sync.py`).
   - Document the operational playbook in `specs/confidential_assets.md` (already updated via the Swift SDK PR).

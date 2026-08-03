@@ -41,7 +41,6 @@ fn json_admin_envelopes_are_rejected_for_every_a0_tag_without_mutation() {
     for tag in [
         0,
         syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
-        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
         syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
         99,
     ] {

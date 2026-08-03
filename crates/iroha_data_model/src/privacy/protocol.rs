@@ -737,6 +737,8 @@ pub struct PrivacyOrchardPoolBootstrapV1 {
     pub pool_id: PrivacyPoolIdV1,
     /// Exact public asset represented by this private pool.
     pub asset_definition_id: AssetDefinitionId,
+    /// Immutable transparent balance partition backing this pool.
+    pub public_balance_scope: AssetBalanceScope,
     /// Governed public reserve account used for deposits and withdrawals.
     pub reserve_account: AccountId,
 }
@@ -750,11 +752,13 @@ impl PrivacyOrchardPoolBootstrapV1 {
     pub fn new(
         pool_id: PrivacyPoolIdV1,
         asset_definition_id: AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
         reserve_account: AccountId,
     ) -> Result<Self, PrivacyOrchardPoolBootstrapValidationErrorV1> {
         let bootstrap = Self {
             pool_id,
             asset_definition_id,
+            public_balance_scope,
             reserve_account,
         };
         bootstrap.validate()?;
@@ -780,6 +784,14 @@ impl PrivacyOrchardPoolBootstrapV1 {
     pub fn validate(&self) -> Result<(), PrivacyOrchardPoolBootstrapValidationErrorV1> {
         if self.pool_id.is_zero() {
             return Err(PrivacyOrchardPoolBootstrapValidationErrorV1::ZeroPoolId);
+        }
+        if matches!(
+            self.public_balance_scope,
+            AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
+        ) {
+            return Err(
+                PrivacyOrchardPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope,
+            );
         }
         self.namespace()
             .validate()
@@ -813,6 +825,9 @@ pub enum PrivacyOrchardPoolBootstrapValidationErrorV1 {
     /// The stable pool identifier is all zero.
     #[error("Orchard pool bootstrap pool id must be non-zero")]
     ZeroPoolId,
+    /// The universal coordinator was supplied as a concrete balance partition.
+    #[error("Orchard pool public balance scope cannot be the universal dataspace")]
+    UniversalPublicBalanceScope,
     /// The derived closed namespace is malformed.
     #[error("Orchard pool bootstrap namespace is invalid: {0}")]
     Namespace(PrivacyNamespaceValidationError),
@@ -1149,6 +1164,8 @@ pub struct PrivacyIvmPrivateNotePoolBootstrapV1 {
     pub pool_id: PrivacyPoolIdV1,
     /// Exact public asset manipulated by the private program.
     pub asset_definition_id: AssetDefinitionId,
+    /// Immutable transparent balance partition backing this pool.
+    pub public_balance_scope: AssetBalanceScope,
     /// Public reserve account used by explicit value-balance bridges.
     pub reserve_account: AccountId,
     /// Exact compiled private-program digest accepted by this pool.
@@ -1268,6 +1285,18 @@ impl PrivacyProofManagedPoolBootstrapV1 {
         }
     }
 
+    /// Return the exact transparent balance partition for protocols with a
+    /// public value-balance bridge.
+    #[must_use]
+    pub const fn public_balance_scope(&self) -> Option<AssetBalanceScope> {
+        match self {
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
+                Some(bootstrap.public_balance_scope)
+            }
+            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
+        }
+    }
+
     /// Return the pinned private-program digest for private-IVM pools.
     #[must_use]
     pub const fn program_id(&self) -> Option<PrivacyProgramIdV1> {
@@ -1311,6 +1340,14 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
                 if bootstrap.program_id.is_zero() {
                     return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroProgramId);
+                }
+                if matches!(
+                    bootstrap.public_balance_scope,
+                    AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
+                ) {
+                    return Err(
+                        PrivacyProofManagedPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope,
+                    );
                 }
                 bootstrap.pool_id
             }
@@ -1433,6 +1470,9 @@ pub enum PrivacyProofManagedPoolBootstrapValidationErrorV1 {
     /// The private-IVM program digest is all zero.
     #[error("private-IVM pool bootstrap program id must be non-zero")]
     ZeroProgramId,
+    /// The universal coordinator was supplied as a concrete balance partition.
+    #[error("private-IVM public balance scope cannot be the universal dataspace")]
+    UniversalPublicBalanceScope,
     /// No complete FCMP++ genesis output was supplied.
     #[error("FCMP++ pool bootstrap requires at least one initial output tuple")]
     EmptyInitialFcmpOutputs,

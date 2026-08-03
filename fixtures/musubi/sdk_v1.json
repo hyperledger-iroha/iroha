@@ -165,6 +165,14 @@
         }
       },
       "response": {
+        "chain_id": "musubi-fixture-chain",
+        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        },
+        "home_release": {
         "manifest": {
           "release": {
             "package": {
@@ -212,6 +220,112 @@
         },
         "artifact_governance": {"kind": "Available", "value": null},
         "revisions": {"yank": 1, "artifact_governance": 1}
+        },
+        "universal_release": {
+          "release": {
+            "package": {
+              "home_dataspace": 7,
+              "scope": {"kind": "DataspaceRoot", "value": null},
+              "name": ["math-utils"]
+            },
+            "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+          },
+          "release_digest": [[87,215,80,27,44,176,223,180,35,168,122,48,79,93,123,5,183,105,118,20,73,60,8,227,170,31,37,187,185,197,69,244]],
+          "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+          "source_digest": [[6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6]],
+          "interface_digest": [[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3]],
+          "abi": {
+            "abi_version": 1,
+            "abi_hash": [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]
+          },
+          "dependencies": [],
+          "selection": {
+            "yank": {
+              "release": {
+                "package": {
+                  "home_dataspace": 7,
+                  "scope": {"kind": "DataspaceRoot", "value": null},
+                  "name": ["math-utils"]
+                },
+                "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+              },
+              "yanked": false,
+              "reason": ["initial publication"],
+              "changed_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+              "changed_at_height": 43,
+              "revision": 1
+            },
+            "storage": {
+              "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+              "availability": {"kind": "Selectable", "value": null},
+              "healthy_replicas": 3,
+              "active_locations": 1,
+              "finalized_height": 50,
+              "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+              "index_revision": 9
+            },
+            "governance": {"kind": "Available", "value": null}
+          },
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "provider-bundle-attestation",
+      "path": "/v1/musubi/queries/provider-bundle-attestation",
+      "request": {
+        "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+        "replication_order": [[194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194]],
+        "provider_id": ["D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1"]
+      },
+      "response": {
+        "key": {
+          "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+          "replication_order": [[194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194]],
+          "provider_id": ["D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1"]
+        },
+        "attestation_digest": [[202,64,228,63,123,56,111,136,137,238,15,232,35,152,98,215,153,35,74,72,5,240,240,100,40,241,105,104,237,225,159,24]],
+        "attestation": {
+          "payload": {
+            "version": 1,
+            "binding": {
+              "chain_id": "musubi-fixture-chain",
+              "genesis_block_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+              "provider_id": ["D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1"],
+              "completed_by": "sorauﾛ1Nwﾖﾖ4ヰﾃtﾀvｴｹﾁnﾒEﾆSwKHﾏMｽoヱVｹﾍ9ｻCｱﾛVDｳ8xLHB99X",
+              "completion_authority": {
+                "provider_owner": "sorauﾛ1Nwﾖﾖ4ヰﾃtﾀvｴｹﾁnﾒEﾆSwKHﾏMｽoヱVｹﾍ9ｻCｱﾛVDｳ8xLHB99X",
+                "signer_policy": {
+                  "policy_id": [225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225,225],
+                  "revision": 1,
+                  "predecessor_digest": null,
+                  "policy_digest": [241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241]
+                }
+              },
+              "replication_order": [[194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194]],
+              "assignment_revision": 1,
+              "completion_epoch": 600,
+              "finalized_anchor": {
+                "height": 49,
+                "block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7]
+              },
+              "archive_id": [[82,250,165,238,226,251,154,17,131,76,147,164,18,177,238,121,13,21,85,146,56,114,94,93,76,27,157,98,11,202,205,253]],
+              "bundle_digest": [[101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101,101]],
+              "descriptor_digest": [[103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103,103]],
+              "semantic_release_manifest_digest": [[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4]],
+              "verification_lock_digest": [[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5]],
+              "source_tree_digest": [[6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6]]
+            }
+          },
+          "approvals": [
+            {
+              "public_key": "ed01201A381879F8A8DC97361D012E3B472207CC7313ED1A81C918EEBFA872B93414D9",
+              "signature": "FC04981FC4E2ACF65AE2BEE31F5B0CAF9C65D3B2C88CFF1B9641E75549E1B0FC122CF97A780E355503E87D99E523F8A86ED24E3C01774947CCED7B1B4CE3E007"
+            }
+          ]
+        },
+        "registered_by": "sorauﾛ1Nwﾖﾖ4ヰﾃtﾀvｴｹﾁnﾒEﾆSwKHﾏMｽoヱVｹﾍ9ｻCｱﾛVDｳ8xLHB99X",
+        "registered_at_height": 44
       }
     },
     {

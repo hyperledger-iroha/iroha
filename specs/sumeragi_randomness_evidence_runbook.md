@@ -95,10 +95,10 @@ The Grafana overview (`specs/grafana_sumeragi_overview.json`) includes
 panels for each counter; capture screenshots after every run and attach them to
 the artefact bundle referenced in {doc}`sumeragi_chaos_performance_runbook`.
 
-## 4. Evidence ingestion and streaming
+## 4. Evidence observation and streaming
 
-Slashing evidence must be collected on every validator and relayed to Torii.
-Use the CLI helpers to demonstrate parity with the HTTP endpoints documented in
+Slashing evidence is admitted through the authenticated consensus peer path and
+exposed read-only by Torii. Use the CLI helpers to demonstrate parity with the HTTP endpoints documented in
 {doc}`torii/sumeragi_evidence_app_api`:
 
 ```bash
@@ -112,12 +112,9 @@ iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 
 Verify that the reported `total` matches the Grafana widget fed by
 `sumeragi_evidence_records_total`, and confirm that records older than
-`sumeragi.npos.reconfig.evidence_horizon_blocks` are rejected (the CLI prints
-the drop reason). When testing alerting, submit a known-good payload via:
-
-```bash
-iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
-```
+`sumeragi.npos.reconfig.evidence_horizon_blocks` are rejected. Alert drills must
+produce evidence through the authenticated peer protocol; Torii and the CLI do
+not provide an evidence-injection path.
 
 Monitor `/v1/events/sse` with a filtered stream to prove SDKs see the same data:
 reuse the Python one-liner from {doc}`torii/sumeragi_evidence_app_api` to build
@@ -149,9 +146,10 @@ trail back to the captured metrics and CLI snapshots.
   delete the captured artefacts, correct `iroha_config`, restart the validator,
   and re-run the validation flow described in {doc}`sumeragi`.
 - **Missing commits or reveals** — A flat `sumeragi_vrf_commits_emitted_total`
-  or `sumeragi_vrf_reveals_emitted_total` time series means Torii is not
-  forwarding VRF frames. Check the validator logs for `handle_vrf_*` errors,
-  then re-submit the payload manually via the POST helpers documented above.
+  or `sumeragi_vrf_reveals_emitted_total` time series means the authenticated
+  peer path is not broadcasting VRF frames. Check the validator logs for
+  `handle_vrf_*` errors, restore peer connectivity, and let the validator
+  rebroadcast the frame through consensus.
 - **Unexpected penalties** — When `sumeragi_vrf_no_participation_total` spikes,
   cross-check the `vrf_penalties_<epoch>.json` file to confirm the signer ID and
   compare it with the staking roster. Penalties that do not align with chaos
@@ -161,5 +159,5 @@ trail back to the captured metrics and CLI snapshots.
   plateaus while chaos tests emit faults, run `iroha ops sumeragi evidence count`
   on multiple validators and confirm `/v1/sumeragi/evidence/count` matches the
   CLI output. Any divergence means SSE/webhook consumers may also be stale, so
-  re-submit a known-good fixture and escalate to the Torii maintainers if the
-  counter still fails to increment.
+  compare authenticated peer-ingress logs and repair the diverging validator.
+  Evidence cannot be injected through Torii.

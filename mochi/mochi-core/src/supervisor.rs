@@ -3609,6 +3609,9 @@ impl PeerSpec {
             .map_err(|err| std::io::Error::other(err.to_string()))?;
         let identity_key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let (identity_public_key, identity_private_key) = identity_key_pair.into_parts();
+        let soranet_transport_key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (soranet_transport_public_key, soranet_transport_private_key) =
+            soranet_transport_key_pair.into_parts();
 
         Ok(Self {
             alias,
@@ -3624,6 +3627,8 @@ impl PeerSpec {
             keys: PeerKeys {
                 public_key,
                 private_key: ExposedPrivateKey(private_key),
+                soranet_transport_public_key,
+                soranet_transport_private_key: ExposedPrivateKey(soranet_transport_private_key),
                 identity_public_key,
                 identity_private_key: ExposedPrivateKey(identity_private_key),
                 pop,
@@ -3659,6 +3664,14 @@ impl PeerSpec {
         root.insert(
             "private_key".into(),
             toml::Value::String(self.keys.private_key.to_string()),
+        );
+        root.insert(
+            "soranet_transport_public_key".into(),
+            toml::Value::String(self.keys.soranet_transport_public_key.to_string()),
+        );
+        root.insert(
+            "soranet_transport_private_key".into(),
+            toml::Value::String(self.keys.soranet_transport_private_key.to_string()),
         );
 
         let trusted = all_peers
@@ -4140,6 +4153,8 @@ impl PeerSpec {
 struct PeerKeys {
     public_key: PublicKey,
     private_key: ExposedPrivateKey,
+    soranet_transport_public_key: PublicKey,
+    soranet_transport_private_key: ExposedPrivateKey,
     identity_public_key: PublicKey,
     identity_private_key: ExposedPrivateKey,
     pop: Vec<u8>,
@@ -5745,6 +5760,30 @@ esac
 
         assert_eq!(supervisor.chain_id(), "test-chain");
         assert_eq!(supervisor.peers().len(), 4);
+        let mut transport_public_keys = HashSet::new();
+        for peer in supervisor.peers() {
+            KeyPair::new(
+                peer.spec.keys.soranet_transport_public_key.clone(),
+                peer.spec.keys.soranet_transport_private_key.0.clone(),
+            )
+            .expect("Mochi transport public/private key pair must match");
+            assert_eq!(
+                peer.spec.keys.soranet_transport_public_key.algorithm(),
+                Algorithm::Ed25519
+            );
+            assert_ne!(
+                peer.spec.keys.soranet_transport_public_key, peer.spec.keys.public_key,
+                "transport and consensus signing identities must differ"
+            );
+            assert_ne!(
+                peer.spec.keys.soranet_transport_public_key, peer.spec.keys.identity_public_key,
+                "transport and streaming identities must differ"
+            );
+            assert!(
+                transport_public_keys.insert(peer.spec.keys.soranet_transport_public_key.clone()),
+                "Mochi peers must not share a transport identity"
+            );
+        }
 
         #[cfg(unix)]
         for peer in supervisor.peers() {
@@ -5772,6 +5811,30 @@ esac
         assert_eq!(
             value.get("chain").and_then(toml::Value::as_str),
             Some("test-chain")
+        );
+        assert_eq!(
+            value
+                .get("soranet_transport_public_key")
+                .and_then(toml::Value::as_str),
+            Some(
+                peer.spec
+                    .keys
+                    .soranet_transport_public_key
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            value
+                .get("soranet_transport_private_key")
+                .and_then(toml::Value::as_str),
+            Some(
+                peer.spec
+                    .keys
+                    .soranet_transport_private_key
+                    .to_string()
+                    .as_str()
+            )
         );
         assert_eq!(
             value

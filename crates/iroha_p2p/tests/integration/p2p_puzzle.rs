@@ -14,11 +14,8 @@ use iroha_config::parameters::{
     defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
 use iroha_config_base::WithOrigin;
-use iroha_crypto::{
-    KeyPair,
-    soranet::handshake::{
-        DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-    },
+use iroha_crypto::soranet::handshake::{
+    DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
 };
 use iroha_data_model::{
     ChainId,
@@ -241,7 +238,7 @@ async fn matching_required_puzzle_parameters_connect() {
     }
 
     let chain = ChainId::from("puzzle_match");
-    let key_pairs = std::array::from_fn::<_, 4, _>(|_| KeyPair::random());
+    let key_pairs = std::array::from_fn::<_, 4, _>(|_| super::random_node_key_pair());
     let addresses = std::array::from_fn::<_, 4, _>(|_| socket_addr!(127.0.0.1: {next_port()}));
     // Exercise the real Argon2 admission path with a small but valid memory
     // cost so the positive case remains reliable on loaded CI workers.
@@ -254,7 +251,7 @@ async fn matching_required_puzzle_parameters_connect() {
     let mut children = Vec::with_capacity(key_pairs.len());
     for (index, (key_pair, address)) in key_pairs.iter().zip(&addresses).enumerate() {
         let (network, child) = NetworkHandle::<EmptyMsg>::start(
-            key_pair.clone(),
+            super::p2p_identity_keys(key_pair.clone()),
             config(address.clone(), handshake.clone()),
             chain.clone(),
             None,
@@ -310,8 +307,8 @@ async fn puzzle_mismatch_rejects_handshake() {
     }
     let baseline_failures = peer::handshake_failure_count();
 
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = socket_addr!(127.0.0.1: {next_port()});
     let addr2 = socket_addr!(127.0.0.1: {next_port()});
 
@@ -320,7 +317,7 @@ async fn puzzle_mismatch_rejects_handshake() {
     let handshake_exit = puzzle_handshake(3, 8 * 1024);
 
     let started1 = NetworkHandle::<EmptyMsg>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         config(addr1.clone(), handshake_entry),
         chain.clone(),
         None,
@@ -333,7 +330,7 @@ async fn puzzle_mismatch_rejects_handshake() {
         Err(_e) => return,
     };
     let started2 = NetworkHandle::<EmptyMsg>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         config(addr2.clone(), handshake_exit),
         chain.clone(),
         None,

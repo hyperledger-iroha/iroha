@@ -100,30 +100,53 @@ function compileFixture(tempRoot, tsconfig) {
   });
 }
 
-test("UnshieldInstructionInput exposes the exact output-free first-release shape", () => {
-  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
-  const source = ts.createSourceFile(
-    declarationPath,
-    fs.readFileSync(declarationPath, "utf8"),
-    ts.ScriptTarget.ES2022,
-    true,
-    ts.ScriptKind.TS,
-  );
-  const declaration = source.statements.find(
-    (statement) =>
-      ts.isInterfaceDeclaration(statement) &&
-      statement.name.text === "UnshieldInstructionInput",
-  );
-  assert.ok(declaration, "UnshieldInstructionInput declaration is missing");
-  const fields = declaration.members.map((member) => member.name?.getText(source)).sort();
-  assert.deepEqual(fields, [
-    "assetDefinitionId",
-    "destinationAccountId",
-    "inputs",
-    "proof",
-    "publicAmount",
-    "rootHint",
-  ]);
+test("retired generic confidential declarations are absent from the published surface", () => {
+  const declarations = fs.readFileSync(path.join(PACKAGE_ROOT, "index.d.ts"), "utf8");
+  const retiredDeclarations = [
+    ["ConfidentialEncryptedPayload", "Input"],
+    ...[["Shi", "eld"], ["Zk", "Transfer"], ["Un", "shield"]].flatMap(
+      (variantParts) => {
+        const variant = variantParts.join("");
+        return [
+          [variant, "InstructionInput"],
+          [variant, "TransactionInput"],
+          ["build", variant, "Instruction"],
+          ["build", variant, "Transaction"],
+        ];
+      },
+    ),
+  ].map((parts) => parts.join(""));
+  for (const retired of retiredDeclarations) {
+    assert.doesNotMatch(declarations, new RegExp(`\\b${retired}\\b`, "u"), retired);
+  }
+});
+
+test("Sumeragi V2 declarations use canonical Rust names without draft aliases", () => {
+  const declarations = fs.readFileSync(path.join(PACKAGE_ROOT, "index.d.ts"), "utf8");
+  for (const canonical of [
+    "ToriiSumeragiV2HeightContextId",
+    "ToriiSumeragiV2ConsensusRound",
+    "ToriiSumeragiV2QuorumCertificateRef",
+    "ToriiSumeragiV2TimeoutCertificateRef",
+  ]) {
+    assert.match(
+      declarations,
+      new RegExp(`export (?:type|interface) ${canonical}\\b`, "u"),
+      `missing canonical ${canonical} declaration`,
+    );
+  }
+  for (const retired of [
+    "ToriiSumeragiV2ContextId",
+    "ToriiSumeragiV2Round",
+    "ToriiSumeragiV2QcReference",
+    "ToriiSumeragiV2TimeoutReference",
+  ]) {
+    assert.doesNotMatch(
+      declarations,
+      new RegExp(`export (?:type|interface) ${retired}\\b`, "u"),
+      `retired draft alias ${retired} must be absent`,
+    );
+  }
 });
 
 test("every public export has a safe runtime target and an explicit declaration target", () => {

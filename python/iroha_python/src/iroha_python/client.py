@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, field, is_dataclass
 from decimal import Decimal
 from enum import Enum
@@ -352,6 +353,32 @@ def _require_exact_non_empty_string(value: Any, context: str) -> str:
     if trimmed != value:
         raise ValueError(f"{context} must not contain surrounding whitespace")
     return value
+
+
+def _require_exact_token_string(value: Any, context: str) -> str:
+    exact = _require_exact_non_empty_string(value, context)
+    if any(char.isspace() or unicodedata.category(char) == "Cc" for char in exact):
+        raise ValueError(f"{context} must not contain whitespace or control characters")
+    return exact
+
+
+def _require_governance_selector_string(value: Any, context: str) -> str:
+    exact = _require_exact_token_string(value, context)
+    if re.fullmatch(r"[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}", exact) is None:
+        raise ValueError(
+            f"{context} must be 1-128 RFC 3986 unreserved ASCII characters "
+            "and must not start with a dot"
+        )
+    return exact
+
+
+def _require_governance_proposal_id(value: Any, context: str) -> str:
+    proposal_id = _require_exact_token_string(value, context)
+    if re.fullmatch(r"[0-9a-f]{64}", proposal_id) is None:
+        raise ValueError(
+            f"{context} must be exactly 64 lowercase hexadecimal characters"
+        )
+    return proposal_id
 
 
 def _normalize_optional_exact_string(value: Any, context: str) -> Optional[str]:
@@ -2760,6 +2787,196 @@ def _normalize_required_base64_payload(value: Any, context: str) -> str:
     return base64.b64encode(decoded).decode("ascii")
 
 
+_GOVERNANCE_PRIVATE_KEY_FIELDS = frozenset(
+    {
+        "private_key",
+        "privateKey",
+        "private_key_hex",
+        "privateKeyHex",
+        "private_key_bytes",
+        "privateKeyBytes",
+        "private_key_seed",
+        "privateKeySeed",
+        "private_key_multihash",
+        "privateKeyMultihash",
+        "private_key_algorithm",
+        "privateKeyAlgorithm",
+    }
+)
+
+_GOVERNANCE_DEPLOY_CONTRACT_FIELDS = frozenset(
+    {
+        "contract_address",
+        "contract_alias",
+        "abi_version",
+        "code_hash",
+        "abi_hash",
+        "window",
+        "mode",
+        "manifest_provenance",
+    }
+)
+_GOVERNANCE_WINDOW_FIELDS = frozenset({"lower", "upper"})
+_GOVERNANCE_MANIFEST_PROVENANCE_FIELDS = frozenset({"signer", "signature"})
+_GOVERNANCE_PLAIN_BALLOT_FIELDS = frozenset(
+    {
+        "authority",
+        "chain_id",
+        "referendum_id",
+        "owner",
+        "amount",
+        "duration_blocks",
+        "direction",
+    }
+)
+_GOVERNANCE_PARLIAMENT_BALLOT_FIELDS = frozenset(
+    {"authority", "chain_id", "proposal_id", "body", "decision"}
+)
+_GOVERNANCE_ZK_BALLOT_V1_FIELDS = frozenset(
+    {
+        "authority",
+        "chain_id",
+        "election_id",
+        "backend",
+        "envelope_b64",
+        "root_hint",
+        "owner",
+        "amount",
+        "duration_blocks",
+        "direction",
+        "nullifier",
+    }
+)
+_GOVERNANCE_ZK_BALLOT_PROOF_V1_FIELDS = frozenset(
+    {"authority", "chain_id", "election_id", "ballot"}
+)
+_GOVERNANCE_BALLOT_PROOF_FIELDS = frozenset(
+    {
+        "backend",
+        "envelope_bytes",
+        "root_hint",
+        "owner",
+        "nullifier",
+        "amount",
+        "duration_blocks",
+        "direction",
+    }
+)
+_GOVERNANCE_FINALIZE_FIELDS = frozenset({"referendum_id", "proposal_id"})
+_GOVERNANCE_ENACT_FIELDS = frozenset({"proposal_id"})
+_GOVERNANCE_PARLIAMENT_BODIES = frozenset(
+    {
+        "rules-committee",
+        "agenda-council",
+        "interest-panel",
+        "review-panel",
+        "policy-jury",
+        "oversight-committee",
+        "fma-committee",
+    }
+)
+_GOVERNANCE_PARLIAMENT_DECISIONS = frozenset({"approve", "reject", "abstain"})
+_GOVERNANCE_BALLOT_DIRECTIONS = frozenset({"Aye", "Nay", "Abstain"})
+
+
+def _reject_governance_private_key_fields(
+    payload: Any,
+    *,
+    context: str,
+) -> None:
+    pending: list[tuple[Any, str]] = [(payload, context)]
+    visited: set[int] = set()
+    while pending:
+        candidate, path = pending.pop()
+        if isinstance(candidate, Mapping):
+            identity = id(candidate)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            fields = sorted(
+                key
+                for key in candidate
+                if isinstance(key, str) and key in _GOVERNANCE_PRIVATE_KEY_FIELDS
+            )
+            if fields:
+                raise ValueError(
+                    f"{path} does not accept private-key fields ({', '.join(fields)}); "
+                    "sign the returned transaction draft locally"
+                )
+            pending.extend(
+                (nested, f"{path}.{key}") for key, nested in candidate.items()
+            )
+        elif isinstance(candidate, (list, tuple)):
+            identity = id(candidate)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            pending.extend(
+                (nested, f"{path}[{index}]")
+                for index, nested in enumerate(candidate)
+            )
+
+
+def _copy_exact_governance_payload(
+    payload: Mapping[str, Any],
+    supported_fields: frozenset[str],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _require_mapping(payload, context)
+    _reject_governance_private_key_fields(record, context=context)
+    if any(not isinstance(key, str) for key in record):
+        raise TypeError(f"{context} field names must be strings")
+    unknown = sorted(set(record).difference(supported_fields))
+    if unknown:
+        raise ValueError(f"{context} contains unknown field `{unknown[0]}`")
+    return dict(record)
+
+
+def _normalize_governance_manifest_provenance(
+    value: Any,
+    *,
+    context: str,
+) -> Dict[str, str]:
+    record = _copy_exact_governance_payload(
+        value,
+        _GOVERNANCE_MANIFEST_PROVENANCE_FIELDS,
+        context=context,
+    )
+    missing = sorted(_GOVERNANCE_MANIFEST_PROVENANCE_FIELDS.difference(record))
+    if missing:
+        raise ValueError(f"{context} is missing required field `{missing[0]}`")
+    return {
+        field: _require_exact_non_empty_string(record[field], f"{context}.{field}")
+        for field in ("signer", "signature")
+    }
+
+
+def _normalize_governance_u64_integer(value: Any, *, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be a JSON u64 integer")
+    if value < 0 or value > (1 << 64) - 1:
+        raise ValueError(f"{context} must fit in a u64")
+    return value
+
+
+def _normalize_governance_ballot_direction(
+    value: Any,
+    *,
+    context: str,
+    required: bool = False,
+) -> Optional[str]:
+    if value is None:
+        if required:
+            raise ValueError(f"{context} must be Aye, Nay, or Abstain")
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be Aye, Nay, or Abstain")
+    if value not in _GOVERNANCE_BALLOT_DIRECTIONS:
+        raise ValueError(f"{context} must be Aye, Nay, or Abstain")
+    return value
+
+
 def _reject_governance_public_input_key(
     record: Dict[str, Any],
     key: str,
@@ -2791,12 +3008,12 @@ def _normalize_governance_public_hex_hint(
         return
     if not isinstance(value, str):
         raise ValueError(f"{context}.{key} must be a 32-byte hex string")
-    raw = value.strip()
+    raw = value
     if ":" in raw:
         scheme, rest = raw.split(":", 1)
-        if scheme and scheme.lower() != "blake2b32":
+        if not scheme or scheme.lower() != "blake2b32":
             raise ValueError(f"{context}.{key} must be a 32-byte hex string")
-        raw = rest.strip()
+        raw = rest
     if raw.startswith(("0x", "0X")):
         raw = raw[2:]
     if not re.fullmatch(r"[0-9a-fA-F]{64}", raw):
@@ -2844,86 +3061,137 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
         raise ValueError(f"{context}.owner must be a canonical I105 account id")
 
 
-def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[str, Any]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{context} must be an object")
-    normalized = dict(value)
-    _reject_governance_public_input_key(
-        normalized,
-        "durationBlocks",
-        "duration_blocks",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "root_hint_hex",
-        "root_hint",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "rootHintHex",
-        "root_hint",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "rootHint",
-        "root_hint",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "nullifier_hex",
-        "nullifier",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "nullifierHex",
-        "nullifier",
-        context=context,
-    )
-    _normalize_governance_public_hex_hint(
-        normalized,
-        "root_hint",
-        context=context,
-    )
-    _normalize_governance_public_hex_hint(
-        normalized,
-        "nullifier",
-        context=context,
-    )
-    _ensure_governance_lock_hints_complete(
-        normalized.get("owner"),
-        normalized.get("amount"),
-        normalized.get("duration_blocks"),
-        context=context,
-    )
-    if normalized.get("amount") is not None:
-        normalized["amount"] = _canonical_quantity_text(
-            normalized["amount"],
-            f"{context}.amount",
-        )
-    _ensure_governance_owner_canonical(normalized.get("owner"), context=context)
-    return normalized
-
-
-def _normalize_governance_zk_ballot_payload(
+def _normalize_governance_deploy_contract_payload(
     payload: Mapping[str, Any],
     *,
     context: str,
 ) -> Dict[str, Any]:
-    record = dict(payload)
-    if "public" in record:
-        public_inputs = record.get("public")
-        if public_inputs is None:
-            record.pop("public", None)
-        else:
-            record["public"] = _normalize_governance_zk_public_inputs(
-                public_inputs,
-                context=f"{context}.public",
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_DEPLOY_CONTRACT_FIELDS,
+        context=context,
+    )
+    contract_address = record.get("contract_address")
+    contract_alias = record.get("contract_alias")
+    if (contract_address is None) == (contract_alias is None):
+        raise ValueError(
+            f"{context} requires exactly one of contract_address or contract_alias"
+        )
+    if contract_address is not None:
+        record["contract_address"] = _require_exact_non_empty_string(
+            contract_address,
+            f"{context}.contract_address",
+        )
+        record.pop("contract_alias", None)
+    else:
+        record["contract_alias"] = _require_exact_non_empty_string(
+            contract_alias,
+            f"{context}.contract_alias",
+        )
+        record.pop("contract_address", None)
+
+    abi_version = _require_exact_non_empty_string(
+        record.get("abi_version"),
+        f"{context}.abi_version",
+    )
+    if abi_version != "1":
+        raise ValueError(f"{context}.abi_version must be 1")
+    record["abi_version"] = abi_version
+    for hash_field in ("code_hash", "abi_hash"):
+        if record.get(hash_field) is None:
+            raise ValueError(f"{context} is missing required field `{hash_field}`")
+        _normalize_governance_public_hex_hint(record, hash_field, context=context)
+
+    if record.get("window") is not None:
+        window = _copy_exact_governance_payload(
+            record["window"],
+            _GOVERNANCE_WINDOW_FIELDS,
+            context=f"{context}.window",
+        )
+        missing = sorted(_GOVERNANCE_WINDOW_FIELDS.difference(window))
+        if missing:
+            raise ValueError(
+                f"{context}.window is missing required field `{missing[0]}`"
             )
+        lower = _normalize_governance_u64_integer(
+            window["lower"],
+            context=f"{context}.window.lower",
+        )
+        upper = _normalize_governance_u64_integer(
+            window["upper"],
+            context=f"{context}.window.upper",
+        )
+        if upper < lower:
+            raise ValueError(f"{context}.window.upper must be at least window.lower")
+        record["window"] = {"lower": lower, "upper": upper}
+    if record.get("mode") is not None:
+        mode = _require_exact_non_empty_string(record["mode"], f"{context}.mode")
+        if mode not in {"Zk", "Plain"}:
+            raise ValueError(f"{context}.mode must be Zk or Plain")
+        record["mode"] = mode
+    if record.get("manifest_provenance") is not None:
+        record["manifest_provenance"] = _normalize_governance_manifest_provenance(
+            record["manifest_provenance"],
+            context=f"{context}.manifest_provenance",
+        )
+    return record
+
+
+def _normalize_governance_u64_decimal(value: Any, context: str) -> str:
+    return _normalize_sorafs_reputation_decimal(
+        value,
+        context,
+        allow_zero=True,
+        maximum=(1 << 64) - 1,
+    )
+
+
+def _normalize_governance_plain_ballot_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_PLAIN_BALLOT_FIELDS,
+        context=context,
+    )
+    record["referendum_id"] = _require_governance_selector_string(
+        record.get("referendum_id"),
+        f"{context}.referendum_id",
+    )
+    record["amount"] = _canonical_quantity_text(
+        record.get("amount"),
+        f"{context} amount",
+    )
+    record["duration_blocks"] = _normalize_governance_u64_decimal(
+        record.get("duration_blocks"),
+        f"{context}.duration_blocks",
+    )
+    record["direction"] = _normalize_governance_ballot_direction(
+        record.get("direction"),
+        context=f"{context}.direction",
+        required=True,
+    )
+    return record
+
+
+def _normalize_governance_parliament_ballot_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_PARLIAMENT_BALLOT_FIELDS,
+        context=context,
+    )
+    if record.get("body") not in _GOVERNANCE_PARLIAMENT_BODIES:
+        raise ValueError(f"{context}.body must name a canonical Parliament body")
+    if record.get("decision") not in _GOVERNANCE_PARLIAMENT_DECISIONS:
+        raise ValueError(
+            f"{context}.decision must be approve, reject, or abstain"
+        )
     return record
 
 
@@ -2932,6 +3200,9 @@ def _normalize_governance_zk_ballot_v1_payload(
     *,
     context: str,
 ) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be a JSON object")
+    _reject_governance_private_key_fields(payload, context=context)
     record = dict(payload)
     _reject_governance_public_input_key(
         record,
@@ -2968,6 +3239,28 @@ def _normalize_governance_zk_ballot_v1_payload(
         "nullifierHex",
         "nullifier",
         context=context,
+    )
+    record = _copy_exact_governance_payload(
+        record,
+        _GOVERNANCE_ZK_BALLOT_V1_FIELDS,
+        context=context,
+    )
+    for field in ("authority", "chain_id"):
+        record[field] = _require_exact_token_string(
+            record.get(field),
+            f"{context}.{field}",
+        )
+    record["election_id"] = _require_governance_selector_string(
+        record.get("election_id"),
+        f"{context}.election_id",
+    )
+    record["backend"] = _require_exact_token_string(
+        record.get("backend"),
+        f"{context}.backend",
+    )
+    record["envelope_b64"] = _normalize_required_base64_payload(
+        record.get("envelope_b64"),
+        f"{context}.envelope_b64",
     )
     _normalize_governance_public_hex_hint(
         record,
@@ -2991,6 +3284,24 @@ def _normalize_governance_zk_ballot_v1_payload(
             f"{context}.amount",
         )
     _ensure_governance_owner_canonical(record.get("owner"), context=context)
+    if record.get("duration_blocks") is not None:
+        record["duration_blocks"] = int(
+            _normalize_governance_u64_decimal(
+                record["duration_blocks"],
+                f"{context}.duration_blocks",
+            )
+        )
+    elif "duration_blocks" in record:
+        record.pop("duration_blocks")
+    if "direction" in record:
+        direction = _normalize_governance_ballot_direction(
+            record["direction"],
+            context=f"{context}.direction",
+        )
+        if direction is None:
+            record.pop("direction")
+        else:
+            record["direction"] = direction
     return record
 
 
@@ -2999,12 +3310,26 @@ def _normalize_governance_zk_ballot_proof_payload(
     *,
     context: str,
 ) -> Dict[str, Any]:
-    record = dict(payload)
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_ZK_BALLOT_PROOF_V1_FIELDS,
+        context=context,
+    )
+    for field in ("authority", "chain_id"):
+        record[field] = _require_exact_token_string(
+            record.get(field),
+            f"{context}.{field}",
+        )
+    record["election_id"] = _require_governance_selector_string(
+        record.get("election_id"),
+        f"{context}.election_id",
+    )
     ballot = record.get("ballot")
     if ballot is None:
         raise ValueError(f"{context}.ballot must be provided")
     if not isinstance(ballot, Mapping):
         raise TypeError(f"{context}.ballot must be an object")
+    _reject_governance_private_key_fields(ballot, context=f"{context}.ballot")
     ballot_record = dict(ballot)
     ballot_context = f"{context}.ballot"
     _reject_governance_public_input_key(
@@ -3037,6 +3362,19 @@ def _normalize_governance_zk_ballot_proof_payload(
         "nullifier",
         context=ballot_context,
     )
+    ballot_record = _copy_exact_governance_payload(
+        ballot_record,
+        _GOVERNANCE_BALLOT_PROOF_FIELDS,
+        context=ballot_context,
+    )
+    ballot_record["backend"] = _require_exact_token_string(
+        ballot_record.get("backend"),
+        f"{ballot_context}.backend",
+    )
+    ballot_record["envelope_bytes"] = _normalize_required_base64_payload(
+        ballot_record.get("envelope_bytes"),
+        f"{ballot_context}.envelope_bytes",
+    )
     _normalize_governance_public_hex_hint(
         ballot_record,
         "root_hint",
@@ -3059,7 +3397,68 @@ def _normalize_governance_zk_ballot_proof_payload(
             f"{ballot_context}.amount",
         )
     _ensure_governance_owner_canonical(ballot_record.get("owner"), context=ballot_context)
+    if ballot_record.get("duration_blocks") is not None:
+        ballot_record["duration_blocks"] = int(
+            _normalize_governance_u64_decimal(
+                ballot_record["duration_blocks"],
+                f"{ballot_context}.duration_blocks",
+            )
+        )
+    elif "duration_blocks" in ballot_record:
+        ballot_record.pop("duration_blocks")
+    if "direction" in ballot_record:
+        direction = _normalize_governance_ballot_direction(
+            ballot_record["direction"],
+            context=f"{ballot_context}.direction",
+        )
+        if direction is None:
+            ballot_record.pop("direction")
+        else:
+            ballot_record["direction"] = direction
     record["ballot"] = ballot_record
+    return record
+
+
+def _normalize_governance_finalize_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_FINALIZE_FIELDS,
+        context=context,
+    )
+    record["referendum_id"] = _require_governance_proposal_id(
+        record.get("referendum_id"),
+        f"{context}.referendum_id",
+    )
+    record["proposal_id"] = _require_governance_proposal_id(
+        record.get("proposal_id"),
+        f"{context}.proposal_id",
+    )
+    if record["referendum_id"] != record["proposal_id"]:
+        raise ValueError(f"{context}.referendum_id must equal proposal_id")
+    return record
+
+
+def _normalize_governance_enact_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_ENACT_FIELDS,
+        context=context,
+    )
+    proposal_id = record.get("proposal_id")
+    if proposal_id is None:
+        raise ValueError(f"{context} is missing required field `proposal_id`")
+    if not isinstance(proposal_id, str) or re.fullmatch(r"[0-9a-f]{64}", proposal_id) is None:
+        raise ValueError(
+            f"{context}.proposal_id must be exactly 64 lowercase hexadecimal characters"
+        )
     return record
 
 
@@ -6979,7 +7378,6 @@ class VerifiedCommittedTransaction:
             "External",
             "SealedCommitment",
             "SealedReveal",
-            "PrivateKaigi",
             "Time",
         }:
             raise ValueError("verified transaction entrypoint_kind is not recognized")
@@ -18656,144 +19054,6 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def shield_asset_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        from_account_id: str,
-        amount: QuantityLike,
-        note_commitment: Union[str, bytes, bytearray, memoryview],
-        ephemeral_public_key: Union[str, bytes, bytearray, memoryview],
-        nonce: Union[str, bytes, bytearray, memoryview],
-        ciphertext: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        ciphertext_b64: Optional[str] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Shield public funds into an asset's ZK ledger."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.shield_asset(
-            asset_definition_id,
-            self._native_transaction_account_id(from_account_id, "from_account_id"),
-            amount,
-            note_commitment=note_commitment,
-            ephemeral_public_key=ephemeral_public_key,
-            nonce=nonce,
-            ciphertext=ciphertext,
-            ciphertext_b64=ciphertext_b64,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
-    def zk_transfer_prepared_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        outputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        proof: Mapping[str, Any],
-        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Submit a prepared private-to-private ZK transfer."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.zk_transfer_prepared(
-            asset_definition_id,
-            inputs=inputs,
-            outputs=outputs,
-            proof=proof,
-            root_hint=root_hint,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
-    def unshield_prepared_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        to_account_id: str,
-        public_amount: QuantityLike,
-        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        proof: Mapping[str, Any],
-        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Submit an output-free first-release ZK unshield transaction.
-
-        Private outputs are derived from the verified statement; the retired
-        caller-supplied ``outputs`` keyword is intentionally unsupported.
-        """
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.unshield_prepared(
-            asset_definition_id,
-            self._native_transaction_account_id(to_account_id, "to_account_id"),
-            public_amount,
-            inputs=inputs,
-            proof=proof,
-            root_hint=root_hint,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
     def _account_record_from_listing(
         self,
         account_id: str,
@@ -21113,17 +21373,6 @@ class ToriiClient(_BaseToriiClient):
             raise RuntimeError("sumeragi evidence endpoint returned non-object payload")
         return SumeragiEvidenceListPage.from_payload(payload)
 
-    def submit_sumeragi_evidence(self, evidence_hex: str) -> Optional[Any]:
-        """Submit a Norito-encoded evidence payload (`POST /v1/sumeragi/evidence`)."""
-
-        return self.request_json(
-            "POST",
-            "/v1/sumeragi/evidence",
-            json_body={"evidence_hex": str(evidence_hex)},
-            expected_status=(200, 202),
-            allow_retry=False,
-        )
-
     def get_sumeragi_phases(self) -> Optional[Any]:
         """Fetch consensus phase durations (`GET /v1/sumeragi/phases`)."""
 
@@ -21157,9 +21406,15 @@ class ToriiClient(_BaseToriiClient):
         """Apply the `gov_protected_namespaces` parameter via `POST /v1/gov/protected-namespaces`."""
 
         if isinstance(namespaces, str):
-            values = [str(namespaces)]
+            raw_values: Sequence[Any] = [namespaces]
         else:
-            values = [str(value) for value in namespaces]
+            raw_values = namespaces
+        values = []
+        for index, value in enumerate(raw_values):
+            namespace = _require_exact_token_string(value, f"namespaces[{index}]")
+            if not namespace.isascii():
+                raise ValueError(f"namespaces[{index}] must contain only ASCII characters")
+            values.append(namespace)
         return self.request_json(
             "POST",
             "/v1/gov/protected-namespaces",
@@ -21211,37 +21466,45 @@ class ToriiClient(_BaseToriiClient):
         return GovernanceContractRecord.from_payload(payload)
 
     def governance_deploy_contract_proposal(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/proposals/deploy-contract`."""
+        """POST a closed deploy proposal with optional public manifest provenance.
+
+        The retired opaque ``limits`` field and private-key material are rejected
+        before dispatch.
+        """
 
         return self.request_json(
             "POST",
             "/v1/gov/proposals/deploy-contract",
-            json_body=dict(payload),
+            json_body=_normalize_governance_deploy_contract_payload(
+                payload,
+                context="governance deploy-contract proposal",
+            ),
         )
 
     def governance_submit_plain_ballot(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/ballots/plain`."""
+        """POST `/v1/gov/ballots/plain` with a canonical u64 decimal duration."""
 
-        normalized = dict(payload)
-        normalized["amount"] = _canonical_quantity_text(
-            normalized.get("amount"),
-            "governance plain ballot amount",
-        )
         return self.request_json(
             "POST",
             "/v1/gov/ballots/plain",
-            json_body=normalized,
+            json_body=_normalize_governance_plain_ballot_payload(
+                payload,
+                context="governance plain ballot",
+            ),
         )
 
-    def governance_submit_zk_ballot(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/ballots/zk`."""
+    def governance_submit_parliament_ballot(
+        self,
+        payload: Mapping[str, Any],
+    ) -> Optional[Any]:
+        """POST a ballot using the canonical hyphenated Parliament body label."""
 
         return self.request_json(
             "POST",
-            "/v1/gov/ballots/zk",
-            json_body=_normalize_governance_zk_ballot_payload(
+            "/v1/gov/parliament/ballots",
+            json_body=_normalize_governance_parliament_ballot_payload(
                 payload,
-                context="governance zk ballot",
+                context="governance parliament ballot",
             ),
         )
 
@@ -21275,24 +21538,35 @@ class ToriiClient(_BaseToriiClient):
         return self.request_json(
             "POST",
             "/v1/gov/finalize",
-            json_body=dict(payload),
+            json_body=_normalize_governance_finalize_payload(
+                payload,
+                context="governance finalize referendum",
+            ),
         )
 
     def governance_enact_proposal(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/enact`."""
+        """POST `/v1/gov/enact` with only the canonical proposal fingerprint."""
 
         return self.request_json(
             "POST",
             "/v1/gov/enact",
-            json_body=dict(payload),
+            json_body=_normalize_governance_enact_payload(
+                payload,
+                context="governance enact proposal",
+            ),
         )
 
     def get_governance_proposal(self, proposal_id: str) -> Optional[Any]:
         """GET `/v1/gov/proposals/{proposal_id}`."""
 
+        exact_proposal_id = _require_governance_proposal_id(
+            proposal_id,
+            "proposal_id",
+        )
+
         return self.request_json(
             "GET",
-            f"/v1/gov/proposals/{proposal_id}",
+            f"/v1/gov/proposals/{quote(exact_proposal_id, safe='')}",
             expected_status=(200, 404),
         )
 
@@ -21307,9 +21581,14 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_referendum(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/referenda/{referendum_id}`."""
 
+        exact_referendum_id = _require_governance_selector_string(
+            referendum_id,
+            "referendum_id",
+        )
+
         return self.request_json(
             "GET",
-            f"/v1/gov/referenda/{referendum_id}",
+            f"/v1/gov/referenda/{quote(exact_referendum_id, safe='')}",
             expected_status=(200, 404),
         )
 
@@ -21327,9 +21606,14 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_tally(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/tally/{referendum_id}`."""
 
+        exact_referendum_id = _require_governance_selector_string(
+            referendum_id,
+            "referendum_id",
+        )
+
         return self.request_json(
             "GET",
-            f"/v1/gov/tally/{referendum_id}",
+            f"/v1/gov/tally/{quote(exact_referendum_id, safe='')}",
             expected_status=(200, 404),
         )
 
@@ -21349,9 +21633,14 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_locks(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/locks/{referendum_id}`."""
 
+        exact_referendum_id = _require_governance_selector_string(
+            referendum_id,
+            "referendum_id",
+        )
+
         return self.request_json(
             "GET",
-            f"/v1/gov/locks/{referendum_id}",
+            f"/v1/gov/locks/{quote(exact_referendum_id, safe='')}",
             expected_status=(200, 404),
         )
 

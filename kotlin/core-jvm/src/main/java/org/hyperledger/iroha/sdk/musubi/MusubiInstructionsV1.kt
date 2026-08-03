@@ -108,19 +108,56 @@ object MusubiInstructionsV1 {
         }
     }
 
-    /** Add or renew one SoraFS location backed by provider-distinct finalized attestations. */
+    /** Register one immutable provider proof for later location-set commitments. */
+    class RegisterMusubiProviderBundleAttestationV1(
+        @JvmField val attestation: MusubiProviderBundleVerificationAttestationV1,
+        @JvmField val expectedLocationRevision: BigInteger,
+    ) {
+        init {
+            MusubiValidationV1.requireU64(
+                expectedLocationRevision,
+                "registerProviderAttestation.expectedLocationRevision",
+            )
+            require(expectedLocationRevision > BigInteger.ZERO) {
+                "Provider-attestation location revision must be non-zero"
+            }
+        }
+
+        /** Return the canonical headerless Rust payload. */
+        fun barePayload(): ByteArray = encodeBare {
+            encodeField(it) { field -> encodeProviderAttestation(field, attestation) }
+            encodeField(it) { field -> encodeU64(field, expectedLocationRevision) }
+        }
+
+        /** Return the concrete schema-bound Norito frame registered by core. */
+        fun concreteFrame(): ByteArray = frame(SCHEMA_NAME, barePayload())
+
+        /** Return the dynamic V1 instruction box submitted in a transaction. */
+        fun toInstructionBox(): InstructionBox =
+            InstructionBox.fromWirePayload(WIRE_ID, concreteFrame())
+
+        companion object {
+            /** Stable dynamic instruction registry identifier. */
+            const val WIRE_ID: String =
+                "iroha.musubi.v1.provider_bundle_attestation.register"
+
+            /** Exact Rust concrete type name used for the Norito schema hash. */
+            const val SCHEMA_NAME: String =
+                "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1"
+        }
+    }
+
+    /** Add or renew one SoraFS location bound to registered provider attestations. */
     class AddMusubiArchiveLocationV1(
         @JvmField val archiveId: MusubiDigest32V1,
         @JvmField val locationId: MusubiDigest32V1,
         @JvmField val pinManifest: MusubiDigest32V1,
         @JvmField val replicationOrder: MusubiDigest32V1,
-        providerAttestations: List<MusubiProviderBundleVerificationAttestationV1>,
+        @JvmField val providerAttestationSetDigest: MusubiProviderBundleAttestationSetDigestV1,
         @JvmField val renewAfterEpoch: BigInteger,
         @JvmField val expiresAtEpoch: BigInteger,
         @JvmField val expectedLocationRevision: BigInteger,
     ) {
-        @JvmField val providerAttestations = providerAttestations.toList()
-
         init {
             listOf(archiveId, locationId, pinManifest, replicationOrder).forEach {
                 MusubiValidationV1.requireNonZeroDigest(it, "Musubi archive-location identity")
@@ -138,34 +175,6 @@ object MusubiInstructionsV1 {
             require(expectedLocationRevision > BigInteger.ZERO) {
                 "Archive-location revision must be non-zero"
             }
-            require(this.providerAttestations.size in 1..64) {
-                "Musubi archive location needs between 1 and 64 provider attestations"
-            }
-            require(this.providerAttestations.zipWithNext().all { (left, right) ->
-                MusubiValidationV1.compareUnsignedBytes(
-                    left.payload.binding.providerIdPayload,
-                    right.payload.binding.providerIdPayload,
-                ) < 0
-            }) { "Musubi provider attestations must be sorted by distinct provider ID" }
-            val first = this.providerAttestations.first().payload.binding
-            this.providerAttestations.forEach { attestation ->
-                val binding = attestation.payload.binding
-                require(binding.archiveId == archiveId &&
-                    binding.replicationOrder == replicationOrder) {
-                    "Musubi provider attestation must bind the location archive and order"
-                }
-                require(binding.chainId == first.chainId &&
-                    binding.genesisBlockHash().contentEquals(first.genesisBlockHash()) &&
-                    binding.archiveId == first.archiveId &&
-                    binding.bundleDigest == first.bundleDigest &&
-                    binding.descriptorDigest == first.descriptorDigest &&
-                    binding.semanticReleaseManifestDigest ==
-                    first.semanticReleaseManifestDigest &&
-                    binding.verificationLockDigest == first.verificationLockDigest &&
-                    binding.sourceTreeDigest == first.sourceTreeDigest) {
-                    "Musubi provider attestations disagree on deployment or bundle commitments"
-                }
-            }
         }
 
         /** Return the canonical headerless Rust payload. */
@@ -175,7 +184,7 @@ object MusubiInstructionsV1 {
             encodeField(it) { field -> encodeDigestNewtype(field, pinManifest) }
             encodeField(it) { field -> encodeDigestNewtype(field, replicationOrder) }
             encodeField(it) { field ->
-                encodeProviderAttestations(field, providerAttestations)
+                encodeDigestNewtype(field, providerAttestationSetDigest)
             }
             encodeField(it) { field -> encodeU64(field, renewAfterEpoch) }
             encodeField(it) { field -> encodeU64(field, expiresAtEpoch) }
@@ -886,6 +895,20 @@ private object RawPayloadAdapter : TypeAdapter<ByteArray> {
 private fun encodeBare(block: (NoritoEncoder) -> Unit): ByteArray =
     NoritoEncoder(NoritoHeader.COMPACT_LEN).also(block).toByteArray()
 
+internal fun musubiProviderBundleAttestationDigestV1(
+    attestation: MusubiProviderBundleVerificationAttestationV1,
+): ByteArray = domainHash(
+    PROVIDER_BUNDLE_ATTESTATION_DIGEST_DOMAIN,
+    encodeBare { encodeProviderAttestation(it, attestation) },
+)
+
+internal fun musubiReleaseManifestDigestV1(
+    manifest: MusubiReleaseManifestV1,
+): ByteArray = domainHash(
+    RELEASE_DIGEST_DOMAIN,
+    encodeBare { encodeReleaseManifest(it, manifest) },
+)
+
 private fun frame(schemaName: String, barePayload: ByteArray): ByteArray =
     NoritoCodec.encode(
         barePayload,
@@ -1104,15 +1127,6 @@ private fun encodeSeedIngressApproval(
 ) {
     encodeField(encoder) { field -> encodeByteVector(field, approval.publicKeyPayload) }
     encodeField(encoder) { field -> encodeByteVector(field, approval.signaturePayload) }
-}
-
-private fun encodeProviderAttestations(
-    encoder: NoritoEncoder,
-    attestations: List<MusubiProviderBundleVerificationAttestationV1>,
-) {
-    encodeSequence(encoder, attestations) { element, attestation ->
-        encodeProviderAttestation(element, attestation)
-    }
 }
 
 private fun encodeProviderAttestation(
@@ -1535,8 +1549,13 @@ private val U8_MASK = BigInteger.valueOf(0xffL)
 private val ARCHIVE_ID_DOMAIN = "iroha.musubi.archive-id.v1".toByteArray(StandardCharsets.UTF_8)
 private val VERIFICATION_LOCK_DOMAIN =
     "iroha.musubi.verification-lock.v1".toByteArray(StandardCharsets.UTF_8)
+private val RELEASE_DIGEST_DOMAIN =
+    "iroha.musubi.release-digest.v1".toByteArray(StandardCharsets.UTF_8)
 private val PARLIAMENT_ACTION_DOMAIN =
     "iroha.musubi.parliament-action.v1".toByteArray(StandardCharsets.UTF_8)
+private val PROVIDER_BUNDLE_ATTESTATION_DIGEST_DOMAIN =
+    "iroha.musubi.provider-bundle-attestation.digest.v1"
+        .toByteArray(StandardCharsets.UTF_8)
 
 private class MusubiPublicKeyOrderKeyV1(
     val algorithm: Int,

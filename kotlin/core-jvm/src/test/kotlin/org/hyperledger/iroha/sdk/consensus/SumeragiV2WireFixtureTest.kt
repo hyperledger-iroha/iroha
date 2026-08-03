@@ -22,6 +22,47 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
+    fun `successor activation blocker uses revision four wire discriminant`() {
+        assertEquals(
+            SumeragiV2Wire.LivenessBlocker.SUCCESSOR_ACTIVATION_PENDING,
+            SumeragiV2Wire.LivenessBlocker.decode(byteArrayOf(7, 0, 0, 0)),
+        )
+        assertEquals(
+            SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING,
+            SumeragiV2Wire.LivenessBlocker.decode(byteArrayOf(8, 0, 0, 0)),
+        )
+    }
+
+    @Test
+    fun `data availability rejects retired encoding tag and zero shards`() {
+        val retiredTag = assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.PayloadEncoding.decode(byteArrayOf(1, 0, 0, 0))
+        }
+        assertEquals("Unknown payload encoding: 1", retiredTag.message)
+        assertEquals(
+            SumeragiV2Wire.PayloadEncoding.REED_SOLOMON_16,
+            SumeragiV2Wire.PayloadEncoding.decode(byteArrayOf(0, 0, 0, 0)),
+        )
+
+        listOf(0 to 1, 1 to 0).forEach { (dataShards, parityShards) ->
+            val zeroShard = assertFailsWith<IllegalArgumentException> {
+                SumeragiV2Wire.DataAvailabilityLayout(
+                    SumeragiV2Wire.PayloadEncoding.REED_SOLOMON_16,
+                    4,
+                    dataShards,
+                    parityShards,
+                    4,
+                    2,
+                )
+            }
+            assertEquals(
+                "ReedSolomon16 data availability requires positive shard counts",
+                zeroShard.message,
+            )
+        }
+    }
+
+    @Test
     fun `rust canonical message fixtures roundtrip`() {
         val messages = fixtureRows().filter { it.kind == "message" }
         assertEquals(EXPECTED_MESSAGE_NAMES, messages.map { it.name }.toSet())

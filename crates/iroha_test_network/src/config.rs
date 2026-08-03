@@ -582,12 +582,20 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .parse()
         .expect("garden_of_live_flowers domain");
     let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
+    let test_domain_name: Name = "domain".parse().expect("test domain");
+    let and_domain_name: Name = "and".parse().expect("and domain");
+    let xor_name: Name = "xor".parse().expect("xor asset name");
+    let may_name: Name = "MAY".parse().expect("MAY asset name");
     let alice_metadata = Metadata::default();
     let universal_dataspace: Name = "universal".parse().expect("universal dataspace");
     let wonderland_domain =
         DomainId::try_new(&wonderland_name, &universal_dataspace).expect("wonderland domain id");
     let garden_domain =
         DomainId::try_new(&garden_name, &universal_dataspace).expect("garden domain id");
+    let test_domain_id =
+        DomainId::try_new(&test_domain_name, &universal_dataspace).expect("test domain id");
+    let and_domain_id =
+        DomainId::try_new(&and_domain_name, &universal_dataspace).expect("and domain id");
 
     builder = builder
         .domain(wonderland_domain.clone())
@@ -599,6 +607,12 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .domain(garden_domain.clone())
         .account(CARPENTER_KEYPAIR.public_key().clone())
         .asset(cabbage_name, NumericSpec::default())
+        .finish_domain()
+        .domain(test_domain_id.clone())
+        .asset(xor_name, NumericSpec::default())
+        .finish_domain()
+        .domain(and_domain_id.clone())
+        .asset(may_name, NumericSpec::default())
         .finish_domain();
 
     let wonderland_domain =
@@ -632,8 +646,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
 
     builder = builder.next_transaction();
 
-    let test_domain_id = DomainId::parse_fully_qualified("domain.universal").expect("domain id");
-    let and_domain_id = DomainId::parse_fully_qualified("and.universal").expect("and domain id");
     let xor_asset_def: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             test_domain_id.clone(),
@@ -2025,7 +2037,7 @@ mod tests {
         let nexus = super::resolve_preexec_nexus_config(None, Some(&bundle))
             .expect("preexec should resolve proof policy overrides");
         let state = State::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
-        super::install_preexec_lane_manifests(&state)
+        super::install_preexec_lane_manifests(&state, None)
             .expect("preexec should install proof-policy-derived lane manifests");
 
         let view = state.view();

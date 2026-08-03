@@ -382,8 +382,6 @@ public final class Java8CompatibilitySurfaceTests {
         + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
         + "\"mtu_bytes\":1280,"
         + "\"display_billing_label\":\"standard XOR\","
-        + "\"fee_asset_id\":\"xor#universal.universal\","
-        + "\"escrow_account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
         + "\"operator_account_id\":\"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT\","
         + "\"lease_fee\":\"1000000.25\","
         + "\"settlement_grace_secs\":120,"

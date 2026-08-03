@@ -12,14 +12,17 @@
 
 | ID | Task | Owner(s) | Dependencies | Exit Criteria |
 |----|------|----------|--------------|---------------|
-| M1.1 | Finalise Swift encrypted-payload bindings (`ShieldRequest`, Norito bridge, TxBuilder helpers) and ensure parity tests cover success + failure paths. | Swift Lead / Confidential Assets WG | Shared fixtures (`fixtures/confidential/encrypted_payload_v1.json`) | `swift test` parity suite green; doc snippets match API surface. |
+| M1.1 | Finalise confidential memo-envelope utilities and specialized proof-bound transaction bindings; ensure parity tests cover success + failure paths without exposing generic Shield, ZkTransfer, or Unshield requests. | Swift Lead / Confidential Assets WG | Shared fixtures (`fixtures/confidential/encrypted_payload_v1.json`) | `swift test` parity suite green; doc snippets match the first-release protocol-bound surface. |
 | M1.2 | Extend `iroha_cli` and docs with encrypted-payload ergonomics (build helpers, failure diagnostics) and add CLI smoke test. | CLI Maintainer / Docs | Torii `/v1/confidential/...` endpoints | CLI walkthrough + smoke test merged; docs updated. |
-| M1.3 | Regenerate deterministic wallet fixture bundles (shield/transfer/unshield flows) and add CI drift alert. | SDK Council / DevRel | Fixture generator, Norito encoder | Fixtures consumed by Rust/Swift/JS tests; CI alerts on drift. |
+| M1.3 | Remove generic confidential wallet fixture bundles and add release-surface drift guards; validate Kagemusha top-up/redemption and native anonymous escrow in their dedicated suites. | SDK Council / DevRel | Instruction catalog, Norito encoder | Rust/Swift/JS guards reject all retired generic wires while specialized protocol fixtures remain covered. |
 | M1.4 | Secure SDK Council approval for payload v1 rollout (decision memo + rollback plan) and record in `status.md`. | SDK Council Chair | Completion of M1.1–M1.3 | Signed decision logged; production flag flipped. |
 
 ### M1 Status
 
-- ✅ Swift SDK exposes `ShieldRequest`/`UnshieldRequest` builders plus async submitters so wallets can originate encrypted payloads without bespoke glue (`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:389`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1006`).
+- ✅ SDKs expose confidential memo-envelope utilities and specialized
+  transaction surfaces. Generic Shield, transfer, and withdrawal builders are
+  intentionally absent: first-release settlement uses authenticated Kagemusha
+  V4 top-up/redemption and typed native anonymous escrow only.
 - ✅ CLI ergonomics landed via the `iroha app zk envelope` helper, which encodes/prints confidential memo envelopes directly from hex/base64 inputs (`crates/iroha_cli/src/zk.rs:1256`).
 - ✅ Deterministic encrypted-payload fixtures feed both Rust and Swift parity suites to keep Norito bytes in sync (`fixtures/confidential/encrypted_payload_v1.json:1`, `crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1`, `IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73`).
 - ✅ SDK Council rollout vote recorded in `specs/confidential_assets/approvals/payload_v1_rollout.md`; `status.md` logs the decision link so production flip now has auditable backing.
@@ -33,7 +36,7 @@
 | M2.3 | Extend benches/integration tests for adversarial workloads, reorg restores, and mempool prefilters; capture golden JSON/CSV perf artefacts. | Performance WG / QA Guild | Updated telemetry hooks | Bench artefacts checked in; CI gate enforces tolerances. |
 | M2.4 | Update `specs/confidential_assets_calibration.md` with signed baselines and governance notes. | Docs Lead / Program Mgmt | Tasks M2.1–M2.3 | Calibration doc + `status.md` updated; governance acknowledgment filed. |
 
-- [x] **M2.2 evidence captured** — `iroha_core` now records CommitmentTree depth/history/eviction stats during `Shield`/`ZkTransfer`, `dashboards/grafana/confidential_assets.json` charts the new depth series, alerts remain in `dashboards/alerts/confidential_assets_rules.yml`, and `specs/confidential_assets.md` documents the curl proof plus Grafana workflow.
+- [x] **M2.2 evidence captured** — `iroha_core` records CommitmentTree depth/history/eviction stats during protocol-private anonymous-escrow transfers and Kagemusha appends; `dashboards/grafana/confidential_assets.json` charts the depth series, alerts remain in `dashboards/alerts/confidential_assets_rules.yml`, and `specs/confidential_assets.md` documents the curl proof plus Grafana workflow.
 
 ### M2 Status
 
@@ -57,7 +60,12 @@ Status: ✅ All rotation policy, SDK/CLI tooling, and rehearsal ownership tasks 
 
 - ✅ Rotation policy/runbook published (`specs/confidential_assets_rotation.md`) covering parameter lifecycles, governance scheduling, CLI/SDK helpers, and operator ownership.
 - ✅ CLI + SDK surfaces already expose confidential policy metadata/pending transitions (CLI helper in `crates/iroha_cli/src/main.rs:1497`, Swift Torii client at `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` with tests in `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`).
-- ✅ End-to-end rotation coverage lives in the existing core tests: `crates/iroha_core/tests/confidential_policy_gates.rs:300` exercises schedule/cancel flows, while the `zk_ledger_scaffold.rs` and `zk_shield_transfer_audit.rs` suites validate mint→transfer→reveal telemetry with audit outputs across rotations.
+- ✅ End-to-end rotation coverage lives in the existing core tests:
+  `crates/iroha_core/tests/confidential_policy_gates.rs:300` exercises
+  schedule/cancel flows, Kagemusha suites validate authenticated top-up and
+  escrow-backed redemption, native escrow suites validate purpose-bound private
+  transfer, and the release-surface regression rejects all three retired
+  generic confidential wires.
 
 ## M4 — Audit & Operations *(🈴 Completed)*
 
@@ -73,7 +81,13 @@ Status: ✅ All rotation policy, SDK/CLI tooling, and rehearsal ownership tasks 
 Status: ✅ Operator/auditor runbooks, selective-disclosure APIs, calibration artefacts, and review tracking are all in-tree; milestone is now considered delivered pending the separate x86 waiver noted above.
 
 - ✅ Auditor & operator workflows consolidated in `specs/confidential_assets_audit_runbook.md` (event feeds, telemetry surfaces, calibration evidence requirements, and external-review cadence).
-- ✅ Selective disclosure APIs + SDK bindings already documented and tested (`crates/iroha_torii/src/routing.rs:15205`, `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`, `crates/iroha_core/tests/zk_confidential_events.rs:19`).
+- ✅ Selective disclosure APIs + SDK bindings are documented in
+  `crates/iroha_torii/src/routing.rs` and
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`; current protocol coverage
+  lives in the Kagemusha top-up/redemption tests in
+  `crates/iroha_core/src/smartcontracts/isi/offline.rs` and the sealed native
+  anonymous-escrow/private-transfer tests in
+  `crates/iroha_core/src/smartcontracts/isi/escrow.rs`.
 - ✅ Telemetry/dashboards + calibration artefacts logged in `specs/confidential_assets.md:401` and `specs/confidential_assets_calibration.md`, giving auditors deterministic references while x86 benchmarking hosts are pending.
 
 ---

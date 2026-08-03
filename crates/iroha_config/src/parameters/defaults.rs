@@ -1496,7 +1496,8 @@ pub mod sorafs {
                 /// outside the completion transaction payload.
                 pub const COMPLETION_CHAIN_ID_MAX_BYTES_V1: usize = 255;
                 /// Maximum canonical bytes for each retained completion account identity.
-                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 = 8 * 1024;
+                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 =
+                    iroha_data_model::musubi::MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 as u64;
                 /// Canonical reserve for one immutable finalized authorization.
                 ///
                 /// The provider-ingest runtime validates the largest variable
@@ -1640,8 +1641,6 @@ pub mod sorafs {
 
             /// The public publisher is opt-in until endpoints and secret paths are configured.
             pub const ENABLED: bool = false;
-            /// Head publication mode (`signed_http` or `ipns`).
-            pub const HEAD_MODE: &str = "signed_http";
             /// Poll interval for filesystem feed reconciliation.
             pub const POLL_INTERVAL_SECS: u64 = 5;
             /// Endpoint TCP/TLS connection timeout.
@@ -1659,12 +1658,6 @@ pub mod sorafs {
             /// 128 MiB of canonical signing payload plus a checked 64 KiB
             /// block-signature/envelope allowance.
             pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((128 * 1024 * 1024) + (64 * 1024));
-            /// Maximum entries retained in the deterministic local IPLD mirror.
-            pub const MIRROR_MAX_ENTRIES: usize = 65_536;
-            /// Maximum canonical block bytes retained by the mirror.
-            pub const MIRROR_MAX_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
-            /// Maximum age accepted for a newly published signed head.
-            pub const MAX_HEAD_AGE_SECS: u64 = 15 * 60;
             /// Maximum future clock skew accepted for blocks and heads.
             pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
             /// Maximum lifetime accepted for one signed outbound request envelope.

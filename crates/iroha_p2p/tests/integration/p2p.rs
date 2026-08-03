@@ -279,7 +279,7 @@ async fn network_create() {
     }
     info!("Starting network tests...");
     let address = socket_addr!(127.0.0.1: {next_port()});
-    let key_pair = KeyPair::random();
+    let key_pair = super::random_node_key_pair();
     let public_key = key_pair.public_key().clone();
     let idle_timeout = Duration::from_secs(60);
     let chain_id = ChainId::from("test_chain");
@@ -413,7 +413,7 @@ async fn network_create() {
         quic_max_idle_timeout: None,
     };
     let started = NetworkHandle::start(
-        key_pair,
+        super::p2p_identity_keys(key_pair),
         config,
         chain_id,
         None,
@@ -455,11 +455,11 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     let chain = ChainId::from("trust_gate_opt_out");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
-    let kp_a = KeyPair::random();
-    let kp_b = KeyPair::random();
+    let kp_a = super::random_node_key_pair();
+    let kp_b = super::random_node_key_pair();
 
     let started_a = NetworkHandle::<MultiTopic>::start(
-        kp_a.clone(),
+        super::p2p_identity_keys(kp_a.clone()),
         trust_config(addr_a.clone(), false, Duration::from_secs(60)),
         chain.clone(),
         None,
@@ -473,7 +473,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     };
 
     let started_b = NetworkHandle::<MultiTopic>::start(
-        kp_b.clone(),
+        super::p2p_identity_keys(kp_b.clone()),
         trust_config(addr_b.clone(), true, Duration::from_secs(60)),
         chain.clone(),
         None,
@@ -613,11 +613,11 @@ async fn trust_gossip_enabled_flows_through() {
     let chain = ChainId::from("trust_gate_enabled");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
-    let kp_a = KeyPair::random();
-    let kp_b = KeyPair::random();
+    let kp_a = super::random_node_key_pair();
+    let kp_b = super::random_node_key_pair();
 
     let started_a = NetworkHandle::<MultiTopic>::start(
-        kp_a.clone(),
+        super::p2p_identity_keys(kp_a.clone()),
         trust_config(addr_a.clone(), true, Duration::from_secs(60)),
         chain.clone(),
         None,
@@ -631,7 +631,7 @@ async fn trust_gossip_enabled_flows_through() {
     };
 
     let started_b = NetworkHandle::<MultiTopic>::start(
-        kp_b.clone(),
+        super::p2p_identity_keys(kp_b.clone()),
         trust_config(addr_b.clone(), true, Duration::from_secs(60)),
         chain.clone(),
         None,
@@ -719,12 +719,12 @@ async fn ws_fallback_connects_and_handshakes() {
         return;
     }
 
-    let peer2_key_pair = KeyPair::random();
+    let peer2_key_pair = super::random_node_key_pair();
     let chain_id = ChainId::from("test_chain");
     let idle_timeout = Duration::from_secs(5);
     let peer2_listen_address = super::next_addr();
     let (peer2_network, _peer2_child) = NetworkHandle::<TestMessage>::start(
-        peer2_key_pair.clone(),
+        super::p2p_identity_keys(peer2_key_pair.clone()),
         websocket_test_config(peer2_listen_address, idle_timeout, false),
         chain_id.clone(),
         None,
@@ -749,10 +749,10 @@ async fn ws_fallback_connects_and_handshakes() {
     ));
 
     // Prefer the WebSocket transport for peer 1's connection to the listener.
-    let peer1_key_pair = KeyPair::random();
+    let peer1_key_pair = super::random_node_key_pair();
     let peer1_listen_address = super::next_addr();
     let (mut peer1_network, _peer1_child) = NetworkHandle::<TestMessage>::start(
-        peer1_key_pair,
+        super::p2p_identity_keys(peer1_key_pair),
         websocket_test_config(peer1_listen_address, idle_timeout, true),
         chain_id,
         None,
@@ -877,9 +877,9 @@ async fn two_networks() {
     if super::skip_if_no_tcp_bind() {
         return;
     }
-    let key_pair1 = KeyPair::random();
+    let key_pair1 = super::random_node_key_pair();
     let public_key1 = key_pair1.public_key().clone();
-    let key_pair2 = KeyPair::random().clone();
+    let key_pair2 = super::random_node_key_pair().clone();
     let public_key2 = key_pair2.public_key().clone();
     let chain_id = ChainId::from("test_chain");
     info!("Starting first network...");
@@ -1016,7 +1016,7 @@ async fn two_networks() {
         quic_max_idle_timeout: None,
     };
     let (mut network1, _) = NetworkHandle::start(
-        key_pair1,
+        super::p2p_identity_keys(key_pair1),
         config1,
         chain_id.clone(),
         None,
@@ -1160,7 +1160,7 @@ async fn two_networks() {
         quic_max_idle_timeout: None,
     };
     let (mut network2, _) = NetworkHandle::<TestMessage>::start(
-        key_pair2,
+        super::p2p_identity_keys(key_pair2),
         config2,
         chain_id.clone(),
         None,
@@ -1257,11 +1257,11 @@ async fn update_peers_triggers_immediate_connect() {
     let address1 = socket_addr!(127.0.0.1: {next_port()});
     let address2 = socket_addr!(127.0.0.1: {next_port()});
 
-    let key_pair1 = KeyPair::random();
-    let key_pair2 = KeyPair::random();
+    let key_pair1 = super::random_node_key_pair();
+    let key_pair2 = super::random_node_key_pair();
 
     let started1 = NetworkHandle::<TestMessage>::start(
-        key_pair1.clone(),
+        super::p2p_identity_keys(key_pair1.clone()),
         Config {
             address: WithOrigin::inline(address1.clone()),
             public_address: WithOrigin::inline(address1.clone()),
@@ -1403,7 +1403,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
     };
 
     let started2 = NetworkHandle::<TestMessage>::start(
-        key_pair2.clone(),
+        super::p2p_identity_keys(key_pair2.clone()),
         Config {
             address: WithOrigin::inline(address2.clone()),
             public_address: WithOrigin::inline(address2.clone()),
@@ -1588,9 +1588,9 @@ async fn happy_eyeballs_parallel_dials() {
 
     // Listener (peer2)
     let address2 = socket_addr!(127.0.0.1: {next_port()});
-    let key_pair2 = KeyPair::random();
+    let key_pair2 = super::random_node_key_pair();
     let started2 = NetworkHandle::<TestMessage>::start(
-        key_pair2.clone(),
+        super::p2p_identity_keys(key_pair2.clone()),
         Config {
             address: WithOrigin::inline(address2.clone()),
             public_address: WithOrigin::inline(address2.clone()),
@@ -1731,9 +1731,9 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
 
     // Dialer (network1)
     let address1 = socket_addr!(127.0.0.1: {next_port()});
-    let key_pair1 = KeyPair::random();
+    let key_pair1 = super::random_node_key_pair();
     let started1 = NetworkHandle::<TestMessage>::start(
-        key_pair1.clone(),
+        super::p2p_identity_keys(key_pair1.clone()),
         Config {
             address: WithOrigin::inline(address1.clone()),
             public_address: WithOrigin::inline(address1.clone()),
@@ -1942,9 +1942,9 @@ async fn low_topics_do_not_starve_each_other() {
 
     // Start receiver network (B)
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
-    let kp_b = KeyPair::random();
+    let kp_b = super::random_node_key_pair();
     let (net_b, _child_b) = match NetworkHandle::<MultiTopic>::start(
-        kp_b.clone(),
+        super::p2p_identity_keys(kp_b.clone()),
         Config {
             address: WithOrigin::inline(addr_b.clone()),
             public_address: WithOrigin::inline(addr_b.clone()),
@@ -2085,9 +2085,9 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
 
     // Start sender network (A)
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
-    let kp_a = KeyPair::random();
+    let kp_a = super::random_node_key_pair();
     let (mut net_a, _child_a) = match NetworkHandle::<MultiTopic>::start(
-        kp_a.clone(),
+        super::p2p_identity_keys(kp_a.clone()),
         Config {
             address: WithOrigin::inline(addr_a.clone()),
             public_address: WithOrigin::inline(addr_a.clone()),
@@ -2317,9 +2317,9 @@ async fn relay_hub_routes_consensus_between_spokes() {
     let spoke1_addr = socket_addr!(127.0.0.1: {next_port()});
     let spoke2_addr = socket_addr!(127.0.0.1: {next_port()});
 
-    let hub_kp = KeyPair::random();
-    let spoke1_kp = KeyPair::random();
-    let spoke2_kp = KeyPair::random();
+    let hub_kp = super::random_node_key_pair();
+    let spoke1_kp = super::random_node_key_pair();
+    let spoke2_kp = super::random_node_key_pair();
 
     let hub_peer = Peer::new(hub_addr.clone(), hub_kp.public_key().clone());
     let spoke1_peer = Peer::new(spoke1_addr.clone(), spoke1_kp.public_key().clone());
@@ -2456,7 +2456,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         };
 
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
-        hub_kp.clone(),
+        super::p2p_identity_keys(hub_kp.clone()),
         make_config(hub_addr.clone(), RelayMode::Hub, Vec::new()),
         chain_id.clone(),
         None,
@@ -2472,7 +2472,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         }
     };
     let (mut spoke1_net, _spoke1_child) = match NetworkHandle::<ConsensusMessage>::start(
-        spoke1_kp.clone(),
+        super::p2p_identity_keys(spoke1_kp.clone()),
         make_config(
             spoke1_addr.clone(),
             RelayMode::Spoke,
@@ -2492,7 +2492,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         }
     };
     let (mut spoke2_net, _spoke2_child) = match NetworkHandle::<ConsensusMessage>::start(
-        spoke2_kp.clone(),
+        super::p2p_identity_keys(spoke2_kp.clone()),
         make_config(
             spoke2_addr.clone(),
             RelayMode::Spoke,
@@ -2590,9 +2590,9 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     let spoke_addr = socket_addr!(127.0.0.1: {next_port()});
     let assist_addr = socket_addr!(127.0.0.1: {next_port()});
 
-    let hub_kp = KeyPair::random();
-    let spoke_kp = KeyPair::random();
-    let assist_kp = KeyPair::random();
+    let hub_kp = super::random_node_key_pair();
+    let spoke_kp = super::random_node_key_pair();
+    let assist_kp = super::random_node_key_pair();
 
     let hub_peer = Peer::new(hub_addr.clone(), hub_kp.public_key().clone());
     let spoke_peer = Peer::new(spoke_addr.clone(), spoke_kp.public_key().clone());
@@ -2727,7 +2727,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         };
 
     let (mut hub_net, _hub_child) = match NetworkHandle::<ConsensusMessage>::start(
-        hub_kp.clone(),
+        super::p2p_identity_keys(hub_kp.clone()),
         make_config(hub_addr.clone(), RelayMode::Hub, Vec::new()),
         chain_id.clone(),
         None,
@@ -2743,7 +2743,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         }
     };
     let (mut spoke_net, _spoke_child) = match NetworkHandle::<ConsensusMessage>::start(
-        spoke_kp.clone(),
+        super::p2p_identity_keys(spoke_kp.clone()),
         make_config(spoke_addr.clone(), RelayMode::Spoke, vec![hub_addr.clone()]),
         chain_id.clone(),
         None,
@@ -2761,7 +2761,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         }
     };
     let (mut assist_net, _assist_child) = match NetworkHandle::<ConsensusMessage>::start(
-        assist_kp.clone(),
+        super::p2p_identity_keys(assist_kp.clone()),
         make_config(
             assist_addr.clone(),
             RelayMode::Assist,
@@ -2869,7 +2869,7 @@ async fn multiple_networks() {
     let mut key_pairs = Vec::new();
     for _ in 0_u16..10_u16 {
         let address = socket_addr!(127.0.0.1: {next_port()});
-        let key_pair = KeyPair::random();
+        let key_pair = super::random_node_key_pair();
         let public_key = key_pair.public_key().clone();
         peers.push(Peer::new(address, public_key));
         key_pairs.push(key_pair);
@@ -3078,10 +3078,16 @@ async fn start_network(
         tls_only_v1_3: true,
         quic_max_idle_timeout: None,
     };
-    let (mut network, _) =
-        NetworkHandle::start(key_pair, config, chain_id, None, None, shutdown_signal)
-            .await
-            .unwrap();
+    let (mut network, _) = NetworkHandle::start(
+        super::p2p_identity_keys(key_pair),
+        config,
+        chain_id,
+        None,
+        None,
+        shutdown_signal,
+    )
+    .await
+    .unwrap();
     if let Err(sender) = network.subscribe_to_peers_messages(actor) {
         drop(sender);
         panic!("failed to subscribe actor to network messages");
@@ -3163,7 +3169,7 @@ async fn tls_inbound_listener_smoke() {
     });
 
     // Network 1 (listener with inbound TLS)
-    let key_pair1 = KeyPair::random();
+    let key_pair1 = super::random_node_key_pair();
     let peer1 = Peer::new(public_host_addr.clone(), key_pair1.public_key().clone());
 
     let config1 = Config {
@@ -3298,7 +3304,7 @@ async fn tls_inbound_listener_smoke() {
 
     // Start network1; if sandbox forbids sockets, skip
     let (network1, _child1) = match NetworkHandle::<TestMessage>::start(
-        key_pair1.clone(),
+        super::p2p_identity_keys(key_pair1.clone()),
         Config {
             tls_listen_address: Some(WithOrigin::inline(tls_listen_addr.clone())),
             ..config1
@@ -3318,10 +3324,10 @@ async fn tls_inbound_listener_smoke() {
     };
 
     // Network 2 (dialer with outbound TLS via hostname)
-    let key_pair2 = KeyPair::random();
+    let key_pair2 = super::random_node_key_pair();
     let dialer_addr = super::next_addr();
     let (_n2, _child2) = match NetworkHandle::<TestMessage>::start(
-        key_pair2.clone(),
+        super::p2p_identity_keys(key_pair2.clone()),
         Config {
             address: WithOrigin::inline(dialer_addr.clone()),
             public_address: WithOrigin::inline(dialer_addr),

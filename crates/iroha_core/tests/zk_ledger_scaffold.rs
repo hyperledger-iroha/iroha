@@ -1,4 +1,4 @@
-//! Scaffold tests for zk asset handlers: `RegisterZkAsset`, Shield, `ZkTransfer`, Unshield.
+//! Scaffold tests for ZK asset registration and authenticated commitment-tree state.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
@@ -8,20 +8,13 @@ use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    smartcontracts::Execute,
     state::{ConfidentialTreeProfile, State, World, WorldReadOnly},
     zk::confidential_v2,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    account::NewAccount,
-    asset::definition::ConfidentialPolicyMode,
-    confidential::ConfidentialEncryptedPayload,
-    isi::error::{InstructionExecutionError, InvalidParameterError},
-    name::Name,
-    permission::Permission,
-    prelude::*,
-    proof::{ProofAttachment, VerifyingKeyId},
+    account::NewAccount, asset::definition::ConfidentialPolicyMode, name::Name,
+    permission::Permission, prelude::*, proof::VerifyingKeyId,
 };
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
@@ -29,22 +22,6 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 const HALO2_IPA_BACKEND: &str = "halo2/ipa";
-
-fn encrypted_payload(seed: u8) -> ConfidentialEncryptedPayload {
-    let mut nonce = [0_u8; 24];
-    nonce.fill(seed);
-    let mut ciphertext = b"zk-ledger-scaffold-payload-v1".to_vec();
-    ciphertext.extend_from_slice(&[seed; 32]);
-    ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
-}
-
-fn native_ipa_attachment() -> ProofAttachment {
-    ProofAttachment::new_ref(
-        HALO2_IPA_BACKEND.into(),
-        ProofBox::new(HALO2_IPA_BACKEND.into(), vec![0xCA, 0xFE]),
-        VerifyingKeyId::new(HALO2_IPA_BACKEND, "unbound-test-vk"),
-    )
-}
 
 #[test]
 fn register_zk_asset_writes_policy_metadata() {
@@ -88,7 +65,6 @@ fn register_zk_asset_writes_policy_metadata() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -174,7 +150,6 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         false,
         false,
-        None,
         None,
         None,
     );
@@ -272,7 +247,6 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
         true,
         false,
         None,
-        None,
         Some(wrong_vk_id),
     );
     let error = stx
@@ -332,7 +306,6 @@ fn schedule_confidential_policy_transition_records_pending() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -441,7 +414,6 @@ fn confidential_policy_transition_applies_at_effective_height() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -564,7 +536,6 @@ fn cancel_confidential_policy_transition_clears_pending() {
         true,
         None,
         None,
-        None,
     );
     stx.world
         .executor()
@@ -631,863 +602,6 @@ fn cancel_confidential_policy_transition_clears_pending() {
             .map(|value| value.is_null())
             .unwrap_or(true),
         "pending transition metadata should be cleared"
-    );
-}
-
-#[test]
-fn transfer_rejects_when_nullifiers_exceed_cap() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, query);
-    let mut zk_cfg = state.zk.clone();
-    zk_cfg.max_nullifiers_per_tx = 1;
-    state
-        .set_zk(zk_cfg)
-        .expect("empty SCCP outbox accepts ledger test configuration");
-
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("zkd", "universal").unwrap(),
-            "capcoin".parse().unwrap(),
-        );
-    let (owner, _owner_key) = gen_account_in("zkd");
-
-    for instr in [
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "capcoin".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .unwrap();
-    }
-
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-        None,
-    );
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register zk asset");
-
-    let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
-        asset_def_id.clone(),
-        vec![[1u8; 32], [2u8; 32]],
-        vec![[9u8; 32]],
-        native_ipa_attachment(),
-        None,
-    );
-    let err = stx
-        .world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(transfer))
-        .expect_err("transfer should exceed nullifier cap");
-    match err {
-        iroha_data_model::ValidationFail::InstructionFailed(
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)),
-        ) => {
-            assert!(msg.contains("nullifiers per transaction cap exceeded"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
-fn transfer_rejects_repeated_nullifier_in_same_instruction() {
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("zkd", "universal").unwrap(),
-            "dupnf".parse().unwrap(),
-        );
-    let (owner, _owner_key) = gen_account_in("zkd");
-
-    let domain = Domain::new(domain_id.clone()).build(&owner);
-    let account = iroha_data_model::account::Account::new(owner.clone()).build(&owner);
-    let asset_def = AssetDefinition::numeric(
-        asset_def_id.clone(),
-        "dupnf".to_owned(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
-    );
-    let world = World::with_assets([domain], [account], [asset_def.build(&owner)], [], []);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
-
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-        None,
-    );
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register zk asset");
-
-    let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
-        asset_def_id.clone(),
-        vec![[7u8; 32], [7u8; 32]],
-        vec![[9u8; 32]],
-        native_ipa_attachment(),
-        None,
-    );
-    let err = stx
-        .world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(transfer))
-        .expect_err("transfer should reject repeated nullifier");
-    match err {
-        iroha_data_model::ValidationFail::InstructionFailed(
-            InstructionExecutionError::InvariantViolation(msg),
-        ) => {
-            assert!(msg.contains("duplicate nullifier"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
-fn shield_rejected_when_policy_disallows() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("zkd", "universal").unwrap(),
-            "denyshield".parse().unwrap(),
-        );
-    let (owner, _owner_key) = gen_account_in("zkd");
-    for instr in [
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "denyshield".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .into(),
-        Mint::asset_quantity(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .unwrap();
-    }
-
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        false,
-        true,
-        None,
-        None,
-        None,
-    );
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, reg.into())
-        .unwrap();
-    stx.apply();
-    block.commit().expect("commit setup block");
-
-    let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(2_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx2 = block2.transaction();
-    let shield = iroha_data_model::isi::zk::Shield::new(
-        asset_def_id.clone(),
-        owner.clone(),
-        100u128,
-        [3u8; 32],
-        encrypted_payload(3),
-    );
-    let res = stx2.world.executor().clone().execute_instruction(
-        &mut stx2,
-        &owner,
-        InstructionBox::from(shield),
-    );
-    assert!(
-        res.is_err(),
-        "shield must be rejected when policy disallows shielding"
-    );
-}
-
-#[test]
-fn unshield_rejected_when_policy_disallows() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("zkd", "universal").unwrap(),
-            "denyunshield".parse().unwrap(),
-        );
-    let (owner, _owner_key) = gen_account_in("zkd");
-    for instr in [
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "denyunshield".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .unwrap();
-    }
-
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        false,
-        None,
-        None,
-        None,
-    );
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, reg.into())
-        .unwrap();
-    stx.apply();
-    block.commit().expect("commit setup block");
-
-    let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(2_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx2 = block2.transaction();
-    let unshield = iroha_data_model::isi::zk::Unshield::new(
-        asset_def_id.clone(),
-        owner.clone(),
-        50u128,
-        vec![[4u8; 32]],
-        native_ipa_attachment(),
-        None,
-    );
-    let res = stx2.world.executor().clone().execute_instruction(
-        &mut stx2,
-        &owner,
-        InstructionBox::from(unshield),
-    );
-    assert!(
-        res.is_err(),
-        "unshield must be rejected when policy disallows unshielding"
-    );
-}
-
-#[test]
-fn zk_transfer_rejected_when_policy_transparent() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("zkd", "universal").unwrap(),
-            "ztrans".parse().unwrap(),
-        );
-    let (owner, _owner_key) = gen_account_in("zkd");
-    for instr in [
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "ztrans".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .into(),
-        Mint::asset_quantity(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .unwrap();
-    }
-
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-        None,
-    );
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, reg.into())
-        .unwrap();
-    stx.apply();
-    block.commit().expect("commit setup block");
-
-    // Shield once to create commitments.
-    let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(2_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx2 = block2.transaction();
-    let shield = iroha_data_model::isi::zk::Shield::new(
-        asset_def_id.clone(),
-        owner.clone(),
-        100u128,
-        [5u8; 32],
-        encrypted_payload(5),
-    );
-    stx2.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx2, &owner, InstructionBox::from(shield))
-        .unwrap();
-    stx2.apply();
-    block2.commit().expect("commit shield block");
-
-    // Re-register with shielding disabled (policy becomes transparent).
-    let mut block3 = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(3_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx3 = block3.transaction();
-    let disable = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        false,
-        false,
-        None,
-        None,
-        None,
-    );
-    stx3.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx3, &owner, disable.into())
-        .unwrap();
-    stx3.apply();
-    block3.commit().expect("commit policy block");
-
-    // Attempt transfer; should fail under transparent policy.
-    let mut block4 = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(4_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx4 = block4.transaction();
-    let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
-        asset_def_id.clone(),
-        vec![[7u8; 32]],
-        vec![[8u8; 32]],
-        native_ipa_attachment(),
-        None,
-    );
-    let res = stx4.world.executor().clone().execute_instruction(
-        &mut stx4,
-        &owner,
-        InstructionBox::from(transfer),
-    );
-    assert!(
-        res.is_err(),
-        "transfer must be rejected when policy forbids shielded operations"
-    );
-}
-
-#[test]
-fn shield_burns_and_unshield_mints() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let chain_id = ChainId::from("iroha-test-chain");
-    let mut state = State::new_with_chain_for_testing(World::new(), kura, query, chain_id.clone());
-    state.zk.halo2.enabled = true;
-    state.zk.verify_timeout = std::time::Duration::ZERO;
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("zkd", "universal").unwrap(),
-            "zcoin".parse().unwrap(),
-        );
-    let (owner, _owner_key) = gen_account_in("zkd");
-    let transfer_vk_name = "transfer_vk";
-    let transfer_vk_id = VerifyingKeyId::new(HALO2_IPA_BACKEND, transfer_vk_name);
-    let transfer_vk_record =
-        confidential_v2::confidential_transfer_v2_vk_record(transfer_vk_name, 1)
-            .expect("confidential transfer v2 verifying key record");
-    let unshield_vk_name = "unshield_vk";
-    let unshield_vk_id = VerifyingKeyId::new(HALO2_IPA_BACKEND, unshield_vk_name);
-    let unshield_vk_record =
-        confidential_v2::confidential_unshield_v2_vk_record(unshield_vk_name, 1)
-            .expect("confidential unshield v2 verifying key record");
-    let spend_key = [7u8; 32];
-    let rho = [11u8; 32];
-    let diversifier = confidential_v2::derive_confidential_diversifier_v2(b"ledger-unshield");
-    let owner_tag =
-        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, diversifier)
-            .expect("owner tag");
-    let unshield_amount = 250u128;
-    let note_commitment = confidential_v2::derive_confidential_note_v2(
-        &asset_def_id.to_string(),
-        unshield_amount,
-        rho,
-        owner_tag,
-    )
-    .expect("confidential note commitment");
-
-    // Setup: register domain/account/asset and mint
-    for instr in [
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Grant::account_permission(
-            Permission::new("CanManageVerifyingKeys".parse().unwrap(), Json::new(())),
-            owner.clone(),
-        )
-        .into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "zcoin".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .into(),
-        Mint::asset_quantity(1000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
-        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-            id: transfer_vk_id.clone(),
-            record: transfer_vk_record,
-        }
-        .into(),
-        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-            id: unshield_vk_id.clone(),
-            record: unshield_vk_record.clone(),
-        }
-        .into(),
-        iroha_data_model::isi::zk::RegisterZkAsset::new(
-            asset_def_id.clone(),
-            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            true,
-            true,
-            Some(transfer_vk_id),
-            Some(unshield_vk_id.clone()),
-            None,
-        )
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .unwrap();
-    }
-
-    // Shield 400
-    let shield = iroha_data_model::isi::zk::Shield::new(
-        asset_def_id.clone(),
-        owner.clone(),
-        400u128,
-        note_commitment,
-        encrypted_payload(1),
-    );
-    let ib: InstructionBox = shield.into();
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, ib)
-        .unwrap();
-    stx.apply();
-    block.commit().expect("commit shield block");
-
-    let asset_id = AssetId::of(asset_def_id.clone(), owner.clone());
-    let bal_after_shield = state
-        .view()
-        .world
-        .assets()
-        .get(&asset_id)
-        .map(|v| v.clone().0)
-        .unwrap();
-    assert_eq!(bal_after_shield, 600u64.into());
-
-    // Check ZK state exists and root updated
-    {
-        let view = state.view();
-        let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
-        assert!(zk_state.root_history.last().copied().unwrap_or([0u8; 32]) != [0u8; 32]);
-        assert_eq!(zk_state.commitments.len(), 1);
-    }
-
-    let root = confidential_v2::compute_confidential_root_v2(&[note_commitment])
-        .expect("single-note confidential root");
-    let vk_box = unshield_vk_record
-        .key
-        .clone()
-        .expect("inline unshield verifying key");
-    let proof = confidential_v2::build_confidential_unshield_proof_v2(
-        &chain_id,
-        &asset_def_id.to_string(),
-        &spend_key,
-        &[note_commitment],
-        &[confidential_v2::ConfidentialUnshieldInputV2 {
-            amount: unshield_amount,
-            rho,
-            diversifier,
-            leaf_index: 0,
-        }],
-        unshield_amount,
-        root,
-        &unshield_vk_record.circuit_id,
-        &vk_box,
-    )
-    .expect("confidential unshield proof");
-    let nullifier = proof.nullifiers[0];
-    let mut attachment = ProofAttachment::new_ref(
-        HALO2_IPA_BACKEND.into(),
-        proof.proof,
-        unshield_vk_id.clone(),
-    );
-    attachment.vk_commitment = Some(unshield_vk_record.commitment);
-
-    // Unshield 250
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut block2 = state.block(header2);
-    let mut stx2 = block2.transaction();
-    let unshield = iroha_data_model::isi::zk::Unshield::new(
-        asset_def_id.clone(),
-        owner.clone(),
-        unshield_amount,
-        vec![nullifier],
-        attachment.clone(),
-        Some(root),
-    );
-    let ib2: InstructionBox = unshield.into();
-    stx2.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx2, &owner, ib2)
-        .unwrap();
-    stx2.apply();
-    block2.commit().expect("commit unshield block");
-    let bal_after_unshield = state
-        .view()
-        .world
-        .assets()
-        .get(&asset_id)
-        .map(|v| v.clone().0)
-        .unwrap();
-    assert_eq!(bal_after_unshield, 850u64.into());
-    {
-        let view = state.view();
-        let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
-        assert_eq!(
-            zk_state.commitments,
-            vec![note_commitment],
-            "full unshield has no proof-authenticated change output"
-        );
-        assert_eq!(zk_state.root_history.last().copied(), Some(root));
-    }
-
-    // Nullifier was consumed by unshield; second unshield with same nullifier must fail
-    let mut block3 = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(3_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx3 = block3.transaction();
-    let repeat = iroha_data_model::isi::zk::Unshield::new(
-        asset_def_id.clone(),
-        owner.clone(),
-        unshield_amount,
-        vec![nullifier],
-        attachment,
-        Some(root),
-    );
-    let res = stx3
-        .world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx3, &owner, repeat.into());
-    assert!(res.is_err(), "duplicate nullifier must be rejected");
-}
-
-#[test]
-fn unshield_v3_appends_only_the_proof_authenticated_change() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let chain_id = ChainId::from("iroha-unshield-v3-ledger-test");
-    let mut state = State::new_with_chain_for_testing(World::new(), kura, query, chain_id.clone());
-    state.zk.halo2.enabled = true;
-    state.zk.verify_timeout = std::time::Duration::ZERO;
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let domain_id = DomainId::try_new("zkv3", "universal").expect("domain");
-    let asset_def_id = AssetDefinitionId::derive_from_components(
-        domain_id.clone(),
-        "change".parse().expect("asset name"),
-    );
-    let (owner, _owner_key) = gen_account_in("zkv3");
-    let vk_name = "unshield_v3_ledger_vk";
-    let vk_id = VerifyingKeyId::new(HALO2_IPA_BACKEND, vk_name);
-    let vk_record = confidential_v2::confidential_unshield_v3_vk_record(vk_name, 1)
-        .expect("canonical unshield v3 verifier");
-    let prior_vk_name = "unshield_v2_rotation_vk";
-    let prior_vk_id = VerifyingKeyId::new(HALO2_IPA_BACKEND, prior_vk_name);
-    let prior_vk_record = confidential_v2::confidential_unshield_v2_vk_record(prior_vk_name, 1)
-        .expect("canonical unshield v2 verifier");
-    let input_amount = 9_u128;
-    let public_amount = 5_u128;
-    let change_amount = input_amount - public_amount;
-    let spend_key = [0x51_u8; 32];
-    let input_rho = [0x52_u8; 32];
-    let change_rho = [0x53_u8; 32];
-    let input_diversifier =
-        confidential_v2::derive_confidential_diversifier_v2(b"ledger-unshield-v3-input");
-    let input_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
-        &spend_key,
-        input_diversifier,
-    )
-    .expect("input owner tag");
-    let input_commitment = confidential_v2::derive_confidential_note_v2(
-        &asset_def_id.to_string(),
-        input_amount,
-        input_rho,
-        input_owner_tag,
-    )
-    .expect("input commitment");
-
-    for instruction in [
-        Register::domain(Domain::new(domain_id)).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Grant::account_permission(
-            Permission::new("CanManageVerifyingKeys".parse().unwrap(), Json::new(())),
-            owner.clone(),
-        )
-        .into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "change".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .into(),
-        Mint::asset_quantity(100_u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
-        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-            id: prior_vk_id.clone(),
-            record: prior_vk_record,
-        }
-        .into(),
-        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-            id: vk_id.clone(),
-            record: vk_record.clone(),
-        }
-        .into(),
-        iroha_data_model::isi::zk::RegisterZkAsset::new(
-            asset_def_id.clone(),
-            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            true,
-            true,
-            None,
-            Some(prior_vk_id),
-            None,
-        )
-        .into(),
-        iroha_data_model::isi::zk::Shield::new(
-            asset_def_id.clone(),
-            owner.clone(),
-            input_amount,
-            input_commitment,
-            encrypted_payload(0x54),
-        )
-        .into(),
-        iroha_data_model::isi::zk::RegisterZkAsset::new(
-            asset_def_id.clone(),
-            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            true,
-            true,
-            None,
-            Some(vk_id.clone()),
-            None,
-        )
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instruction)
-            .expect("set up change-unshield fixture");
-    }
-    stx.apply();
-    block.commit().expect("commit change-unshield setup");
-
-    {
-        let view = state.view();
-        let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
-        assert_eq!(
-            zk_state.tree_profile,
-            ConfidentialTreeProfile::PoseidonPastaV1,
-            "an unshield-only binding derives the circuit's tree profile"
-        );
-        assert_eq!(
-            zk_state.vk_unshield.as_ref().map(|binding| &binding.id),
-            Some(&vk_id),
-            "same-profile verifier rotation succeeds with an existing commitment"
-        );
-    }
-
-    let initial_root = confidential_v2::compute_confidential_root_v2(&[input_commitment])
-        .expect("initial confidential root");
-    let vk_box = vk_record.key.clone().expect("inline unshield v3 key");
-    let proof = confidential_v2::build_confidential_unshield_proof_v3(
-        &chain_id,
-        &asset_def_id.to_string(),
-        &spend_key,
-        &[input_commitment],
-        &[confidential_v2::ConfidentialUnshieldInputV2 {
-            amount: input_amount,
-            rho: input_rho,
-            diversifier: input_diversifier,
-            leaf_index: 0,
-        }],
-        &[confidential_v2::ConfidentialUnshieldOutputV3 {
-            amount: change_amount,
-            rho: change_rho,
-        }],
-        public_amount,
-        initial_root,
-        &vk_record.circuit_id,
-        &vk_box,
-    )
-    .expect("build change-unshield proof");
-    assert_eq!(proof.output_commitments.len(), 1);
-    let authenticated_change = proof.output_commitments[0];
-    let mut attachment = ProofAttachment::new_ref(HALO2_IPA_BACKEND.into(), proof.proof, vk_id);
-    attachment.vk_commitment = Some(vk_record.commitment);
-
-    let mut block = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(2_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx = block.transaction();
-    let instruction = iroha_data_model::isi::zk::Unshield::new(
-        asset_def_id.clone(),
-        owner.clone(),
-        public_amount,
-        proof.nullifiers,
-        attachment,
-        Some(initial_root),
-    );
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, instruction.into())
-        .expect("execute proof-authenticated change unshield");
-    stx.apply();
-    block.commit().expect("commit change unshield");
-
-    let view = state.view();
-    let zk_state = view.world.zk_assets().get(&asset_def_id).expect("zk state");
-    assert_eq!(
-        zk_state.commitments,
-        vec![input_commitment, authenticated_change]
-    );
-    let expected_root =
-        confidential_v2::compute_confidential_root_v2(&[input_commitment, authenticated_change])
-            .expect("root after proof-authenticated change");
-    assert_eq!(zk_state.root_history.last().copied(), Some(expected_root));
-    let public_asset = AssetId::of(asset_def_id, owner);
-    assert_eq!(
-        view.world
-            .assets()
-            .get(&public_asset)
-            .expect("public asset")
-            .clone()
-            .0,
-        96_u64.into()
     );
 }
 
@@ -1612,7 +726,6 @@ fn zk_roots_are_bounded_in_world_state() {
             true,
             None,
             None,
-            None,
         )
         .into(),
     ] {
@@ -1623,26 +736,24 @@ fn zk_roots_are_bounded_in_world_state() {
             .unwrap();
     }
 
-    // Perform many shields to exceed the cap
+    // Seed many authenticated commitment transitions to exceed the root-history cap.
+    let mut zk_state = stx
+        .world
+        .zk_assets()
+        .get(&asset_def_id)
+        .cloned()
+        .expect("registered confidential asset state");
     for i in 0..16u8 {
         let mut note = [0u8; 32];
         note[0] = i + 1;
-        let ib: InstructionBox = iroha_data_model::isi::zk::Shield::new(
-            asset_def_id.clone(),
-            owner.clone(),
-            100u128,
-            note,
-            encrypted_payload(i),
-        )
-        .into();
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, ib)
-            .unwrap();
+        zk_state
+            .push_commitment(note, nonzero!(4_usize))
+            .expect("seed bounded root transition");
     }
+    stx.world.zk_assets.remove(asset_def_id.clone());
+    stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
     stx.apply();
-    block.commit().expect("commit shield block");
+    block.commit().expect("commit bounded root-history fixture");
 
     // Assert bounded roots in world state
     let view = state.view();
@@ -1772,7 +883,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 true,
                 None,
                 None,
-                None,
             )
             .into(),
         ] {
@@ -1786,7 +896,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         block.commit().expect("commit setup block");
     }
 
-    // Subsequent blocks append a single shield to advance frontiers.
+    // Subsequent blocks append one authenticated commitment and advance frontiers.
     for h in 2_u64..=8 {
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(h).expect("block height must be non-zero"),
@@ -1800,21 +910,22 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         let mut stx = block.transaction();
         let mut commitment = [0u8; 32];
         commitment[0] = h as u8;
-        let shield: InstructionBox = iroha_data_model::isi::zk::Shield::new(
-            asset_def_id.clone(),
-            owner.clone(),
-            100u128,
-            commitment,
-            encrypted_payload(h as u8),
-        )
-        .into();
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, shield)
-            .unwrap();
+        let mut zk_state = stx
+            .world
+            .zk_assets()
+            .get(&asset_def_id)
+            .cloned()
+            .expect("registered confidential asset state");
+        zk_state
+            .push_commitment(commitment, nonzero!(8_usize))
+            .expect("append authenticated commitment");
+        zk_state
+            .record_frontier_checkpoint(h, 1, 3)
+            .expect("record bounded frontier checkpoint");
+        stx.world.zk_assets.remove(asset_def_id.clone());
+        stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
         stx.apply();
-        block.commit().expect("commit shield block");
+        block.commit().expect("commit frontier checkpoint block");
     }
 
     let view = state.view();

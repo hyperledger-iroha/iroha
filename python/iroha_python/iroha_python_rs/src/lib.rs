@@ -85,7 +85,6 @@ use iroha_data_model::{
         consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
         decode_framed_signed_block,
     },
-    confidential::ConfidentialEncryptedPayload,
     consensus::{
         CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash,
     },
@@ -119,7 +118,7 @@ use iroha_data_model::{
         },
         smart_contract_code::CommitContractDeployment,
         sorafs::{CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder},
-        zk::{RegisterZkAsset, Shield, Unshield, VerifyProof, ZkAssetMode, ZkTransfer},
+        zk::{RegisterZkAsset, VerifyProof, ZkAssetMode},
     },
     metadata::Metadata,
     name::Name,
@@ -1010,18 +1009,6 @@ fn py_fixed_array_list(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<
     )))
 }
 
-fn ensure_unique_fixed_arrays(items: &[[u8; 32]], context: &str) -> PyResult<()> {
-    let mut seen = HashSet::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
-        if !seen.insert(*item) {
-            return Err(PyValueError::new_err(format!(
-                "{context}[{index}] duplicates an earlier value"
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn ensure_non_zero_fixed_array<const N: usize>(item: [u8; N], context: &str) -> PyResult<[u8; N]> {
     if item.iter().all(|byte| *byte == 0) {
         return Err(PyValueError::new_err(format!("{context} must be non-zero")));
@@ -1141,19 +1128,6 @@ fn parse_verifying_key_id_py(
         PyValueError::new_err(format!("invalid {context} backend identifier: {err}"))
     })?;
     Ok(Some(VerifyingKeyId::new(backend, name_text)))
-}
-
-fn parse_optional_root_hint(
-    value: Option<&Bound<'_, PyAny>>,
-    context: &str,
-) -> PyResult<Option<[u8; 32]>> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.is_none() {
-        return Ok(None);
-    }
-    py_fixed_array::<32>(value, context).map(Some)
 }
 
 fn py_exact_dict<'value, 'py>(
@@ -12039,108 +12013,6 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (asset_definition_id, from_account_id, amount, note_commitment, ephemeral_public_key, nonce, ciphertext))]
-    #[allow(clippy::too_many_arguments)]
-    fn shield_asset<'py>(
-        _cls: &Bound<'py, PyType>,
-        asset_definition_id: &str,
-        from_account_id: &str,
-        amount: &str,
-        note_commitment: &Bound<'py, PyAny>,
-        ephemeral_public_key: &Bound<'py, PyAny>,
-        nonce: &Bound<'py, PyAny>,
-        ciphertext: &Bound<'py, PyAny>,
-    ) -> PyResult<Self> {
-        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid asset definition id `{asset_definition_id}`: {err}"
-            ))
-        })?;
-        let from = parse_account_id(from_account_id)?;
-        ensure_ed25519_account(&from)?;
-        let amount = parse_asset_quantity(amount, "amount")?;
-        let note_commitment = py_fixed_array::<32>(note_commitment, "note_commitment")?;
-        let ephemeral_public_key =
-            py_fixed_array::<32>(ephemeral_public_key, "ephemeral_public_key")?;
-        let nonce = py_fixed_array::<24>(nonce, "nonce")?;
-        let ciphertext = py_bytes_or_base64(ciphertext, "ciphertext")?;
-        if ciphertext.is_empty() {
-            return Err(PyValueError::new_err("ciphertext must be non-empty"));
-        }
-        let encrypted_payload =
-            ConfidentialEncryptedPayload::new(ephemeral_public_key, nonce, ciphertext);
-        let instruction = Shield::new(asset, from, amount, note_commitment, encrypted_payload);
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (asset_definition_id, inputs, outputs, proof, *, root_hint=None))]
-    fn zk_transfer_prepared<'py>(
-        _cls: &Bound<'py, PyType>,
-        asset_definition_id: &str,
-        inputs: &Bound<'py, PyAny>,
-        outputs: &Bound<'py, PyAny>,
-        proof: &Bound<'py, PyAny>,
-        root_hint: Option<&Bound<'py, PyAny>>,
-    ) -> PyResult<Self> {
-        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid asset definition id `{asset_definition_id}`: {err}"
-            ))
-        })?;
-        let inputs = py_fixed_array_list(inputs, "inputs")?;
-        if inputs.is_empty() {
-            return Err(PyValueError::new_err(
-                "inputs must contain at least one nullifier",
-            ));
-        }
-        ensure_unique_fixed_arrays(&inputs, "inputs")?;
-        let outputs = py_fixed_array_list(outputs, "outputs")?;
-        if outputs.is_empty() {
-            return Err(PyValueError::new_err(
-                "outputs must contain at least one commitment",
-            ));
-        }
-        ensure_unique_fixed_arrays(&outputs, "outputs")?;
-        let proof = parse_zk_proof_attachment(proof, "proof")?;
-        let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
-        let instruction = ZkTransfer::new(asset, inputs, outputs, proof, root_hint);
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (asset_definition_id, to_account_id, public_amount, inputs, proof, *, root_hint=None))]
-    fn unshield_prepared<'py>(
-        _cls: &Bound<'py, PyType>,
-        asset_definition_id: &str,
-        to_account_id: &str,
-        public_amount: &str,
-        inputs: &Bound<'py, PyAny>,
-        proof: &Bound<'py, PyAny>,
-        root_hint: Option<&Bound<'py, PyAny>>,
-    ) -> PyResult<Self> {
-        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid asset definition id `{asset_definition_id}`: {err}"
-            ))
-        })?;
-        let to = parse_account_id(to_account_id)?;
-        ensure_ed25519_account(&to)?;
-        let public_amount = parse_asset_quantity(public_amount, "public_amount")?;
-        let inputs = py_fixed_array_list(inputs, "inputs")?;
-        if inputs.is_empty() {
-            return Err(PyValueError::new_err(
-                "inputs must contain at least one nullifier",
-            ));
-        }
-        ensure_unique_fixed_arrays(&inputs, "inputs")?;
-        let proof = parse_zk_proof_attachment(proof, "proof")?;
-        let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
-        let instruction = Unshield::new(asset, to, public_amount, inputs, proof, root_hint);
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
     fn mint_asset_quantity(
         _cls: &Bound<'_, PyType>,
         asset_id: &str,
@@ -18052,7 +17924,6 @@ fn verify_committed_transaction_inclusion_json_py(
         TransactionEntrypoint::External(_) => "External",
         TransactionEntrypoint::SealedCommitment(_) => "SealedCommitment",
         TransactionEntrypoint::SealedReveal(_) => "SealedReveal",
-        TransactionEntrypoint::PrivateKaigi(_) => "PrivateKaigi",
         TransactionEntrypoint::Time(_) => "Time",
     };
     let external_transaction = match &committed.entrypoint {

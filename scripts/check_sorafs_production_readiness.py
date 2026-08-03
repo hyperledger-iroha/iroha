@@ -108,6 +108,7 @@ from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
 )
 from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GOVERNANCE_DAG_REQUIRED_KINDS,
+    INGRESS_QUALIFICATION_BOUND_KINDS as GOVERNANCE_DAG_INGRESS_BOUND_KINDS,
     KIND_BY_NAME as GOVERNANCE_DAG_KIND_BY_NAME,
     POLICY_BOUND_KINDS as GOVERNANCE_DAG_POLICY_BOUND_KINDS,
     PUBLIC_HEAD_BOUND_KINDS as GOVERNANCE_DAG_PUBLIC_HEAD_BOUND_KINDS,
@@ -3837,6 +3838,30 @@ def validate_governance_dag_bound_artifact_metadata(
         ),
         errors=errors,
     )
+    for metadata_field, fingerprint_field in (
+        ("valid_receiver_policy_digests", "receiver_policy_digest_hex"),
+        ("valid_replay_namespace_digests", "replay_namespace_digest_hex"),
+        ("valid_replica_set_digests", "replica_set_digest_hex"),
+        (
+            "valid_kubo_ingress_binding_digests",
+            "kubo_ingress_binding_digest_hex",
+        ),
+        (
+            "valid_signed_head_ingress_binding_digests",
+            "signed_head_ingress_binding_digest_hex",
+        ),
+    ):
+        bound_artifact_fingerprints_match_hex_list_metadata(
+            payload,
+            kind_names=GOVERNANCE_DAG_INGRESS_BOUND_KINDS,
+            metadata_field=metadata_field,
+            fingerprint_field=fingerprint_field,
+            error=(
+                "governance_dag ingress-bound artifact fingerprints must match "
+                f"{metadata_field}"
+            ),
+            errors=errors,
+        )
 
 
 def validate_gateway_load_bound_artifact_metadata(

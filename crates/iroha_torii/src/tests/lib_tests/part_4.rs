@@ -1449,6 +1449,79 @@
     }
 
     #[tokio::test]
+    async fn zk_ivm_prove_handlers_authenticate_before_job_gc_or_lookup() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.require_api_token = true;
+            state.api_tokens_set = Arc::new(HashSet::new());
+            state.zk_ivm_prove_job_ttl_ms = 1;
+        }
+        let get_job_id = "11111111111111111111111111111111".to_owned();
+        let delete_job_id = "22222222222222222222222222222222".to_owned();
+        for job_id in [&get_job_id, &delete_job_id] {
+            let retention = app
+                .zk_ivm_prove_job_budget
+                .try_reserve(2)
+                .expect("test reservation");
+            app.zk_ivm_prove_jobs.insert(
+                (*job_id).clone(),
+                ZkIvmProveJobState {
+                    created_ms: 0,
+                    last_access_ms: 0,
+                    status: ZkIvmProveJobStatus::Done,
+                    response_body: Bytes::from_static(b"{}"),
+                    retention,
+                    cancel: tokio::sync::watch::channel(false).0,
+                },
+            );
+        }
+
+        let Err(error) = handler_zk_ivm_prove_get(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::extract::Path(get_job_id.clone()),
+        )
+        .await
+        else {
+            panic!("unauthenticated GET must fail before GC or lookup");
+        };
+        assert_unconfigured_api_token_error(error);
+        let Err(error) = handler_zk_ivm_prove_delete(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::extract::Path(delete_job_id.clone()),
+        )
+        .await
+        else {
+            panic!("unauthenticated DELETE must fail before GC or removal");
+        };
+        assert_unconfigured_api_token_error(error);
+        let Err(error) = handler_zk_ivm_prove(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::new(),
+        )
+        .await
+        else {
+            panic!("unauthenticated POST must fail before GC or body parsing");
+        };
+        assert_unconfigured_api_token_error(error);
+
+        assert!(
+            app.zk_ivm_prove_jobs.contains_key(&get_job_id),
+            "authentication failure must not garbage-collect an unrelated expired job"
+        );
+        assert!(
+            app.zk_ivm_prove_jobs.contains_key(&delete_job_id),
+            "authentication failure must not reveal or remove the selected job"
+        );
+    }
+
+    #[tokio::test]
     async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
         let app = mk_app_state_for_tests();
 
@@ -2841,26 +2914,6 @@
             handler_soracloud_status(State(app), HeaderMap::new(), loopback_connect_info(), None)
                 .await
                 .expect_err("handler-local API-token validation must fail closed");
-        assert_unconfigured_api_token_error(error);
-    }
-
-    #[tokio::test]
-    async fn direct_response_handler_fails_closed_before_consensus_dispatch() {
-        let mut app = mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("unique app state");
-        state.require_api_token = true;
-        state.api_tokens_set = Arc::new(HashSet::new());
-
-        let error = handler_sumeragi_evidence_submit(
-            State(app),
-            HeaderMap::new(),
-            loopback_connect_info(),
-            NoritoJson(routing::EvidenceSubmitRequestDto {
-                evidence_hex: String::new(),
-            }),
-        )
-        .await
-        .expect_err("handler-local API-token validation must precede consensus dispatch");
         assert_unconfigured_api_token_error(error);
     }
 

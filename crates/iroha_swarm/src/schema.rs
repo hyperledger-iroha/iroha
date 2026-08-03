@@ -25,6 +25,17 @@ fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
         );
     }
     map.insert(
+        "P2P_SORANET_TRANSPORT_PUBLIC_KEY".into(),
+        json::to_value(env.soranet_transport_public_key)
+            .expect("serialize SoraNet transport public key"),
+    );
+    if let Some(private_key) = env.soranet_transport_private_key {
+        map.insert(
+            "P2P_SORANET_TRANSPORT_PRIVATE_KEY".into(),
+            json::to_value(private_key).expect("serialize SoraNet transport private key"),
+        );
+    }
+    map.insert(
         "P2P_PUBLIC_ADDRESS".into(),
         Value::String(env.p2p_public_address.to_string()),
     );
@@ -76,8 +87,8 @@ fn trusted_peers_pop_map(
     network: &std::collections::BTreeMap<u16, peer::PeerInfo>,
 ) -> std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>> {
     let mut pops = std::collections::BTreeMap::new();
-    for (_, _, (public_key, _), pop) in network.values() {
-        pops.insert(public_key.clone(), pop.clone());
+    for peer_info in network.values() {
+        pops.insert(peer_info.key_pair.0.clone(), peer_info.pop.clone());
     }
     pops
 }
@@ -90,6 +101,7 @@ mod json_value_tests {
     use crate::peer;
 
     type SampleTopology = (
+        peer::ExposedKeyPair,
         peer::ExposedKeyPair,
         [u16; 2],
         iroha_data_model::ChainId,
@@ -105,6 +117,9 @@ mod json_value_tests {
         let (secondary_pair, secondary_pop) =
             peer::generate_bls_key_pair(Some(b"swarm-json-secondary"), b"node-1")
                 .expect("seeded secondary BLS key generation should succeed");
+        let transport_pair =
+            peer::generate_soranet_transport_key_pair(Some(b"swarm-json-primary"), b"node-0")
+                .expect("seeded primary transport key generation should succeed");
         let ports = [crate::BASE_PORT_P2P, crate::BASE_PORT_API];
         let other_ports = [crate::BASE_PORT_P2P + 1, crate::BASE_PORT_API + 1];
         let mut topology = std::collections::BTreeSet::new();
@@ -117,14 +132,23 @@ mod json_value_tests {
         let mut trusted_pops = std::collections::BTreeMap::new();
         trusted_pops.insert(primary_pair.0.clone(), primary_pop);
         trusted_pops.insert(secondary_pair.0.clone(), secondary_pop);
-        (primary_pair, ports, chain, topology, trusted_pops)
+        (
+            primary_pair,
+            transport_pair,
+            ports,
+            chain,
+            topology,
+            trusted_pops,
+        )
     }
 
     #[test]
     fn peer_env_to_value_matches_expected_fields() {
-        let (primary_pair, ports, chain, topology, trusted_pops) = sample_topology();
+        let (primary_pair, transport_pair, ports, chain, topology, trusted_pops) =
+            sample_topology();
         let env = PeerEnv::new(
             &primary_pair,
+            &transport_pair,
             ports,
             &chain,
             &topology,
@@ -137,6 +161,16 @@ mod json_value_tests {
         expected.insert("PUBLIC_KEY".into(), json::to_value(env.public_key).unwrap());
         if let Some(private_key) = env.private_key {
             expected.insert("PRIVATE_KEY".into(), json::to_value(private_key).unwrap());
+        }
+        expected.insert(
+            "P2P_SORANET_TRANSPORT_PUBLIC_KEY".into(),
+            json::to_value(env.soranet_transport_public_key).unwrap(),
+        );
+        if let Some(private_key) = env.soranet_transport_private_key {
+            expected.insert(
+                "P2P_SORANET_TRANSPORT_PRIVATE_KEY".into(),
+                json::to_value(private_key).unwrap(),
+            );
         }
         expected.insert(
             "P2P_PUBLIC_ADDRESS".into(),
@@ -376,6 +410,8 @@ struct PeerEnv<'a> {
     chain: &'a iroha_data_model::ChainId,
     public_key: &'a iroha_crypto::PublicKey,
     private_key: Option<&'a iroha_crypto::ExposedPrivateKey>,
+    soranet_transport_public_key: &'a iroha_crypto::PublicKey,
+    soranet_transport_private_key: Option<&'a iroha_crypto::ExposedPrivateKey>,
     p2p_public_address: iroha_primitives::addr::SocketAddr,
     p2p_address: iroha_primitives::addr::SocketAddr,
     api_address: iroha_primitives::addr::SocketAddr,
@@ -386,6 +422,7 @@ struct PeerEnv<'a> {
 impl<'a> PeerEnv<'a> {
     fn new(
         (public_key, private_key): &'a peer::ExposedKeyPair,
+        (soranet_transport_public_key, soranet_transport_private_key): &'a peer::ExposedKeyPair,
         [port_p2p, port_api]: [u16; 2],
         chain: &'a iroha_data_model::ChainId,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
@@ -401,6 +438,8 @@ impl<'a> PeerEnv<'a> {
             chain,
             public_key,
             private_key: private_key.as_ref(),
+            soranet_transport_public_key,
+            soranet_transport_private_key: soranet_transport_private_key.as_ref(),
             p2p_public_address,
             p2p_address: iroha_primitives::addr::socket_addr!(0.0.0.0:port_p2p),
             api_address: iroha_primitives::addr::socket_addr!(0.0.0.0:port_api),
@@ -908,7 +947,7 @@ impl<'a> BuildOrPull<'a> {
             .expect("a swarm always contains at least one validator");
         Self::Build {
             primary: (
-                IrohadRef(primary_info.0.clone()),
+                IrohadRef(primary_info.name.clone()),
                 Self::irohad(
                     image,
                     healthcheck,
@@ -923,7 +962,7 @@ impl<'a> BuildOrPull<'a> {
             irohads: peers
                 .map(|(index, info)| {
                     (
-                        IrohadRef(info.0.clone()),
+                        IrohadRef(info.name.clone()),
                         Self::irohad(
                             BuiltImage::new(image.image),
                             healthcheck,
@@ -948,12 +987,19 @@ impl<'a> BuildOrPull<'a> {
         chain: &'a iroha_data_model::ChainId,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         trusted_peers_pop: &std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
-        (_, ports, key_pair, _): &'a peer::PeerInfo,
+        peer_info: &'a peer::PeerInfo,
     ) -> Irohad<'a, Image> {
         Irohad::new(
             image,
-            PeerEnv::new(key_pair, *ports, chain, topology, trusted_peers_pop.clone()),
-            *ports,
+            PeerEnv::new(
+                &peer_info.key_pair,
+                &peer_info.soranet_transport_key_pair,
+                peer_info.ports,
+                chain,
+                topology,
+                trusted_peers_pop.clone(),
+            ),
+            peer_info.ports,
             healthcheck,
             genesis,
             runtime,
@@ -974,7 +1020,7 @@ impl<'a> BuildOrPull<'a> {
             .iter()
             .map(|(index, info)| {
                 (
-                    IrohadRef(info.0.clone()),
+                    IrohadRef(info.name.clone()),
                     Self::irohad(
                         image,
                         healthcheck,
@@ -1145,6 +1191,23 @@ mod tests {
     fn peer_env_produces_exhaustive_config() {
         let (key_pair, pop) = peer::generate_bls_key_pair(None, &[])
             .expect("random BLS key generation should succeed");
+        let transport_key_pair = peer::generate_soranet_transport_key_pair(None, &[])
+            .expect("random SoraNet transport key generation should succeed");
+        assert_eq!(
+            transport_key_pair.0.algorithm(),
+            iroha_crypto::Algorithm::Ed25519
+        );
+        assert_ne!(transport_key_pair.0, key_pair.0);
+        iroha_crypto::KeyPair::new(
+            transport_key_pair.0.clone(),
+            transport_key_pair
+                .1
+                .as_ref()
+                .expect("transport private key")
+                .0
+                .clone(),
+        )
+        .expect("transport key pair must match");
         let mut trusted_pops = BTreeMap::new();
         trusted_pops.insert(key_pair.0.clone(), pop);
         let genesis_public_key = peer::generate_key_pair(None, &[])
@@ -1153,7 +1216,14 @@ mod tests {
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
         let topology = [peer::peer("dummy", BASE_PORT_API, key_pair.0.clone())].into();
-        let env = PeerEnv::new(&key_pair, ports, &chain, &topology, trusted_pops);
+        let env = PeerEnv::new(
+            &key_pair,
+            &transport_key_pair,
+            ports,
+            &chain,
+            &topology,
+            trusted_pops,
+        );
         let mut value = peer_env_to_value(&env);
         let Value::Object(ref mut map) = value else {
             unreachable!("peer environment is an object");

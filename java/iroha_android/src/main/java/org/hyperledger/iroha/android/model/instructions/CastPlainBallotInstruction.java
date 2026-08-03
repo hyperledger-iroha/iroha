@@ -135,10 +135,9 @@ public final class CastPlainBallotInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setReferendumId(final String referendumId) {
-      if (referendumId == null || referendumId.isBlank()) {
-        throw new IllegalArgumentException("referendumId must not be blank");
-      }
-      this.referendumId = referendumId;
+      this.referendumId =
+          GovernanceInstructionUtils.requireGovernanceSelectorV1(
+              referendumId, "referendumId");
       return this;
     }
 

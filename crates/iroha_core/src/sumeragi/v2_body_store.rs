@@ -1421,7 +1421,7 @@ mod tests {
 
     use crate::sumeragi::{
         v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
-        v2_effects::BodyValidationTask,
+        v2_chunks::encode_payload, v2_effects::BodyValidationTask,
     };
 
     #[derive(Debug)]
@@ -1587,14 +1587,10 @@ mod tests {
             block_hash: block.hash(),
             payload_hash: Hash::new(&canonical_wire),
         };
-        let manifest = wire::PayloadManifest::derive(
-            context,
-            round,
-            subject,
-            u64::try_from(canonical_wire.len()).expect("fixture body length"),
-            std::slice::from_ref(&canonical_wire),
-        )
-        .expect("fixture manifest");
+        let manifest = encode_payload(context, round, subject, &canonical_wire)
+            .expect("encode canonical fixture payload")
+            .manifest()
+            .clone();
         (canonical_wire, manifest)
     }
 
@@ -2095,14 +2091,10 @@ mod tests {
             height: context.height,
             view: 7,
         };
-        let later_manifest = wire::PayloadManifest::derive(
-            &context,
-            later_round,
-            origin_manifest.subject,
-            u64::try_from(body.len()).expect("fixture body length"),
-            std::slice::from_ref(&body),
-        )
-        .expect("derive the later-view manifest for the exact body");
+        let later_manifest = encode_payload(&context, later_round, origin_manifest.subject, &body)
+            .expect("encode the exact body for its later view")
+            .manifest()
+            .clone();
         let later_receipt = store
             .store(later_manifest, body)
             .expect("the original leader signature authenticates an unchanged reproposal body");
@@ -2165,14 +2157,10 @@ mod tests {
             height: context.height,
             view: 7,
         };
-        let later_manifest = wire::PayloadManifest::derive(
-            &context,
-            later_round,
-            origin_manifest.subject,
-            u64::try_from(body.len()).expect("fixture body length"),
-            std::slice::from_ref(&body),
-        )
-        .expect("derive the later-view manifest for the exact body");
+        let later_manifest = encode_payload(&context, later_round, origin_manifest.subject, &body)
+            .expect("encode the exact body for its later view")
+            .manifest()
+            .clone();
         let later_receipt = store
             .store(later_manifest, body)
             .expect("durably bind the exact body to the later round");
@@ -2244,14 +2232,11 @@ mod tests {
             block_hash: result_bearing.hash(),
             payload_hash: Hash::new(&result_bearing_wire),
         };
-        let result_bearing_manifest = wire::PayloadManifest::derive(
-            &context,
-            manifest.round,
-            subject,
-            u64::try_from(result_bearing_wire.len()).expect("fixture body length"),
-            std::slice::from_ref(&result_bearing_wire),
-        )
-        .expect("derive result-bearing manifest");
+        let result_bearing_manifest =
+            encode_payload(&context, manifest.round, subject, &result_bearing_wire)
+                .expect("encode result-bearing fixture payload")
+                .manifest()
+                .clone();
         let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
         assert!(matches!(
             store.store(result_bearing_manifest, result_bearing_wire),

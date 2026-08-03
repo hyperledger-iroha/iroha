@@ -269,52 +269,6 @@ final class TxBuilderTests: XCTestCase {
         return try Keypair(privateKeyBytes: keyData)
     }
 
-    private func makeShieldRequest(authority: String,
-                                   amount: String = "42",
-                                   ttlMs: UInt64? = 45) throws -> ShieldRequest {
-        let noteCommitment = Data(repeating: 0xAB, count: 32)
-        let payload = try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x01, count: 32),
-                                                       nonce: Data(repeating: 0x02, count: 24),
-                                                       ciphertext: Data([0xDE, 0xAD, 0xBE, 0xEF]))
-        return try ShieldRequest(chainId: Self.fixtureChainId,
-                                 authority: authority,
-                                 assetDefinitionId: Self.fixtureAssetDefinition,
-                                 fromAccountId: authority,
-                                 amount: amount,
-                                 noteCommitment: noteCommitment,
-                                 payload: payload,
-                                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                 ttlMs: ttlMs)
-    }
-
-    private func makeProofAttachment() throws -> ProofAttachment {
-        let proof = Data(repeating: 0xEE, count: 48)
-        let reference = ProofAttachment.VerifyingKeyReference(backend: "halo2/ipa", name: "vk_unshield")
-        return try ProofAttachment(backend: "halo2/ipa",
-                                   proof: proof,
-                                   verifyingKey: .reference(reference))
-    }
-
-    private func makeUnshieldRequest(authority: String,
-                                     amount: String = "7",
-                                     ttlMs: UInt64? = 30) throws -> UnshieldRequest {
-        let proof = try makeProofAttachment()
-        let inputs = [
-            Data(repeating: 0x10, count: 32),
-            Data(repeating: 0x20, count: 32),
-        ]
-        let rootHint = Data(repeating: 0xAA, count: 32)
-        return try UnshieldRequest(chainId: Self.fixtureChainId,
-                                   authority: authority,
-                                   assetDefinitionId: Self.fixtureAssetDefinition,
-                                   toAccountId: authority,
-                                   publicAmount: amount,
-                                   inputs: inputs,
-                                   proof: proof,
-                                   rootHint: rootHint,
-                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                   ttlMs: ttlMs)
-    }
 
     private func hexEncoded(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
@@ -360,7 +314,6 @@ final class TxBuilderTests: XCTestCase {
 
     private func makeRegisterZkAssetRequest(authority: String,
                                             ttlMs: UInt64? = 30) throws -> RegisterZkAssetRequest {
-        let transferVk = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_transfer")
         let unshieldVk = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_unshield")
         return RegisterZkAssetRequest(chainId: Self.fixtureChainId,
                                       authority: authority,
@@ -368,7 +321,6 @@ final class TxBuilderTests: XCTestCase {
                                       mode: .hybrid,
                                       allowShield: true,
                                       allowUnshield: true,
-                                      transferVerifyingKey: transferVk,
                                       unshieldVerifyingKey: unshieldVk,
                                       shieldVerifyingKey: nil,
                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
@@ -1678,6 +1630,38 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(normalized.norito, swift.norito)
     }
 
+    func testGovernanceWindowAndDeployAbiAreExactByConstruction() throws {
+        let fullRange = try GovernanceWindow(lower: 0, upper: UInt64.max)
+        XCTAssertEqual(fullRange.lower, 0)
+        XCTAssertEqual(fullRange.upper, UInt64.max)
+
+        XCTAssertThrowsError(try GovernanceWindow(lower: 2, upper: 1)) { error in
+            XCTAssertEqual(
+                error as? TransactionInputError,
+                .invalidGovernanceWindow(lower: 2, upper: 1)
+            )
+        }
+
+        for abiVersion in ["", "01", "2", " 1", "1 "] {
+            XCTAssertThrowsError(
+                try ProposeDeployContractRequest(
+                    chainId: Self.fixtureChainId,
+                    authority: "authority",
+                    contractAddress: Self.fixtureGovernanceContractAddress,
+                    codeHashHex: String(repeating: "11", count: 32),
+                    abiHashHex: String(repeating: "22", count: 32),
+                    abiVersion: abiVersion,
+                    feePayment: .authority(chargeLimits: [], gasLimit: nil)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? TransactionInputError,
+                    .invalidGovernanceAbiVersion(abiVersion)
+                )
+            }
+        }
+    }
+
     func testGovernanceProposeDeployMatchesNativeBridge() throws {
         try requireNativeTestCapability(
             NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
@@ -1688,17 +1672,17 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let codeHash = Data(repeating: 0x11, count: 32)
         let abiHash = Data(repeating: 0x22, count: 32)
-        let window = GovernanceWindow(lower: 4, upper: 8)
-        let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
-                                                   authority: authority,
-                                                   contractAddress: Self.fixtureGovernanceContractAddress,
-                                                   codeHashHex: hexEncoded(codeHash),
-                                                   abiHashHex: hexEncoded(abiHash),
-                                                   abiVersion: "1",
-                                                   window: window,
-                                                   mode: .plain,
-                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                                   ttlMs: 20)
+        let window = try GovernanceWindow(lower: 4, upper: 8)
+        let request = try ProposeDeployContractRequest(chainId: Self.fixtureChainId,
+                                                       authority: authority,
+                                                       contractAddress: Self.fixtureGovernanceContractAddress,
+                                                       codeHashHex: hexEncoded(codeHash),
+                                                       abiHashHex: hexEncoded(abiHash),
+                                                       abiVersion: "1",
+                                                       window: window,
+                                                       mode: .plain,
+                                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                                       ttlMs: 20)
 
         let swift = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
                                                                     keypair: keypair,
@@ -1919,16 +1903,16 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
-                                                   authority: authority,
-                                                   contractAddress: Self.fixtureGovernanceContractAddress,
-                                                   codeHashHex: String(repeating: "aa", count: 32),
-                                                   abiHashHex: String(repeating: "bb", count: 32),
-                                                   abiVersion: "1",
-                                                   window: GovernanceWindow(lower: 1, upper: 5),
-                                                   mode: .zk,
-                                                   feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                                   ttlMs: nil)
+        let request = try ProposeDeployContractRequest(chainId: Self.fixtureChainId,
+                                                       authority: authority,
+                                                       contractAddress: Self.fixtureGovernanceContractAddress,
+                                                       codeHashHex: String(repeating: "aa", count: 32),
+                                                       abiHashHex: String(repeating: "bb", count: 32),
+                                                       abiVersion: "1",
+                                                       window: GovernanceWindow(lower: 1, upper: 5),
+                                                       mode: .zk,
+                                                       feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                                       ttlMs: nil)
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let envelope = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
                                                                        signingKey: signingKey,
@@ -2004,187 +1988,6 @@ final class TxBuilderTests: XCTestCase {
                 return
             }
         }
-    }
-
-    func testShieldRequestValidatesCommitmentLength() throws {
-        let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let payload = try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x11, count: 32),
-                                                       nonce: Data(repeating: 0x22, count: 24),
-                                                       ciphertext: Data([0xAA, 0xBB]))
-        XCTAssertThrowsError(
-            try ShieldRequest(chainId: Self.fixtureChainId,
-                              authority: authority,
-                              assetDefinitionId: Self.fixtureAssetDefinition,
-                              fromAccountId: authority,
-                              amount: "1",
-                              noteCommitment: Data(repeating: 0x00, count: 16),
-                              payload: payload,
-                              feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                              ttlMs: 10)
-        ) { error in
-            guard case ShieldRequestError.invalidNoteCommitmentLength = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-        }
-    }
-
-    func testShieldRequestUsesCanonicalQuantityStrings() throws {
-        let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let wide = "340282366920938463463374607431768211456.25"
-        XCTAssertEqual(try makeShieldRequest(authority: authority, amount: wide).amount, wide)
-
-        for malformed in ["01", "1.0", "-1"] {
-            XCTAssertThrowsError(try makeShieldRequest(authority: authority, amount: malformed)) {
-                error in
-                guard case ShieldRequestError.invalidAmount = error else {
-                    return XCTFail("Unexpected error for \(malformed): \(error)")
-                }
-            }
-        }
-    }
-
-    func testShieldEncodingMatchesNativeBridge() throws {
-        try requireEd25519Encoder()
-
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = try makeShieldRequest(authority: authority)
-        let swift = try SwiftTransactionEncoder.encodeShield(request: request,
-                                                             keypair: keypair,
-                                                             creationTimeMs: Self.fixtureCreationTimeMs)
-
-        guard let native = try? NoritoNativeBridge.shared.encodeShield(chainId: request.chainId,
-                                                                       authority: request.authority,
-                                                                       creationTimeMs: Self.fixtureCreationTimeMs,
-                                                                       ttlMs: request.ttlMs,
-                                                                       assetDefinitionId: request.assetDefinitionId,
-                                                                       fromAccountId: request.fromAccountId,
-                                                                       amount: request.amount,
-                                                                       noteCommitment: request.noteCommitment,
-                                                                       payloadEphemeral: request.payload.ephemeralPublicKey,
-                                                                       payloadNonce: request.payload.nonce,
-                                                                       payloadCiphertext: request.payload.ciphertext,
-                                                                       feePaymentJSON: try request.feePayment.canonicalJSONData(),
-                                                                       privateKey: keypair.privateKeyBytes) else {
-            XCTFail("Expected native shield encoding")
-            return
-        }
-
-        let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, swift.signedTransaction)
-        XCTAssertEqual(native.hash, swift.transactionHash)
-        XCTAssertEqual(normalized.norito, swift.norito)
-    }
-
-    func testUnshieldRequestRequiresInputs() throws {
-        let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let proof = try makeProofAttachment()
-        XCTAssertThrowsError(
-            try UnshieldRequest(chainId: Self.fixtureChainId,
-                                authority: authority,
-                                assetDefinitionId: Self.fixtureAssetDefinition,
-                                toAccountId: authority,
-                                publicAmount: "1",
-                                inputs: [],
-                                proof: proof,
-                                feePayment: .authority(chargeLimits: [], gasLimit: nil),)
-        ) { error in
-            guard case UnshieldRequestError.inputsEmpty = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-        }
-    }
-
-    func testUnshieldRequestValidatesNullifierLength() throws {
-        let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let proof = try makeProofAttachment()
-        let invalidInput = Data(repeating: 0x11, count: 8)
-        XCTAssertThrowsError(
-            try UnshieldRequest(chainId: Self.fixtureChainId,
-                                authority: authority,
-                                assetDefinitionId: Self.fixtureAssetDefinition,
-                                toAccountId: authority,
-                                publicAmount: "1",
-                                inputs: [invalidInput],
-                                proof: proof,
-                                feePayment: .authority(chargeLimits: [], gasLimit: nil),)
-        ) { error in
-            guard case UnshieldRequestError.invalidNullifierLength = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-        }
-    }
-
-    func testUnshieldRequestValidatesRootHintLength() throws {
-        let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let proof = try makeProofAttachment()
-        let validInput = Data(repeating: 0x42, count: 32)
-        let hint = Data(repeating: 0xFF, count: 8)
-        XCTAssertThrowsError(
-            try UnshieldRequest(chainId: Self.fixtureChainId,
-                                authority: authority,
-                                assetDefinitionId: Self.fixtureAssetDefinition,
-                                toAccountId: authority,
-                                publicAmount: "1",
-                                inputs: [validInput],
-                                proof: proof,
-                                rootHint: hint,
-                                feePayment: .authority(chargeLimits: [], gasLimit: nil),)
-        ) { error in
-            guard case UnshieldRequestError.invalidRootHintLength = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-        }
-    }
-
-    func testUnshieldRequestUsesCanonicalQuantityStrings() throws {
-        let keypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let wide = "18446744073709551616.25"
-        XCTAssertEqual(try makeUnshieldRequest(authority: authority, amount: wide).publicAmount, wide)
-
-        for malformed in ["01", "1.0", "-1"] {
-            XCTAssertThrowsError(try makeUnshieldRequest(authority: authority, amount: malformed)) {
-                error in
-                guard case UnshieldRequestError.invalidPublicAmount = error else {
-                    return XCTFail("Unexpected error for \(malformed): \(error)")
-                }
-            }
-        }
-    }
-
-    func testUnshieldEncodingMatchesNativeBridge() throws {
-        try requireEd25519Encoder()
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = try makeUnshieldRequest(authority: authority)
-        let swift = try SwiftTransactionEncoder.encodeUnshield(request: request,
-                                                               keypair: keypair,
-                                                               creationTimeMs: Self.fixtureCreationTimeMs)
-        guard let native = try? NoritoNativeBridge.shared.encodeUnshield(chainId: request.chainId,
-                                                                         authority: request.authority,
-                                                                         creationTimeMs: Self.fixtureCreationTimeMs,
-                                                                         ttlMs: request.ttlMs,
-                                                                         assetDefinitionId: request.assetDefinitionId,
-                                                                         destinationAccountId: request.toAccountId,
-                                                                         amount: request.publicAmount,
-                                                                         inputs: request.flattenedInputs,
-                                                                         proofJSON: try request.proof.encodedJSON(),
-                                                                         rootHint: request.rootHint,
-                                                                         feePaymentJSON: try request.feePayment.canonicalJSONData(),
-                                                                         privateKey: keypair.privateKeyBytes) else {
-            XCTFail("Expected native unshield encoding")
-            return
-        }
-        let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, swift.signedTransaction)
-        XCTAssertEqual(native.hash, swift.transactionHash)
-        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

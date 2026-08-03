@@ -4,8 +4,6 @@
 
 #[path = "../zk_roots_get_cap.rs"]
 mod zk_roots_get_cap;
-#[path = "../zk_shield_transfer_audit.rs"]
-mod zk_shield_transfer_audit;
 #[path = "../zk_stark.rs"]
 mod zk_stark;
 #[path = "../zk_testkit.rs"]

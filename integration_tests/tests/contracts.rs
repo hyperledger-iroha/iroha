@@ -475,6 +475,12 @@ async fn wait_for_cross_peer_rbc_diagnostics(
         .map_err(|_| eyre!("peer count does not fit in u32"))?;
     let expected_min_quorum = u32::try_from(commit_quorum_from_len(network.peers().len()).max(1))
         .map_err(|_| eyre!("commit quorum does not fit in u32"))?;
+    let mut expected_validator_set = network
+        .peers()
+        .iter()
+        .map(|peer| peer.id())
+        .collect::<Vec<_>>();
+    expected_validator_set.sort();
     let zero_hash = Hash::prehashed([0; Hash::LENGTH]);
     let deadline = Instant::now() + timeout;
 
@@ -497,37 +503,47 @@ async fn wait_for_cross_peer_rbc_diagnostics(
                         .committed_lane_blocks
                         .into_iter()
                         .filter(|record| {
+                            let matching_ownership = ownerships.iter().find(|ownership| {
+                                ownership.validate_replay_material().is_ok()
+                                    && ownership.lane_id == record.lane_id
+                                    && ownership.dataspace_id == record.dataspace_id
+                                    && ownership.lane_incarnation == record.lane_incarnation
+                                    && ownership.lane_block_height == record.lane_block_height
+                                    && ownership.lane_block_view == record.lane_block_view
+                                    && ownership.lane_block_descriptor_hash
+                                        == Some(record.descriptor_hash)
+                                    && ownership.subject_hash == record.subject_hash
+                                    && ownership.payload_ownership_hash
+                                        == record.payload_ownership_hash
+                                    && ownership.rbc_instance_hash == record.rbc_instance_hash
+                                    && ownership.qc_mode_tag == record.qc_mode_tag
+                                    && ownership.lane_block_descriptor_validator_count
+                                        == record.validator_count
+                                    && ownership.lane_block_descriptor_min_quorum
+                                        == record.min_quorum
+                                    && ownership.lane_block_descriptor_validator_count
+                                        == expected_validator_count
+                                    && ownership.lane_block_descriptor_min_quorum
+                                        == expected_min_quorum
+                                    && ownership.lane_block_descriptor_validator_set.as_slice()
+                                        == expected_validator_set.as_slice()
+                            });
                             after.is_none_or(|baseline| {
                                 record.lane_id == baseline.lane_id
                                     && record.dataspace_id == baseline.dataspace_id
                                     && record.lane_incarnation == baseline.lane_incarnation
                                     && (record.lane_block_height, record.lane_block_view)
                                         > (baseline.lane_block_height, baseline.lane_block_view)
-                            }) && required_transaction.is_none_or(
-                                |(proposal_height, transaction_hash)| {
-                                    ownerships.iter().any(|ownership| {
+                            }) && matching_ownership.is_some_and(|ownership| {
+                                required_transaction.is_none_or(
+                                    |(proposal_height, transaction_hash)| {
                                         ownership.proposal_height == proposal_height
                                             && ownership
                                                 .accepted_transaction_hashes
                                                 .contains(transaction_hash)
-                                            && ownership.validate_replay_material().is_ok()
-                                            && ownership.lane_id == record.lane_id
-                                            && ownership.dataspace_id == record.dataspace_id
-                                            && ownership.lane_incarnation == record.lane_incarnation
-                                            && ownership.lane_block_height
-                                                == record.lane_block_height
-                                            && ownership.lane_block_view == record.lane_block_view
-                                            && ownership.lane_block_descriptor_hash
-                                                == Some(record.descriptor_hash)
-                                            && ownership.subject_hash == record.subject_hash
-                                            && ownership.payload_ownership_hash
-                                                == record.payload_ownership_hash
-                                            && ownership.rbc_instance_hash
-                                                == record.rbc_instance_hash
-                                            && ownership.qc_mode_tag == record.qc_mode_tag
-                                    })
-                                },
-                            ) && record.executable_payload_available
+                                    },
+                                )
+                            }) && record.executable_payload_available
                                 && committed_lane_block_status_counts_as_progress(
                                     &record.execution_status,
                                     record.executable_payload_available,
@@ -1532,7 +1548,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         assert_typed_query_projection(all_page, view_name, expected_fields)?;
     }
 
-    const INVALID_PAGINATION_BOUNDS: [(&str, &str, &str, &str, &str); 7] = [
+    const INVALID_PAGINATION_BOUNDS: [(&str, &str, &str, &str, &str); 8] = [
         (
             "negative offset",
             "-1",
@@ -1571,6 +1587,13 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         (
             "offset above the signed host range",
             "9223372036854775808",
+            "1",
+            "AssertionFailed",
+            "assertion failed (constraint violation)",
+        ),
+        (
+            "offset above the unsigned host range",
+            "18446744073709551616",
             "1",
             "AssertionFailed",
             "assertion failed (constraint violation)",

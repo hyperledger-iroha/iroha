@@ -7,10 +7,16 @@
 //! makes the command one-shot across restart.
 
 use std::{
-    env, fs,
+    fs,
     fs::{File, OpenOptions},
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
+};
+
+#[cfg(feature = "test-network-native-amx-fault-injection")]
+use std::{
+    env,
+    path::PathBuf,
     sync::{Mutex, OnceLock},
 };
 
@@ -18,12 +24,14 @@ use std::{
 use norito::json::Map;
 use norito::json::Value;
 
+#[cfg(feature = "test-network-native-amx-fault-injection")]
 const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const COMMAND_FILE: &str = "native-amx-fault-command.norito.json";
 const ACK_FILE: &str = "native-amx-fault-ack.norito.json";
 const FORMAT_VERSION: u64 = 1;
 const MAX_FILE_BYTES: usize = 4 * 1024;
 
+#[cfg(feature = "test-network-native-amx-fault-injection")]
 static HOOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// Exact Native AMX phase at which the adversarial-test daemon aborts.
@@ -52,6 +60,7 @@ enum Evaluation {
 }
 
 /// Abort the feature-isolated daemon after durably acknowledging an exact cut.
+#[cfg(feature = "test-network-native-amx-fault-injection")]
 pub(crate) fn maybe_abort(phase: NativeAmxFaultPhase, source_id: [u8; 32]) {
     let Some(root) = env::var_os(CONTROL_DIR_ENV).map(PathBuf::from) else {
         return;

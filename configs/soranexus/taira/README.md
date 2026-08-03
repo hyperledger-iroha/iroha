@@ -107,7 +107,8 @@ into multi-second stalls.
 - `validator_roster.example.toml`: copy-me roster template for all validator
   public addresses, public keys, and PoPs. Keep the populated file user-local.
 - `validator_secrets.example.toml`: copy-me runtime template for per-validator
-  private keys, shared onboarding/faucet authority and streaming identity key
+  BLS private keys and dedicated SoraNet Ed25519 transport key pairs, shared
+  onboarding/faucet authority and streaming identity key
   material, the public identity of the provider-backed Soracloud mutation
   signer, plus the public SoraFS admission-council roots and quorum. Keep the
   populated file user-local. The Soracloud provider owns its private key; only
@@ -623,11 +624,16 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    `configs/soranexus/taira/validator_secrets.local.toml`.
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
-   roster, then put the matching validator `private_key` values and the shared
+   roster, then put each matching validator `private_key` plus its dedicated
+   Ed25519 `soranet_transport_public_key`/`soranet_transport_private_key` pair
+   and the shared
    `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`, every
    `soracloud_runtime_signer_*` public binding field,
    `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
-   values in the runtime file. SoraFS council roots must be canonical Ed25519
+   values in the runtime file. A validator's SoraNet transport identity must
+   be distinct from both its BLS node identity and the shared streaming
+   identity; the renderer rejects reuse and duplicate transport identities.
+   SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
    advert keys.
 4. Render the per-validator bundle:
@@ -1665,8 +1671,9 @@ away from the shipped MCP-enabled config:
 3. Render the per-validator config bundle from a user-local roster file, then
    copy the correct validator config onto the host, for example:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
-   - `validator_secrets.local.toml` must include both the validator private
-     keys and the shared `account_onboarding_*`, `torii_faucet_*`, and
+   - `validator_secrets.local.toml` must include every validator BLS private
+     key, its dedicated Ed25519 `soranet_transport_public_key` and
+     `soranet_transport_private_key`, and the shared `account_onboarding_*`, `torii_faucet_*`, and
      `streaming_identity_*`, `soracloud_runtime_signer_*`,
      `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
      fields because the checked-in template intentionally leaves those

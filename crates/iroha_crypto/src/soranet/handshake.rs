@@ -50,7 +50,7 @@ const SESSION_KEY_IKM_DOMAIN: &[u8] = b"soranet.session-key.ikm.v1";
 const STEP_DOMAIN: &[u8] = b"soranet.noise.step.v1";
 const RELAY_AUTH_DOMAIN: &[u8] = b"soranet.handshake.relay-auth.v1";
 
-/// ALPN used by the public SoraNet QUIC transport.
+/// ALPN used by the public `SoraNet` QUIC transport.
 pub const SORANET_QUIC_ALPN: &[u8] = b"soranet/1";
 /// Placeholder TLS name used by non-VPN harnesses that do not terminate TLS.
 pub const DEFAULT_TLS_SERVER_NAME: &str = "soranet.invalid";
@@ -2023,6 +2023,10 @@ fn relay_auth_digest(
     hasher.finalize().into()
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "relay authentication keeps every protocol-bound input explicit"
+)]
 fn append_relay_authentication(
     frame: &mut Vec<u8>,
     suite: HandshakeSuite,
@@ -2060,6 +2064,10 @@ fn append_relay_authentication(
     append_len_prefixed(frame, signature.payload())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "relay authentication keeps every protocol-bound input explicit"
+)]
 fn verify_relay_authentication(
     suite: HandshakeSuite,
     client_hello: &[u8],

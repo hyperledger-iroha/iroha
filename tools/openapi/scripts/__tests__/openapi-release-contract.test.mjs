@@ -61,7 +61,7 @@ test('Musubi V1 contract verifier is exact and fail closed', () => {
 });
 
 test('checked OpenAPI artifacts expose only the Musubi V1 route contract', async () => {
-  assert.equal(MUSUBI_V1_PATHS.length, 29);
+  assert.equal(MUSUBI_V1_PATHS.length, 31);
   assert.deepEqual(Object.keys(MUSUBI_V1_MODELS).sort(), MUSUBI_V1_PATHS);
 
   for (const relativePath of [

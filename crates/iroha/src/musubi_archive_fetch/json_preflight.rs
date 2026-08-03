@@ -2,22 +2,22 @@
 
 /// Endpoint-specific upper bounds applied before an owned JSON DOM is built.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct JsonDomEnvelopeV1 {
+pub(super) struct JsonDomEnvelopeV1 {
     /// Maximum container, scalar, and string token count.
-    pub(crate) max_tokens: usize,
+    pub(super) tokens: usize,
     /// Maximum nested object or array depth.
-    pub(crate) max_depth: usize,
+    pub(super) depth: usize,
     /// Maximum encoded byte length of one JSON string.
-    pub(crate) max_single_string_bytes: usize,
+    pub(super) single_string_bytes: usize,
     /// Maximum aggregate encoded byte length of all JSON strings.
-    pub(crate) max_total_string_bytes: usize,
+    pub(super) total_string_bytes: usize,
     /// Maximum byte length of one unquoted scalar literal.
-    pub(crate) max_atom_bytes: usize,
+    pub(super) atom_bytes: usize,
 }
 
 /// Structural-envelope rejection reported before DOM allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum JsonDomPreflightErrorV1 {
+pub(super) enum JsonDomPreflightErrorV1 {
     /// The byte sequence cannot form a structurally valid JSON document.
     Malformed,
     /// Container nesting exceeds the endpoint envelope.
@@ -37,13 +37,17 @@ pub(crate) enum JsonDomPreflightErrorV1 {
 /// number, duplicate-key, and UTF-8 validation remains the Norito parser's job;
 /// this pass only ensures that any valid prefix it can allocate is inside the
 /// endpoint-specific structural and string envelope.
-pub(crate) fn preflight_json_dom(
+#[expect(
+    clippy::too_many_lines,
+    reason = "the allocation-free JSON scanner keeps its state transitions in one audit surface"
+)]
+pub(super) fn preflight_json_dom(
     body: &[u8],
     limits: JsonDomEnvelopeV1,
 ) -> Result<(), JsonDomPreflightErrorV1> {
     const MAX_TRACKED_DEPTH: usize = 32;
 
-    if limits.max_depth == 0 || limits.max_depth > MAX_TRACKED_DEPTH {
+    if limits.depth == 0 || limits.depth > MAX_TRACKED_DEPTH {
         return Err(JsonDomPreflightErrorV1::Malformed);
     }
     let mut stack = [0_u8; MAX_TRACKED_DEPTH];
@@ -59,13 +63,13 @@ pub(crate) fn preflight_json_dom(
                 tokens = tokens
                     .checked_add(1)
                     .ok_or(JsonDomPreflightErrorV1::TooManyTokens)?;
-                if tokens > limits.max_tokens {
+                if tokens > limits.tokens {
                     return Err(JsonDomPreflightErrorV1::TooManyTokens);
                 }
                 depth = depth
                     .checked_add(1)
                     .ok_or(JsonDomPreflightErrorV1::TooDeep)?;
-                if depth > limits.max_depth {
+                if depth > limits.depth {
                     return Err(JsonDomPreflightErrorV1::TooDeep);
                 }
                 stack[depth - 1] = if body[index] == b'{' { b'}' } else { b']' };
@@ -82,7 +86,7 @@ pub(crate) fn preflight_json_dom(
                 tokens = tokens
                     .checked_add(1)
                     .ok_or(JsonDomPreflightErrorV1::TooManyTokens)?;
-                if tokens > limits.max_tokens {
+                if tokens > limits.tokens {
                     return Err(JsonDomPreflightErrorV1::TooManyTokens);
                 }
                 index += 1;
@@ -92,13 +96,13 @@ pub(crate) fn preflight_json_dom(
                     match byte {
                         b'"' => {
                             let encoded_bytes = index - string_start;
-                            if encoded_bytes > limits.max_single_string_bytes {
+                            if encoded_bytes > limits.single_string_bytes {
                                 return Err(JsonDomPreflightErrorV1::StringBytes);
                             }
                             total_string_bytes = total_string_bytes
                                 .checked_add(encoded_bytes)
                                 .ok_or(JsonDomPreflightErrorV1::StringBytes)?;
-                            if total_string_bytes > limits.max_total_string_bytes {
+                            if total_string_bytes > limits.total_string_bytes {
                                 return Err(JsonDomPreflightErrorV1::StringBytes);
                             }
                             index += 1;
@@ -124,7 +128,7 @@ pub(crate) fn preflight_json_dom(
                 tokens = tokens
                     .checked_add(1)
                     .ok_or(JsonDomPreflightErrorV1::TooManyTokens)?;
-                if tokens > limits.max_tokens {
+                if tokens > limits.tokens {
                     return Err(JsonDomPreflightErrorV1::TooManyTokens);
                 }
                 let atom_start = index;
@@ -138,7 +142,7 @@ pub(crate) fn preflight_json_dom(
                     }
                     index += 1;
                 }
-                if index - atom_start > limits.max_atom_bytes {
+                if index - atom_start > limits.atom_bytes {
                     return Err(JsonDomPreflightErrorV1::AtomBytes);
                 }
             }
@@ -156,11 +160,11 @@ mod tests {
     use super::*;
 
     const PLAN_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
-        max_tokens: 65_536,
-        max_depth: 16,
-        max_single_string_bytes: 4 * 1024,
-        max_total_string_bytes: 4 * 1024 * 1024,
-        max_atom_bytes: 64,
+        tokens: 65_536,
+        depth: 16,
+        single_string_bytes: 4 * 1024,
+        total_string_bytes: 4 * 1024 * 1024,
+        atom_bytes: 64,
     };
 
     #[test]
@@ -169,11 +173,11 @@ mod tests {
         preflight_json_dom(
             body,
             JsonDomEnvelopeV1 {
-                max_tokens: 32,
-                max_depth: 8,
-                max_single_string_bytes: 32,
-                max_total_string_bytes: 128,
-                max_atom_bytes: 64,
+                tokens: 32,
+                depth: 8,
+                single_string_bytes: 32,
+                total_string_bytes: 128,
+                atom_bytes: 64,
             },
         )
         .expect("bounded representative response");
@@ -182,7 +186,7 @@ mod tests {
     #[test]
     fn rejects_pathological_unknown_field_before_dom() {
         let mut body = String::from("{\"unknown\":[");
-        for index in 0..PLAN_ENVELOPE.max_tokens {
+        for index in 0..PLAN_ENVELOPE.tokens {
             if index != 0 {
                 body.push(',');
             }
@@ -199,11 +203,11 @@ mod tests {
     #[test]
     fn rejects_depth_string_and_atom_envelopes() {
         let limits = JsonDomEnvelopeV1 {
-            max_tokens: 16,
-            max_depth: 3,
-            max_single_string_bytes: 4,
-            max_total_string_bytes: 6,
-            max_atom_bytes: 4,
+            tokens: 16,
+            depth: 3,
+            single_string_bytes: 4,
+            total_string_bytes: 6,
+            atom_bytes: 4,
         };
         assert_eq!(
             preflight_json_dom(br#"[[[[0]]]]"#, limits),

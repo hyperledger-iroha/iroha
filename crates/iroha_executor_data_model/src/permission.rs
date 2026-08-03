@@ -834,8 +834,8 @@ pub mod settlement {
         /// Exact consent from a debited counterparty for one bilateral settlement intent.
         ///
         /// Only the account named by `debited_asset` may delegate or revoke this
-        /// token. The intent hash commits to the complete domain-separated DvP,
-        /// PvP, or repo phase, so changing any economic term or the settlement
+        /// token. The intent hash commits to the complete domain-separated `DvP`,
+        /// `PvP`, or repo phase, so changing any economic term or the settlement
         /// identifier requires fresh consent. Repo initiation requires distinct
         /// cash-debit and maturity-collateral consents before any asset moves.
         pub struct CanExecuteSettlement {
@@ -943,9 +943,20 @@ pub mod governance {
     }
 
     permission! {
+        /// Allow proposing a runtime upgrade for one exact ABI target.
+        #[derive(Copy)]
+        pub struct CanProposeRuntimeUpgrade {
+            /// Exact ABI version targeted by the proposed runtime upgrade.
+            pub abi_version: u16,
+            /// Exact canonical ABI hash targeted by the proposed runtime upgrade.
+            pub abi_hash: [u8; 32],
+        }
+    }
+
+    permission! {
         /// Allow submitting a governance ballot to a referendum/election
         pub struct CanSubmitGovernanceBallot {
-            /// Referendum or election identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum or election.
             pub referendum_id: String,
         }
     }
@@ -979,7 +990,7 @@ pub mod governance {
     permission! {
         /// Allow slashing governance bond locks for a referendum.
         pub struct CanSlashGovernanceLock {
-            /// Referendum identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum.
             pub referendum_id: String,
         }
     }
@@ -987,7 +998,7 @@ pub mod governance {
     permission! {
         /// Allow restituting governance bond locks after appeal.
         pub struct CanRestituteGovernanceLock {
-            /// Referendum identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum.
             pub referendum_id: String,
         }
     }
@@ -1218,7 +1229,7 @@ mod tests {
         CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
     };
     use super::escrow::CanResolveEscrowDispute;
-    use super::governance::CanManageVerifyingKeys;
+    use super::governance::{CanManageVerifyingKeys, CanProposeRuntimeUpgrade};
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
@@ -1357,6 +1368,42 @@ mod tests {
         assert!(
             CanManageVerifyingKeys::try_from(&malformed).is_err(),
             "the global capability must not accept an invented resource scope"
+        );
+    }
+
+    #[test]
+    fn runtime_upgrade_proposal_permission_binds_the_exact_abi_target() {
+        let expected = CanProposeRuntimeUpgrade {
+            abi_version: 1,
+            abi_hash: [0xA5; 32],
+        };
+        let canonical: iroha_data_model::permission::Permission = expected.into();
+        assert_eq!(canonical.name(), "CanProposeRuntimeUpgrade");
+        assert_eq!(
+            CanProposeRuntimeUpgrade::try_from(&canonical)
+                .expect("decode exact runtime-upgrade proposal scope"),
+            expected
+        );
+
+        let other_target: iroha_data_model::permission::Permission = CanProposeRuntimeUpgrade {
+            abi_version: 1,
+            abi_hash: [0x5A; 32],
+        }
+        .into();
+        assert_ne!(canonical, other_target);
+        let other_version: iroha_data_model::permission::Permission = CanProposeRuntimeUpgrade {
+            abi_version: 2,
+            abi_hash: [0xA5; 32],
+        }
+        .into();
+        assert_ne!(canonical, other_version);
+        let malformed = iroha_data_model::permission::Permission::new(
+            "CanProposeRuntimeUpgrade".into(),
+            norito::json!({"abi_version": 1}),
+        );
+        assert!(
+            CanProposeRuntimeUpgrade::try_from(&malformed).is_err(),
+            "runtime-upgrade permission must require the exact ABI hash"
         );
     }
 

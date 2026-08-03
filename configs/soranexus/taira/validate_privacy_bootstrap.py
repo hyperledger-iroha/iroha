@@ -650,7 +650,11 @@ def _validate_config(config: dict[str, Any], plan: dict[str, Any], *, release: b
     credentials = onboarding.get("credentials") if isinstance(onboarding, dict) else None
     streaming = config.get("streaming")
     if (
-        not isinstance(kagemusha, dict)
+        config.get("soranet_transport_public_key")
+        != "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY"
+        or config.get("soranet_transport_private_key")
+        != "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY"
+        or not isinstance(kagemusha, dict)
         or kagemusha.get("private_key")
         != "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
         or not isinstance(onboarding, dict)
@@ -668,7 +672,7 @@ def _validate_config(config: dict[str, Any], plan: dict[str, Any], *, release: b
         or streaming.get("identity_private_key")
         != "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
     ):
-        _fail("public Taira config must retain every runtime-secret placeholder")
+        _fail("public Taira config must retain every runtime-identity placeholder")
 
     canonical = _load_toml(DEFAULT_CONFIG)
     canonical_torii = canonical.get("torii")

@@ -28,17 +28,41 @@ def _git(root: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def source_fixture(tmp_path: Path) -> Path:
+def source_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    seal_home = tmp_path / "seal-home"
+    cargo_home = tmp_path / "cargo-home"
+    rustup_home = tmp_path / "rustup-home"
+    cargo_target = tmp_path / "cargo-target"
+    seal_tmp = tmp_path / "seal-tmp"
+    for directory in (seal_home, cargo_home, rustup_home, cargo_target, seal_tmp):
+        directory.mkdir()
+    monkeypatch.setenv("NORITO_BRIDGE_SEAL_HOME", str(seal_home))
+    monkeypatch.setenv("NORITO_BRIDGE_SEAL_CARGO_HOME", str(cargo_home))
+    monkeypatch.setenv("NORITO_BRIDGE_SEAL_RUSTUP_HOME", str(rustup_home))
+    monkeypatch.setenv("NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR", str(cargo_target))
+    monkeypatch.setenv("NORITO_BRIDGE_SEAL_TMPDIR", str(seal_tmp))
+
     root = tmp_path / "iroha"
     (root / "bridge-src").mkdir(parents=True)
+    (root / "IrohaSwift").mkdir()
     (root / ".gitignore").write_text("Cargo.lock\nbridge-src/*.cache\n", encoding="utf-8")
     (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
     (root / "Cargo.lock").write_text("lock-v1\n", encoding="utf-8")
     (root / "bridge-src/lib.rs").write_text("pub fn bridge() {}\n", encoding="utf-8")
+    (root / "IrohaSwift/Package.resolved").write_text(
+        '{"pins":[],"version":3}\n', encoding="utf-8"
+    )
     _git(root, "init", "-q")
     _git(root, "config", "user.name", "Source Seal Test")
     _git(root, "config", "user.email", "source-seal@example.invalid")
-    _git(root, "add", ".gitignore", "Cargo.toml", "bridge-src/lib.rs")
+    _git(
+        root,
+        "add",
+        ".gitignore",
+        "Cargo.toml",
+        "bridge-src/lib.rs",
+        "IrohaSwift/Package.resolved",
+    )
     _git(root, "commit", "-qm", "fixture")
     return root
 
@@ -120,7 +144,7 @@ def test_android_inputs_and_targets_are_platform_specific(
         encoding="utf-8",
     )
     apple_package = source_fixture / "IrohaSwift/Package.swift"
-    apple_package.parent.mkdir(parents=True)
+    apple_package.parent.mkdir(parents=True, exist_ok=True)
     apple_package.write_text("// fixture\n", encoding="utf-8")
     observed_targets: list[tuple[str, ...]] = []
 

@@ -15,8 +15,6 @@ mod sumeragi_kagami_localnet;
 mod sumeragi_localnet_smoke;
 #[path = "sumeragi_lock_convergence.rs"]
 mod sumeragi_lock_convergence;
-#[path = "sumeragi_negative_paths.rs"]
-mod sumeragi_negative_paths;
 #[path = "sumeragi_npos_happy_path.rs"]
 mod sumeragi_npos_happy_path;
 #[path = "sumeragi_npos_liveness.rs"]
@@ -27,8 +25,6 @@ mod sumeragi_npos_pacemaker_latency;
 mod sumeragi_npos_performance;
 #[path = "sumeragi_npos_stake_activation.rs"]
 mod sumeragi_npos_stake_activation;
-#[path = "sumeragi_randomness.rs"]
-mod sumeragi_randomness;
 #[path = "sumeragi_rotation.rs"]
 mod sumeragi_rotation;
 #[path = "sumeragi_telemetry.rs"]

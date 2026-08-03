@@ -222,6 +222,36 @@ def test_android_sbom_collection_preserves_each_module_report(tmp_path: Path) ->
 def test_xcframework_smoke_emits_all_lanes_through_separate_data_fd(
     tmp_path: Path,
 ) -> None:
+    harness_root = tmp_path / "repo"
+    harness = harness_root / "scripts" / "ci" / "run_xcframework_smoke.sh"
+    harness.parent.mkdir(parents=True)
+    harness.write_bytes(
+        (REPO_ROOT / "scripts" / "ci" / "run_xcframework_smoke.sh").read_bytes()
+    )
+    harness.chmod(0o755)
+    anomaly_checker = harness_root / "scripts" / "swift_smoke_anomalies.py"
+    anomaly_checker.write_bytes(
+        (REPO_ROOT / "scripts" / "swift_smoke_anomalies.py").read_bytes()
+    )
+    (harness_root / "examples" / "ios" / "NoritoDemoXcode").mkdir(parents=True)
+
+    bridge_sentinel = tmp_path / "bridge-built"
+    _write_executable(
+        harness_root / "scripts" / "build_norito_xcframework.sh",
+        f"""
+        #!/bin/bash
+        set -euo pipefail
+        [[ "${{CARGO_TARGET_DIR:-}}" == "{tmp_path / 'cargo-target'}" ]]
+        [[ "${{CARGO_BUILD_JOBS:-}}" == "1" ]]
+        [[ "${{CARGO_INCREMENTAL:-}}" == "0" ]]
+        [[ "${{CARGO_NET_OFFLINE:-}}" == "true" ]]
+        [[ "${{RUSTC_BOOTSTRAP:-}}" == "1" ]]
+        [[ -n "${{RUSTC:-}}" ]]
+        [[ -n "${{RUSTDOC:-}}" ]]
+        printf '%s\n' built > "{bridge_sentinel}"
+        """,
+    )
+
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_executable(
@@ -236,6 +266,9 @@ def test_xcframework_smoke_emits_all_lanes_through_separate_data_fd(
         """
         #!/bin/bash
         printf '%s\n' "fake xcodebuild $*"
+        if [[ "${IOS6_TEST_XCODEBUILD_FAIL:-0}" == "1" ]]; then
+          exit 37
+        fi
         exit 0
         """,
     )
@@ -270,7 +303,13 @@ def test_xcframework_smoke_emits_all_lanes_through_separate_data_fd(
             "PATH": os.pathsep.join(
                 [str(fake_bin), str(Path(sys.executable).parent), "/usr/bin", "/bin"]
             ),
-            "IOS6_SMOKE_SKIP_BRIDGE": "1",
+            "CARGO_TARGET_DIR": str(tmp_path / "cargo-target"),
+            "CARGO_BUILD_JOBS": "1",
+            "CARGO_INCREMENTAL": "0",
+            "CARGO_NET_OFFLINE": "true",
+            "RUSTC_BOOTSTRAP": "1",
+            "RUSTC": "/toolchains/1.93.1/bin/rustc",
+            "RUSTDOC": "/toolchains/1.93.1/bin/rustdoc",
             "IOS6_SMOKE_DERIVED_DATA": str(tmp_path / "derived"),
             "IOS6_SMOKE_RESULTS_PATH": str(result_path),
             "IOS6_SMOKE_ANOMALY_PATH": str(anomaly_path),
@@ -278,16 +317,17 @@ def test_xcframework_smoke_emits_all_lanes_through_separate_data_fd(
     )
 
     result = subprocess.run(
-        ["/bin/bash", str(REPO_ROOT / "scripts/ci/run_xcframework_smoke.sh")],
+        ["/bin/bash", str(harness)],
         check=False,
         capture_output=True,
         text=True,
-        cwd=REPO_ROOT,
+        cwd=harness_root,
         env=env,
         timeout=30,
     )
 
     assert result.returncode == 0, result.stderr
+    assert bridge_sentinel.read_text(encoding="utf-8") == "built\n"
     telemetry = json.loads(result_path.read_text(encoding="utf-8"))
     lanes = telemetry["buildkite"]["lanes"]
     assert [lane["name"] for lane in lanes] == [
@@ -310,3 +350,28 @@ def test_xcframework_smoke_emits_all_lanes_through_separate_data_fd(
         "open_incidents": [],
     }
     assert anomaly_path.exists()
+
+    failed_result_path = tmp_path / "failed-result.json"
+    failed_anomaly_path = tmp_path / "failed-anomalies.json"
+    env.update(
+        {
+            "IOS6_TEST_XCODEBUILD_FAIL": "1",
+            "IOS6_SMOKE_RESULTS_PATH": str(failed_result_path),
+            "IOS6_SMOKE_ANOMALY_PATH": str(failed_anomaly_path),
+        }
+    )
+    failed = subprocess.run(
+        ["/bin/bash", str(harness)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=harness_root,
+        env=env,
+        timeout=30,
+    )
+    assert failed.returncode != 0
+    failed_telemetry = json.loads(failed_result_path.read_text(encoding="utf-8"))
+    assert {lane["status"] for lane in failed_telemetry["buildkite"]["lanes"]} == {
+        "fail"
+    }
+    assert failed_anomaly_path.exists()

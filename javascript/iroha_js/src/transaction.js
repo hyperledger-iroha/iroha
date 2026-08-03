@@ -13,11 +13,7 @@ import {
 } from "./ivmArtifact.js";
 import { ToriiClient } from "./toriiClient.js";
 import { noritoDecodeInstruction } from "./norito.js";
-import {
-  KotodamaQuantity,
-  NumericV1,
-  NumericV1Error,
-} from "./numericV1.js";
+import { NumericV1, NumericV1Error } from "./numericV1.js";
 import {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -62,9 +58,6 @@ import {
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
-  buildShieldInstruction,
-  buildZkTransferInstruction,
-  buildUnshieldInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,
@@ -4132,28 +4125,6 @@ function normalizeWholeNumberLiteral(value, context) {
   return normalized;
 }
 
-function normalizeCanonicalQuantityInput(value, context) {
-  try {
-    if (value instanceof KotodamaQuantity) {
-      return NumericV1.encodeQuantityJson(value);
-    }
-    if (typeof value === "string") {
-      return NumericV1.decodeQuantityJson(value).toString();
-    }
-    if (typeof value === "bigint") {
-      return new KotodamaQuantity(value, 0).toString();
-    }
-    throw new TypeError(
-      `${context} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected`,
-    );
-  } catch (error) {
-    if (!(error instanceof NumericV1Error)) throw error;
-    throw new TypeError(
-      `${context} must be a canonical non-negative Kotodama V1 Quantity (${error.code})`,
-    );
-  }
-}
-
 function normalizeFixed32HexInput(value, context) {
   if (typeof value === "string") {
     if (value.trim() !== value) {
@@ -4194,69 +4165,6 @@ function toNamedBuffer(value, context) {
     return Buffer.from(value);
   }
   throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
-}
-
-/**
- * Build a deterministic confidential XOR fee-spend envelope for private Kaigi.
- */
-export function buildPrivateKaigiFeeSpend({
-  chainId,
-  assetDefinitionId,
-  actionHash,
-  anchorRootHex,
-  feeAmount,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
-  if (!native || typeof native.buildPrivateKaigiFeeSpend !== "function") {
-    throw new Error(
-      "native binding 'buildPrivateKaigiFeeSpend' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "privateKaigiFeeSpend",
-  );
-  const result = native.buildPrivateKaigiFeeSpend(
-    normalizeExactMetadataString(chainId, "privateKaigiFeeSpend.chainId"),
-    normalizeExactMetadataString(
-      assetDefinitionId,
-      "privateKaigiFeeSpend.assetDefinitionId",
-    ),
-    toBuffer(actionHash),
-    normalizeFixed32HexInput(anchorRootHex, "privateKaigiFeeSpend.anchorRootHex"),
-    normalizeCanonicalQuantityInput(
-      feeAmount,
-      "privateKaigiFeeSpend.feeAmount",
-    ),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return {
-    asset_definition_id: String(
-      result.assetDefinitionId ?? result.asset_definition_id,
-    ),
-    anchor_root: Buffer.from(result.anchorRoot ?? result.anchor_root),
-    nullifiers: Array.isArray(result.nullifiers)
-      ? result.nullifiers.map((entry) => Buffer.from(entry))
-      : [],
-    output_commitments: Array.isArray(
-      result.outputCommitments ?? result.output_commitments,
-    )
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
-          Buffer.from(entry),
-        )
-      : [],
-    encrypted_change_payloads: Array.isArray(
-      result.encryptedChangePayloads ?? result.encrypted_change_payloads,
-    )
-      ? (
-          result.encryptedChangePayloads ?? result.encrypted_change_payloads
-        ).map((entry) => Buffer.from(entry))
-      : [],
-    proof: Buffer.from(result.proof),
-  };
 }
 
 /**
@@ -4519,116 +4427,6 @@ export function buildConfidentialUnshieldProofV3({
       : [],
     root: Buffer.from(result.root),
     proof: Buffer.from(result.proof),
-  };
-}
-
-/**
- * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(Create)`.
- */
-export function buildPrivateCreateKaigiTransaction({
-  chainId,
-  call,
-  artifacts,
-  feeSpend,
-  metadata = null,
-  creationTimeMs = null,
-  nonce = null,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildPrivateCreateKaigiTransaction !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildPrivateCreateKaigiTransaction' is unavailable",
-    );
-  }
-  const result = native.buildPrivateCreateKaigiTransaction(
-    normalizeExactMetadataString(chainId, "privateCreateKaigi.chainId"),
-    JSON.stringify(call ?? {}),
-    JSON.stringify(artifacts ?? {}),
-    JSON.stringify(feeSpend ?? {}),
-    normalizeMetadataPayload(metadata, "privateCreateKaigi.metadata"),
-    creationTimeMs,
-    nonce,
-  );
-  return {
-    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
-    hash: Buffer.from(result.hash),
-    actionHash: Buffer.from(result.actionHash),
-  };
-}
-
-/**
- * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(Join)`.
- */
-export function buildPrivateJoinKaigiTransaction({
-  chainId,
-  callId,
-  artifacts,
-  feeSpend,
-  metadata = null,
-  creationTimeMs = null,
-  nonce = null,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildPrivateJoinKaigiTransaction !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildPrivateJoinKaigiTransaction' is unavailable",
-    );
-  }
-  const result = native.buildPrivateJoinKaigiTransaction(
-    normalizeExactMetadataString(chainId, "privateJoinKaigi.chainId"),
-    normalizeExactMetadataString(callId, "privateJoinKaigi.callId"),
-    JSON.stringify(artifacts ?? {}),
-    JSON.stringify(feeSpend ?? {}),
-    normalizeMetadataPayload(metadata, "privateJoinKaigi.metadata"),
-    creationTimeMs,
-    nonce,
-  );
-  return {
-    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
-    hash: Buffer.from(result.hash),
-    actionHash: Buffer.from(result.actionHash),
-  };
-}
-
-/**
- * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(End)`.
- */
-export function buildPrivateEndKaigiTransaction({
-  chainId,
-  callId,
-  endedAtMs = null,
-  artifacts,
-  feeSpend,
-  metadata = null,
-  creationTimeMs = null,
-  nonce = null,
-}) {
-  const native = resolveNativeBinding();
-  if (!native || typeof native.buildPrivateEndKaigiTransaction !== "function") {
-    throw new Error(
-      "native binding 'buildPrivateEndKaigiTransaction' is unavailable",
-    );
-  }
-  const result = native.buildPrivateEndKaigiTransaction(
-    normalizeExactMetadataString(chainId, "privateEndKaigi.chainId"),
-    normalizeExactMetadataString(callId, "privateEndKaigi.callId"),
-    endedAtMs,
-    JSON.stringify(artifacts ?? {}),
-    JSON.stringify(feeSpend ?? {}),
-    normalizeMetadataPayload(metadata, "privateEndKaigi.metadata"),
-    creationTimeMs,
-    nonce,
-  );
-  return {
-    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
-    hash: Buffer.from(result.hash),
-    actionHash: Buffer.from(result.actionHash),
   };
 }
 
@@ -5004,87 +4802,6 @@ export function buildCancelConfidentialPolicyTransitionTransaction({
 }) {
   const instruction =
     buildCancelConfidentialPolicyTransitionInstruction(cancellation);
-  return buildTransaction({
-    chainId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-export function buildShieldTransaction({
-  chainId,
-  authority,
-  feePayment,
-  shield,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildShieldInstruction(shield);
-  return buildTransaction({
-    chainId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-export function buildZkTransferTransaction({
-  chainId,
-  authority,
-  feePayment,
-  transfer,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildZkTransferInstruction(transfer);
-  return buildTransaction({
-    chainId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-export function buildUnshieldTransaction({
-  chainId,
-  authority,
-  feePayment,
-  unshield,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildUnshieldInstruction(unshield);
   return buildTransaction({
     chainId,
     authority,

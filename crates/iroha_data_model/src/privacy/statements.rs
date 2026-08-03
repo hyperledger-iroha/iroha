@@ -266,7 +266,7 @@ impl BootleLanternIssuerPublicMatrixV1 {
         let mut entries = Vec::with_capacity(
             BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
         );
-        for row in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 {
+        for row in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 - 1 {
             for column in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 {
                 if row >= column {
                     entries.push(first_column[row - column].clone());
@@ -286,6 +286,9 @@ impl BootleLanternIssuerPublicMatrixV1 {
                 }
             }
         }
+        // The final row is the reversed first column. Move those polynomials
+        // directly because no later matrix entry needs the owned inputs.
+        entries.extend(first_column.into_iter().rev());
         Ok(Self { entries })
     }
 
@@ -300,6 +303,10 @@ impl BootleLanternIssuerPublicMatrixV1 {
     ///
     /// Rejects a non-Toeplitz block, an incorrect negacyclic `Y` shift, or a
     /// public key whose eight first-column blocks are too sparse.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the matrix validator keeps ordered structural checks and their stable first-error precedence together"
+    )]
     pub fn validate_r512_multiplication_structure_v1(
         &self,
     ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
@@ -1081,6 +1088,8 @@ pub struct OrchardHalo2ActionsStatementV1 {
     pub context: PrivacyStatementContextV1,
     /// Asset represented by the Orchard action.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent reserve partition used by directional value bridges.
+    pub public_balance_scope: AssetBalanceScope,
     /// Orchard pool namespace.
     pub pool_id: PrivacyPoolIdV1,
     /// Admitted note-commitment tree anchor.
@@ -1141,6 +1150,8 @@ pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     pub context: PrivacyStatementContextV1,
     /// Asset manipulated by the private program.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent reserve partition used by directional value bridges.
+    pub public_balance_scope: AssetBalanceScope,
     /// Private-note pool namespace.
     pub pool_id: PrivacyPoolIdV1,
     /// Exact private IVM program identifier.
@@ -1432,6 +1443,7 @@ impl PrivacyStatementV1 {
 fn validate_zk_ace(
     statement: &ZkAcePqAuthorizationStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
+    validate_public_balance_scope(statement.public_balance_scope)?;
     require_commitment(statement.identity_commitment, 0)?;
     require_nonzero_id(statement.policy_id.is_zero(), PrivacyTypedFieldV1::PolicyId)?;
     require_nonzero_id(
@@ -2056,6 +2068,7 @@ fn validate_orchard(
     statement: &OrchardHalo2ActionsStatementV1,
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
+    validate_public_balance_scope(statement.public_balance_scope)?;
     require_nonzero_id(statement.pool_id.is_zero(), PrivacyTypedFieldV1::PoolId)?;
     require_nonzero_id(statement.anchor.is_zero(), PrivacyTypedFieldV1::Root)?;
     require_epoch(statement.anchor_epoch, PrivacyEpochFieldV1::Root)?;
@@ -2247,6 +2260,7 @@ fn validate_ivm_private_note(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
+    validate_public_balance_scope(statement.public_balance_scope)?;
     require_nonzero_id(statement.pool_id.is_zero(), PrivacyTypedFieldV1::PoolId)?;
     require_nonzero_id(
         statement.program_id.is_zero(),
@@ -2290,6 +2304,18 @@ fn validate_ivm_private_note(
         limits,
     )?;
     validate_ivm_private_encrypted_outputs(&statement.encrypted_outputs)
+}
+
+fn validate_public_balance_scope(
+    scope: AssetBalanceScope,
+) -> Result<(), PrivacyStatementValidationError> {
+    if matches!(
+        scope,
+        AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
+    ) {
+        return Err(PrivacyStatementValidationError::UniversalPublicBalanceScope);
+    }
+    Ok(())
 }
 
 fn validate_pq_masp(

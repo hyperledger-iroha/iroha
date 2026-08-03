@@ -40,10 +40,11 @@ use norito::json::{Map, Value};
 use crate::{
     archive_fetch::{
         ArchiveFetchErrorV1, ArchiveFetchFailureClassV1, ArchiveTransportErrorV1,
-        MusubiArchiveFetchAdapterV1, ProductionSorafsArchiveTransportV1,
-        load_production_archive_transport_v1,
+        MusubiArchiveFetchAdapterV1, PreparedProductionSorafsArchiveTransportV1,
+        ProductionSorafsArchiveTransportV1, build_production_archive_transport_v1,
+        prepare_production_archive_transport_v1,
     },
-    atomic_io::AtomicWriteRoot,
+    atomic_io::{AtomicWriteErrorCode, AtomicWriteRoot},
     cache::{CacheError, InstallOutcome, MusubiCache, RepairOutcome, platform_cache_root_v1},
     compiler::{
         CompilerActionV1, CompilerBridgeErrorV1, execute_compiler_graph, validate_packaged_plan,
@@ -62,15 +63,18 @@ use crate::{
         PackageError, package_layout_for_member, plan_package, publication_claim,
         publication_manifest_toml, semantic_release_manifest,
     },
-    publication_runtime::load_production_publication_runtime_v1,
+    publication_runtime::{
+        load_bound_production_publication_runtime_v1, load_production_publication_runtime_v1,
+    },
     publish::{
         PublicationAdvanceV1, PublicationBackendError, PublicationEngine, PublicationError,
         PublicationJournalStore, PublicationOperationIdV1, PublicationRequestV1,
         PublicationResultV1, PublicationStagedCarSourceV1, PublicationValidationEvidenceV1,
     },
     registry::{
-        PublicationPollPolicyV1, RegistryErrorV1, RegistryPublicationBackendV1,
-        RegistryReadClientV1, RegistrySigningClientV1, resume_with_bounded_polling,
+        PlatformConfigProvenanceV1, PublicationPollPolicyV1, RegistryErrorV1,
+        RegistryPublicationBackendV1, RegistryReadClientV1, RegistrySigningClientV1,
+        resume_with_bounded_polling,
     },
     registry_cache::{CachedResolverSourceV1, ResolverIndexCacheV1},
     resolver::{ConflictReasonV1, ResolveModeV1, ResolverError},
@@ -84,9 +88,9 @@ use crate::{
 const LOCK_FILE_NAME: &str = "Musubi.lock";
 
 /// Parsed presentation mode and logical command result.
-pub(crate) struct Invocation {
-    pub(crate) format: OutputFormat,
-    pub(crate) output: CommandOutput,
+pub struct Invocation {
+    pub format: OutputFormat,
+    pub output: CommandOutput,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
@@ -409,11 +413,22 @@ struct PublishArgs {
     #[command(flatten)]
     network: NetworkArgs,
     /// Return after persisting a resumable operation journal.
-    #[arg(long, conflicts_with = "resume")]
+    #[arg(long, conflicts_with_all = ["resume", "recover"])]
     detach: bool,
     /// Resume one secret-free publication journal by its canonical operation id.
-    #[arg(long, value_name = "OPERATION_ID", conflicts_with = "detach")]
+    #[arg(
+        long,
+        value_name = "OPERATION_ID",
+        conflicts_with_all = ["detach", "recover"]
+    )]
     resume: Option<PublicationOperationIdV1>,
+    /// Rebuild missing immutable sidecars for one pristine pre-ingress journal.
+    #[arg(
+        long,
+        value_name = "OPERATION_ID",
+        conflicts_with_all = ["detach", "resume"]
+    )]
+    recover: Option<PublicationOperationIdV1>,
 }
 
 #[derive(Args, Debug)]
@@ -463,6 +478,10 @@ enum RoleArg {
     Maintainer,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the four independent permission switches are the stable CLI shape"
+)]
 #[derive(Args, Clone, Copy, Debug, Default)]
 struct MaintainerPermissionArgs {
     /// Allow publishing immutable releases.
@@ -672,7 +691,7 @@ struct Success {
 type CommandResult = Result<Success, Diagnostic>;
 
 /// Parse and execute an argv sequence without writing process streams.
-pub(crate) fn invoke<I, T>(args: I) -> Invocation
+pub fn invoke<I, T>(args: I) -> Invocation
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -1521,19 +1540,24 @@ fn dependency_text(dependency: &EffectiveDependency, workspace: &Workspace) -> S
                     .values()
                     .find(|member| &member.manifest_path == manifest)
             });
-            if let Some(local) = local {
-                format!(
-                    "{} -> {} v{} (path {})",
-                    dependency.alias, local.package.selector, local.package.version, path
-                )
-            } else if let (Some(package), Some(requirement)) = (package, requirement) {
-                format!(
-                    "{} -> {package} {requirement} (path {path})",
-                    dependency.alias
-                )
-            } else {
-                format!("{} -> path {path}", dependency.alias)
-            }
+            local.map_or_else(
+                || {
+                    if let (Some(package), Some(requirement)) = (package, requirement) {
+                        format!(
+                            "{} -> {package} {requirement} (path {path})",
+                            dependency.alias
+                        )
+                    } else {
+                        format!("{} -> path {path}", dependency.alias)
+                    }
+                },
+                |local| {
+                    format!(
+                        "{} -> {} v{} (path {})",
+                        dependency.alias, local.package.selector, local.package.version, path
+                    )
+                },
+            )
         }
     }
 }
@@ -1617,10 +1641,10 @@ fn read_optional_workspace_lock(workspace: &Workspace) -> Result<Option<Lockfile
     }
     LockfileV1::read(&path)
         .map(Some)
-        .map_err(|error| lockfile_diagnostic(&path, error))
+        .map_err(|error| lockfile_diagnostic(&path, &error))
 }
 
-fn lockfile_diagnostic(path: &Path, error: LockfileError) -> Diagnostic {
+fn lockfile_diagnostic(path: &Path, error: &LockfileError) -> Diagnostic {
     let code = if matches!(error, LockfileError::Legacy) {
         ErrorCode::LockfileLegacy
     } else {
@@ -1751,6 +1775,9 @@ struct ResolvedWorkspaceGraphV1 {
     lock: LockfileV1,
     registry: Option<RegistryReadClientV1>,
     cached_source: Option<CachedResolverSourceV1>,
+    prepared_archive_fetch:
+        Option<Result<PreparedProductionSorafsArchiveTransportV1, ArchiveTransportErrorV1>>,
+    platform_config_provenance: Option<PlatformConfigProvenanceV1>,
     account_chain_discriminant: u16,
 }
 
@@ -1817,8 +1844,14 @@ fn resolve_and_update_workspace_lock(
     } else {
         ResolveModeV1::UpdateLock
     };
-    let (outcome, registry, cached_source, account_chain_discriminant) = if mode.effective_offline()
-    {
+    let (
+        outcome,
+        registry,
+        cached_source,
+        prepared_archive_fetch,
+        platform_config_provenance,
+        account_chain_discriminant,
+    ) = if mode.effective_offline() {
         let cached = resolve_workspace_offline_cached(
             &resolver_cache,
             workspace,
@@ -1833,11 +1866,17 @@ fn resolve_and_update_workspace_lock(
             cached.outcome,
             None,
             Some(cached.source),
+            None,
+            None,
             account_chain_discriminant,
         )
     } else {
-        let registry = RegistryReadClientV1::load(config)
+        let (registry, config_image) = RegistryReadClientV1::load_with_config_image(config)
             .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+        let prepared_archive_fetch =
+            prepare_production_archive_transport_v1(config_image.path(), config_image.bytes());
+        let platform_config_provenance = config_image.provenance();
+        drop(config_image);
         let account_chain_discriminant = registry.account_chain_discriminant();
         let mut snapshot_mismatches = 0_u8;
         let outcome = loop {
@@ -1869,19 +1908,28 @@ fn resolve_and_update_workspace_lock(
                 result => break result.map_err(graph_diagnostic)?,
             }
         };
-        (outcome, Some(registry), None, account_chain_discriminant)
+        (
+            outcome,
+            Some(registry),
+            None,
+            Some(prepared_archive_fetch),
+            Some(platform_config_provenance),
+            account_chain_discriminant,
+        )
     };
     if outcome.changed {
         let writer = AtomicWriteRoot::new(workspace.root()).map_err(atomic_diagnostic)?;
         outcome
             .lockfile
             .write_atomic(&writer, Path::new(LOCK_FILE_NAME))
-            .map_err(|error| lockfile_diagnostic(&lock_path, error))?;
+            .map_err(|error| lockfile_diagnostic(&lock_path, &error))?;
     }
     Ok(ResolvedWorkspaceGraphV1 {
         lock: outcome.lockfile,
         registry,
         cached_source,
+        prepared_archive_fetch,
+        platform_config_provenance,
         account_chain_discriminant,
     })
 }
@@ -1958,8 +2006,7 @@ fn run_fetch(explicit_manifest: Option<&Path>, args: &FetchArgs) -> CommandResul
         false,
     )?;
     let cache = open_user_cache()?;
-    let fetched =
-        ensure_graph_archives(&cache, &graph, args.mode, args.registry.config.as_deref())?;
+    let fetched = ensure_graph_archives(&cache, &graph, args.mode)?;
     Ok(Success {
         message: format!("fetched {} archive(s)", fetched.len()),
         data: object([
@@ -1974,7 +2021,6 @@ fn ensure_graph_archives(
     cache: &MusubiCache,
     graph: &ResolvedWorkspaceGraphV1,
     mode: GraphModeArgs,
-    config: Option<&Path>,
 ) -> Result<Vec<Value>, Diagnostic> {
     let mut nodes_by_archive = BTreeMap::new();
     for node in &graph.lock.nodes {
@@ -2010,12 +2056,28 @@ fn ensure_graph_archives(
             .with_help("rerun online, or repair a corrupt cache entry first"));
         }
         if transport.is_none() {
+            let prepared = graph
+                .prepared_archive_fetch
+                .as_ref()
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        ErrorCode::OfflineMiss,
+                        "authenticated archive-fetch configuration is unavailable offline",
+                    )
+                })?
+                .as_ref()
+                .map_err(|error| archive_transport_diagnostic(*error))?;
             transport = Some(
-                load_production_archive_transport_v1(config)
+                build_production_archive_transport_v1(prepared)
                     .map_err(archive_transport_diagnostic)?,
             );
         }
-        let adapter = MusubiArchiveFetchAdapterV1::new(graph.online_registry()?, cache);
+        let adapter = MusubiArchiveFetchAdapterV1::new(graph.online_registry()?, cache)
+            .with_expected_deployment(
+                &graph.lock.chain_id,
+                graph.lock.genesis_hash,
+                graph.lock.snapshot,
+            );
         let outcome = adapter
             .fetch_exact(
                 archive_id,
@@ -2029,7 +2091,7 @@ fn ensure_graph_archives(
             })?;
         for node in nodes {
             cache.load_compiler_package(node).map_err(|error| {
-                cache_maintenance_diagnostic(error)
+                cache_maintenance_diagnostic(&error)
                     .with_context("archive_id", hex::encode(archive_id.as_bytes()))
             })?;
         }
@@ -2071,14 +2133,18 @@ fn archive_transport_diagnostic(error: ArchiveTransportErrorV1) -> Diagnostic {
 fn archive_fetch_diagnostic(error: ArchiveFetchErrorV1) -> Diagnostic {
     let code = match error.class() {
         ArchiveFetchFailureClassV1::Retryable => ErrorCode::Network,
-        ArchiveFetchFailureClassV1::Integrity => ErrorCode::ArchiveInvalid,
-        ArchiveFetchFailureClassV1::Unavailable => ErrorCode::ArchiveInvalid,
-        ArchiveFetchFailureClassV1::Permanent => ErrorCode::ArchiveInvalid,
+        ArchiveFetchFailureClassV1::Integrity
+        | ArchiveFetchFailureClassV1::Unavailable
+        | ArchiveFetchFailureClassV1::Permanent => ErrorCode::ArchiveInvalid,
     };
     Diagnostic::new(code, "authenticated SoraFS archive fetch failed")
         .with_context("archive_code", error.code())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the CLI handler keeps one auditable build/test orchestration sequence"
+)]
 fn run_build(
     explicit_manifest: Option<&Path>,
     command: &'static str,
@@ -2096,8 +2162,7 @@ fn run_build(
         false,
     )?;
     let cache = open_user_cache()?;
-    let archives =
-        ensure_graph_archives(&cache, &graph, args.mode, args.registry.config.as_deref())?;
+    let archives = ensure_graph_archives(&cache, &graph, args.mode)?;
     let action = if command == "build" {
         CompilerActionV1::Build
     } else {
@@ -2112,7 +2177,7 @@ fn run_build(
         args.release,
         graph.account_chain_discriminant(),
     )
-    .map_err(|error| graph_mode_compiler_diagnostic(error, args.mode))?;
+    .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
     if command == "test" {
         let report = execute_workspace_tests_v1(
             &cache,
@@ -2121,7 +2186,7 @@ fn run_build(
             &graph.lock,
             &WorkspaceTestOptionsV1::new(graph.account_chain_discriminant()),
         )
-        .map_err(|error| graph_mode_test_diagnostic(error, args.mode))?;
+        .map_err(|error| graph_mode_test_diagnostic(&error, args.mode))?;
         if !report.is_success() {
             let first_failure = report
                 .targets
@@ -2266,8 +2331,8 @@ fn open_user_cache() -> Result<MusubiCache, Diagnostic> {
     })
 }
 
-fn compiler_bridge_diagnostic(error: CompilerBridgeErrorV1) -> Diagnostic {
-    let code = match &error {
+fn compiler_bridge_diagnostic(error: &CompilerBridgeErrorV1) -> Diagnostic {
+    let code = match error {
         CompilerBridgeErrorV1::Workspace(_) => ErrorCode::WorkspaceInvalid,
         CompilerBridgeErrorV1::Lock(_) => ErrorCode::LockfileInvalid,
         CompilerBridgeErrorV1::Cache(_) => ErrorCode::CacheCorrupt,
@@ -2277,7 +2342,10 @@ fn compiler_bridge_diagnostic(error: CompilerBridgeErrorV1) -> Diagnostic {
     Diagnostic::new(code, error.to_string())
 }
 
-fn graph_mode_compiler_diagnostic(error: CompilerBridgeErrorV1, mode: GraphModeArgs) -> Diagnostic {
+fn graph_mode_compiler_diagnostic(
+    error: &CompilerBridgeErrorV1,
+    mode: GraphModeArgs,
+) -> Diagnostic {
     if mode.effective_offline() && matches!(&error, CompilerBridgeErrorV1::Cache(_)) {
         return Diagnostic::new(
             ErrorCode::OfflineMiss,
@@ -2288,8 +2356,8 @@ fn graph_mode_compiler_diagnostic(error: CompilerBridgeErrorV1, mode: GraphModeA
     compiler_bridge_diagnostic(error)
 }
 
-fn test_runner_diagnostic(error: WorkspaceTestErrorV1) -> Diagnostic {
-    let code = match &error {
+fn test_runner_diagnostic(error: &WorkspaceTestErrorV1) -> Diagnostic {
+    let code = match error {
         WorkspaceTestErrorV1::Workspace(_) | WorkspaceTestErrorV1::Target(_) => {
             ErrorCode::WorkspaceInvalid
         }
@@ -2302,7 +2370,7 @@ fn test_runner_diagnostic(error: WorkspaceTestErrorV1) -> Diagnostic {
     Diagnostic::new(code, error.to_string())
 }
 
-fn graph_mode_test_diagnostic(error: WorkspaceTestErrorV1, mode: GraphModeArgs) -> Diagnostic {
+fn graph_mode_test_diagnostic(error: &WorkspaceTestErrorV1, mode: GraphModeArgs) -> Diagnostic {
     if mode.effective_offline() && matches!(&error, WorkspaceTestErrorV1::Cache(_)) {
         return Diagnostic::new(
             ErrorCode::OfflineMiss,
@@ -2313,6 +2381,10 @@ fn graph_mode_test_diagnostic(error: WorkspaceTestErrorV1, mode: GraphModeArgs) 
     test_runner_diagnostic(error)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the CLI handler keeps clean-package validation and receipt assembly together"
+)]
 fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandResult {
     let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
     let lock_path = workspace.root().join(LOCK_FILE_NAME);
@@ -2330,8 +2402,7 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
         (None, Vec::new())
     } else {
         let cache = open_user_cache()?;
-        let archives =
-            ensure_graph_archives(&cache, &graph, args.mode, args.registry.config.as_deref())?;
+        let archives = ensure_graph_archives(&cache, &graph, args.mode)?;
         (Some(cache), archives)
     };
     let mut listed = Vec::new();
@@ -2355,11 +2426,12 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
         let verification_lock = graph
             .lock
             .verification_lock(selector, release.clone())
-            .map_err(|error| lockfile_diagnostic(&lock_path, error))?;
-        let manifest = publication_manifest_toml(member).map_err(package_diagnostic)?;
+            .map_err(|error| lockfile_diagnostic(&lock_path, &error))?;
+        let manifest =
+            publication_manifest_toml(member).map_err(|error| package_diagnostic(&error))?;
         let layout = package_layout_for_member(workspace.root(), member);
-        let plan =
-            plan_package(&layout, &manifest, &verification_lock).map_err(package_diagnostic)?;
+        let plan = plan_package(&layout, &manifest, &verification_lock)
+            .map_err(|error| package_diagnostic(&error))?;
         let file_paths = plan
             .files()
             .iter()
@@ -2383,25 +2455,27 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             &verification_lock,
             graph.account_chain_discriminant(),
         )
-        .map_err(|error| graph_mode_compiler_diagnostic(error, args.mode))?;
+        .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
         let semantic = semantic_release_manifest(
             member,
             release.clone(),
             &verification_lock,
             interface_digest,
         )
-        .map_err(package_diagnostic)?;
+        .map_err(|error| package_diagnostic(&error))?;
         let car = plan
             .into_car(&semantic, &verification_lock)
-            .map_err(package_diagnostic)?;
-        let archive_commitment = car.archive_commitment().map_err(package_diagnostic)?;
+            .map_err(|error| package_diagnostic(&error))?;
+        let archive_commitment = car
+            .archive_commitment()
+            .map_err(|error| package_diagnostic(&error))?;
         let publication = publication_claim(
             &semantic,
             &archive_commitment,
-            graph.lock.snapshot.clone(),
+            graph.lock.snapshot,
             verification_lock,
         )
-        .map_err(package_diagnostic)?;
+        .map_err(|error| package_diagnostic(&error))?;
         if output_writer.is_none() {
             output_writer = Some(package_output_writer(&workspace)?);
         }
@@ -2526,8 +2600,8 @@ fn package_output_writer(workspace: &Workspace) -> Result<AtomicWriteRoot, Diagn
     AtomicWriteRoot::new(workspace.root()).map_err(atomic_diagnostic)
 }
 
-fn package_diagnostic(error: PackageError) -> Diagnostic {
-    let code = if matches!(&error, PackageError::Io { .. }) {
+fn package_diagnostic(error: &PackageError) -> Diagnostic {
+    let code = if matches!(error, PackageError::Io { .. }) {
         ErrorCode::Io
     } else {
         ErrorCode::PackageInvalid
@@ -2535,7 +2609,14 @@ fn package_diagnostic(error: PackageError) -> Diagnostic {
     Diagnostic::new(code, error.to_string())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "publication setup is one security-sensitive validation and staging workflow"
+)]
 fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandResult {
+    if let Some(operation_id) = args.recover {
+        return recover_publication_sidecars(explicit_manifest, args, operation_id);
+    }
     if let Some(operation_id) = args.resume {
         if args.mode.effective_offline() {
             return Err(Diagnostic::new(
@@ -2594,32 +2675,35 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     let verification_lock = graph
         .lock
         .verification_lock(selector, release.clone())
-        .map_err(|error| lockfile_diagnostic(&lock_path, error))?;
-    let manifest = publication_manifest_toml(member).map_err(package_diagnostic)?;
+        .map_err(|error| lockfile_diagnostic(&lock_path, &error))?;
+    let manifest = publication_manifest_toml(member).map_err(|error| package_diagnostic(&error))?;
     let layout = package_layout_for_member(workspace.root(), member);
-    let plan = plan_package(&layout, &manifest, &verification_lock).map_err(package_diagnostic)?;
+    let plan = plan_package(&layout, &manifest, &verification_lock)
+        .map_err(|error| package_diagnostic(&error))?;
     let cache = open_user_cache()?;
-    ensure_graph_archives(&cache, &graph, args.mode, args.network.config.as_deref())?;
+    ensure_graph_archives(&cache, &graph, args.mode)?;
     let interface_digest = validate_packaged_plan(
         &cache,
         &plan,
         &verification_lock,
         graph.account_chain_discriminant(),
     )
-    .map_err(compiler_bridge_diagnostic)?;
+    .map_err(|error| compiler_bridge_diagnostic(&error))?;
     let semantic = semantic_release_manifest(member, release, &verification_lock, interface_digest)
-        .map_err(package_diagnostic)?;
+        .map_err(|error| package_diagnostic(&error))?;
     let car = plan
         .into_car(&semantic, &verification_lock)
-        .map_err(package_diagnostic)?;
-    let archive_commitment = car.archive_commitment().map_err(package_diagnostic)?;
+        .map_err(|error| package_diagnostic(&error))?;
+    let archive_commitment = car
+        .archive_commitment()
+        .map_err(|error| package_diagnostic(&error))?;
     let publication = publication_claim(
         &semantic,
         &archive_commitment,
         graph.lock.snapshot,
         verification_lock,
     )
-    .map_err(package_diagnostic)?;
+    .map_err(|error| package_diagnostic(&error))?;
     let compiler_output_digest = publication_compiler_output_digest(
         interface_digest,
         publication.manifest.release_digest(),
@@ -2637,10 +2721,19 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
             compiler_output_digest,
         )
     };
-    let loaded = load_production_publication_runtime_v1(args.network.config.as_deref(), validator)
-        .map_err(publication_configuration_diagnostic)?;
+    let platform_config_provenance =
+        graph.platform_config_provenance.as_ref().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::Publish,
+                "publication configuration provenance is unavailable",
+            )
+        })?;
+    let loaded =
+        load_bound_production_publication_runtime_v1(platform_config_provenance, validator)
+            .map_err(publication_configuration_diagnostic)?;
+    let registry = loaded.registry_reader();
     let bindings = loaded.bindings().clone();
-    let (signing, services, _) = loaded.into_parts();
+    let (signing, mut services, _) = loaded.into_parts();
     let request = PublicationRequestV1 {
         chain_id: graph.lock.chain_id.clone(),
         genesis_block_hash: graph.lock.genesis_hash,
@@ -2655,36 +2748,49 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
         expected_governance_revision,
         nonce: unpredictable_publication_nonce(),
     };
-    request.validate().map_err(publication_diagnostic)?;
+    request
+        .validate()
+        .map_err(|error| publication_diagnostic(&error))?;
     let operation_id = request.operation_id();
     let state_root = publication_state_root()?;
-    let store = PublicationJournalStore::open(&state_root).map_err(publication_diagnostic)?;
-    let source = PublicationStagedCarSourceV1::stage_bytes(
-        &state_root,
-        operation_id,
-        archive_commitment.car_size,
-        archive_commitment.car_digest,
-        car.bytes(),
-    )
-    .map_err(publication_diagnostic)?;
+    let store = PublicationJournalStore::open(&state_root)
+        .map_err(|error| publication_diagnostic(&error))?;
+    services
+        .bind_publication_state_root(&state_root)
+        .map_err(publication_configuration_diagnostic)?;
     let engine = PublicationEngine::new(&store);
-    engine
-        .begin_detached(request.clone())
-        .map_err(publication_diagnostic)?;
-    let registry = graph.registry.ok_or_else(|| {
-        Diagnostic::new(
-            ErrorCode::Publish,
-            "publication requires a live finalized Musubi registry",
-        )
-    })?;
+    let (_, source) = engine
+        .begin_detached_with_car(request.clone(), car.plan(), car.bytes())
+        .map_err(|error| {
+            let diagnostic = publication_diagnostic(&error)
+                .with_context("operation_id", operation_id.to_string());
+            match store.load(operation_id) {
+                Ok(journal) if journal.request == request => {
+                    if journal.phase == crate::publish::PublicationPhaseV1::Validation
+                        && journal.revision == 1
+                    {
+                        diagnostic.with_help(format!(
+                            "a matching pristine request journal is durable; after correcting local packaging or storage, run `musubi publish --recover {operation_id}` and then resume it"
+                        ))
+                    } else {
+                        diagnostic.with_help(format!(
+                            "the matching operation has already advanced; continue with `musubi publish --resume {operation_id}`"
+                        ))
+                    }
+                }
+                Ok(_) | Err(_) => diagnostic,
+            }
+        })?;
     let mut backend = RegistryPublicationBackendV1::new(registry, signing, services, &request)
         .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
 
     match engine
         .advance_once(operation_id, &source, &mut backend)
-        .map_err(publication_diagnostic)?
+        .map_err(|error| publication_diagnostic(&error))?
     {
-        PublicationAdvanceV1::Complete(result) => return publication_result(result),
+        PublicationAdvanceV1::Complete(result) => {
+            return Ok(publication_result(&request.namespace, result));
+        }
         PublicationAdvanceV1::Progressed(crate::publish::PublicationPhaseV1::SeedIngress) => {}
         PublicationAdvanceV1::Pending(phase) | PublicationAdvanceV1::Progressed(phase) => {
             return Err(Diagnostic::new(
@@ -2696,33 +2802,212 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
         }
     }
     if args.detach {
-        return Ok(Success {
-            message: format!("prepared detached publication {operation_id}"),
-            data: object([
-                ("operation_id", Value::from(operation_id.to_string())),
-                (
-                    "release",
-                    Value::from(request.publication.manifest.release.to_string()),
-                ),
-                ("phase", Value::from("seed-ingress")),
-            ]),
-        });
+        return Ok(detached_publication_result(
+            &request.namespace,
+            &request.publication.manifest.release,
+            operation_id,
+        ));
     }
-    finish_publication(&engine, operation_id, &source, &mut backend)
+    finish_publication(
+        &engine,
+        operation_id,
+        &request.namespace,
+        &source,
+        &mut backend,
+    )
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "recovery keeps the journal-derived clean rebuild and exact sidecar comparison adjacent"
+)]
+fn recover_publication_sidecars(
+    explicit_manifest: Option<&Path>,
+    args: &PublishArgs,
+    operation_id: PublicationOperationIdV1,
+) -> CommandResult {
+    if args.selection.workspace
+        || !args.selection.packages.is_empty()
+        || !args.selection.exclude.is_empty()
+    {
+        return Err(Diagnostic::new(
+            ErrorCode::Usage,
+            "publication recovery derives its exact package selection from the journal",
+        )
+        .with_context("operation_id", operation_id.to_string())
+        .with_help("remove `--workspace`, `--exclude`, and `-p/--package` from `--recover`"));
+    }
+
+    let state_root = publication_state_root()?;
+    recover_publication_sidecars_at(explicit_manifest, args, operation_id, &state_root, None)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "recovery keeps the journal-derived clean rebuild and exact sidecar comparison adjacent"
+)]
+fn recover_publication_sidecars_at(
+    explicit_manifest: Option<&Path>,
+    args: &PublishArgs,
+    operation_id: PublicationOperationIdV1,
+    state_root: &Path,
+    injected_cache: Option<&MusubiCache>,
+) -> CommandResult {
+    let store = PublicationJournalStore::open(state_root)
+        .map_err(|error| publication_diagnostic(&error))?;
+    let journal = store.load(operation_id).map_err(|error| {
+        publication_diagnostic(&error).with_context("operation_id", operation_id.to_string())
+    })?;
+    if journal.phase != crate::publish::PublicationPhaseV1::Validation || journal.revision != 1 {
+        return Err(publication_diagnostic(&PublicationError::InvalidJournal(
+            "pre-ingress sidecar recovery requires the pristine validation revision".to_owned(),
+        ))
+        .with_context("operation_id", operation_id.to_string())
+        .with_help("advanced publication operations must continue with `musubi publish --resume OPERATION_ID`"));
+    }
+    let expected_release = &journal.request.publication.manifest.release;
+    let selector = MusubiPackageSelectorV1 {
+        namespace: journal.request.namespace.clone(),
+        name: expected_release.package.name.clone(),
+    };
+
+    let manifest_path = project_manifest_path(explicit_manifest)?;
+    let workspace = load_workspace(&manifest_path).map_err(workspace_diagnostic)?;
+    let member = workspace
+        .members()
+        .values()
+        .find(|member| member.package.selector == selector)
+        .ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::WorkspaceInvalid,
+                "the journal package is not a member of the selected workspace",
+            )
+            .with_context("operation_id", operation_id.to_string())
+            .with_context("package", selector.to_string())
+        })?;
+    if member.package.version != expected_release.version {
+        return Err(Diagnostic::new(
+            ErrorCode::WorkspaceInvalid,
+            "the workspace package version differs from the immutable recovery journal",
+        )
+        .with_context("operation_id", operation_id.to_string())
+        .with_context("package", selector.to_string())
+        .with_context("journal_version", expected_release.version.to_string())
+        .with_context("workspace_version", member.package.version.to_string()));
+    }
+
+    let verification_lock = journal.request.publication.resolution.lock.clone();
+    let graph_lock = LockfileV1::new(
+        journal.request.chain_id.clone(),
+        journal.request.genesis_block_hash,
+        journal.request.publication.resolution.snapshot,
+        vec![crate::lockfile::LockedRootV1 {
+            package: selector.clone(),
+            dependencies: verification_lock.root_dependencies.clone(),
+        }],
+        verification_lock.nodes.clone(),
+    )
+    .map_err(|error| {
+        Diagnostic::new(
+            ErrorCode::Publish,
+            "the journal exact verification graph cannot be reconstructed safely",
+        )
+        .with_context("operation_id", operation_id.to_string())
+        .with_context("reason", error.to_string())
+    })?;
+    let manifest = publication_manifest_toml(member).map_err(|error| package_diagnostic(&error))?;
+    let layout = package_layout_for_member(workspace.root(), member);
+    let plan = plan_package(&layout, &manifest, &verification_lock)
+        .map_err(|error| package_diagnostic(&error))?;
+
+    let (registry, config_image) =
+        RegistryReadClientV1::load_with_config_image(args.network.config.as_deref())
+            .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
+    let prepared_archive_fetch =
+        prepare_production_archive_transport_v1(config_image.path(), config_image.bytes());
+    drop(config_image);
+    let account_chain_discriminant = registry.account_chain_discriminant();
+    let graph = ResolvedWorkspaceGraphV1 {
+        lock: graph_lock,
+        registry: Some(registry),
+        cached_source: None,
+        prepared_archive_fetch: Some(prepared_archive_fetch),
+        platform_config_provenance: None,
+        account_chain_discriminant,
+    };
+    let platform_cache;
+    let cache = match injected_cache {
+        Some(cache) => cache,
+        None => {
+            platform_cache = open_user_cache()?;
+            &platform_cache
+        }
+    };
+    ensure_graph_archives(cache, &graph, args.mode)?;
+    let interface_digest = validate_packaged_plan(
+        cache,
+        &plan,
+        &verification_lock,
+        graph.account_chain_discriminant(),
+    )
+    .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
+    let semantic = semantic_release_manifest(
+        member,
+        expected_release.clone(),
+        &verification_lock,
+        interface_digest,
+    )
+    .map_err(|error| package_diagnostic(&error))?;
+    let car = plan
+        .into_car(&semantic, &verification_lock)
+        .map_err(|error| package_diagnostic(&error))?;
+    let archive_commitment = car
+        .archive_commitment()
+        .map_err(|error| package_diagnostic(&error))?;
+    let publication = publication_claim(
+        &semantic,
+        &archive_commitment,
+        journal.request.publication.resolution.snapshot,
+        verification_lock,
+    )
+    .map_err(|error| package_diagnostic(&error))?;
+
+    let engine = PublicationEngine::new(&store);
+    engine
+        .recover_pre_ingress_sidecars(
+            &journal,
+            &publication,
+            &archive_commitment,
+            car.plan(),
+            car.bytes(),
+        )
+        .map_err(|error| {
+            publication_diagnostic(&error).with_context("operation_id", operation_id.to_string())
+        })?;
+    Ok(recovered_publication_result(
+        &journal.request.namespace,
+        expected_release,
+        operation_id,
+    ))
 }
 
 fn resume_publication(args: &PublishArgs, operation_id: PublicationOperationIdV1) -> CommandResult {
     let state_root = publication_state_root()?;
-    let store = PublicationJournalStore::open(&state_root).map_err(publication_diagnostic)?;
-    let journal = store.load(operation_id).map_err(publication_diagnostic)?;
-    let reader = RegistryReadClientV1::load(args.network.config.as_deref())
-        .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
+    let store = PublicationJournalStore::open(&state_root)
+        .map_err(|error| publication_diagnostic(&error))?;
+    let journal = store
+        .load(operation_id)
+        .map_err(|error| publication_diagnostic(&error))?;
     let loaded = load_production_publication_runtime_v1(
         args.network.config.as_deref(),
         validate_resumable_publication_car,
     )
     .map_err(publication_configuration_diagnostic)?;
-    let (signer, services, _) = loaded.into_parts();
+    let reader = loaded.registry_reader();
+    let (signer, mut services, _) = loaded.into_parts();
+    services
+        .bind_publication_state_root(&state_root)
+        .map_err(publication_configuration_diagnostic)?;
     let mut backend = RegistryPublicationBackendV1::new(reader, signer, services, &journal.request)
         .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
     let source = PublicationStagedCarSourceV1::new(
@@ -2731,12 +3016,19 @@ fn resume_publication(args: &PublishArgs, operation_id: PublicationOperationIdV1
         journal.request.archive_commitment.car_size,
     );
     let engine = PublicationEngine::new(&store);
-    finish_publication(&engine, operation_id, &source, &mut backend)
+    finish_publication(
+        &engine,
+        operation_id,
+        &journal.request.namespace,
+        &source,
+        &mut backend,
+    )
 }
 
 fn finish_publication(
     engine: &PublicationEngine<'_>,
     operation_id: PublicationOperationIdV1,
+    namespace: &MusubiNamespaceV1,
     source: &PublicationStagedCarSourceV1,
     backend: &mut dyn crate::publish::PublicationBackend,
 ) -> CommandResult {
@@ -2747,9 +3039,9 @@ fn finish_publication(
         backend,
         PublicationPollPolicyV1::default(),
     )
-    .map_err(publication_diagnostic)?
+    .map_err(|error| publication_diagnostic(&error))?
     {
-        PublicationAdvanceV1::Complete(result) => publication_result(result),
+        PublicationAdvanceV1::Complete(result) => Ok(publication_result(namespace, result)),
         PublicationAdvanceV1::Pending(phase) | PublicationAdvanceV1::Progressed(phase) => {
             Err(Diagnostic::new(
                 ErrorCode::Publish,
@@ -2762,34 +3054,134 @@ fn finish_publication(
     }
 }
 
-fn publication_result(result: PublicationResultV1) -> CommandResult {
-    Ok(Success {
+fn recovered_publication_result(
+    namespace: &MusubiNamespaceV1,
+    release: &MusubiReleaseIdV1,
+    operation_id: PublicationOperationIdV1,
+) -> Success {
+    Success {
+        message: format!("recovered publication sidecars {operation_id}"),
+        data: object([
+            ("status", Value::from("recovered")),
+            ("operation_id", Value::from(operation_id.to_string())),
+            (
+                "release",
+                Value::from(namespaced_release(namespace, release)),
+            ),
+            ("structural_release", Value::from(release.to_string())),
+            ("phase", Value::from("validation")),
+            (
+                "next",
+                Value::from(format!("musubi publish --resume {operation_id}")),
+            ),
+        ]),
+    }
+}
+
+fn detached_publication_result(
+    namespace: &MusubiNamespaceV1,
+    release: &MusubiReleaseIdV1,
+    operation_id: PublicationOperationIdV1,
+) -> Success {
+    Success {
+        message: format!("prepared detached publication {operation_id}"),
+        data: object([
+            ("status", Value::from("detached")),
+            ("operation_id", Value::from(operation_id.to_string())),
+            (
+                "release",
+                Value::from(namespaced_release(namespace, release)),
+            ),
+            ("structural_release", Value::from(release.to_string())),
+            ("phase", Value::from("seed-ingress")),
+        ]),
+    }
+}
+
+fn publication_result(namespace: &MusubiNamespaceV1, result: PublicationResultV1) -> Success {
+    let PublicationResultV1 {
+        operation_id,
+        submission,
+        final_checkpoint: checkpoint,
+    } = result;
+    Success {
         message: format!(
             "published {}",
-            result.final_evidence.home_release.manifest.release
+            namespaced_release(namespace, &checkpoint.release)
         ),
-        data: Value::Object(Map::from_iter([
+        data: object([
+            ("status", Value::from("complete")),
+            ("operation_id", Value::from(operation_id.to_string())),
             (
-                "operation_id".to_owned(),
-                Value::from(result.operation_id.to_string()),
+                "release",
+                Value::from(namespaced_release(namespace, &checkpoint.release)),
             ),
             (
-                "release".to_owned(),
-                Value::from(
-                    result
-                        .final_evidence
-                        .home_release
-                        .manifest
-                        .release
-                        .to_string(),
-                ),
+                "structural_release",
+                Value::from(checkpoint.release.to_string()),
+            ),
+            ("chain_id", Value::from(checkpoint.chain_id.to_string())),
+            (
+                "genesis_hash",
+                Value::from(hex::encode(checkpoint.genesis_block_hash)),
             ),
             (
-                "transaction_hash".to_owned(),
-                Value::from(hex::encode(result.submission.transaction_hash)),
+                "snapshot",
+                object([
+                    (
+                        "finalized_height",
+                        Value::from(checkpoint.snapshot.finalized_height),
+                    ),
+                    (
+                        "finalized_block_hash",
+                        Value::from(hex::encode(checkpoint.snapshot.finalized_block_hash)),
+                    ),
+                    (
+                        "index_revision",
+                        Value::from(checkpoint.snapshot.index_revision),
+                    ),
+                ]),
             ),
-        ])),
-    })
+            (
+                "release_digest",
+                Value::from(hex::encode(checkpoint.release_digest.as_bytes())),
+            ),
+            (
+                "archive_id",
+                Value::from(hex::encode(checkpoint.archive_id.as_bytes())),
+            ),
+            (
+                "home_release_digest",
+                Value::from(hex::encode(checkpoint.home_release_digest)),
+            ),
+            (
+                "universal_release_digest",
+                Value::from(hex::encode(checkpoint.universal_release_digest)),
+            ),
+            (
+                "checkpoint_digest",
+                Value::from(hex::encode(checkpoint.checkpoint_digest)),
+            ),
+            (
+                "amx_submission",
+                object([
+                    (
+                        "instruction_digest",
+                        Value::from(hex::encode(submission.instruction_digest)),
+                    ),
+                    (
+                        "transaction_hash",
+                        Value::from(hex::encode(submission.transaction_hash)),
+                    ),
+                    ("applied_height", Value::from(submission.applied_height)),
+                ]),
+            ),
+        ]),
+    }
+}
+
+fn namespaced_release(namespace: &MusubiNamespaceV1, release: &MusubiReleaseIdV1) -> String {
+    format!("{namespace}/{}@{}", release.package.name, release.version)
 }
 
 fn publication_compiler_output_digest(
@@ -2864,7 +3256,7 @@ fn validate_prepared_car_stream(
 ) -> Result<(), PublicationBackendError> {
     let mut size = 0_u64;
     let mut digest = blake3::Hasher::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let read = input
             .read(&mut buffer)
@@ -2908,11 +3300,22 @@ fn unpredictable_publication_nonce() -> [u8; 32] {
 fn publication_configuration_diagnostic(
     error: crate::publication_runtime::ProductionPublicationConfigurationErrorV1,
 ) -> Diagnostic {
-    Diagnostic::new(
+    let diagnostic = Diagnostic::new(
         ErrorCode::Publish,
-        "production publication services are not configured",
+        if error.code() == "MUSUBI_PUBLICATION_CONFIG_CHANGED" {
+            "platform client configuration changed during publication preparation"
+        } else {
+            "production publication services are not configured"
+        },
     )
-    .with_context("publication_code", error.code())
+    .with_context("publication_code", error.code());
+    if error.code() == "MUSUBI_PUBLICATION_CONFIG_CHANGED" {
+        diagnostic.with_help(
+            "rerun publish so dependency resolution and authenticated publication use one configuration image",
+        )
+    } else {
+        diagnostic
+    }
 }
 
 fn publication_state_root() -> Result<PathBuf, Diagnostic> {
@@ -2942,27 +3345,38 @@ fn publication_state_root() -> Result<PathBuf, Diagnostic> {
     #[cfg(not(any(unix, target_os = "windows")))]
     let root: Option<PathBuf> = None;
 
-    root.ok_or_else(|| {
+    let requested = root.ok_or_else(|| {
         Diagnostic::new(
             ErrorCode::Io,
             "platform user state directory is unavailable",
         )
-    })
+    })?;
+    AtomicWriteRoot::open_or_create_private(&requested)
+        .map(|root| root.path().to_path_buf())
+        .map_err(atomic_diagnostic)
 }
 
-fn publication_diagnostic(error: PublicationError) -> Diagnostic {
-    let public_code = match &error {
+fn publication_diagnostic(error: &PublicationError) -> Diagnostic {
+    let public_code = match error {
         PublicationError::Backend(backend) => backend.code(),
-        PublicationError::CarSource(_) => "PUBLICATION_CAR_NOT_STAGED",
+        PublicationError::CarSource(_) => "PUBLICATION_SIDECAR_UNAVAILABLE",
         PublicationError::NotFound(_) => "PUBLICATION_OPERATION_NOT_FOUND",
         PublicationError::ConcurrentJournalUpdate => "PUBLICATION_CONCURRENT_RESUME",
         PublicationError::InvalidEvidence { .. } => "PUBLICATION_EVIDENCE_INVALID",
         PublicationError::InvalidJournal(_) => "PUBLICATION_JOURNAL_INVALID",
+        PublicationError::JournalWrite(error)
+            if matches!(
+                error.code(),
+                AtomicWriteErrorCode::ImmutableConflict | AtomicWriteErrorCode::UnsafeTarget
+            ) =>
+        {
+            "PUBLICATION_STATE_INTEGRITY_INVALID"
+        }
         PublicationError::JournalWrite(_) | PublicationError::JournalIo(_) => {
             "PUBLICATION_JOURNAL_IO"
         }
     };
-    Diagnostic::new(ErrorCode::Publish, "publication resume failed")
+    Diagnostic::new(ErrorCode::Publish, "publication operation failed")
         .with_context("publication_code", public_code)
 }
 
@@ -3032,18 +3446,15 @@ fn run_release_yank(args: &ReleaseMutationArgs, yanked: bool) -> CommandResult {
         .resolve_selector(&args.package)
         .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
     let release = MusubiReleaseIdV1::new(package, args.version.clone());
-    let reason = args.reason.clone().map_or_else(
-        || {
-            if yanked {
-                "package maintainer requested yank"
-            } else {
-                "package maintainer requested unyank"
-            }
-            .parse()
-            .expect("built-in Musubi reason is valid")
-        },
-        |reason| reason,
-    );
+    let reason = args.reason.clone().unwrap_or_else(|| {
+        if yanked {
+            "package maintainer requested yank"
+        } else {
+            "package maintainer requested unyank"
+        }
+        .parse()
+        .expect("built-in Musubi reason is valid")
+    });
     let signer = RegistrySigningClientV1::load(args.network.config.as_deref())
         .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
     let transaction_hash = signer
@@ -3067,6 +3478,10 @@ fn run_release_yank(args: &ReleaseMutationArgs, yanked: bool) -> CommandResult {
     })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the command preserves one explicit match arm per governance operation"
+)]
 fn run_owner(args: &OwnerArgs) -> CommandResult {
     match &args.command {
         OwnerCommand::Invite {
@@ -3361,7 +3776,7 @@ fn run_owner_list(selector: &MusubiPackageSelectorV1, network: &NetworkArgs) -> 
                 "maintainer directory pages crossed finalized snapshots",
             ));
         }
-        snapshot.get_or_insert_with(|| page.snapshot.clone());
+        snapshot.get_or_insert(page.snapshot);
         entries.extend(page.items);
         if entries.len() > maximum_entries {
             return Err(Diagnostic::new(
@@ -3497,11 +3912,15 @@ fn registry_json<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> Result<V
 }
 
 fn registry_diagnostic(error: RegistryErrorV1, fallback: ErrorCode) -> Diagnostic {
-    let code = match error.class() {
-        crate::registry::RegistryFailureClassV1::Retryable => ErrorCode::Network,
-        crate::registry::RegistryFailureClassV1::Permanent
-        | crate::registry::RegistryFailureClassV1::NotFound
-        | crate::registry::RegistryFailureClassV1::StaleCursor => fallback,
+    let code = match (error.code(), error.class()) {
+        ("MUSUBI_PUBLICATION_AUTHORITY_MISMATCH", _) => ErrorCode::Unauthorized,
+        (_, crate::registry::RegistryFailureClassV1::Retryable) => ErrorCode::Network,
+        (
+            _,
+            crate::registry::RegistryFailureClassV1::Permanent
+            | crate::registry::RegistryFailureClassV1::NotFound
+            | crate::registry::RegistryFailureClassV1::StaleCursor,
+        ) => fallback,
     };
     Diagnostic::new(code, "Musubi registry operation failed")
         .with_context("registry_code", error.code())
@@ -3514,9 +3933,11 @@ fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandRes
     let lock = read_optional_workspace_lock(&workspace)?;
     let target = args.package.as_ref().map_or_else(
         || "all locked packages".to_owned(),
-        |target| match &target.locked_version {
-            Some(version) => format!("{}@{version}", target.package),
-            None => target.package.to_string(),
+        |target| {
+            target.locked_version.as_ref().map_or_else(
+                || target.package.to_string(),
+                |version| format!("{}@{version}", target.package),
+            )
         },
     );
 
@@ -3602,7 +4023,7 @@ fn run_cache(explicit_manifest: Option<&Path>, args: &CacheArgs) -> CommandResul
             let targets = if *all {
                 cache
                     .archive_ids()
-                    .map_err(cache_maintenance_diagnostic)?
+                    .map_err(|error| cache_maintenance_diagnostic(&error))?
                     .into_iter()
                     .collect()
             } else {
@@ -3639,7 +4060,7 @@ fn run_cache(explicit_manifest: Option<&Path>, args: &CacheArgs) -> CommandResul
             let cache = open_user_cache()?;
             let mut targets = cache
                 .archive_ids()
-                .map_err(cache_maintenance_diagnostic)?
+                .map_err(|error| cache_maintenance_diagnostic(&error))?
                 .into_iter()
                 .collect::<BTreeSet<_>>();
             if let Some(lock) = &project_lock {
@@ -3654,9 +4075,11 @@ fn run_cache(explicit_manifest: Option<&Path>, args: &CacheArgs) -> CommandResul
         }
         CacheCommand::Prune { dry_run, registry } => {
             let cache = open_user_cache()?;
-            let archive_ids = cache.archive_ids().map_err(cache_maintenance_diagnostic)?;
+            let archive_ids = cache
+                .archive_ids()
+                .map_err(|error| cache_maintenance_diagnostic(&error))?;
             if archive_ids.is_empty() {
-                return empty_cache_prune_success(*dry_run);
+                return Ok(empty_cache_prune_success(*dry_run));
             }
             let registry = RegistryReadClientV1::load(registry.config.as_deref())
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
@@ -3693,8 +4116,8 @@ struct CacheRetentionDeploymentV1 {
     snapshot: MusubiRegistrySnapshotV1,
 }
 
-fn empty_cache_prune_success(dry_run: bool) -> CommandResult {
-    Ok(Success {
+fn empty_cache_prune_success(dry_run: bool) -> Success {
+    Success {
         message: if dry_run {
             "would prune 0 cached archive(s)".to_owned()
         } else {
@@ -3712,9 +4135,13 @@ fn empty_cache_prune_success(dry_run: bool) -> CommandResult {
             ("candidates", Value::Array(Vec::new())),
             ("decisions", Value::Array(Vec::new())),
         ]),
-    })
+    }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "retention proof validation and deletion remain one fail-closed workflow"
+)]
 fn prune_cache_targets(
     cache: &MusubiCache,
     archive_ids: &[iroha_data_model::musubi::ArchiveId],
@@ -3722,9 +4149,11 @@ fn prune_cache_targets(
     dry_run: bool,
 ) -> CommandResult {
     if archive_ids.is_empty() {
-        return empty_cache_prune_success(dry_run);
+        return Ok(empty_cache_prune_success(dry_run));
     }
-    if archive_ids.iter().any(|archive_id| archive_id.is_zero())
+    if archive_ids
+        .iter()
+        .any(iroha_data_model::musubi::ArchiveId::is_zero)
         || archive_ids.windows(2).any(|pair| pair[0] >= pair[1])
     {
         return Err(cache_retention_diagnostic(
@@ -3802,7 +4231,7 @@ fn prune_cache_targets(
     } else {
         cache
             .prune_exact(&prunable)
-            .map_err(cache_maintenance_diagnostic)?
+            .map_err(|error| cache_maintenance_diagnostic(&error))?
             .removed
     };
     let decision_values = decisions
@@ -3911,6 +4340,20 @@ fn cache_retention_diagnostic(reason: &'static str) -> Diagnostic {
     .with_help("no cache path has been changed")
 }
 
+fn load_registry_and_archive_transport(
+    config: Option<&Path>,
+) -> Result<(RegistryReadClientV1, ProductionSorafsArchiveTransportV1), Diagnostic> {
+    let (registry, config_image) = RegistryReadClientV1::load_with_config_image(config)
+        .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+    let prepared =
+        prepare_production_archive_transport_v1(config_image.path(), config_image.bytes())
+            .map_err(archive_transport_diagnostic)?;
+    drop(config_image);
+    let transport =
+        build_production_archive_transport_v1(&prepared).map_err(archive_transport_diagnostic)?;
+    Ok((registry, transport))
+}
+
 fn verify_cache_targets(
     cache: &MusubiCache,
     targets: &BTreeSet<iroha_data_model::musubi::ArchiveId>,
@@ -3922,10 +4365,7 @@ fn verify_cache_targets(
             data: object([("archives", Value::Array(Vec::new()))]),
         });
     }
-    let registry = RegistryReadClientV1::load(config)
-        .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
-    let mut transport =
-        load_production_archive_transport_v1(config).map_err(archive_transport_diagnostic)?;
+    let (registry, mut transport) = load_registry_and_archive_transport(config)?;
     let adapter = MusubiArchiveFetchAdapterV1::new(&registry, cache);
     let mut verified = Vec::with_capacity(targets.len());
     for archive_id in targets {
@@ -3937,7 +4377,7 @@ fn verify_cache_targets(
             })?;
         cache
             .verify(&prepared.commitment, &prepared.plan)
-            .map_err(cache_maintenance_diagnostic)?;
+            .map_err(|error| cache_maintenance_diagnostic(&error))?;
         verified.push(object([
             (
                 "archive_id",
@@ -3972,10 +4412,7 @@ fn repair_cache_targets(
             ]),
         });
     }
-    let registry = RegistryReadClientV1::load(config)
-        .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
-    let mut transport =
-        load_production_archive_transport_v1(config).map_err(archive_transport_diagnostic)?;
+    let (registry, mut transport) = load_registry_and_archive_transport(config)?;
     let adapter = MusubiArchiveFetchAdapterV1::new(&registry, cache);
     let mut repaired = Vec::with_capacity(targets.len());
     for archive_id in targets {
@@ -3987,7 +4424,7 @@ fn repair_cache_targets(
             })?;
         let repair = cache
             .repair(&prepared.commitment, &prepared.plan)
-            .map_err(cache_maintenance_diagnostic)?;
+            .map_err(|error| cache_maintenance_diagnostic(&error))?;
         let (location_id, provider, status) = match repair {
             RepairOutcome::Healthy(_) => (
                 prepared.location_id,
@@ -4045,8 +4482,8 @@ fn repair_cache_targets(
     })
 }
 
-fn cache_maintenance_diagnostic(error: CacheError) -> Diagnostic {
-    let code = if matches!(&error, CacheError::Io { .. }) {
+fn cache_maintenance_diagnostic(error: &CacheError) -> Diagnostic {
+    let code = if matches!(error, CacheError::Io { .. }) {
         ErrorCode::Io
     } else {
         ErrorCode::CacheCorrupt
@@ -4070,24 +4507,35 @@ mod tests {
         ChainId,
         account::{AccountId, address::ChainDiscriminantGuard},
         musubi::{
-            MusubiDescriptionV1, MusubiInvitationStateV1, MusubiKeywordV1,
-            MusubiMaintainerInvitationV1, MusubiNamespaceBindingV1, MusubiOrderedPackageEntryV1,
-            MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
-            MusubiPackageIdV1, MusubiPackageMemberV1, MusubiPackageScopeV1,
-            MusubiRegistrySnapshotV1, MusubiSearchHitV1, MusubiSearchPageV1,
-            MusubiSearchSnapshotV1,
+            ArchiveId, MusubiAbiBindingV1, MusubiDescriptionV1, MusubiInvitationStateV1,
+            MusubiKeywordV1, MusubiMaintainerInvitationV1, MusubiNamespaceBindingV1,
+            MusubiOrderedPackageEntryV1, MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1,
+            MusubiOrderedPrefixV1, MusubiPackageIdV1, MusubiPackageMemberV1, MusubiPackageScopeV1,
+            MusubiRegistrySnapshotV1, MusubiReleaseDigestV1, MusubiSearchHitV1, MusubiSearchPageV1,
+            MusubiSearchSnapshotV1, MusubiVerificationNodeV1,
         },
         nexus::DataSpaceId,
     };
     use tempfile::TempDir;
 
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt as _;
+    use iroha_data_model::{
+        musubi::{MUSUBI_REGISTRY_VERSION_V1, MusubiPublicationV1, MusubiVerificationLockV1},
+        sorafs::capacity::ProviderId,
+    };
+    #[cfg(unix)]
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     use super::*;
-    use crate::lockfile::LockedRootV1;
+    #[cfg(unix)]
+    use crate::package::PackageCar;
+    use crate::{
+        lockfile::LockedRootV1,
+        output::{OUTPUT_SCHEMA, OUTPUT_VERSION},
+        publish::{PublicationAmxSubmissionV1, PublicationFinalCheckpointV1},
+    };
 
-    fn command_names(command: clap::Command) -> BTreeSet<String> {
+    fn command_names(command: &clap::Command) -> BTreeSet<String> {
         command
             .get_subcommands()
             .map(|command| command.get_name().to_owned())
@@ -4136,6 +4584,401 @@ mod tests {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive test account");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    #[cfg(unix)]
+    struct RecoveryPackageFixture {
+        publication: MusubiPublicationV1,
+        archive_commitment: iroha_data_model::musubi::MusubiArchiveCommitmentV1,
+        car: PackageCar,
+    }
+
+    #[cfg(unix)]
+    fn recovery_snapshot() -> MusubiRegistrySnapshotV1 {
+        MusubiRegistrySnapshotV1 {
+            finalized_height: 7,
+            finalized_block_hash: [0x42; 32],
+            index_revision: 3,
+        }
+    }
+
+    #[cfg(unix)]
+    fn fixture_release(
+        manifest_path: &Path,
+        home_dataspace: u64,
+        domain: &str,
+    ) -> MusubiReleaseIdV1 {
+        let workspace = load_workspace(manifest_path).expect("load fixture workspace");
+        let mut members = workspace.members().values();
+        let member = members.next().expect("one fixture member");
+        assert!(members.next().is_none(), "fixture must have one package");
+        MusubiReleaseIdV1::new(
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(home_dataspace),
+                MusubiPackageScopeV1::Domain(domain.parse().expect("fixture package domain")),
+                member.package.selector.name.clone(),
+            ),
+            member.package.version.clone(),
+        )
+    }
+
+    #[cfg(unix)]
+    fn fixture_verification_lock(
+        release: MusubiReleaseIdV1,
+        root_dependencies: Vec<MusubiExactDependencyEdgeV1>,
+        nodes: Vec<MusubiVerificationNodeV1>,
+    ) -> MusubiVerificationLockV1 {
+        let mut lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: release,
+            root_dependencies,
+            nodes,
+        };
+        lock.canonicalize();
+        lock.validate().expect("valid fixture verification lock");
+        lock
+    }
+
+    #[cfg(unix)]
+    fn build_recovery_package(
+        manifest_path: &Path,
+        cache: &MusubiCache,
+        verification_lock: MusubiVerificationLockV1,
+    ) -> RecoveryPackageFixture {
+        let workspace = load_workspace(manifest_path).expect("load package fixture workspace");
+        let mut members = workspace.members().values();
+        let member = members.next().expect("one package fixture member");
+        assert!(members.next().is_none(), "fixture must have one package");
+        let manifest = publication_manifest_toml(member).expect("canonical package manifest");
+        let layout = package_layout_for_member(workspace.root(), member);
+        let plan = plan_package(&layout, &manifest, &verification_lock).expect("package plan");
+        let interface_digest = validate_packaged_plan(cache, &plan, &verification_lock, 753)
+            .expect("clean package validation");
+        let semantic = semantic_release_manifest(
+            member,
+            verification_lock.root.clone(),
+            &verification_lock,
+            interface_digest,
+        )
+        .expect("semantic release");
+        let car = plan
+            .into_car(&semantic, &verification_lock)
+            .expect("canonical package CAR");
+        let archive_commitment = car.archive_commitment().expect("archive commitment");
+        let publication = publication_claim(
+            &semantic,
+            &archive_commitment,
+            recovery_snapshot(),
+            verification_lock,
+        )
+        .expect("publication claim");
+        RecoveryPackageFixture {
+            publication,
+            archive_commitment,
+            car,
+        }
+    }
+
+    #[cfg(unix)]
+    fn recovery_request(namespace: &str, package: &RecoveryPackageFixture) -> PublicationRequestV1 {
+        let request = PublicationRequestV1 {
+            chain_id: "musubi-recovery-test".parse().expect("fixture chain id"),
+            genesis_block_hash: [0x31; 32],
+            publisher: test_account(20),
+            ingress_broker: test_account(21),
+            seed_provider: ProviderId::new([0x32; 32]),
+            namespace: namespace.parse().expect("fixture namespace"),
+            publication: package.publication.clone(),
+            archive_commitment: package.archive_commitment.clone(),
+            namespace_delegation: None,
+            expected_policy_revision: 1,
+            expected_governance_revision: None,
+            nonce: [0x33; 32],
+        };
+        request.validate().expect("valid recovery request");
+        request
+    }
+
+    #[cfg(unix)]
+    fn persist_recovery_request(
+        state_root: &Path,
+        request: &PublicationRequestV1,
+    ) -> PublicationOperationIdV1 {
+        let store = PublicationJournalStore::open(state_root).expect("open recovery journal store");
+        let journal = store
+            .create(request.clone())
+            .expect("persist pristine recovery journal");
+        assert_eq!(journal.revision, 1);
+        assert_eq!(
+            journal.phase,
+            crate::publish::PublicationPhaseV1::Validation
+        );
+        journal.operation_id
+    }
+
+    #[cfg(unix)]
+    fn create_private_fixture_directory(path: &Path) {
+        fs::create_dir(path).expect("create private fixture directory");
+        #[cfg(unix)]
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .expect("secure private fixture directory");
+    }
+
+    #[cfg(unix)]
+    fn recovery_publish_args(
+        operation_id: PublicationOperationIdV1,
+        config: &Path,
+        locked: bool,
+        offline: bool,
+    ) -> PublishArgs {
+        PublishArgs {
+            selection: SelectionArgs::default(),
+            mode: GraphModeArgs {
+                locked,
+                offline,
+                frozen: false,
+            },
+            network: NetworkArgs {
+                config: Some(config.to_path_buf()),
+            },
+            detach: false,
+            resume: None,
+            recover: Some(operation_id),
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_poisoned_recovery_config(root: &Path) -> PathBuf {
+        let config = root.join("client.toml");
+        fs::write(
+            &config,
+            r#"torii_url = "http://127.0.0.1:9/"
+torii_request_timeout_ms = 1
+
+[account]
+chain_discriminant = 753
+public_key = "deliberately-not-a-key"
+private_key = "deliberately-not-a-key"
+
+[musubi.fetch]
+client_id = "recovery-test"
+request_timeout_ms = 1
+
+[[musubi.fetch.provider_gateways]]
+provider_id = "1111111111111111111111111111111111111111111111111111111111111111"
+url = "https://provider.invalid/"
+api_token_file = "missing-provider.token"
+"#,
+        )
+        .expect("write poisoned recovery config");
+        config
+    }
+
+    #[cfg(unix)]
+    fn assert_archive_transport_is_poisoned(config: &Path) {
+        let bytes = fs::read(config).expect("read poisoned recovery config");
+        let prepared = prepare_production_archive_transport_v1(config, &bytes)
+            .expect("parse secret-free fetch configuration");
+        assert!(
+            build_production_archive_transport_v1(&prepared).is_err(),
+            "the absent token must make runtime transport construction fail"
+        );
+    }
+
+    #[cfg(unix)]
+    fn assert_no_recovery_sidecars(
+        state_root: &Path,
+        operation_id: PublicationOperationIdV1,
+        expected_size: u64,
+    ) {
+        let source = PublicationStagedCarSourceV1::new(state_root, operation_id, expected_size);
+        assert!(!source.path().exists(), "recovery CAR must remain absent");
+        assert!(
+            !source.plan_path().exists(),
+            "recovery plan must remain absent"
+        );
+    }
+
+    #[cfg(unix)]
+    fn build_and_install_dependency_fixture(
+        root: &Path,
+        cache: &MusubiCache,
+    ) -> (MusubiExactDependencyEdgeV1, MusubiVerificationNodeV1) {
+        let dependency_root = root.join("dependency");
+        let invocation = invoke([
+            OsString::from("musubi"),
+            OsString::from("new"),
+            dependency_root.as_os_str().to_owned(),
+            OsString::from("--namespace"),
+            OsString::from("deps.sora"),
+            OsString::from("--name"),
+            OsString::from("dependency"),
+            OsString::from("--version"),
+            OsString::from("1.0.0"),
+            OsString::from("--export"),
+            OsString::from("run"),
+        ]);
+        assert_eq!(invocation.output.exit_code(), 0);
+        let manifest_path = dependency_root.join(MANIFEST_FILE_NAME);
+        let release = fixture_release(&manifest_path, 8, "deps");
+        let package = build_recovery_package(
+            &manifest_path,
+            cache,
+            fixture_verification_lock(release.clone(), Vec::new(), Vec::new()),
+        );
+        cache
+            .install(
+                &package.archive_commitment,
+                package.car.plan(),
+                std::io::Cursor::new(package.car.bytes()),
+            )
+            .expect("install dependency fixture in immutable cache");
+        let manifest = &package.publication.manifest;
+        let node = MusubiVerificationNodeV1 {
+            release: release.clone(),
+            release_digest: manifest.release_digest(),
+            archive_id: package.archive_commitment.archive_id(),
+            source_digest: package.archive_commitment.source_tree_digest,
+            interface_digest: manifest.interface_digest,
+            abi: manifest.abi,
+            dependencies: Vec::new(),
+        };
+        node.validate().expect("valid dependency fixture node");
+        let edge = MusubiExactDependencyEdgeV1 {
+            alias: "dependency".parse().expect("dependency alias"),
+            kind: MusubiDependencyKindV1::Normal,
+            package: release.package.clone(),
+            requirement: "^1.0.0".parse().expect("dependency requirement"),
+            selected: release,
+        };
+        edge.validate().expect("valid dependency fixture edge");
+        (edge, node)
+    }
+
+    #[cfg(unix)]
+    fn add_dependency_to_fixture_manifest(manifest_path: &Path) {
+        let mut document = fs::read_to_string(manifest_path).expect("read fixture manifest");
+        document.push_str(
+            "\n[dependencies]\ndependency = { package = \"deps.sora/dependency\", version = \"^1.0.0\" }\n",
+        );
+        fs::write(manifest_path, document).expect("add fixture dependency");
+    }
+
+    #[cfg(unix)]
+    fn build_root_recovery_request(
+        manifest_path: &Path,
+        cache: &MusubiCache,
+        dependencies: Vec<MusubiExactDependencyEdgeV1>,
+        nodes: Vec<MusubiVerificationNodeV1>,
+    ) -> PublicationRequestV1 {
+        let release = fixture_release(manifest_path, 7, "apps");
+        let package = build_recovery_package(
+            manifest_path,
+            cache,
+            fixture_verification_lock(release, dependencies, nodes),
+        );
+        recovery_request("apps.sora", &package)
+    }
+
+    #[cfg(unix)]
+    fn retarget_recovery_request(
+        mut request: PublicationRequestV1,
+        name: Option<&str>,
+        version: Option<&str>,
+    ) -> PublicationRequestV1 {
+        if let Some(name) = name {
+            request.publication.resolution.lock.root.package.name =
+                name.parse().expect("replacement package name");
+        }
+        if let Some(version) = version {
+            request.publication.resolution.lock.root.version =
+                version.parse().expect("replacement package version");
+        }
+        request.publication.manifest.release = request.publication.resolution.lock.root.clone();
+        request.publication.manifest.verification_lock_digest =
+            request.publication.resolution.lock.digest();
+        request
+            .validate()
+            .expect("retargeted recovery request remains internally valid");
+        request
+    }
+
+    #[cfg(unix)]
+    fn add_unreachable_recovery_node_unchecked(
+        mut request: PublicationRequestV1,
+    ) -> PublicationRequestV1 {
+        let release = MusubiReleaseIdV1::new(
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(99),
+                MusubiPackageScopeV1::DataspaceRoot,
+                "unreachable".parse().expect("unreachable package name"),
+            ),
+            "1.0.0".parse().expect("unreachable package version"),
+        );
+        request
+            .publication
+            .resolution
+            .lock
+            .nodes
+            .push(MusubiVerificationNodeV1 {
+                release,
+                release_digest: MusubiReleaseDigestV1::new([0x51; 32]),
+                archive_id: ArchiveId::new([0x52; 32]),
+                source_digest: MusubiContentDigestV1::new([0x53; 32]),
+                interface_digest: MusubiContentDigestV1::new([0x54; 32]),
+                abi: MusubiAbiBindingV1::new([0x55; 32]).expect("unreachable node ABI"),
+                dependencies: Vec::new(),
+            });
+        request.publication.resolution.lock.canonicalize();
+        request.publication.manifest.verification_lock_digest =
+            request.publication.resolution.lock.digest();
+        request
+    }
+
+    fn publication_receipt_fixture() -> (MusubiNamespaceV1, PublicationResultV1) {
+        let namespace = "apps.sora".parse().expect("fixture namespace");
+        let release = MusubiReleaseIdV1::new(
+            MusubiPackageIdV1::new(
+                DataSpaceId::new(7),
+                MusubiPackageScopeV1::Domain("apps".parse().expect("fixture structural domain")),
+                "demo".parse().expect("fixture package name"),
+            ),
+            "1.2.3".parse().expect("fixture release version"),
+        );
+        let operation_id = "0101010101010101010101010101010101010101010101010101010101010101"
+            .parse()
+            .expect("fixture operation id");
+        let submission = PublicationAmxSubmissionV1 {
+            operation_id,
+            instruction_digest: [0x18; 32],
+            transaction_hash: [0x19; 32],
+            applied_height: u64::MAX,
+        };
+        let final_checkpoint = PublicationFinalCheckpointV1 {
+            operation_id,
+            chain_id: "token:dev".parse().expect("fixture chain id"),
+            genesis_block_hash: [0x11; 32],
+            snapshot: MusubiRegistrySnapshotV1 {
+                finalized_height: u64::MAX,
+                finalized_block_hash: [0x12; 32],
+                index_revision: u64::MAX,
+            },
+            release,
+            release_digest: iroha_data_model::musubi::MusubiReleaseDigestV1::new([0x13; 32]),
+            archive_id: iroha_data_model::musubi::ArchiveId::new([0x14; 32]),
+            home_release_digest: [0x15; 32],
+            universal_release_digest: [0x16; 32],
+            checkpoint_digest: [0x17; 32],
+        };
+        (
+            namespace,
+            PublicationResultV1 {
+                operation_id,
+                submission,
+                final_checkpoint,
+            },
+        )
     }
 
     fn serve_json_sequence(responses: Vec<Vec<u8>>) -> (String, thread::JoinHandle<()>) {
@@ -4377,8 +5220,10 @@ mod tests {
         )
         .expect("signer-free registry client");
 
-        let error = prune_cache_targets(&cache, &archive_ids, &registry, false)
-            .expect_err("deployment drift must fail closed");
+        let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
+            Err(error) => error,
+            Ok(_) => panic!("deployment drift must fail closed"),
+        };
         assert_eq!(error.code(), ErrorCode::Registry);
         assert!(
             archive_path.exists(),
@@ -4388,6 +5233,45 @@ mod tests {
     }
 
     fn write_test_lock(root: &Path) {
+        write_test_lock_graph(root, Vec::new(), Vec::new());
+    }
+
+    fn write_test_lock_with_registry_node(root: &Path) {
+        let dependency_package = MusubiPackageIdV1::new(
+            DataSpaceId::new(8),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "dependency".parse().expect("dependency package name"),
+        );
+        let dependency_release = MusubiReleaseIdV1::new(
+            dependency_package.clone(),
+            "1.0.0".parse().expect("dependency version"),
+        );
+        write_test_lock_graph(
+            root,
+            vec![MusubiExactDependencyEdgeV1 {
+                alias: "dependency".parse().expect("dependency alias"),
+                kind: MusubiDependencyKindV1::Normal,
+                package: dependency_package,
+                requirement: "^1.0.0".parse().expect("dependency requirement"),
+                selected: dependency_release.clone(),
+            }],
+            vec![MusubiVerificationNodeV1 {
+                release: dependency_release,
+                release_digest: MusubiReleaseDigestV1::new([3; 32]),
+                archive_id: ArchiveId::new([4; 32]),
+                source_digest: MusubiContentDigestV1::new([5; 32]),
+                interface_digest: MusubiContentDigestV1::new([6; 32]),
+                abi: MusubiAbiBindingV1::new([7; 32]).expect("dependency ABI"),
+                dependencies: Vec::new(),
+            }],
+        );
+    }
+
+    fn write_test_lock_graph(
+        root: &Path,
+        root_dependencies: Vec<MusubiExactDependencyEdgeV1>,
+        nodes: Vec<MusubiVerificationNodeV1>,
+    ) {
         let lock = LockfileV1::new(
             "musubi-cli-test".parse().expect("chain id"),
             [1; 32],
@@ -4398,9 +5282,9 @@ mod tests {
             },
             vec![LockedRootV1 {
                 package: "apps.sora/demo".parse().expect("root package selector"),
-                dependencies: Vec::new(),
+                dependencies: root_dependencies,
             }],
-            Vec::new(),
+            nodes,
         )
         .expect("valid test lock");
         let bytes = lock.render().expect("render lock").into_bytes();
@@ -4420,7 +5304,7 @@ mod tests {
             "Musubi V1 must not retain hidden or visible command aliases"
         );
         assert_eq!(
-            command_names(command.clone()),
+            command_names(&command),
             BTreeSet::from_iter(
                 [
                     "add", "alias", "build", "cache", "check", "fetch", "info", "init", "metadata",
@@ -4435,7 +5319,7 @@ mod tests {
             .find(|command| command.get_name() == "owner")
             .expect("owner command");
         assert_eq!(
-            command_names(owner.clone()),
+            command_names(owner),
             BTreeSet::from_iter(
                 ["accept", "invite", "list", "remove", "set-role"].map(str::to_owned)
             )
@@ -4445,7 +5329,7 @@ mod tests {
             .find(|command| command.get_name() == "alias")
             .expect("alias command");
         assert_eq!(
-            command_names(alias.clone()),
+            command_names(alias),
             BTreeSet::from_iter(["history", "info", "register", "resolve"].map(str::to_owned))
         );
         let cache = command
@@ -4453,7 +5337,7 @@ mod tests {
             .find(|command| command.get_name() == "cache")
             .expect("cache command");
         assert_eq!(
-            command_names(cache.clone()),
+            command_names(cache),
             BTreeSet::from_iter(["prune", "repair", "verify"].map(str::to_owned))
         );
     }
@@ -4643,19 +5527,19 @@ mod tests {
     #[test]
     fn workspace_test_failures_keep_their_stable_boundary_codes() {
         assert_eq!(
-            test_runner_diagnostic(WorkspaceTestErrorV1::Workspace("invalid".to_owned())).code(),
+            test_runner_diagnostic(&WorkspaceTestErrorV1::Workspace("invalid".to_owned())).code(),
             ErrorCode::WorkspaceInvalid
         );
         assert_eq!(
-            test_runner_diagnostic(WorkspaceTestErrorV1::Lock("invalid".to_owned())).code(),
+            test_runner_diagnostic(&WorkspaceTestErrorV1::Lock("invalid".to_owned())).code(),
             ErrorCode::LockfileInvalid
         );
         assert_eq!(
-            test_runner_diagnostic(WorkspaceTestErrorV1::Cache("invalid".to_owned())).code(),
+            test_runner_diagnostic(&WorkspaceTestErrorV1::Cache("invalid".to_owned())).code(),
             ErrorCode::CacheCorrupt
         );
         assert_eq!(
-            test_runner_diagnostic(WorkspaceTestErrorV1::Runner("failed".to_owned())).code(),
+            test_runner_diagnostic(&WorkspaceTestErrorV1::Runner("failed".to_owned())).code(),
             ErrorCode::Compiler
         );
     }
@@ -4821,6 +5705,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the fixture verifies the complete signer-free owner-list response"
+    )]
     fn owner_list_is_signer_free_and_includes_pending_invitations() {
         let selector: MusubiPackageSelectorV1 = "apps.sora/demo".parse().expect("selector");
         let binding = MusubiNamespaceBindingV1 {
@@ -4858,7 +5746,7 @@ mod tests {
                 index_revision: snapshot.index_revision,
             }],
             next_cursor: None,
-            snapshot: snapshot.clone(),
+            snapshot,
         };
         let owner = test_account(31);
         let invited = test_account(32);
@@ -5157,7 +6045,7 @@ mod tests {
     fn consumer_lock_is_not_used_as_package_or_cache_authentication() {
         let temp = TempDir::new().expect("temporary directory");
         let (root, manifest_path) = create_test_package(&temp);
-        write_test_lock(&root);
+        write_test_lock_with_registry_node(&root);
 
         let package = invoke([
             OsString::from("musubi"),
@@ -5184,6 +6072,8 @@ mod tests {
             manifest_path.as_os_str().to_owned(),
             OsString::from("cache"),
             OsString::from("verify"),
+            OsString::from("--config"),
+            manifest_path.as_os_str().to_owned(),
         ]);
         assert_eq!(verify.output.exit_code(), ErrorCode::Registry.exit_code());
         let rendered = verify
@@ -5228,10 +6118,12 @@ mod tests {
             .expect("empty external graph"),
             registry: None,
             cached_source: None,
+            prepared_archive_fetch: None,
+            platform_config_provenance: None,
             account_chain_discriminant: 753,
         };
         assert!(
-            ensure_graph_archives(&cache, &graph, GraphModeArgs::default(), None)
+            ensure_graph_archives(&cache, &graph, GraphModeArgs::default())
                 .expect("empty graph fetch")
                 .is_empty()
         );
@@ -5299,7 +6191,7 @@ mod tests {
     }
 
     #[test]
-    fn publish_resume_accepts_only_a_canonical_detached_operation() {
+    fn publish_resume_and_recover_accept_only_canonical_detached_operations() {
         let operation = "0101010101010101010101010101010101010101010101010101010101010101";
         let parsed = Cli::try_parse_from(["musubi", "publish", "--resume", operation])
             .expect("canonical resume command");
@@ -5308,10 +6200,36 @@ mod tests {
         };
         assert_eq!(arguments.resume.expect("operation").to_string(), operation);
         assert!(!arguments.detach);
+        assert!(arguments.recover.is_none());
+
+        let parsed = Cli::try_parse_from(["musubi", "publish", "--recover", operation])
+            .expect("canonical recovery command");
+        let Command::Publish(arguments) = parsed.command else {
+            panic!("publish command expected");
+        };
+        assert_eq!(arguments.recover.expect("operation").to_string(), operation);
+        assert!(!arguments.detach);
+        assert!(arguments.resume.is_none());
 
         assert!(
             Cli::try_parse_from(["musubi", "publish", "--resume", operation, "--detach"]).is_err(),
             "detach and resume are mutually exclusive"
+        );
+        assert!(
+            Cli::try_parse_from(["musubi", "publish", "--recover", operation, "--detach"]).is_err(),
+            "detach and recover are mutually exclusive"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "musubi",
+                "publish",
+                "--recover",
+                operation,
+                "--resume",
+                operation,
+            ])
+            .is_err(),
+            "resume and recover are mutually exclusive"
         );
         assert!(
             Cli::try_parse_from([
@@ -5322,6 +6240,362 @@ mod tests {
             ])
             .is_err(),
             "operation id uses canonical lowercase hex"
+        );
+    }
+
+    #[test]
+    fn publish_recovery_rejects_explicit_workspace_selection() {
+        let operation = "0101010101010101010101010101010101010101010101010101010101010101";
+        let invocation = invoke([
+            "musubi",
+            "publish",
+            "--recover",
+            operation,
+            "-p",
+            "apps.sora/demo",
+        ]);
+        assert_eq!(invocation.output.exit_code(), ErrorCode::Usage.exit_code());
+        let rendered = invocation
+            .output
+            .render(OutputFormat::Human)
+            .expect("recovery selection diagnostic");
+        assert!(
+            rendered
+                .stderr()
+                .contains("derives its exact package selection")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publish_recovery_is_signer_free_and_ignores_the_locked_consumer_graph() {
+        let temp = TempDir::new().expect("temporary recovery fixture");
+        let (root, manifest_path) = create_test_package(&temp);
+        let cache = MusubiCache::open(temp.path().join("cache")).expect("private fixture cache");
+        let request = build_root_recovery_request(&manifest_path, &cache, Vec::new(), Vec::new());
+        let state_root = temp.path().join("state");
+        create_private_fixture_directory(&state_root);
+        let operation_id = persist_recovery_request(&state_root, &request);
+        let config = write_poisoned_recovery_config(temp.path());
+        assert_eq!(
+            RegistrySigningClientV1::load(Some(&config))
+                .expect_err("poisoned signing identity must be rejected")
+                .code(),
+            "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID"
+        );
+        assert_archive_transport_is_poisoned(&config);
+
+        let lock_path = root.join(LOCK_FILE_NAME);
+        let lock_bytes = b"retired lock bytes that recovery must never parse or replace\n";
+        fs::write(&lock_path, lock_bytes).expect("write deliberately invalid consumer lock");
+        let mut permissions = fs::metadata(&lock_path)
+            .expect("consumer lock metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&lock_path, permissions).expect("make consumer lock read-only");
+        let before = fs::metadata(&lock_path).expect("consumer lock metadata before recovery");
+        let before_modified = before.modified().expect("consumer lock modification time");
+        #[cfg(unix)]
+        let before_identity = (
+            before.dev(),
+            before.ino(),
+            before.mode(),
+            before.mtime(),
+            before.mtime_nsec(),
+        );
+
+        let args = recovery_publish_args(operation_id, &config, true, true);
+        let success = recover_publication_sidecars_at(
+            Some(&manifest_path),
+            &args,
+            operation_id,
+            &state_root,
+            Some(&cache),
+        )
+        .expect("locked offline recovery must use only its journal graph");
+        assert_eq!(
+            success.message,
+            format!("recovered publication sidecars {operation_id}")
+        );
+
+        let source = PublicationStagedCarSourceV1::new(
+            &state_root,
+            operation_id,
+            request.archive_commitment.car_size,
+        );
+        assert!(source.path().is_file());
+        assert!(source.plan_path().is_file());
+        let store = PublicationJournalStore::open(&state_root).expect("reopen journal store");
+        let journal = store
+            .load(operation_id)
+            .expect("unchanged recovery journal");
+        assert_eq!(journal.request, request);
+        assert_eq!(journal.revision, 1);
+        assert_eq!(
+            journal.phase,
+            crate::publish::PublicationPhaseV1::Validation
+        );
+
+        let after = fs::metadata(&lock_path).expect("consumer lock metadata after recovery");
+        assert_eq!(
+            fs::read(&lock_path).expect("consumer lock bytes"),
+            lock_bytes
+        );
+        assert_eq!(after.len(), before.len());
+        assert_eq!(
+            after.permissions().readonly(),
+            before.permissions().readonly()
+        );
+        assert_eq!(
+            after.modified().expect("consumer lock modification time"),
+            before_modified
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            (
+                after.dev(),
+                after.ino(),
+                after.mode(),
+                after.mtime(),
+                after.mtime_nsec(),
+            ),
+            before_identity
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn offline_publish_recovery_uses_cached_nodes_without_transport() {
+        let temp = TempDir::new().expect("temporary recovery fixture");
+        let (_root, manifest_path) = create_test_package(&temp);
+        add_dependency_to_fixture_manifest(&manifest_path);
+        let cache = MusubiCache::open(temp.path().join("cache")).expect("private fixture cache");
+        let (edge, node) = build_and_install_dependency_fixture(temp.path(), &cache);
+        let request = build_root_recovery_request(&manifest_path, &cache, vec![edge], vec![node]);
+        let state_root = temp.path().join("state");
+        create_private_fixture_directory(&state_root);
+        let operation_id = persist_recovery_request(&state_root, &request);
+        let config = write_poisoned_recovery_config(temp.path());
+        assert_archive_transport_is_poisoned(&config);
+
+        let args = recovery_publish_args(operation_id, &config, false, true);
+        recover_publication_sidecars_at(
+            Some(&manifest_path),
+            &args,
+            operation_id,
+            &state_root,
+            Some(&cache),
+        )
+        .expect("offline recovery must accept an authenticated cache hit");
+
+        let source = PublicationStagedCarSourceV1::new(
+            &state_root,
+            operation_id,
+            request.archive_commitment.car_size,
+        );
+        assert!(source.path().is_file());
+        assert!(source.plan_path().is_file());
+        let journal = PublicationJournalStore::open(&state_root)
+            .expect("reopen journal store")
+            .load(operation_id)
+            .expect("unchanged recovery journal");
+        assert_eq!(journal.request, request);
+        assert_eq!(journal.revision, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn offline_publish_recovery_reports_cache_miss_before_transport() {
+        let temp = TempDir::new().expect("temporary recovery fixture");
+        let (_root, manifest_path) = create_test_package(&temp);
+        add_dependency_to_fixture_manifest(&manifest_path);
+        let builder_cache =
+            MusubiCache::open(temp.path().join("builder-cache")).expect("private builder cache");
+        let (edge, node) = build_and_install_dependency_fixture(temp.path(), &builder_cache);
+        let request =
+            build_root_recovery_request(&manifest_path, &builder_cache, vec![edge], vec![node]);
+        let empty_cache =
+            MusubiCache::open(temp.path().join("empty-cache")).expect("private empty cache");
+        let state_root = temp.path().join("state");
+        create_private_fixture_directory(&state_root);
+        let operation_id = persist_recovery_request(&state_root, &request);
+        let store = PublicationJournalStore::open(&state_root).expect("reopen journal store");
+        let journal_before = store.load(operation_id).expect("pristine recovery journal");
+        let config = write_poisoned_recovery_config(temp.path());
+        assert_archive_transport_is_poisoned(&config);
+
+        let args = recovery_publish_args(operation_id, &config, false, true);
+        let error = match recover_publication_sidecars_at(
+            Some(&manifest_path),
+            &args,
+            operation_id,
+            &state_root,
+            Some(&empty_cache),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("offline recovery must reject a missing exact archive"),
+        };
+        assert_eq!(error.code(), ErrorCode::OfflineMiss);
+        assert_eq!(
+            store
+                .load(operation_id)
+                .expect("unchanged recovery journal"),
+            journal_before
+        );
+        assert_no_recovery_sidecars(
+            &state_root,
+            operation_id,
+            request.archive_commitment.car_size,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publish_recovery_rejects_identity_mismatches_before_sidecars() {
+        let temp = TempDir::new().expect("temporary recovery fixture");
+        let (_root, manifest_path) = create_test_package(&temp);
+        let cache = MusubiCache::open(temp.path().join("cache")).expect("private fixture cache");
+        let base = build_root_recovery_request(&manifest_path, &cache, Vec::new(), Vec::new());
+        let state_root = temp.path().join("state");
+        create_private_fixture_directory(&state_root);
+        let missing_config = temp.path().join("must-not-be-opened.toml");
+        let cases = [
+            (
+                retarget_recovery_request(base.clone(), Some("other"), None),
+                ErrorCode::WorkspaceInvalid,
+                "not a member of the selected workspace",
+            ),
+            (
+                retarget_recovery_request(base.clone(), None, Some("9.9.9")),
+                ErrorCode::WorkspaceInvalid,
+                "version differs from the immutable recovery journal",
+            ),
+        ];
+
+        for (request, expected_code, expected_message) in cases {
+            let operation_id = persist_recovery_request(&state_root, &request);
+            let store = PublicationJournalStore::open(&state_root).expect("reopen journal store");
+            let journal_before = store.load(operation_id).expect("pristine recovery journal");
+            let args = recovery_publish_args(operation_id, &missing_config, false, false);
+            let error = match recover_publication_sidecars_at(
+                Some(&manifest_path),
+                &args,
+                operation_id,
+                &state_root,
+                Some(&cache),
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("mismatched recovery request must fail"),
+            };
+            assert_eq!(error.code(), expected_code);
+            let rendered = CommandOutput::failure("publish", error)
+                .render(OutputFormat::Human)
+                .expect("render recovery mismatch diagnostic");
+            assert!(
+                rendered.stderr().contains(expected_message),
+                "{}",
+                rendered.stderr()
+            );
+            assert_eq!(
+                store
+                    .load(operation_id)
+                    .expect("unchanged recovery journal"),
+                journal_before
+            );
+            assert_no_recovery_sidecars(
+                &state_root,
+                operation_id,
+                request.archive_commitment.car_size,
+            );
+        }
+        assert!(
+            !missing_config.exists(),
+            "early mismatch checks must not create or require platform config"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publish_rejects_unreachable_verification_nodes_before_journal_or_sidecars() {
+        let temp = TempDir::new().expect("temporary recovery fixture");
+        let (_root, manifest_path) = create_test_package(&temp);
+        let cache = MusubiCache::open(temp.path().join("cache")).expect("private fixture cache");
+        let request = add_unreachable_recovery_node_unchecked(build_root_recovery_request(
+            &manifest_path,
+            &cache,
+            Vec::new(),
+            Vec::new(),
+        ));
+        let operation_id = request.operation_id();
+        let expected_size = request.archive_commitment.car_size;
+        let validation_error = request
+            .validate()
+            .expect_err("an unreachable exact node must invalidate the publication request");
+        assert!(
+            validation_error
+                .to_string()
+                .contains("unreachable exact nodes")
+        );
+
+        let state_root = temp.path().join("state");
+        create_private_fixture_directory(&state_root);
+        let store =
+            PublicationJournalStore::open(&state_root).expect("open recovery journal store");
+        let create_error = store
+            .create(request)
+            .expect_err("invalid proof graphs must be rejected before journal creation");
+        assert!(create_error.to_string().contains("unreachable exact nodes"));
+        assert!(matches!(
+            store.load(operation_id),
+            Err(crate::publish::PublicationError::NotFound(found)) if found == operation_id
+        ));
+        assert_no_recovery_sidecars(&state_root, operation_id, expected_size);
+    }
+
+    #[test]
+    fn recovered_publication_json_is_one_secret_free_resume_instruction() {
+        let (namespace, result) = publication_receipt_fixture();
+        let operation_id = result.operation_id;
+        let success = recovered_publication_result(
+            &namespace,
+            &result.final_checkpoint.release,
+            operation_id,
+        );
+        let rendered = CommandOutput::success("publish", success.message, success.data)
+            .render(OutputFormat::Json)
+            .expect("recovery JSON");
+        assert_eq!(rendered.exit_code(), 0);
+        assert!(rendered.stderr().is_empty());
+        assert_eq!(rendered.stdout().matches('\n').count(), 1);
+        let document: Value =
+            norito::json::from_str(rendered.stdout()).expect("one recovery JSON document");
+        let data = document
+            .get("data")
+            .and_then(Value::as_object)
+            .expect("recovery data");
+        assert_eq!(
+            data.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "next",
+                "operation_id",
+                "phase",
+                "release",
+                "status",
+                "structural_release",
+            ])
+        );
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("recovered")
+        );
+        assert_eq!(
+            data.get("phase").and_then(Value::as_str),
+            Some("validation")
+        );
+        let expected_next = format!("musubi publish --resume {operation_id}");
+        assert_eq!(
+            data.get("next").and_then(Value::as_str),
+            Some(expected_next.as_str())
         );
     }
 
@@ -5354,6 +6628,322 @@ mod tests {
         );
         assert!(arguments.detach);
         assert!(arguments.resume.is_none());
+        assert!(arguments.recover.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn completed_publication_json_is_one_origin_independent_exact_receipt() {
+        let (namespace, result) = publication_receipt_fixture();
+        let operation_id = result.operation_id.to_string();
+        let structural_release = result.final_checkpoint.release.to_string();
+        // Fresh publication and completed resume both converge on this formatter with the
+        // immutable request namespace and the same final result. Render two independent calls so
+        // neither origin can acquire a distinct success envelope.
+        let fresh_success = publication_result(&namespace, result.clone());
+        let resumed_success = publication_result(&namespace, result);
+        assert_eq!(fresh_success.message, "published apps.sora/demo@1.2.3");
+        assert_eq!(resumed_success.message, fresh_success.message);
+        let first = CommandOutput::success("publish", fresh_success.message, fresh_success.data)
+            .render(OutputFormat::Json)
+            .expect("first publication JSON");
+        let second =
+            CommandOutput::success("publish", resumed_success.message, resumed_success.data)
+                .render(OutputFormat::Json)
+                .expect("second publication JSON");
+
+        assert_eq!(first, second);
+        assert_eq!(first.exit_code(), 0);
+        assert!(first.stderr().is_empty());
+        assert_eq!(first.stdout().matches('\n').count(), 1);
+        let document: Value =
+            norito::json::from_str(first.stdout()).expect("one publication JSON document");
+        assert_eq!(
+            document
+                .as_object()
+                .expect("output envelope")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["command", "data", "message", "ok", "schema", "version"])
+        );
+        assert_eq!(
+            document.get("schema").and_then(Value::as_str),
+            Some(OUTPUT_SCHEMA)
+        );
+        assert_eq!(
+            document.get("version").and_then(Value::as_u64),
+            Some(OUTPUT_VERSION)
+        );
+        assert_eq!(
+            document.get("command").and_then(Value::as_str),
+            Some("publish")
+        );
+        assert_eq!(document.get("ok").and_then(Value::as_bool), Some(true));
+
+        let data = document
+            .get("data")
+            .and_then(Value::as_object)
+            .expect("publication receipt data");
+        assert_eq!(
+            data.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "amx_submission",
+                "archive_id",
+                "chain_id",
+                "checkpoint_digest",
+                "genesis_hash",
+                "home_release_digest",
+                "operation_id",
+                "release",
+                "release_digest",
+                "snapshot",
+                "status",
+                "structural_release",
+                "universal_release_digest",
+            ])
+        );
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("complete"));
+        assert_eq!(
+            data.get("operation_id").and_then(Value::as_str),
+            Some(operation_id.as_str())
+        );
+        assert_eq!(
+            data.get("release").and_then(Value::as_str),
+            Some("apps.sora/demo@1.2.3")
+        );
+        assert_eq!(
+            data.get("structural_release").and_then(Value::as_str),
+            Some(structural_release.as_str())
+        );
+        assert_eq!(
+            data.get("chain_id").and_then(Value::as_str),
+            Some("token:dev")
+        );
+        assert_eq!(
+            data.get("genesis_hash").and_then(Value::as_str),
+            Some(hex::encode([0x11; 32]).as_str())
+        );
+        assert_eq!(
+            data.get("release_digest").and_then(Value::as_str),
+            Some(hex::encode([0x13; 32]).as_str())
+        );
+        assert_eq!(
+            data.get("archive_id").and_then(Value::as_str),
+            Some(hex::encode([0x14; 32]).as_str())
+        );
+        assert_eq!(
+            data.get("home_release_digest").and_then(Value::as_str),
+            Some(hex::encode([0x15; 32]).as_str())
+        );
+        assert_eq!(
+            data.get("universal_release_digest").and_then(Value::as_str),
+            Some(hex::encode([0x16; 32]).as_str())
+        );
+        assert_eq!(
+            data.get("checkpoint_digest").and_then(Value::as_str),
+            Some(hex::encode([0x17; 32]).as_str())
+        );
+
+        let snapshot = data
+            .get("snapshot")
+            .and_then(Value::as_object)
+            .expect("receipt snapshot");
+        assert_eq!(
+            snapshot.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["finalized_block_hash", "finalized_height", "index_revision"])
+        );
+        assert_eq!(
+            snapshot.get("finalized_height").and_then(Value::as_u64),
+            Some(u64::MAX)
+        );
+        assert_eq!(
+            snapshot.get("index_revision").and_then(Value::as_u64),
+            Some(u64::MAX)
+        );
+        assert_eq!(
+            snapshot.get("finalized_block_hash").and_then(Value::as_str),
+            Some(hex::encode([0x12; 32]).as_str())
+        );
+
+        let submission = data
+            .get("amx_submission")
+            .and_then(Value::as_object)
+            .expect("AMX submission binding");
+        assert_eq!(
+            submission
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["applied_height", "instruction_digest", "transaction_hash"])
+        );
+        assert_eq!(
+            submission.get("applied_height").and_then(Value::as_u64),
+            Some(u64::MAX)
+        );
+        assert_eq!(
+            submission.get("instruction_digest").and_then(Value::as_str),
+            Some(hex::encode([0x18; 32]).as_str())
+        );
+        assert_eq!(
+            submission.get("transaction_hash").and_then(Value::as_str),
+            Some(hex::encode([0x19; 32]).as_str())
+        );
+    }
+
+    #[test]
+    fn detached_publication_json_is_namespaced_and_discriminated() {
+        let (namespace, result) = publication_receipt_fixture();
+        let release = &result.final_checkpoint.release;
+        let success = detached_publication_result(&namespace, release, result.operation_id);
+        let output = CommandOutput::success("publish", success.message, success.data)
+            .render(OutputFormat::Json)
+            .expect("detached publication JSON");
+        let document: Value = norito::json::from_str(output.stdout()).expect("detached document");
+        let data = document
+            .get("data")
+            .and_then(Value::as_object)
+            .expect("detached receipt data");
+
+        assert_eq!(
+            data.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "operation_id",
+                "phase",
+                "release",
+                "status",
+                "structural_release",
+            ])
+        );
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("detached"));
+        assert_eq!(
+            data.get("phase").and_then(Value::as_str),
+            Some("seed-ingress")
+        );
+        assert_eq!(
+            data.get("release").and_then(Value::as_str),
+            Some("apps.sora/demo@1.2.3")
+        );
+        assert_eq!(
+            data.get("structural_release").and_then(Value::as_str),
+            Some(release.to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn publication_release_labels_stay_namespaced_for_both_structural_scopes() {
+        let (namespace, result) = publication_receipt_fixture();
+        let domain_release = result.final_checkpoint.release;
+        assert_eq!(
+            namespaced_release(&namespace, &domain_release),
+            "apps.sora/demo@1.2.3"
+        );
+        assert_ne!(domain_release.to_string(), "apps.sora/demo@1.2.3");
+
+        let root_namespace = "sora".parse().expect("fixture root namespace");
+        let mut root_release = domain_release;
+        root_release.package.scope = MusubiPackageScopeV1::DataspaceRoot;
+        assert_eq!(
+            namespaced_release(&root_namespace, &root_release),
+            "sora/demo@1.2.3"
+        );
+        assert_ne!(root_release.to_string(), "sora/demo@1.2.3");
+    }
+
+    #[test]
+    fn publication_receipts_and_diagnostics_do_not_expose_secret_controls() {
+        let (namespace, result) = publication_receipt_fixture();
+        let success = publication_result(&namespace, result);
+        let rendered = CommandOutput::success("publish", success.message, success.data)
+            .render(OutputFormat::Json)
+            .expect("publication receipt JSON");
+        for forbidden in [
+            "authorization",
+            "bearer",
+            "car_path",
+            "config_path",
+            "credential",
+            "journal_path",
+            "private_key",
+            "provider_url",
+            "runtime_endpoint",
+            "seed_provider",
+            "stream_token",
+            "torii_url",
+        ] {
+            assert!(
+                !rendered.stdout().contains(forbidden),
+                "publication receipt exposed {forbidden}"
+            );
+        }
+
+        for (error, secret, expected_code) in [
+            (
+                PublicationError::CarSource(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "sidecar-secret",
+                )),
+                "sidecar-secret",
+                "PUBLICATION_SIDECAR_UNAVAILABLE",
+            ),
+            (
+                PublicationError::InvalidJournal(
+                    "private_key=journal-secret Authorization: Bearer journal-bearer".to_owned(),
+                ),
+                "journal-secret",
+                "PUBLICATION_JOURNAL_INVALID",
+            ),
+            (
+                PublicationError::Backend(PublicationBackendError::permanent(
+                    "authorization=Bearer backend-secret",
+                )),
+                "backend-secret",
+                "MUSUBI_BACKEND_FAILURE",
+            ),
+        ] {
+            let rendered = CommandOutput::failure("publish", publication_diagnostic(&error))
+                .render(OutputFormat::Json)
+                .expect("redacted publication diagnostic");
+            assert!(!rendered.stdout().contains(secret));
+            let document: Value =
+                norito::json::from_str(rendered.stdout()).expect("diagnostic document");
+            assert_eq!(
+                document
+                    .pointer("/error/context/publication_code")
+                    .and_then(Value::as_str),
+                Some(expected_code)
+            );
+            assert_eq!(
+                document.pointer("/error/message").and_then(Value::as_str),
+                Some("publication operation failed")
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            let temporary = TempDir::new().expect("temporary publication state");
+            let writer = AtomicWriteRoot::new(temporary.path()).expect("bind state root");
+            writer
+                .install_immutable(Path::new("sidecar"), b"expected")
+                .expect("install immutable sidecar");
+            let conflict = writer
+                .install_immutable(Path::new("sidecar"), b"substituted")
+                .expect_err("differing immutable sidecar must conflict");
+            let rendered = CommandOutput::failure(
+                "publish",
+                publication_diagnostic(&PublicationError::JournalWrite(conflict)),
+            )
+            .render(OutputFormat::Json)
+            .expect("redacted sidecar-conflict diagnostic");
+            let document: Value =
+                norito::json::from_str(rendered.stdout()).expect("diagnostic document");
+            assert_eq!(
+                document
+                    .pointer("/error/context/publication_code")
+                    .and_then(Value::as_str),
+                Some("PUBLICATION_STATE_INTEGRITY_INVALID")
+            );
+        }
     }
 
     #[test]

@@ -66,7 +66,5 @@ mod transaction_parameters;
 mod transaction_traits;
 #[path = "../unregistered_instruction.rs"]
 mod unregistered_instruction;
-#[path = "../unshield_json_defaults.rs"]
-mod unshield_json_defaults;
 #[path = "../zk_envelope_roundtrip.rs"]
 mod zk_envelope_roundtrip;

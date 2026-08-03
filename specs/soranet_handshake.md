@@ -210,6 +210,10 @@ of which policy a relay enforces.
 - **TTL enforcement.** Puzzle tickets reuse the existing `pow` `min_ticket_ttl_secs`
   and `max_future_skew_secs` bounds. Verification rejects expired tickets, TTLs that
   fall below the policy minimum, or expiry windows that exceed the allowed skew.
+  Minting re-anchors the expiry-bound challenge before every Argon2 candidate,
+  checks the clock and remaining lifetime after that candidate, and never extends
+  an expiry after solving. The target mint TTL must exceed the minimum remaining
+  TTL and stay within the maximum future-skew corridor.
 - **Issuance service.** The `tools/soranet-puzzle-service` daemon exposes Norito JSON
   endpoints at `/v1/puzzle/config` and `/v1/puzzle/mint`, allowing edge relays to delegate
   ticket minting. Config responses surface the active difficulty and TTL bounds, while

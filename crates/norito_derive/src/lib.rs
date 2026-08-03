@@ -357,7 +357,7 @@ fn validate_data_field_attrs(data: &Data) -> syn::Result<()> {
             Ok(())
         }
         Data::Union(data) => Err(syn::Error::new_spanned(
-            &data.union_token,
+            data.union_token,
             "Norito derives do not support unions",
         )),
     }
@@ -3973,6 +3973,7 @@ fn derive_fast_json_struct_flatten(
                 w: &mut norito::json::TapeWalker<'a>,
                 _arena: &'arena mut norito::json::Arena,
             ) -> ::core::result::Result<Self, norito::Error> {
+                w.ensure_document_depth()?;
                 let mut parser = norito::json::Parser::new_at(w.input(), w.raw_pos());
                 let value = norito::json::Value::json_deserialize(&mut parser)?;
                 w.sync_to_raw(parser.position());
@@ -4562,6 +4563,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                         quote! {
                             impl<'a> norito::json::FastFromJson<'a> for #ident {
                                 fn parse<'arena>(w: &mut norito::json::TapeWalker<'a>, arena: &'arena mut norito::json::Arena) -> ::core::result::Result<Self, norito::Error> {
+                                    w.ensure_document_depth()?;
                                     w.expect_object_start()?;
                                     #(#inits)*
                                     let mut __seen: u128 = 0;
@@ -4911,6 +4913,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                         w: &mut norito::json::TapeWalker<'a>,
                         arena: &'arena mut norito::json::Arena,
                     ) -> ::core::result::Result<Self, norito::Error> {
+                        w.ensure_document_depth()?;
                         let __input = w.input();
                         w.expect_object_start()?;
                         let mut __variant_idx: ::core::option::Option<u8> = ::core::option::Option::None;
@@ -6070,6 +6073,7 @@ fn derive_fast_from_json_fallback(input: &DeriveInput) -> TokenStream2 {
                 w: &mut norito::json::TapeWalker<'a>,
                 _arena: &'arena mut norito::json::Arena,
             ) -> ::core::result::Result<Self, norito::Error> {
+                w.ensure_document_depth()?;
                 let input = w.input();
                 let mut parser = norito::json::Parser::new_at(input, w.raw_pos());
                 let value = <Self as norito::json::JsonDeserialize>::json_deserialize(&mut parser)

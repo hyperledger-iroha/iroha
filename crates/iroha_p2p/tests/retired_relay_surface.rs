@@ -21,3 +21,36 @@ fn retired_relay_stub_surface_is_absent() {
         "the retired relay-stub transport module must not be reintroduced"
     );
 }
+
+#[test]
+fn retired_classical_noise_surface_is_unreachable() {
+    let manifest = include_str!("../Cargo.toml");
+    let peer = include_str!("../src/peer.rs");
+    let transport = include_str!("../src/transport.rs");
+    let (_, feature_and_dev_sections) = manifest
+        .split_once("[features]")
+        .expect("P2P manifest must declare its feature inventory");
+
+    assert!(
+        !manifest.contains("noise_handshake"),
+        "the classical Noise handshake feature must stay retired"
+    );
+    assert!(
+        !feature_and_dev_sections.contains("snow"),
+        "the locked Snow package must not be selectable by any crate feature"
+    );
+    if manifest.contains("snow =") {
+        assert!(
+            manifest.contains("[target.'cfg(any())'.dependencies]\nsnow = \"0.10\""),
+            "until lockfile regeneration removes it, Snow may exist only behind an always-false target"
+        );
+    }
+    assert!(
+        !peer.contains("HandshakeNoise"),
+        "the application handshake must not regain a Noise variant"
+    );
+    assert!(
+        !transport.contains("pub mod noise"),
+        "the transport must not regain a classical Noise implementation"
+    );
+}

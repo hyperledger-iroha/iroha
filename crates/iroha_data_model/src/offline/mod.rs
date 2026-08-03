@@ -5680,6 +5680,10 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         Ok(candidate)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the fixed V4 manifest validator keeps all consensus-critical invariants in one auditable path"
+    )]
     fn validate_with_attestation_state(
         &self,
         finalized: bool,

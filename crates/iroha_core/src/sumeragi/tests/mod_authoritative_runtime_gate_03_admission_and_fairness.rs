@@ -403,7 +403,7 @@
     }
 
     #[test]
-    fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
+    fn retained_vote_does_not_hide_bounded_timeout_vote_needed_for_catch_up() {
         let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
         let validator = PeerId::new(KeyPair::random().public_key().clone());
         let mut vote_message = v2_vote(wire::GlobalPhase::Prepare);
@@ -447,7 +447,12 @@
             .token
             .clone();
 
-        for (view, expected) in [(vote_round.view - 1, false), (vote_round.view, true), (vote_round.view + 1, false)] {
+        for (view, expected) in [
+            (vote_round.view - 1, false),
+            (vote_round.view, true),
+            (vote_round.view + 1, true),
+            (vote_round.view + 2, false),
+        ] {
             let mut candidate = timeout_vote.clone();
             let BlockMessage::V2(wire::ConsensusMessageV2 {
                 payload: wire::ConsensusMessageV2Payload::TimeoutVote(timeout),
@@ -463,9 +468,17 @@
                     &InboundBlockMessage::new(candidate, Some(validator.clone())),
                 ),
                 expected,
-                "only an exact-view timeout share can cross the blocked Vote owner"
+                "only the reducer's bounded current/adjacent timeout window can cross the blocked Vote owner"
             );
         }
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::TimeoutVote(timeout),
+            ..
+        }) = &mut timeout_vote
+        else {
+            unreachable!("timeout fixture carries a v2 TimeoutVote");
+        };
+        timeout.round.view = vote_round.view + 1;
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::new(
                 timeout_vote,
@@ -484,7 +497,9 @@
                     })
                 )
             })
-            .expect("a timeout share can reach verification while the direct Vote is body-blocked");
+            .expect(
+                "an adjacent timeout share can reach verification while the direct Vote is body-blocked",
+            );
         assert!(matches!(
             admitted_timeout_vote.message(),
             BlockMessage::V2(wire::ConsensusMessageV2 {

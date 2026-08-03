@@ -44,7 +44,6 @@ use crate::{
     routing::{MaybeTelemetry, parse_account_literal_with_state},
 };
 
-const CONTEXT_GOV_BALLOT_ZK_AUTHORITY: &str = "/v1/gov/ballots/zk#authority";
 const CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY: &str = "/v1/gov/ballots/zk-v1#authority";
 const CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY: &str =
     "/v1/gov/ballots/zk-v1/ballot-proof#authority";
@@ -55,47 +54,10 @@ const CONTEXT_MINISTRY_AGENDA_DRAFT_AUTHORITY: &str =
     "/v1/ministry/agenda/proposals/draft#authority";
 const CONTEXT_GOV_PARLIAMENT_BALLOT_AUTHORITY: &str = "/v1/gov/parliament/ballots#authority";
 
-fn decode_hex(s: &str) -> Result<Vec<u8>, crate::Error> {
-    let s = s.trim_start_matches("0x");
-    if !s.len().is_multiple_of(2) {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "odd hex length".into(),
-                ),
-            ),
-        ));
-    }
-    let mut out = Vec::with_capacity(s.len() / 2);
-    let b = s.as_bytes();
-    for i in (0..b.len()).step_by(2) {
-        let h = from_hex_nibble(b[i]).ok_or_else(|| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion("bad hex".into()),
-            ))
-        })?;
-        let l = from_hex_nibble(b[i + 1]).ok_or_else(|| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion("bad hex".into()),
-            ))
-        })?;
-        out.push((h << 4) | l);
-    }
-    Ok(out)
-}
-
-fn from_hex_nibble(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
-}
-
 use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Debug, JsonDeserialize, JsonSerialize, Clone, Copy)]
+#[norito(deny_unknown_fields)]
 /// Inclusive height window used for governance scheduling.
 ///
 /// Both bounds are block heights; handlers treat missing windows as
@@ -150,7 +112,7 @@ pub struct ProposeDeployContractDto {
     /// Optional on-chain contract alias resolved to the canonical contract address.
     #[norito(default)]
     pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    /// ABI version (e.g., "1")
+    /// Exact first-release ABI version (`"1"`).
     pub abi_version: String,
     /// Deterministic code hash (blake2b-32; prefixed or raw hex)
     pub code_hash: String,
@@ -158,12 +120,9 @@ pub struct ProposeDeployContractDto {
     pub abi_hash: String,
     /// Optional enactment window override (inclusive)
     pub window: Option<AtWindowDto>,
-    /// Optional voting mode: "Zk" or "Plain" (default Zk)
+    /// Optional exact voting mode (`Zk` or `Plain`; defaults to `Zk`).
     #[norito(default)]
-    pub mode: Option<String>,
-    /// Optional per-contract limits (opaque for now)
-    #[norito(default)]
-    pub limits: Option<norito::json::Value>,
+    pub mode: Option<iroha_data_model::isi::governance::VotingMode>,
     /// Optional manifest provenance (public key + signature over the manifest payload).
     #[norito(default)]
     pub manifest_provenance: Option<ManifestProvenance>,
@@ -205,6 +164,7 @@ pub struct ProposeDeployContractResponse {
 }
 
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for proposing one closed SCCP registry action via governance.
 pub struct ProposeSccpRouteGovernanceDto {
     /// Atomic closed registry action to apply if governance enacts the proposal.
@@ -252,6 +212,7 @@ pub struct ProposeSccpRouteGovernanceResponse {
 }
 
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for drafting a Ministry agenda proposal submission transaction.
 pub struct MinistryAgendaProposalDraftDto {
     /// Agenda proposal payload that will be submitted on-chain.
@@ -291,46 +252,6 @@ pub enum MinistryAgendaProposalDraftOutcome {
     Draft(MinistryAgendaProposalDraftResponse),
     /// Proposal id already exists in committed state.
     Duplicate(MinistryAgendaProposalGetResponse),
-}
-
-#[derive(Debug, JsonDeserialize, JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for submitting a zero-knowledge ballot.
-pub struct ZkBallotDto {
-    /// Authority as canonical I105 or on-chain account alias.
-    pub authority: String,
-    /// Chain id to build the transaction skeleton for
-    pub chain_id: String,
-    pub election_id: String,
-    /// Base64-encoded proof bytes
-    pub proof_b64: String,
-    /// Public inputs (opaque for now)
-    #[norito(default)]
-    pub public: Option<norito::json::Value>,
-}
-
-impl norito::core::NoritoSerialize for ZkBallotDto {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let value = norito::json::to_value(self)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let json = norito::json::to_string(&value)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        <String as norito::core::NoritoSerialize>::serialize(&json, writer)
-    }
-}
-
-impl<'de> norito::core::NoritoDeserialize<'de> for ZkBallotDto {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<ZkBallotDto>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_json: &norito::core::Archived<String> = archived.cast();
-        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
-        norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
-    }
-
-    fn deserialize(archived: &'de norito::core::Archived<ZkBallotDto>) -> Self {
-        Self::try_deserialize(archived).expect("ZkBallotDto should deserialize from JSON string")
-    }
 }
 
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
@@ -441,16 +362,10 @@ fn lock_hints_incomplete(owner: bool, amount: bool, duration: bool) -> bool {
     any && !(owner && amount && duration)
 }
 
-fn hint_present(map: &json::Map, key: &str) -> bool {
-    map.get(key)
-        .map(|value| !matches!(value, json::Value::Null))
-        .unwrap_or(false)
-}
-
-fn normalize_zk_ballot_public_inputs(map: &mut json::Map) -> Result<(), String> {
-    reject_zk_public_input_aliases(map)?;
-    canonicalize_hex32_public_input(map, "root_hint", "root_hint")?;
-    canonicalize_hex32_public_input(map, "nullifier", "nullifier")?;
+fn validate_optional_ballot_direction(direction: Option<&str>) -> Result<(), String> {
+    if direction.is_some_and(|value| !matches!(value, "Aye" | "Nay" | "Abstain")) {
+        return Err("direction must be Aye, Nay, or Abstain".to_owned());
+    }
     Ok(())
 }
 
@@ -521,47 +436,69 @@ fn reject_zk_v1_ballotproof_aliases_from_raw(raw: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn canonicalize_hex32_public_input(
-    map: &mut json::Map,
-    key: &str,
-    label: &str,
-) -> Result<(), String> {
-    let Some(value) = map.get_mut(key) else {
-        return Ok(());
-    };
-    if matches!(value, json::Value::Null) {
-        return Ok(());
-    }
-    let raw = value
-        .as_str()
-        .ok_or_else(|| format!("{label} must be 32-byte hex"))?;
-    let canonical =
-        canonicalize_hex32_value(raw).ok_or_else(|| format!("{label} must be 32-byte hex"))?;
-    *value = json::Value::String(canonical);
-    Ok(())
-}
-
 fn canonicalize_hex32_value(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
-        if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+    let without_scheme = if let Some((scheme, rest)) = raw.split_once(':') {
+        if scheme.eq_ignore_ascii_case("blake2b32") {
             rest
         } else {
             return None;
         }
     } else {
-        trimmed
+        raw
     };
-    let body = without_scheme.trim();
-    let body = body
+    let body = without_scheme
         .strip_prefix("0x")
-        .or_else(|| body.strip_prefix("0X"))
-        .unwrap_or(body)
-        .trim();
+        .or_else(|| without_scheme.strip_prefix("0X"))
+        .unwrap_or(without_scheme);
     if body.len() != 64 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     Some(body.to_ascii_lowercase())
+}
+
+fn validate_exact_nonempty_token(field: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err(format!(
+            "{field} must be a non-empty token without whitespace or control characters"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_governance_selector_v1(field: &str, value: &str) -> Result<(), String> {
+    if !iroha_data_model::governance::is_valid_governance_selector_v1(value) {
+        return Err(format!(
+            "{field} must match {}",
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
+        ));
+    }
+    Ok(())
+}
+
+fn parse_exact_lower_hex32_path(field: &str, value: &str) -> Result<[u8; 32], crate::Error> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(crate::routing::conversion_error(format!(
+            "{field} must be exact lowercase 32-byte hex"
+        )));
+    }
+    let mut decoded = [0_u8; 32];
+    hex::decode_to_slice(value, &mut decoded).map_err(|_| {
+        crate::routing::conversion_error(format!("{field} must be exact lowercase 32-byte hex"))
+    })?;
+    Ok(decoded)
+}
+
+fn require_exact_governance_path_token(field: &str, value: &str) -> Result<(), crate::Error> {
+    validate_governance_selector_v1(field, value)
+        .map_err(|message| crate::routing::conversion_error(message.into()))
 }
 
 fn parse_canonical_u64_decimal(field: &str, value: &str) -> Result<u64, String> {
@@ -638,6 +575,12 @@ pub async fn handle_gov_ballot_zk_v1(
     if let Err(reason) = reject_zk_v1_aliases_from_raw(raw.as_ref()) {
         return Ok(ballot_rejection(&reason));
     }
+    if let Err(reason) = validate_exact_nonempty_token("backend", &body.backend) {
+        return Ok(ballot_rejection(&reason));
+    }
+    if let Err(reason) = validate_governance_selector_v1("election_id", &body.election_id) {
+        return Ok(ballot_rejection(&reason));
+    }
     // Minimal size check for b64
     if base64::engine::general_purpose::STANDARD
         .decode(body.envelope_b64.as_bytes())
@@ -671,6 +614,9 @@ pub async fn handle_gov_ballot_zk_v1(
         if let Err(reason) = ensure_owner_canonical(owner) {
             return Ok(ballot_rejection(&reason));
         }
+    }
+    if let Err(reason) = validate_optional_ballot_direction(body.direction.as_deref()) {
+        return Ok(ballot_rejection(&reason));
     }
     // Build public inputs JSON object with optional hints
     let mut pub_map = norito::json::Map::new();
@@ -740,6 +686,12 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     if let Err(reason) = reject_zk_v1_ballotproof_aliases_from_raw(raw.as_ref()) {
         return Ok(ballot_rejection(&reason));
     }
+    if let Err(reason) = validate_exact_nonempty_token("backend", &body.ballot.backend) {
+        return Ok(ballot_rejection(&reason));
+    }
+    if let Err(reason) = validate_governance_selector_v1("election_id", &body.election_id) {
+        return Ok(ballot_rejection(&reason));
+    }
     if body.ballot.envelope_bytes.is_empty() {
         return Ok(JsonBody(BallotSubmitResponse {
             ok: false,
@@ -762,6 +714,9 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         return Ok(ballot_rejection(
             "lock hints must include owner, amount, duration_blocks",
         ));
+    }
+    if let Err(reason) = validate_optional_ballot_direction(body.ballot.direction.as_deref()) {
+        return Ok(ballot_rejection(&reason));
     }
     // Build public inputs JSON from optional hints in BallotProof
     let mut pub_map = norito::json::Map::new();
@@ -1222,12 +1177,8 @@ fn ensure_chain_id_matches(
     chain_id: &iroha_data_model::ChainId,
     provided: &str,
 ) -> Result<(), crate::Error> {
-    let provided = provided.trim();
-    if provided.is_empty() {
-        return Err(crate::routing::conversion_error(
-            "chain_id must not be empty".into(),
-        ));
-    }
+    validate_exact_nonempty_token("chain_id", provided)
+        .map_err(|message| crate::routing::conversion_error(message.into()))?;
     if chain_id.as_str() != provided {
         return Err(crate::routing::conversion_error(format!(
             "chain_id mismatch: expected {}, got {}",
@@ -1265,16 +1216,15 @@ fn parse_canonical_authority_literal(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<iroha_data_model::account::AccountId, crate::Error> {
-    let trimmed = raw.trim();
-    let canonical = iroha_data_model::account::AccountId::canonicalize(trimmed).map_err(|_| {
+    let canonical = iroha_data_model::account::AccountId::canonicalize(raw).map_err(|_| {
         crate::routing::conversion_error("authority must use canonical I105 account id form".into())
     })?;
-    if canonical != trimmed {
+    if canonical != raw {
         return Err(crate::routing::conversion_error(
             "authority must use canonical I105 account id form".into(),
         ));
     }
-    parse_authority_literal(state, trimmed, telemetry, context)
+    parse_authority_literal(state, raw, telemetry, context)
 }
 
 fn instruction_skeleton_for_propose(
@@ -1306,9 +1256,8 @@ fn build_signable_transaction_b64(
 }
 
 fn canonical_hex32(value: &str, field: &str) -> Result<(String, [u8; 32]), crate::Error> {
-    let trimmed = value.trim();
-    let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
-        if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+    let without_scheme = if let Some((scheme, rest)) = value.split_once(':') {
+        if scheme.eq_ignore_ascii_case("blake2b32") {
             rest
         } else {
             return Err(crate::Error::Query(
@@ -1320,14 +1269,12 @@ fn canonical_hex32(value: &str, field: &str) -> Result<(String, [u8; 32]), crate
             ));
         }
     } else {
-        trimmed
+        value
     };
-    let body = without_scheme.trim();
-    let body = body
+    let body = without_scheme
         .strip_prefix("0x")
-        .or_else(|| body.strip_prefix("0X"))
-        .unwrap_or(body)
-        .trim();
+        .or_else(|| without_scheme.strip_prefix("0X"))
+        .unwrap_or(without_scheme);
     if body.len() != 64 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(crate::Error::Query(
             iroha_data_model::ValidationFail::QueryFailed(
@@ -1493,28 +1440,12 @@ pub struct TallyGetResponse {
 /// Handler for fetching a proposal record by hex id.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when the provided identifier is not valid 32-byte hex.
+/// Returns `crate::Error::Query` unless the identifier is exact lowercase 32-byte hex.
 pub async fn handle_gov_get_proposal(
     state: Arc<iroha_core::state::State>,
     id: axum::extract::Path<String>,
 ) -> Result<JsonBody<ProposalGetResponse>, crate::Error> {
-    let hex = id.0;
-    let bytes = decode_hex(&hex).map_err(|_| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion("invalid id".into()),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid id length".into(),
-                ),
-            ),
-        ));
-    }
-    let mut id_arr = [0u8; 32];
-    id_arr.copy_from_slice(&bytes);
+    let id_arr = parse_exact_lower_hex32_path("proposal id", &id.0)?;
     let world = state.world_view();
     let found = world.governance_proposals().get(&id_arr).cloned();
     Ok(JsonBody(ProposalGetResponse {
@@ -1526,12 +1457,14 @@ pub async fn handle_gov_get_proposal(
 /// Handler for fetching governance locks by referendum id.
 ///
 /// # Errors
-/// This handler never returns an error; missing locks are reported with `found = false`.
+/// Returns a conversion error for a noncanonical referendum token. Missing locks are reported
+/// with `found = false`.
 pub async fn handle_gov_get_locks(
     state: Arc<iroha_core::state::State>,
     rid: axum::extract::Path<String>,
 ) -> Result<JsonBody<LocksGetResponse>, crate::Error> {
     let ref_id = rid.0;
+    require_exact_governance_path_token("referendum id", &ref_id)?;
     let world = state.world_view();
     let found = world.governance_locks().get(&ref_id).cloned();
     Ok(JsonBody(LocksGetResponse {
@@ -1544,12 +1477,14 @@ pub async fn handle_gov_get_locks(
 /// Handler for fetching a referendum by id.
 ///
 /// # Errors
-/// This handler never returns an error; missing referenda are returned with `found = false`.
+/// Returns a conversion error for a noncanonical referendum token. Missing referenda are returned
+/// with `found = false`.
 pub async fn handle_gov_get_referendum(
     state: Arc<iroha_core::state::State>,
     id: axum::extract::Path<String>,
 ) -> Result<JsonBody<ReferendumGetResponse>, crate::Error> {
     let rid = id.0;
+    require_exact_governance_path_token("referendum id", &rid)?;
     let world = state.world_view();
     let found = world.governance_referenda().get(&rid).copied();
     Ok(JsonBody(ReferendumGetResponse {
@@ -1571,6 +1506,7 @@ pub async fn handle_gov_get_tally(
     id: axum::extract::Path<String>,
 ) -> Result<JsonBody<TallyGetResponse>, crate::Error> {
     let rid = id.0;
+    require_exact_governance_path_token("referendum id", &rid)?;
     let world = state.world_view();
     let mut proposal_id = [0_u8; 32];
     let is_validation_fee_referendum = rid.len() == 64
@@ -1731,32 +1667,20 @@ pub struct FinalizeResponse {
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when `proposal_id` is not 32-byte hex.
+/// Returns `crate::Error::Query` when the identifiers are noncanonical or do not match.
 pub async fn handle_gov_finalize(
     NoritoJson(body): NoritoJson<FinalizeDto>,
 ) -> Result<JsonBody<FinalizeResponse>, crate::Error> {
-    // Parse proposal id hex
-    let bytes = hex::decode(body.proposal_id.trim_start_matches("0x")).map_err(|_| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "invalid proposal_id".into(),
-            ),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid proposal_id length".into(),
-                ),
-            ),
+    parse_exact_lower_hex32_path("referendum_id", &body.referendum_id)?;
+    let proposal_id = parse_exact_lower_hex32_path("proposal_id", &body.proposal_id)?;
+    if body.referendum_id != body.proposal_id {
+        return Err(crate::routing::conversion_error(
+            "referendum_id must equal proposal_id".into(),
         ));
     }
-    let mut id_arr = [0u8; 32];
-    id_arr.copy_from_slice(&bytes);
     let instr = iroha_data_model::isi::governance::FinalizeReferendum {
         referendum_id: body.referendum_id,
-        proposal_id: id_arr,
+        proposal_id,
     };
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
     let tx_instructions = vec![tx_instr_from_box(boxed)];
@@ -1916,6 +1840,7 @@ pub async fn handle_gov_enact(
 }
 
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for applying protected namespaces parameter.
 pub struct ProtectedNamespacesDto {
     /// Namespaces to protect (e.g., `["apps", "system"]`).
@@ -1950,14 +1875,22 @@ pub async fn handle_gov_protected_set(
 
     use iroha_data_model::parameter::{CustomParameterId, Parameter, custom::CustomParameter};
 
-    // Validate namespace strings are non-empty ASCII (basic check)
-    let filtered: Vec<String> = body
+    let namespaces: Vec<String> = body
         .namespaces
         .into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    let namespace_count = filtered.len();
+        .enumerate()
+        .map(|(index, namespace)| {
+            validate_exact_nonempty_token(&format!("namespaces[{index}]"), &namespace)?;
+            if !namespace.is_ascii() {
+                return Err(format!(
+                    "namespaces[{index}] must contain only ASCII characters"
+                ));
+            }
+            Ok(namespace)
+        })
+        .collect::<Result<_, String>>()
+        .map_err(|message| crate::routing::conversion_error(message.into()))?;
+    let namespace_count = namespaces.len();
     let name = iroha_data_model::name::Name::from_str("gov_protected_namespaces").map_err(|e| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -1966,7 +1899,7 @@ pub async fn handle_gov_protected_set(
     let id = CustomParameterId(name);
     // Convert Vec<String> -> Vec<&str> to satisfy Json's From<Vec<T>> bound
     let json_array = norito::json::native::Value::Array(
-        filtered
+        namespaces
             .into_iter()
             .map(norito::json::native::Value::from)
             .collect(),
@@ -2253,8 +2186,7 @@ pub async fn handle_gov_propose_deploy(
     let (code_hash_hex, code_hash_bytes) = canonical_hex32(&body.code_hash, "code_hash")?;
     let (abi_hash_hex, abi_hash_bytes) = canonical_hex32(&body.abi_hash, "abi_hash")?;
 
-    let abi_version = body.abi_version.trim();
-    let expected_abi_hash = match abi_version {
+    let expected_abi_hash = match body.abi_version.as_str() {
         "1" => ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         other => {
             return Err(crate::Error::Query(
@@ -2270,26 +2202,14 @@ pub async fn handle_gov_propose_deploy(
         return Err(crate::Error::Query(
             iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "abi_hash does not match canonical hash for abi_version {abi_version}"
+                    "abi_hash does not match canonical hash for abi_version {}",
+                    body.abi_version
                 )),
             ),
         ));
     }
 
-    let mode = match body.mode.as_deref() {
-        Some(m) if m.eq_ignore_ascii_case("plain") => Some(gov::VotingMode::Plain),
-        Some(m) if m.eq_ignore_ascii_case("zk") => Some(gov::VotingMode::Zk),
-        Some(other) => {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                        "unsupported voting mode: {other}"
-                    )),
-                ),
-            ));
-        }
-        None => None,
-    };
+    let mode = body.mode;
 
     let window = body.window.map(|w| AtWindow {
         lower: w.lower,
@@ -2312,7 +2232,7 @@ pub async fn handle_gov_propose_deploy(
         contract_address: contract_address.clone(),
         code_hash_hex,
         abi_hash_hex,
-        abi_version: abi_version.to_string(),
+        abi_version: body.abi_version,
         window,
         mode,
         manifest_provenance: body.manifest_provenance.clone(),
@@ -2437,10 +2357,10 @@ pub async fn handle_ministry_agenda_proposal_get(
     state: Arc<iroha_core::state::State>,
     proposal_id: axum::extract::Path<String>,
 ) -> Result<JsonBody<MinistryAgendaProposalGetResponse>, crate::Error> {
-    let proposal_id = proposal_id.0.trim().to_string();
-    if proposal_id.is_empty() {
+    let proposal_id = proposal_id.0;
+    if !iroha_data_model::ministry::is_valid_agenda_proposal_id(&proposal_id) {
         return Err(crate::routing::conversion_error(
-            "proposal_id must not be empty".into(),
+            "proposal_id must follow the exact AC-YYYY-### format".into(),
         ));
     }
     let record = state
@@ -2451,85 +2371,6 @@ pub async fn handle_ministry_agenda_proposal_get(
     Ok(JsonBody(MinistryAgendaProposalGetResponse {
         found: record.is_some(),
         record,
-    }))
-}
-
-/// POST /v1/gov/ballot/zk — accept a ZK ballot and build an instruction skeleton.
-///
-/// The request schema excludes private signing material; callers submit locally signed transactions.
-///
-/// # Errors
-/// Returns `crate::Error::Query` for invalid chain id or authority. Invalid proofs result in an
-/// `ok = false` response.
-pub async fn handle_gov_ballot_zk(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(body): NoritoJson<ZkBallotDto>,
-) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
-    // Minimal size check for b64
-    if base64::engine::general_purpose::STANDARD
-        .decode(body.proof_b64.as_bytes())
-        .map(|bytes| bytes.len())
-        .unwrap_or(0)
-        == 0
-    {
-        return Ok(JsonBody(BallotSubmitResponse {
-            ok: false,
-            accepted: false,
-            reason: Some("invalid proof".to_string()),
-            tx_instructions: Vec::new(),
-        }));
-    }
-    let ZkBallotDto {
-        authority,
-        chain_id: body_chain_id,
-        election_id,
-        proof_b64,
-        public,
-    } = body;
-    ensure_chain_id_matches(chain_id.as_ref(), &body_chain_id)?;
-    let _authority_id = parse_authority_literal(
-        state.as_ref(),
-        authority.as_str(),
-        &telemetry,
-        CONTEXT_GOV_BALLOT_ZK_AUTHORITY,
-    )?;
-    let public_inputs = match public {
-        None => norito::json::Value::Object(norito::json::Map::new()),
-        Some(norito::json::Value::Object(mut map)) => {
-            if let Err(reason) = normalize_zk_ballot_public_inputs(&mut map) {
-                return Ok(ballot_rejection(&reason));
-            }
-            let has_owner = hint_present(&map, "owner");
-            let has_amount = hint_present(&map, "amount");
-            let has_duration = hint_present(&map, "duration_blocks");
-            if lock_hints_incomplete(has_owner, has_amount, has_duration) {
-                return Ok(ballot_rejection(
-                    "lock hints must include owner, amount, duration_blocks",
-                ));
-            }
-            if let Err(reason) = reject_zk_public_input_owner(&map) {
-                return Ok(ballot_rejection(&reason));
-            }
-            norito::json::Value::Object(map)
-        }
-        Some(_) => {
-            return Ok(ballot_rejection("public inputs must be a JSON object"));
-        }
-    };
-    // Build instruction skeleton
-    let instr = iroha_data_model::isi::governance::CastZkBallot {
-        election_id,
-        proof_b64,
-        public_inputs_json: norito::json::to_json(&public_inputs).unwrap_or_else(|_| "{}".into()),
-    };
-    let tx_instructions = vec![tx_instr_from_box(instr.into())];
-    Ok(JsonBody(BallotSubmitResponse {
-        ok: true,
-        accepted: true,
-        reason: Some("build transaction skeleton".to_string()),
-        tx_instructions,
     }))
 }
 
@@ -2563,6 +2404,8 @@ pub async fn handle_gov_ballot_plain_with_policy(
     telemetry: MaybeTelemetry,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
+    validate_governance_selector_v1("referendum_id", &body.referendum_id)
+        .map_err(|message| crate::routing::conversion_error(message.into()))?;
     // Basic shape validations
     if !(body.direction == "Aye" || body.direction == "Nay" || body.direction == "Abstain") {
         return Err(crate::routing::conversion_error("invalid direction".into()));
@@ -2775,16 +2618,49 @@ mod tests {
     }
 
     #[test]
-    fn hint_present_handles_nulls() {
-        let mut map = json::Map::new();
-        assert!(!hint_present(&map, "owner"));
-        map.insert("owner".to_string(), json::Value::Null);
-        assert!(!hint_present(&map, "owner"));
-        map.insert(
-            "owner".to_string(),
-            json::Value::String("alice".to_string()),
+    fn optional_ballot_direction_is_closed() {
+        for direction in [None, Some("Aye"), Some("Nay"), Some("Abstain")] {
+            validate_optional_ballot_direction(direction).expect("canonical direction");
+        }
+        assert_eq!(
+            validate_optional_ballot_direction(Some("aye")),
+            Err("direction must be Aye, Nay, or Abstain".to_owned())
         );
-        assert!(hint_present(&map, "owner"));
+        assert_eq!(
+            validate_optional_ballot_direction(Some("Approve")),
+            Err("direction must be Aye, Nay, or Abstain".to_owned())
+        );
+    }
+
+    #[test]
+    fn canonical_hex32_accepts_only_declared_wire_forms() {
+        let uppercase = "AB".repeat(32);
+        let expected = "ab".repeat(32);
+        for literal in [
+            uppercase.clone(),
+            format!("0X{uppercase}"),
+            format!("BlAkE2b32:{uppercase}"),
+            format!("BLAKE2B32:0x{uppercase}"),
+        ] {
+            let (canonical, bytes) = canonical_hex32(&literal, "hash").expect("declared form");
+            assert_eq!(canonical, expected);
+            assert_eq!(bytes, [0xAB; 32]);
+            assert_eq!(canonicalize_hex32_value(&literal), Some(expected.clone()));
+        }
+
+        for literal in [
+            format!(":{uppercase}"),
+            format!(" {uppercase}"),
+            format!("{uppercase} "),
+            format!("sha256:{uppercase}"),
+            "ab".repeat(31),
+        ] {
+            assert!(
+                canonical_hex32(&literal, "hash").is_err(),
+                "unexpectedly accepted {literal:?}"
+            );
+            assert_eq!(canonicalize_hex32_value(&literal), None);
+        }
     }
 
     fn conversion_message(err: crate::Error) -> String {
@@ -3370,7 +3246,6 @@ seiyaku GovernedReadFixture {
             abi_hash: format!("0x{}", hex::encode(canonical_abi)),
             window: Some(AtWindowDto { lower: 1, upper: 2 }),
             mode: None,
-            limits: Some(crate::json_object(vec![("max_pages", 64u64)])),
             manifest_provenance: None,
         };
         let s = norito::json::to_json(&req).unwrap();
@@ -3403,7 +3278,7 @@ seiyaku GovernedReadFixture {
             state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(ProtectedNamespacesDto {
-                namespaces: vec!["apps".to_owned(), " system ".to_owned(), String::new()],
+                namespaces: vec!["apps".to_owned(), "system".to_owned()],
                 authority: None,
             }),
         )
@@ -3423,6 +3298,25 @@ seiyaku GovernedReadFixture {
             .0;
         assert!(!after.found);
         assert!(after.namespaces.is_empty());
+    }
+
+    #[tokio::test]
+    async fn protected_namespaces_rejects_noncanonical_tokens_before_drafting() {
+        let (state, _queue, chain_id) = mk_basic_context();
+        for namespace in ["", " system", "system ", "system namespace", "systèm"] {
+            let error = handle_gov_protected_set(
+                chain_id.clone(),
+                state.clone(),
+                MaybeTelemetry::disabled(),
+                NoritoJson(ProtectedNamespacesDto {
+                    namespaces: vec![namespace.to_owned()],
+                    authority: None,
+                }),
+            )
+            .await
+            .expect_err("noncanonical namespace must fail before drafting");
+            assert!(error.to_string().contains("namespaces[0]"));
+        }
     }
 
     #[tokio::test]
@@ -3463,9 +3357,10 @@ seiyaku GovernedReadFixture {
     #[tokio::test]
     async fn finalize_builds_instruction_skeleton() {
         let (_state, _queue, _chain_id) = mk_basic_context();
+        let proposal_id = "aa".repeat(32);
         let dto = FinalizeDto {
-            referendum_id: "ref-xyz".to_string(),
-            proposal_id: format!("0x{}", "aa".repeat(32)),
+            referendum_id: proposal_id.clone(),
+            proposal_id,
         };
         let res = handle_gov_finalize(NoritoJson(dto))
             .await
@@ -3475,6 +3370,53 @@ seiyaku GovernedReadFixture {
         assert_eq!(body.tx_instructions.len(), 1);
         assert!(!body.tx_instructions[0].wire_id.is_empty());
         assert!(!body.tx_instructions[0].payload_hex.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finalize_rejects_noncanonical_or_mismatched_identifiers() {
+        for referendum_id in [
+            String::new(),
+            "ref-xyz".to_owned(),
+            "AA".repeat(32),
+            format!("0x{}", "aa".repeat(32)),
+            format!("{} ", "aa".repeat(32)),
+        ] {
+            let error = handle_gov_finalize(NoritoJson(FinalizeDto {
+                referendum_id,
+                proposal_id: "aa".repeat(32),
+            }))
+            .await
+            .expect_err("invalid referendum id must fail before drafting");
+            assert!(error.to_string().contains("referendum_id"));
+        }
+        for proposal_id in [
+            format!(":{}", "aa".repeat(32)),
+            format!("sha256:{}", "aa".repeat(32)),
+            format!("0x{}", "aa".repeat(32)),
+            "AA".repeat(32),
+            format!(" {}", "aa".repeat(32)),
+            format!("{} ", "aa".repeat(32)),
+        ] {
+            let error = handle_gov_finalize(NoritoJson(FinalizeDto {
+                referendum_id: "aa".repeat(32),
+                proposal_id,
+            }))
+            .await
+            .expect_err("undeclared proposal hash form must fail before drafting");
+            assert!(error.to_string().contains("proposal_id"));
+        }
+
+        let error = handle_gov_finalize(NoritoJson(FinalizeDto {
+            referendum_id: "aa".repeat(32),
+            proposal_id: "bb".repeat(32),
+        }))
+        .await
+        .expect_err("referendum and proposal ids must identify the same proposal");
+        assert!(
+            error
+                .to_string()
+                .contains("referendum_id must equal proposal_id")
+        );
     }
 
     #[tokio::test]
@@ -3493,8 +3435,7 @@ seiyaku GovernedReadFixture {
                 lower: 10,
                 upper: 20,
             }),
-            mode: Some("Zk".to_string()),
-            limits: Some(norito::json::Value::Object(norito::json::Map::new())),
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
             manifest_provenance: None,
         };
         let (code_hex, code_bytes) = super::canonical_hex32(&code_hash_input, "code_hash").unwrap();
@@ -3653,11 +3594,10 @@ seiyaku GovernedReadFixture {
     #[test]
     fn governance_mutation_dtos_reject_retired_signing_fields_during_decode() {
         macro_rules! assert_rejects_field {
-            ($field:literal; $($request:ty),+ $(,)?) => {
+            ($field:expr; $($request:ty),+ $(,)?) => {
                 $(
-                    let error = norito::json::from_str::<$request>(
-                        concat!(r#"{"#, $field, r#"": "must-not-cross-torii"}"#),
-                    )
+                    let input = format!(r#"{{"{}":"must-not-cross-torii"}}"#, $field);
+                    let error = norito::json::from_str::<$request>(&input)
                     .expect_err("retired signing field must fail JSON admission");
                     let message = error.to_string();
                     assert!(
@@ -3670,16 +3610,34 @@ seiyaku GovernedReadFixture {
             };
         }
 
-        assert_rejects_field!(
-            "private_key";
-            ProposeDeployContractDto,
-            ZkBallotDto,
-            PlainBallotDto,
-            ParliamentBallotDto,
-            ZkBallotV1Dto,
-            ZkBallotV1BallotProofDto,
-            FinalizeDto,
-        );
+        for field in [
+            "private_key",
+            "privateKey",
+            "private_key_hex",
+            "privateKeyHex",
+            "private_key_bytes",
+            "privateKeyBytes",
+            "private_key_seed",
+            "privateKeySeed",
+            "private_key_multihash",
+            "privateKeyMultihash",
+            "private_key_algorithm",
+            "privateKeyAlgorithm",
+        ] {
+            assert_rejects_field!(
+                field;
+                ProposeDeployContractDto,
+                ProposeSccpRouteGovernanceDto,
+                MinistryAgendaProposalDraftDto,
+                PlainBallotDto,
+                ParliamentBallotDto,
+                ZkBallotV1Dto,
+                ZkBallotV1BallotProofDto,
+                FinalizeDto,
+                EnactDto,
+                ProtectedNamespacesDto,
+            );
+        }
         assert_rejects_field!(
             "authority";
             ProposeDeployContractDto,
@@ -3687,9 +3645,51 @@ seiyaku GovernedReadFixture {
         );
     }
 
-    #[tokio::test]
-    async fn propose_deploy_rejects_unknown_mode() {
-        let (state, _queue, _chain_id) = mk_basic_context();
+    #[test]
+    fn governance_nested_request_types_reject_unknown_fields() {
+        let error = norito::json::from_str::<AtWindowDto>(
+            r#"{"lower":1,"upper":2,"private_key":"secret"}"#,
+        )
+        .expect_err("governance window must be closed");
+        assert!(error.to_string().contains("private_key"));
+
+        let ballot = iroha_data_model::isi::governance::BallotProof {
+            backend: "halo2/ipa".into(),
+            envelope_bytes: vec![1, 2, 3, 4],
+            root_hint: None,
+            owner: None,
+            nullifier: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+        };
+        let canonical = norito::json::to_json(&ballot).expect("encode canonical ballot proof");
+        let body = canonical
+            .strip_suffix('}')
+            .expect("ballot proof JSON is an object");
+        let injected = format!(r#"{body},"privateKeySeed":"secret"}}"#);
+        let error =
+            norito::json::from_str::<iroha_data_model::isi::governance::BallotProof>(&injected)
+                .expect_err("ballot proof must be closed");
+        assert!(error.to_string().contains("privateKeySeed"));
+
+        let keypair =
+            KeyPair::try_from_seed(b"closed-manifest-provenance".to_vec(), Algorithm::Ed25519)
+                .expect("derive manifest provenance fixture key");
+        let provenance = mk_manifest_provenance(&keypair, [0x11; 32], [0x22; 32]);
+        let canonical =
+            norito::json::to_json(&provenance).expect("encode canonical manifest provenance");
+        let body = canonical
+            .strip_suffix('}')
+            .expect("manifest provenance JSON is an object");
+        let injected = format!(r#"{body},"privateKeyAlgorithm":"secret"}}"#);
+        let error = norito::json::from_str::<ManifestProvenance>(&injected)
+            .expect_err("manifest provenance must be closed");
+        assert!(error.to_string().contains("privateKeyAlgorithm"));
+    }
+
+    #[test]
+    fn propose_deploy_rejects_noncanonical_mode_during_decode() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let dto = ProposeDeployContractDto {
             contract_address: Some(sample_contract_address()),
@@ -3698,14 +3698,47 @@ seiyaku GovernedReadFixture {
             code_hash: format!("{}", "11".repeat(32)),
             abi_hash: format!("{}", hex::encode(canonical_abi)),
             window: None,
-            mode: Some("quadratic".to_string()),
-            limits: Some(norito::json::Value::Object(norito::json::Map::new())),
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
             manifest_provenance: None,
         };
-        let err = handle_gov_propose_deploy(state, NoritoJson(dto))
-            .await
-            .unwrap_err();
-        assert!(format!("{err:?}").contains("unsupported voting mode"));
+        let canonical = norito::json::to_json(&dto).expect("canonical deploy request");
+        assert!(canonical.contains("\"mode\":\"Zk\""));
+        for mode in ["zk", "plain", "PLAIN", " Zk", "Zk ", "Quadratic"] {
+            let aliased = canonical.replace("\"mode\":\"Zk\"", &format!("\"mode\":\"{mode}\""));
+            let error = norito::json::from_str::<ProposeDeployContractDto>(&aliased)
+                .expect_err("noncanonical deploy voting mode must fail typed decoding");
+            assert!(
+                error.to_string().contains(mode.trim())
+                    || error.to_string().contains("VotingMode")
+                    || error.to_string().contains("unknown variant"),
+                "{mode}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn propose_deploy_accepts_only_exact_abi_v1_label() {
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+        for abi_version in ["", "01", " 1", "1 ", "2"] {
+            let dto = ProposeDeployContractDto {
+                contract_address: Some(sample_contract_address()),
+                contract_alias: None,
+                abi_version: abi_version.to_owned(),
+                code_hash: "11".repeat(32),
+                abi_hash: hex::encode(canonical_abi),
+                window: None,
+                mode: None,
+                manifest_provenance: None,
+            };
+            let error = handle_gov_propose_deploy(state.clone(), NoritoJson(dto))
+                .await
+                .expect_err("only the exact first-release ABI label is accepted");
+            assert!(
+                format!("{error:?}").contains("unsupported abi_version"),
+                "{abi_version:?}: {error:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -3719,7 +3752,6 @@ seiyaku GovernedReadFixture {
             abi_hash: format!("{}", "22".repeat(32)),
             window: None,
             mode: None,
-            limits: Some(norito::json::Value::Object(norito::json::Map::new())),
             manifest_provenance: None,
         };
         let err = handle_gov_propose_deploy(state, NoritoJson(dto))
@@ -3765,9 +3797,40 @@ seiyaku GovernedReadFixture {
     }
 
     #[tokio::test]
+    async fn ministry_agenda_draft_rejects_noncanonical_authority_without_trimming() {
+        let harness = mk_governance_harness(true);
+        let authority = format!(" {}", harness.authority);
+        let error = handle_ministry_agenda_proposal_draft(
+            harness.chain_id,
+            harness.state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(MinistryAgendaProposalDraftDto {
+                proposal: sample_agenda_proposal("AC-2026-240"),
+                authority,
+            }),
+        )
+        .await
+        .expect_err("whitespace authority alias must fail before drafting");
+        assert!(
+            format!("{error:?}").contains("canonical I105"),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn ministry_agenda_get_returns_missing_then_persisted_record() {
         let harness = mk_governance_harness(true);
         let proposal = sample_agenda_proposal("AC-2026-242");
+
+        for invalid in [" AC-2026-242", "AC-2026-242 ", "ac-2026-242", "AC-2026-42"] {
+            let error = handle_ministry_agenda_proposal_get(
+                harness.state.clone(),
+                axum::extract::Path(invalid.to_owned()),
+            )
+            .await
+            .expect_err("noncanonical proposal id must fail before lookup");
+            assert!(format!("{error:?}").contains("AC-YYYY-###"));
+        }
 
         let missing = handle_ministry_agenda_proposal_get(
             harness.state.clone(),
@@ -3985,147 +4048,6 @@ seiyaku GovernedReadFixture {
     }
 
     #[tokio::test]
-    async fn ballot_zk_builds_instruction_skeleton() {
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
-        // minimal non-empty proof bytes
-        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
-        let dto = ZkBallotDto {
-            authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: chain_id_str,
-            election_id: "e1".to_string(),
-            proof_b64,
-            public: Some(norito::json::Value::Object(norito::json::Map::new())),
-        };
-        let res =
-            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
-                .await
-                .expect("handler ok");
-        let body = res.0;
-        assert!(body.ok);
-        assert!(body.accepted);
-        assert_eq!(body.tx_instructions.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn ballot_zk_rejects_non_object_public_inputs() {
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
-        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
-        let dto = ZkBallotDto {
-            authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: chain_id_str,
-            election_id: "e1".to_string(),
-            proof_b64,
-            public: Some(norito::json::Value::String("oops".to_string())),
-        };
-        let res =
-            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
-                .await
-                .expect("handler ok");
-        let body = res.0;
-        assert!(!body.ok);
-        assert!(!body.accepted);
-        assert_eq!(
-            body.reason.as_deref(),
-            Some("public inputs must be a JSON object")
-        );
-    }
-
-    #[tokio::test]
-    async fn ballot_zk_rejects_partial_lock_hints() {
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
-        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
-        let mut map = norito::json::Map::new();
-        map.insert(
-            "owner".to_string(),
-            norito::json::Value::from(ACCOUNT_AUTHORITY.to_string()),
-        );
-        let dto = ZkBallotDto {
-            authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: chain_id_str,
-            election_id: "e1".to_string(),
-            proof_b64,
-            public: Some(norito::json::Value::Object(map)),
-        };
-        let res =
-            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
-                .await
-                .expect("handler ok");
-        let body = res.0;
-        assert!(!body.ok);
-        assert!(!body.accepted);
-        assert_eq!(
-            body.reason.as_deref(),
-            Some("lock hints must include owner, amount, duration_blocks")
-        );
-    }
-
-    #[tokio::test]
-    async fn ballot_zk_rejects_noncanonical_owner_hint() {
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
-        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
-        let owner = noncanonical_literal(ACCOUNT_AUTHORITY);
-        let mut map = norito::json::Map::new();
-        map.insert("owner".to_string(), norito::json::Value::from(owner));
-        map.insert("amount".to_string(), norito::json::Value::from("100"));
-        map.insert(
-            "duration_blocks".to_string(),
-            norito::json::Value::from(64u64),
-        );
-        let dto = ZkBallotDto {
-            authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: chain_id_str,
-            election_id: "e1".to_string(),
-            proof_b64,
-            public: Some(norito::json::Value::Object(map)),
-        };
-        let res =
-            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
-                .await
-                .expect("handler ok");
-        let body = res.0;
-        assert!(!body.ok);
-        assert!(!body.accepted);
-        assert_eq!(
-            body.reason.as_deref(),
-            Some("owner must use canonical I105 account id form")
-        );
-    }
-
-    #[tokio::test]
-    async fn ballot_zk_rejects_deprecated_public_inputs() {
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
-        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
-        let mut map = norito::json::Map::new();
-        map.insert(
-            "rootHint".to_string(),
-            norito::json::Value::from("aa".repeat(32)),
-        );
-        let dto = ZkBallotDto {
-            authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: chain_id_str,
-            election_id: "e1".to_string(),
-            proof_b64,
-            public: Some(norito::json::Value::Object(map)),
-        };
-        let res =
-            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
-                .await
-                .expect("handler ok");
-        let body = res.0;
-        assert!(!body.ok);
-        assert!(!body.accepted);
-        assert_eq!(
-            body.reason.as_deref(),
-            Some("public inputs must use root_hint (unsupported key rootHint)")
-        );
-    }
-
-    #[tokio::test]
     async fn parliament_ballot_builds_instruction_skeleton() {
         let (state, _queue, chain_id) = mk_basic_context();
         let dto = ParliamentBallotDto {
@@ -4163,51 +4085,202 @@ seiyaku GovernedReadFixture {
         assert_eq!(ballot.decision, ParliamentDecision::Approve);
     }
 
-    #[test]
-    fn normalize_zk_ballot_public_inputs_canonicalizes_hex() {
-        let mut map = norito::json::Map::new();
-        let root_raw = format!("0x{}", "Aa".repeat(32));
-        map.insert("root_hint".to_string(), norito::json::Value::from(root_raw));
-        let nullifier_raw = format!("blake2b32:{}", "BB".repeat(32));
-        map.insert(
-            "nullifier".to_string(),
-            norito::json::Value::from(nullifier_raw),
+    #[tokio::test]
+    async fn governance_ballot_context_tokens_reject_whitespace_without_normalization() {
+        use iroha_data_model::isi::governance::BallotProof;
+
+        let (state, _queue, chain_id) = mk_basic_context();
+        let canonical_authority = canonical_literal(ACCOUNT_AUTHORITY);
+        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
+
+        for invalid_chain in [
+            format!(" {}", chain_id.as_str()),
+            format!("{} ", chain_id.as_str()),
+        ] {
+            let error = ensure_chain_id_matches(chain_id.as_ref(), &invalid_chain)
+                .expect_err("chain aliases must fail closed");
+            assert!(format!("{error:?}").contains("chain_id"));
+        }
+        ensure_chain_id_matches(chain_id.as_ref(), chain_id.as_str())
+            .expect("exact chain id must remain valid");
+
+        let error = handle_gov_ballot_plain_with_policy(
+            chain_id.clone(),
+            state.clone(),
+            NoritoJson(PlainBallotDto {
+                authority: canonical_authority.clone(),
+                chain_id: chain_id.as_str().to_owned(),
+                referendum_id: "referendum-1 ".to_owned(),
+                owner: canonical_authority.clone(),
+                amount: 1_u64.into(),
+                duration_blocks: "0".to_owned(),
+                direction: "Aye".to_owned(),
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect_err("PLAIN referendum aliases must fail before drafting");
+        assert!(format!("{error:?}").contains("referendum_id"));
+
+        let dto = ZkBallotV1Dto {
+            authority: canonical_authority.clone(),
+            chain_id: "deliberately-wrong-chain".to_owned(),
+            election_id: "election-1\n".to_owned(),
+            backend: "halo2/ipa".to_owned(),
+            envelope_b64: proof_b64,
+            root_hint: None,
+            owner: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+            nullifier: None,
+        };
+        let raw = Bytes::from(
+            norito::json::to_vec(&norito::json::to_value(&dto).expect("serialize dto"))
+                .expect("encode dto"),
         );
-        normalize_zk_ballot_public_inputs(&mut map).expect("normalize");
-        let root_expected = "aa".repeat(32);
-        let nullifier_expected = "bb".repeat(32);
-        assert!(map.contains_key("root_hint"));
-        assert!(map.contains_key("nullifier"));
+        let response = handle_gov_ballot_zk_v1(
+            chain_id.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            crate::NoritoJsonWithBytes { value: dto, raw },
+        )
+        .await
+        .expect("invalid election is a typed ballot rejection");
         assert_eq!(
-            map.get("root_hint").and_then(norito::json::Value::as_str),
-            Some(root_expected.as_str())
+            response.0.reason.as_deref(),
+            Some(concat!(
+                "election_id must match ",
+                "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$"
+            ))
         );
+        assert!(response.0.tx_instructions.is_empty());
+
+        let dto = ZkBallotV1BallotProofDto {
+            authority: canonical_authority,
+            chain_id: "deliberately-wrong-chain".to_owned(),
+            election_id: " election-1".to_owned(),
+            ballot: BallotProof {
+                backend: "halo2/ipa".into(),
+                envelope_bytes: vec![1, 2, 3],
+                root_hint: None,
+                owner: None,
+                nullifier: None,
+                amount: None,
+                duration_blocks: None,
+                direction: None,
+            },
+        };
+        let raw = Bytes::from(
+            norito::json::to_vec(&norito::json::to_value(&dto).expect("serialize dto"))
+                .expect("encode dto"),
+        );
+        let response = handle_gov_ballot_zk_v1_ballotproof(
+            chain_id,
+            state,
+            MaybeTelemetry::disabled(),
+            crate::NoritoJsonWithBytes { value: dto, raw },
+        )
+        .await
+        .expect("invalid election is a typed ballot rejection");
         assert_eq!(
-            map.get("nullifier").and_then(norito::json::Value::as_str),
-            Some(nullifier_expected.as_str())
+            response.0.reason.as_deref(),
+            Some(concat!(
+                "election_id must match ",
+                "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$"
+            ))
         );
+        assert!(response.0.tx_instructions.is_empty());
     }
 
     #[test]
-    fn normalize_zk_ballot_public_inputs_rejects_deprecated_keys() {
-        let mut map = norito::json::Map::new();
-        map.insert(
-            "nullifier_hex".to_string(),
-            norito::json::Value::from("aa".repeat(32)),
-        );
-        let err = normalize_zk_ballot_public_inputs(&mut map).expect_err("deprecated");
-        assert!(err.contains("nullifier_hex"));
+    fn exact_governance_path_token_grammar_rejects_aliasing_characters() {
+        for valid in ["referendum-1", "A9_selector~with.dots"] {
+            validate_governance_selector_v1("referendum id", valid)
+                .expect("a bounded RFC 3986 unreserved selector is valid");
+        }
+        for invalid in [
+            "",
+            ".",
+            "..",
+            ".hidden",
+            "a/b",
+            "a%2Fb",
+            "投票",
+            " referendum",
+            "referendum ",
+            "refer\nendum",
+            "refer\u{7f}endum",
+        ] {
+            validate_governance_selector_v1("referendum id", invalid)
+                .expect_err("noncanonical path selectors must fail closed");
+        }
+        validate_governance_selector_v1("referendum id", &"a".repeat(128))
+            .expect("the exact length boundary is valid");
+        validate_governance_selector_v1("referendum id", &"a".repeat(129))
+            .expect_err("overlong selectors must fail closed");
     }
 
-    #[test]
-    fn normalize_zk_ballot_public_inputs_rejects_invalid_hex() {
-        let mut map = norito::json::Map::new();
-        map.insert(
-            "root_hint".to_string(),
-            norito::json::Value::from("not-hex"),
-        );
-        let err = normalize_zk_ballot_public_inputs(&mut map).expect_err("invalid hex");
-        assert_eq!(err, "root_hint must be 32-byte hex");
+    #[tokio::test]
+    async fn governance_get_handlers_reject_noncanonical_selectors_before_lookup() {
+        fn assert_conversion(error: &crate::Error) {
+            assert!(
+                matches!(
+                    error,
+                    crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
+                    ))
+                ),
+                "expected query conversion error, got {error:?}"
+            );
+        }
+
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+
+        for invalid in ["AA".repeat(32), format!("0x{}", "aa".repeat(32))] {
+            let error = handle_gov_get_proposal(state.clone(), axum::extract::Path(invalid))
+                .await
+                .expect_err("proposal aliases must fail before lookup");
+            assert_conversion(&error);
+        }
+        let missing = handle_gov_get_proposal(state.clone(), axum::extract::Path("aa".repeat(32)))
+            .await
+            .expect("an exact lowercase proposal id reaches lookup");
+        assert!(!missing.0.found);
+
+        for invalid in [
+            "a/b".to_owned(),
+            ".".to_owned(),
+            ".hidden".to_owned(),
+            "a%2Fb".to_owned(),
+            "投票".to_owned(),
+            "a".repeat(129),
+        ] {
+            let error =
+                handle_gov_get_referendum(state.clone(), axum::extract::Path(invalid.clone()))
+                    .await
+                    .expect_err("noncanonical selectors must fail before referendum lookup");
+            assert_conversion(&error);
+        }
+
+        let error =
+            handle_gov_get_locks(state.clone(), axum::extract::Path(" referendum".to_owned()))
+                .await
+                .expect_err("leading whitespace must fail before lock lookup");
+        assert_conversion(&error);
+        let error =
+            handle_gov_get_referendum(state.clone(), axum::extract::Path("referendum ".to_owned()))
+                .await
+                .expect_err("trailing whitespace must fail before referendum lookup");
+        assert_conversion(&error);
+        let error = handle_gov_get_tally(state, axum::extract::Path("refer\nendum".to_owned()))
+            .await
+            .expect_err("control characters must fail before tally lookup");
+        assert_conversion(&error);
     }
 
     #[tokio::test]
@@ -4748,8 +4821,7 @@ seiyaku GovernanceFlowFixture {
             code_hash: format!("0x{}", hex::encode(code_hash_bytes)),
             abi_hash: format!("0x{}", hex::encode(abi_hash_bytes)),
             window: None,
-            mode: Some("Plain".to_string()),
-            limits: None,
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Plain),
             manifest_provenance: Some(manifest_provenance),
         };
         let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
@@ -4944,8 +5016,7 @@ seiyaku GovernanceFlowFixture {
             code_hash: format!("0x{}", hex::encode(code_hash_bytes)),
             abi_hash: format!("0x{}", hex::encode(abi_hash_bytes)),
             window: None,
-            mode: Some("Plain".to_string()),
-            limits: None,
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Plain),
             manifest_provenance: Some(manifest_provenance),
         };
         let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
@@ -5192,6 +5263,158 @@ seiyaku GovernanceFlowFixture {
             body.reason.as_deref(),
             Some("owner must use canonical I105 account id form")
         );
+    }
+
+    #[tokio::test]
+    async fn zk_v1_handlers_reject_noncanonical_direction() {
+        use iroha_data_model::isi::governance::BallotProof;
+
+        let (state, _queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let envelope_b64 = base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]);
+        let dto = super::ZkBallotV1Dto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str.clone(),
+            election_id: "ref-1".to_string(),
+            backend: "halo2/ipa".to_string(),
+            envelope_b64,
+            root_hint: None,
+            owner: None,
+            amount: None,
+            duration_blocks: None,
+            direction: Some("aye".to_string()),
+            nullifier: None,
+        };
+        let raw =
+            Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
+        let response = super::handle_gov_ballot_zk_v1(
+            chain_id.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            crate::NoritoJsonWithBytes { value: dto, raw },
+        )
+        .await
+        .expect("handler response");
+        assert!(!response.0.accepted);
+        assert_eq!(
+            response.0.reason.as_deref(),
+            Some("direction must be Aye, Nay, or Abstain")
+        );
+
+        let dto = super::ZkBallotV1BallotProofDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "ref-1".to_string(),
+            ballot: BallotProof {
+                backend: "halo2/ipa".into(),
+                envelope_bytes: vec![1, 2, 3, 4],
+                root_hint: None,
+                owner: None,
+                nullifier: None,
+                amount: None,
+                duration_blocks: None,
+                direction: Some("Approve".to_string()),
+            },
+        };
+        let raw =
+            Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
+        let response = super::handle_gov_ballot_zk_v1_ballotproof(
+            chain_id,
+            state,
+            MaybeTelemetry::disabled(),
+            crate::NoritoJsonWithBytes { value: dto, raw },
+        )
+        .await
+        .expect("handler response");
+        assert!(!response.0.accepted);
+        assert_eq!(
+            response.0.reason.as_deref(),
+            Some("direction must be Aye, Nay, or Abstain")
+        );
+    }
+
+    #[tokio::test]
+    async fn zk_v1_handlers_reject_non_token_backends_before_context_lookup() {
+        use iroha_data_model::isi::governance::BallotProof;
+
+        let (state, _queue, chain_id) = mk_basic_context();
+        for backend in ["", " halo2/ipa", "halo2/ipa ", "halo2 ipa", "halo2\nipa"] {
+            let dto = super::ZkBallotV1Dto {
+                authority: ACCOUNT_AUTHORITY.to_string(),
+                chain_id: "deliberately-wrong-chain".to_owned(),
+                election_id: "ref-1".to_owned(),
+                backend: backend.to_owned(),
+                envelope_b64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+                root_hint: None,
+                owner: None,
+                amount: None,
+                duration_blocks: None,
+                direction: None,
+                nullifier: None,
+            };
+            let raw =
+                Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
+            let response = super::handle_gov_ballot_zk_v1(
+                chain_id.clone(),
+                state.clone(),
+                MaybeTelemetry::disabled(),
+                crate::NoritoJsonWithBytes { value: dto, raw },
+            )
+            .await
+            .expect("backend rejection must precede chain lookup");
+            assert!(!response.0.accepted, "backend `{backend:?}`");
+            assert!(
+                response.0.tx_instructions.is_empty(),
+                "backend `{backend:?}`"
+            );
+            assert!(
+                response
+                    .0
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("backend")),
+                "backend `{backend:?}`"
+            );
+
+            let dto = super::ZkBallotV1BallotProofDto {
+                authority: ACCOUNT_AUTHORITY.to_string(),
+                chain_id: "deliberately-wrong-chain".to_owned(),
+                election_id: "ref-1".to_owned(),
+                ballot: BallotProof {
+                    backend: backend.into(),
+                    envelope_bytes: vec![1, 2, 3, 4],
+                    root_hint: None,
+                    owner: None,
+                    nullifier: None,
+                    amount: None,
+                    duration_blocks: None,
+                    direction: None,
+                },
+            };
+            let raw =
+                Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
+            let response = super::handle_gov_ballot_zk_v1_ballotproof(
+                chain_id.clone(),
+                state.clone(),
+                MaybeTelemetry::disabled(),
+                crate::NoritoJsonWithBytes { value: dto, raw },
+            )
+            .await
+            .expect("backend rejection must precede chain lookup");
+            assert!(!response.0.accepted, "backend `{backend:?}`");
+            assert!(
+                response.0.tx_instructions.is_empty(),
+                "backend `{backend:?}`"
+            );
+            assert!(
+                response
+                    .0
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("backend")),
+                "backend `{backend:?}`"
+            );
+        }
     }
 
     #[tokio::test]

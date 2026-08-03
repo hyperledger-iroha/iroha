@@ -4,6 +4,11 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 object GovernanceInstructionUtils {
 
     private val HEX_PATTERN = Regex("^[0-9a-fA-F]+$")
+    private val LOWERCASE_HEX_PATTERN = Regex("^[0-9a-f]+$")
+
+    private const val GOVERNANCE_SELECTOR_V1_MAX_LENGTH = 128
+    private const val GOVERNANCE_SELECTOR_V1_PATTERN =
+        "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$"
 
     /** Inclusive enactment window expressed in block heights. */
     class AtWindow(@JvmField val lower: Long, @JvmField val upper: Long) {
@@ -71,4 +76,37 @@ object GovernanceInstructionUtils {
         }
         return normalized.lowercase()
     }
+
+    /** Require an exact lowercase hexadecimal value without compatibility normalization. */
+    @JvmStatic
+    fun requireExactLowercaseHex(value: String?, fieldName: String, expectedBytes: Int): String {
+        require(expectedBytes > 0) { "expectedBytes must be positive" }
+        require(!value.isNullOrBlank()) { "$fieldName must not be blank" }
+        require(value.length == expectedBytes * 2 && LOWERCASE_HEX_PATTERN.matches(value)) {
+            "$fieldName must be exactly ${expectedBytes * 2} lowercase hex chars"
+        }
+        return value
+    }
+
+    /** Require one canonical first-release governance selector without normalizing it. */
+    @JvmStatic
+    fun requireGovernanceSelectorV1(value: String, fieldName: String): String {
+        require(
+            value.length in 1..GOVERNANCE_SELECTOR_V1_MAX_LENGTH &&
+                value[0] != '.' &&
+                value.all(::isGovernanceSelectorUnreservedAscii),
+        ) {
+            "$fieldName must match $GOVERNANCE_SELECTOR_V1_PATTERN"
+        }
+        return value
+    }
+
+    private fun isGovernanceSelectorUnreservedAscii(character: Char): Boolean =
+        character in 'A'..'Z' ||
+            character in 'a'..'z' ||
+            character in '0'..'9' ||
+            character == '-' ||
+            character == '.' ||
+            character == '_' ||
+            character == '~'
 }

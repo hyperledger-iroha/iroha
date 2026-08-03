@@ -53,7 +53,7 @@ use crate::{
 
 /// Runtime controls for one authenticated Musubi workspace test invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkspaceTestOptionsV1 {
+pub struct WorkspaceTestOptionsV1 {
     /// Optional test-name substring or exact name.
     pub filter: Option<String>,
     /// Require `filter` to match the complete test name.
@@ -85,7 +85,7 @@ impl WorkspaceTestOptionsV1 {
 
 /// Structured report for one manifest-declared test target.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkspaceTestTargetReportV1 {
+pub struct WorkspaceTestTargetReportV1 {
     /// Selected workspace package that owns this target.
     pub package: MusubiPackageSelectorV1,
     /// Parent-local manifest target name.
@@ -98,7 +98,7 @@ pub(crate) struct WorkspaceTestTargetReportV1 {
 
 /// Complete deterministic report for all selected workspace test roots.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkspaceTestReportV1 {
+pub struct WorkspaceTestReportV1 {
     /// Target reports ordered by package, target name, and portable source path.
     pub targets: Vec<WorkspaceTestTargetReportV1>,
 }
@@ -131,7 +131,7 @@ impl WorkspaceTestReportV1 {
 
 /// Stable authenticated workspace test failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum WorkspaceTestErrorV1 {
+pub enum WorkspaceTestErrorV1 {
     /// Selection or local workspace state was inconsistent.
     Workspace(String),
     /// The exact consumer lock did not match the selected roots.
@@ -187,7 +187,7 @@ impl AuthenticatedTestRegistryV1 for MusubiCache {
 /// registry nodes are already forbidden from carrying development edges by the
 /// lock schema. This function never discovers or runs tests owned by dependency
 /// packages.
-pub(crate) fn execute_workspace_tests_v1(
+pub fn execute_workspace_tests_v1(
     cache: &MusubiCache,
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
@@ -197,6 +197,10 @@ pub(crate) fn execute_workspace_tests_v1(
     execute_workspace_tests_with_source(cache, workspace, selected, lock, options)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "workspace-test execution authenticates the exact lock graph, targets, and VM inputs in one ordered fail-closed workflow"
+)]
 fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
     source: &S,
     workspace: &Workspace,
@@ -306,7 +310,7 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
                 }
                 let mut request =
                     KotoTestRunRequestV1::new(&source.logical_path, options.chain_discriminant);
-                request.filter = options.filter.clone();
+                request.filter.clone_from(&options.filter);
                 request.exact = options.exact;
                 request.jobs = options.jobs;
                 request.seed = options.seed;
@@ -736,6 +740,10 @@ fn validate_cached_manifest_edges(
     Ok(())
 }
 
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "portable Musubi source paths require the canonical lowercase .ko suffix"
+)]
 fn relative_library_source(path: &str, source_dir: &PortablePath) -> Option<String> {
     if source_dir.as_str() == "." {
         return path.ends_with(".ko").then(|| path.to_owned());
@@ -868,7 +876,10 @@ fn declared_test_sources(
     Ok(sources)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the bounded recursive directory walk carries each confinement and resource-budget guard explicitly"
+)]
 fn collect_declared_test_directory(
     package_root: &Path,
     directory: &Path,
@@ -1636,6 +1647,10 @@ default-members = ["app"]
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture proves authenticated reachability across path and registry package boundaries"
+    )]
     fn authenticates_registry_edges_reachable_through_a_pure_path_package_only() {
         let temp = tempdir().expect("tempdir");
         write(
@@ -1864,7 +1879,11 @@ core = { package = "test/core", version = "^1.0.0" }
         );
         fs::hard_link(&first, temp.path().join("tests/second.ko")).expect("hardlink test source");
         let workspace = load_workspace(&temp.path().join("Musubi.toml")).expect("workspace");
-        let selected = vec!["test/app".parse().expect("selector")];
+        let selected = vec![
+            "test/app"
+                .parse::<MusubiPackageSelectorV1>()
+                .expect("selector"),
+        ];
         let lock = lock(
             vec![LockedRootV1 {
                 package: selected[0].clone(),

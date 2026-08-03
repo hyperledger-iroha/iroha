@@ -38,8 +38,25 @@ Build the required native bridge before resolving the package:
 
 ```bash
 cd /path/to/iroha
+export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
+mkdir -p "$CARGO_TARGET_DIR"
+export CARGO_BUILD_JOBS=1
+export CARGO_INCREMENTAL=0
+export CARGO_NET_OFFLINE=true
+export RUSTC_BOOTSTRAP=1
+export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
+export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 make bridge-xcframework
 ```
+
+The build requires Python 3.12, uses only the repository-root `Cargo.lock`, and
+rejects in-tree or symbolic Cargo targets. A nonempty external isolated target
+is supported; builds sharing that target or output are serialized by held locks,
+and every Apple slice is freshly invoked. The archive owner requires the explicit
+epoch, snapshots the complete authenticated generation under the output lock, and
+atomically publishes a sorted ZIP with normalized modes and timestamps.
 
 ### Swift Package Manager (`Package.swift`)
 
@@ -142,14 +159,23 @@ fail-closed. After the privacy production-gate evidence has been approved, build
 an opt-in Apple artifact with:
 
 ```bash
+export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
+mkdir -p "$CARGO_TARGET_DIR"
+export CARGO_BUILD_JOBS=1
+export CARGO_INCREMENTAL=0
+export CARGO_NET_OFFLINE=true
+export RUSTC_BOOTSTRAP=1
+export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
 scripts/build_norito_xcframework.sh --privacy-production-enabled
 ```
 
 That option passes the existing `privacy-production-enabled` Cargo feature to
 every Apple slice and marks the XCFramework plus its artifact manifest. The
 `Mobile SDK Artifacts` manual workflow exposes the same default-off option.
-Do not use skip-build mode with this option: the builder rejects that ambiguous
-combination rather than labeling pre-existing libraries as production-enabled.
+The builder always compiles all four slices into the one caller-selected target,
+uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
+There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
 
 CI runs `.github/workflows/mobile_sdk_artifacts.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging and mandatory missing-artifact rejection.
 
@@ -336,7 +362,7 @@ attaches those headers centrally instead of repeating them at each call site.
 Credential-bearing headers are rejected over plain HTTP or host-mismatched
 requests by the shared transport-security check.
 
-`TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
+`TransferRequest`, `MintRequest`, and `BurnRequest` expect
 canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
@@ -464,8 +490,8 @@ From this directory, run the portable/mobile suites and the mainline Kagemusha
 adapter boundary with:
 
 ```bash
-swift test --filter IrohaPeer
-swift test --filter KagemushaPeerTransportTests
+swift test --disable-automatic-resolution --filter IrohaPeer
+swift test --disable-automatic-resolution --filter KagemushaPeerTransportTests
 ```
 
 See the [peer transport V1 guide](../specs/peer_transport_v1.md) for byte
@@ -1261,59 +1287,10 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
-### Shield transaction builder
-
-`ShieldRequest` wires encrypted payloads into a `zk::Shield` instruction:
-
-```swift
-let payload = try ConfidentialEncryptedPayload(
-    ephemeralPublicKey: Data(repeating: 0x11, count: 32),
-    nonce: Data(repeating: 0x22, count: 24),
-    ciphertext: memoCiphertext
-)
-
-let request = try ShieldRequest(
-    chainId: chainId,
-    authority: AccountId.make(publicKey: keypair.publicKey),
-    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
-    fromAccountId: "<account_i105>",
-    amount: "42",
-    noteCommitment: noteCommitmentBytes, // 32 bytes
-    payload: payload,
-    ttlMs: 120
-)
-
-try await sdk.submit(shield: request, keypair: keypair)
-```
-
-The SDK validates the 32-byte commitment, enforces the encrypted payload layout, and signs
-the Norito transaction before submitting it to `/v1/pipeline/transactions`. Use
-`submitAndWait(shield:pollOptions:)` to block until Torii reports a terminal status.
-
-### Unshield transaction builder
-
-`UnshieldRequest` assembles `zk::Unshield` instructions with proof attachments:
-
-```swift
-let proof = try ProofAttachment(
-    backend: "halo2/ipa",
-    proof: Data(repeating: 0xAB, count: 48),
-    verifyingKey: .reference(.init(backend: "halo2/ipa", name: "vk_unshield"))
-)
-
-let request = try UnshieldRequest(
-    chainId: chainId,
-    authority: AccountId.make(publicKey: keypair.publicKey),
-    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
-    toAccountId: "<recipient_account_i105>",
-    publicAmount: "50",
-    inputs: [Data(repeating: 0x10, count: 32)],
-    proof: proof,
-    rootHint: Data(repeating: 0x44, count: 32)
-)
-
-try await sdk.submit(unshield: request, keypair: keypair)
-```
+Generic shield, shielded-transfer, and unshield instructions are not part of
+the first-release SDK surface. Wallets use the typed, proof-bound Kagemusha
+top-up and redemption flows; the underlying proof codecs remain available to
+those flows without exposing generic transaction builders.
 
 `ProofAttachment` emits registry-bound envelopes (`backend`, `proof_b64`, `vk_ref`, optional
 `vk_commitment_hex`/`envelope_hash_hex`); embedded key bytes are not accepted by the Swift builder.
@@ -1797,7 +1774,11 @@ The Android and JavaScript SDKs use the same seed/attempt mapping, so reconnect 
 let proposal = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
                                                             codeHashHex: "f0…",
                                                             abiHashHex: "e1…",
-                                                            abiVersion: "1")
+                                                            abiVersion: "1",
+                                                            manifestProvenance: .init(
+                                                                signer: "ed25519:…",
+                                                                signature: "ed25519:…"
+                                                            ))
 let draft = try await torii.submitGovernanceDeployContractProposal(proposal)
 
 // Convert the instruction skeleton into a signed transaction envelope
@@ -1807,6 +1788,36 @@ let draft = try await torii.submitGovernanceDeployContractProposal(proposal)
 let tally = try await torii.getGovernanceTally(id: "referendum-123")
 print("approve:", tally.approve, "reject:", tally.reject)
 ```
+
+Governance mutation DTOs are closed, public-only types. They cannot carry a
+private key, witness, or an unrecognized JSON extension; sign the returned
+transaction skeleton locally. Deployment proposals deliberately expose no
+`limits` field because Torii does not enforce a per-proposal limits object.
+Manifest provenance uses `ToriiContractManifestProvenance` rather than opaque
+JSON.
+
+Both V1 ZK submission formats share `GovernanceZkBallotPublicInputs`, whose
+only fields are `root_hint`, `owner`, `amount`, `duration_blocks`, `direction`,
+and `nullifier`. The flat envelope and nested `BallotProof` routes are available
+through `submitGovernanceZkBallotV1` and `submitGovernanceZkBallotProofV1`.
+Parliament ballots use `ToriiGovernanceParliamentBody` and
+`ToriiGovernanceParliamentDecision`, so canonical labels such as
+`policy-jury` and `approve` are emitted without stringly typed aliases. Plain
+ballots accept a `UInt64` duration in Swift and encode it as the canonical
+decimal JSON string required by Torii. ZK backend tags are exact non-empty
+tokens: whitespace and control-character variants are rejected before an HTTP
+request is dispatched. Referendum and election selectors use one first-release
+grammar across REST and locally signed transactions: 1–128 RFC 3986 unreserved
+ASCII bytes, without a leading dot. Governance windows reject an upper bound below the
+lower bound while retaining the complete `UInt64` height domain.
+
+`ToriiGovernanceEnactRequest` contains only the exact 64-character lowercase
+proposal id. Torii derives the retained window and instruction preimage from
+committed state; Swift does not accept caller-supplied enactment aliases for
+either value. Locally signed `CastZkBallotRequest` transactions use the same
+closed `GovernanceZkBallotPublicInputs` model as REST, including typed `UInt64`
+durations and exact ballot directions. Arbitrary `NoritoJSON` public-input
+objects are intentionally not accepted.
 
 The same helpers are exposed on `IrohaSDK` via convenience methods (for example,
 `sdk.submitGovernancePlainBallot(...)`, `sdk.getGovernanceProposal(idHex:)`). Unlock statistics (`/v1/gov/locks/stats`) accept optional `height` and `referendum_id` filters.
@@ -1904,14 +1915,20 @@ records the bridge version plus per-platform SHA-256 hashes.
 `dist/NoritoBridge.artifacts.json` is the stable relative symlink to that embedded
 manifest; publishing the XCFramework therefore switches both binaries and evidence
 through one atomic directory exchange.
+`scripts/archive_norito_xcframework.py` is the only supported distribution archive
+owner; `make bridge-xcframework` invokes it with `SOURCE_DATE_EPOCH`. Do not create
+release ZIPs with `zip` or `ditto` directly. The owner recomputes repository/tool
+provenance, authenticates every Mach-O architecture and required/forbidden export,
+and publishes normalized ZIP bytes atomically; CI compiles a fresh SwiftPM consumer
+from that exact archive.
 
 ### NoritoBridge policy and troubleshooting
 - Builds require `dist/NoritoBridge.xcframework`; package resolution fails when the
   artifact is missing or malformed.
 - Broken bridge symbols surface `bridgeUnavailable`/`nativeBridgeUnavailable` errors
   that include the expected xcframework location.
-- Example: `swift test --package-path IrohaSwift` requires the bridge artifact to be
-  materialized first.
+- Example: `swift test --package-path IrohaSwift --disable-automatic-resolution`
+  requires the bridge artifact and reviewed `Package.resolved` to be materialized first.
 
 ## SwiftUI demo and CI
 
@@ -1928,13 +1945,16 @@ For contributor setup and Torii mock ledger instructions, refer to
 
 ## Musubi V1 registry reads
 
-`MusubiToriiClientV1` is a signer-free, read-only client for the eleven typed
+`MusubiToriiClientV1` is a signer-free, read-only client for the twelve typed
 `/v1/musubi/queries/*` POST routes. Its first-release-only models preserve
 structural package identities, immutable namespace bindings, canonical
 structured SemVer requirements, exact unsigned JSON integers, finalized cursors,
 chain/genesis lock identity, and the authoritative archive commitment. Decoding
 rejects unknown fields, unsupported
-ABI/edition versions, and noncanonical names instead of accepting legacy forms.
+ABI/edition versions, noncanonical names, and duplicate parent-local dependency
+aliases instead of accepting legacy or ambiguous forms. Response bodies are
+streamed into a 32 MiB bounded collector; declared oversize and the first
+undeclared excess byte cancel the request before unbounded allocation.
 
 Swift, Kotlin, and Java exercise the Rust-owned contract in
 [`fixtures/musubi/sdk_v1.json`](../fixtures/musubi/sdk_v1.json). Authentication can
@@ -1962,7 +1982,7 @@ builders, or
 `standaloneInstructionBoxFrame()` only when an API explicitly requires a
 standalone framed box. Both forms are checked against the Rust-owned
 [`fixtures/musubi/instructions_v1.json`](../fixtures/musubi/instructions_v1.json);
-one real signed-batch regression also extracts and compares all eighteen inline
+one real signed-batch regression also extracts and compares all nineteen inline
 pairs, including the compact `ChainId` and `TransactionSignature` wrappers.
 
 ## Development commands
@@ -1970,7 +1990,7 @@ pairs, including the compact `ChainId` and `TransactionSignature` wrappers.
 - Run the package tests:
 
   ```bash
-  swift test --package-path IrohaSwift
+  swift test --package-path IrohaSwift --disable-automatic-resolution
   ```
 
 - Render/validate the parity + CI dashboards (uses sample feeds by default):

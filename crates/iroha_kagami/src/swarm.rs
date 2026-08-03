@@ -1214,8 +1214,10 @@ fn validate_runtime_projection_policy(
     );
     ensure!(
         source.common.chain == projected.common.chain
-            && source.common.key_pair.public_key() == projected.common.key_pair.public_key(),
-        "container runtime projection changed validator chain or identity"
+            && source.common.key_pair.public_key() == projected.common.key_pair.public_key()
+            && source.common.soranet_transport_key_pair.public_key()
+                == projected.common.soranet_transport_key_pair.public_key(),
+        "container runtime projection changed validator chain, signing identity, or SoraNet transport identity"
     );
     let trusted_keys = |config: &actual::Root| {
         std::iter::once(&config.common.trusted_peers.value().myself)
@@ -2717,6 +2719,7 @@ fn load_prepared_bundle(
     let mut chain = None;
     let mut admitted = Vec::with_capacity(config_paths.len());
     let mut validator_keys = BTreeSet::new();
+    let mut soranet_transport_keys = BTreeSet::new();
     let mut exposed_ports = BTreeSet::new();
     for (index, path) in config_paths.iter().enumerate() {
         let ParsedPreparedPeerConfig {
@@ -2816,6 +2819,26 @@ fn load_prepared_bundle(
         ensure!(
             validator_keys.insert(validator_key.clone()),
             "prepared validator identity {validator_key} is duplicated"
+        );
+        let soranet_transport_key = config
+            .common
+            .soranet_transport_key_pair
+            .public_key()
+            .clone();
+        ensure!(
+            soranet_transport_key.algorithm() == iroha_crypto::Algorithm::Ed25519,
+            "prepared validator config {} SoraNet transport key must use Ed25519",
+            path.display()
+        );
+        ensure!(
+            soranet_transport_key != validator_key,
+            "prepared validator config {} reuses its signing identity for SoraNet transport",
+            path.display()
+        );
+        ensure!(
+            soranet_transport_keys.insert(soranet_transport_key),
+            "prepared validator config {} duplicates another validator's SoraNet transport identity",
+            path.display()
         );
         let pop = validated
             .validator_pops
@@ -2984,6 +3007,12 @@ fn load_prepared_bundle(
             name: peer.service_name.clone(),
             p2p_port: peer.p2p_port,
             api_port: peer.api_port,
+            soranet_transport_public_key: admitted
+                .config
+                .common
+                .soranet_transport_key_pair
+                .public_key()
+                .clone(),
             key_pair: admitted.key_pair,
             pop: admitted.pop,
             requires_sora_profile,

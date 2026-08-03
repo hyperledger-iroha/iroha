@@ -141,9 +141,9 @@ impl BlockPayload {
                 TransactionEntrypoint::SealedReveal(reveal) => {
                     Some(reveal.signed_transaction().clone())
                 }
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => None,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    None
+                }
             })
             .collect();
         self.transactions.len()
@@ -310,8 +310,7 @@ impl SignedBlock {
         ExternalTransactionIterator::new(self)
     }
 
-    /// External entrypoints (signed transactions and authority-free private Kaigi transactions)
-    /// in execution order.
+    /// External entrypoints in execution order.
     #[inline]
     pub fn external_entrypoints_cloned(
         &self,
@@ -699,7 +698,6 @@ impl<'a> ExternalTransactionIterator<'a> {
                             Some(reveal.signed_transaction())
                         }
                         TransactionEntrypoint::SealedCommitment(_)
-                        | TransactionEntrypoint::PrivateKaigi(_)
                         | TransactionEntrypoint::Time(_) => None,
                     })
                     .collect()

@@ -963,6 +963,18 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
         "REPLACE_WITH_VALIDATOR_PRIVATE_KEY",
         "Taira validator private key",
     )?;
+    expect_toml_string_v1(
+        root,
+        "soranet_transport_public_key",
+        "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY",
+        "Taira SoraNet transport public key",
+    )?;
+    expect_toml_string_v1(
+        root,
+        "soranet_transport_private_key",
+        "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY",
+        "Taira SoraNet transport private key",
+    )?;
     let torii = toml_table_field_v1(root, "torii", "Taira config")?;
     expect_toml_string_v1(
         toml_table_field_v1(torii, "kagemusha_commands", "Taira torii config")?,
@@ -1818,6 +1830,33 @@ mod tests {
                 .to_string()
                 .contains("secret-free staging placeholder")
         );
+    }
+
+    #[test]
+    fn config_template_with_materialized_soranet_transport_identity_is_rejected() {
+        let broker = parse_broker_public_export_v1(&broker_export_fixture_v1())
+            .expect("parse broker fixture");
+        for (placeholder, materialized) in [
+            (
+                "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY",
+                "ed01200000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            (
+                "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY",
+                "802620000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ] {
+            let text = std::str::from_utf8(CONFIG_TEMPLATE_V1)
+                .expect("config fixture UTF-8")
+                .replacen(placeholder, materialized, 1);
+            assert!(
+                render_release_config_v1(text.as_bytes(), &broker)
+                    .expect_err("reject materialized SoraNet transport identity")
+                    .to_string()
+                    .contains("secret-free staging placeholder"),
+                "materializing {placeholder} must fail closed"
+            );
+        }
     }
 
     #[test]

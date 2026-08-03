@@ -33,7 +33,6 @@ use iroha_config::{
         defaults,
     },
 };
-use iroha_data_model::block::consensus_v2::ConsensusMode;
 #[cfg(feature = "app_api")]
 use iroha_version::codec::EncodeVersioned as _;
 // Temporary in-memory code registry is not used by on-chain manifest endpoints.
@@ -69,12 +68,7 @@ use iroha_core::{
         ContractAliasBindingRecord, ContractAliasLeaseStatus, State as CoreState, StateReadOnly,
         WorldReadOnly,
     },
-    sumeragi::{
-        self, SumeragiHandle,
-        consensus::Evidence as ConsensusEvidence,
-        message::{BlockMessage, ControlFlow},
-        status,
-    },
+    sumeragi::{self, status},
     telemetry::{Telemetry, capability::TelemetryGate},
     time,
     torii::zk::proofs::{
@@ -116,7 +110,7 @@ use iroha_data_model::{
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
     panic::AssertUnwindSafe,
     sync::OnceLock,
@@ -2351,9 +2345,6 @@ fn kaigi_signal_from_transaction(
             }),
             u64::try_from(reveal.signed_transaction().creation_time().as_millis()).ok(),
         ),
-        TransactionEntrypoint::PrivateKaigi(private) => {
-            (&private.metadata, None, Some(private.creation_time_ms))
-        }
         TransactionEntrypoint::Time(_) => return None,
     };
     let key: Name = "kaigi_signal".parse().ok()?;
@@ -5741,6 +5732,7 @@ mod connect_session_tests {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request for recent shielded ledger roots (convenience JSON wrapper).
 /// Mirrors the Norito type used by IVM syscalls.
 pub struct ZkRootsGetRequestDto {
@@ -5779,6 +5771,7 @@ pub struct ZkRootsGetResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request for current profiled confidential-tree inclusion paths.
 pub struct ZkMerklePathGetRequestDto {
     /// Asset selector (unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`)
@@ -5846,9 +5839,10 @@ pub struct ZkMerklePathGetResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request for election tally (convenience JSON wrapper).
 pub struct ZkVoteGetTallyRequestDto {
-    /// Unique election identifier.
+    /// Canonical governance selector V1 identifying the election.
     pub election_id: String,
 }
 
@@ -5870,6 +5864,39 @@ pub struct ZkVoteGetTallyResponseDto {
     pub finalized: bool,
     /// Public tally counts per option (length equals number of options).
     pub tally: Vec<u64>,
+}
+
+#[cfg(test)]
+mod zk_request_dto_json_tests {
+    use super::*;
+
+    fn assert_unknown_field(error: norito::json::Error) {
+        match error {
+            norito::json::Error::UnknownField { field } => assert_eq!(field, "unexpected"),
+            other => panic!("expected unknown field error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn closed_zk_query_requests_reject_unknown_json_fields() {
+        let error = norito::json::from_str::<ZkRootsGetRequestDto>(
+            r#"{"asset_id":"rose#universal","max":1,"unexpected":true}"#,
+        )
+        .expect_err("roots request must reject unknown fields");
+        assert_unknown_field(error);
+
+        let error = norito::json::from_str::<ZkMerklePathGetRequestDto>(
+            r#"{"asset_id":"rose#universal","commitments":[],"unexpected":true}"#,
+        )
+        .expect_err("Merkle-path request must reject unknown fields");
+        assert_unknown_field(error);
+
+        let error = norito::json::from_str::<ZkVoteGetTallyRequestDto>(
+            r#"{"election_id":"election-alpha","unexpected":true}"#,
+        )
+        .expect_err("vote-tally request must reject unknown fields");
+        assert_unknown_field(error);
+    }
 }
 
 /// Wrapped response for proof lookups that preserves payload size for egress gating.
@@ -6250,6 +6277,12 @@ pub async fn handle_v1_sumeragi_commit_qcs(
     Ok(resp)
 }
 
+fn query_internal_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+
 /// Run synchronous query work while retaining admission through physical completion.
 pub(crate) async fn run_admitted_blocking<T, F>(
     admission: crate::QueryAdmissionPermit,
@@ -6268,7 +6301,7 @@ where
         work()
     })
     .await
-    .map_err(|_| sccp_internal_error(worker_failure))?
+    .map_err(|_| query_internal_error(worker_failure))?
 }
 
 #[cfg(feature = "app_api")]
@@ -6440,9 +6473,7 @@ fn sccp_not_found() -> Error {
 }
 
 fn sccp_internal_error(message: impl Into<String>) -> Error {
-    Error::Query(iroha_data_model::ValidationFail::InternalError(
-        message.into(),
-    ))
+    query_internal_error(message)
 }
 
 fn sccp_bundle_response<T>(value: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
@@ -9815,43 +9846,98 @@ fn render_zk_verify_batch_response(ok: bool, statuses_json: Value) -> Result<Res
 }
 
 #[cfg(feature = "zk-verify-batch")]
-pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
-    headers: axum::http::HeaderMap,
+fn max_standard_base64_len(max_decoded_len: usize) -> usize {
+    max_decoded_len
+        .checked_add(2)
+        .map(|value| value / 3)
+        .and_then(|chunks| chunks.checked_mul(4))
+        .unwrap_or(usize::MAX)
+}
+
+#[cfg(feature = "zk-verify-batch")]
+fn zk_verify_batch_decode_limits(
+    body_len: usize,
+    limits: ZkVerifyBatchLimits,
+) -> norito::DecodeLimits {
+    // The HTTP body limit is enforced before this function is reached. Keep
+    // every nested allocation finite as well. Limits derive from the already
+    // capped archive rather than `max_envelope_bytes`, because an oversized
+    // but decodable envelope is a per-entry diagnostic, not a whole-request
+    // decode failure.
+    let max_sequence_elements = limits.max_batch.max(body_len);
+    norito::DecodeLimits::new(
+        max_sequence_elements,
+        body_len,
+        body_len.saturating_add(limits.max_batch),
+        body_len.saturating_mul(16),
+        16,
+    )
+}
+
+#[cfg(feature = "zk-verify-batch")]
+fn handle_v1_zk_verify_batch_sync(
+    format: crate::utils::TypedRequestContentFormat,
     body: axum::body::Bytes,
     limits: ZkVerifyBatchLimits,
 ) -> Result<Response> {
     if body.len() > limits.max_body_bytes {
         return verify_batch_limit_rejected("body_too_large", limits.max_body_bytes, body.len());
     }
-    let ct = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
     let mut ok = false;
     let mut statuses_json: Value = Value::Array(Vec::new());
-    if ct.contains(super::utils::NORITO_MIME_TYPE) {
-        if let Ok(envs) =
-            norito::decode_from_bytes::<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>>(&body)
-        {
-            if envs.len() > limits.max_batch {
-                return verify_batch_limit_rejected(
-                    "batch_too_large",
-                    limits.max_batch,
-                    envs.len(),
-                );
+    match format {
+        crate::utils::TypedRequestContentFormat::Norito => {
+            let batch_len = match norito::inspect_stream_vec_len_bounded_from_reader::<
+                _,
+                iroha_zkp_halo2::OpenVerifyEnvelope,
+            >(
+                std::io::Cursor::new(body.as_ref()), limits.max_batch
+            ) {
+                Ok(batch_len) => Some(batch_len),
+                Err(norito::Error::SequenceLengthExceeded { length, .. }) => {
+                    let actual = usize::try_from(length).unwrap_or(usize::MAX);
+                    return verify_batch_limit_rejected(
+                        "batch_too_large",
+                        limits.max_batch,
+                        actual,
+                    );
+                }
+                Err(_) => None,
+            };
+            if let Some(batch_len) = batch_len
+                && let Ok(envs) = norito::decode_from_bytes_with_limits::<
+                    Vec<iroha_zkp_halo2::OpenVerifyEnvelope>,
+                >(
+                    &body, zk_verify_batch_decode_limits(body.len(), limits)
+                )
+            {
+                if envs.len() > limits.max_batch {
+                    return verify_batch_limit_rejected(
+                        "batch_too_large",
+                        limits.max_batch,
+                        envs.len(),
+                    );
+                }
+                if envs.len() != batch_len {
+                    return render_zk_verify_batch_response(false, statuses_json);
+                }
+                let encoded_lens: Vec<usize> = envs
+                    .iter()
+                    .map(|env| norito::to_bytes(env).map_or(usize::MAX, |bytes| bytes.len()))
+                    .collect();
+                let outcomes = verify_batch_outcomes(&envs, &encoded_lens, limits);
+                statuses_json = batch_outcomes_json(outcomes);
+                ok = true;
             }
-            let encoded_lens: Vec<usize> = envs
-                .iter()
-                .map(|env| norito::to_bytes(env).map_or(usize::MAX, |bytes| bytes.len()))
-                .collect();
-            let outcomes = verify_batch_outcomes(&envs, &encoded_lens, limits);
-            statuses_json = batch_outcomes_json(outcomes);
-            ok = true;
         }
-    } else if ct.contains("application/json") {
-        // JSON: accept array of base64-encoded Norito envelopes.
-        if let Ok(v) = norito::json::from_slice::<norito::json::Value>(&body) {
-            if let Some(arr) = v.as_array() {
+        crate::utils::TypedRequestContentFormat::Json => {
+            // JSON uses standard padded base64 for each canonical Norito
+            // envelope. Reject lengths that cannot fit before allocating the
+            // decoded buffer, then enforce the exact decoded cap before the
+            // envelope decoder can allocate nested values.
+            if let Ok(v) = norito::json::from_slice::<norito::json::Value>(&body)
+                && let Some(arr) = v.as_array()
+            {
                 if arr.len() > limits.max_batch {
                     return verify_batch_limit_rejected(
                         "batch_too_large",
@@ -9859,21 +9945,33 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
                         arr.len(),
                     );
                 }
+                let max_base64_len = max_standard_base64_len(limits.max_envelope_bytes);
                 let outcomes: Vec<ZkVerifyBatchOutcome> = arr
                     .iter()
                     .map(|item| {
                         let Some(s) = item.as_str() else {
                             return ZkVerifyBatchOutcome::Error("invalid_entry_type");
                         };
+                        if s.len() > max_base64_len {
+                            return ZkVerifyBatchOutcome::Error("envelope_too_large");
+                        }
+                        if s.len() % 4 != 0 {
+                            return ZkVerifyBatchOutcome::Error("invalid_base64");
+                        }
                         let Ok(bytes) =
                             base64::engine::general_purpose::STANDARD.decode(s.as_bytes())
                         else {
                             return ZkVerifyBatchOutcome::Error("invalid_base64");
                         };
                         let encoded_len = bytes.len();
-                        let Ok(env) = norito::decode_from_bytes::<
+                        if encoded_len > limits.max_envelope_bytes {
+                            return ZkVerifyBatchOutcome::Error("envelope_too_large");
+                        }
+                        let Ok(env) = norito::decode_from_bytes_with_limits::<
                             iroha_zkp_halo2::OpenVerifyEnvelope,
-                        >(&bytes) else {
+                        >(
+                            &bytes, zk_verify_batch_decode_limits(encoded_len, limits)
+                        ) else {
                             return ZkVerifyBatchOutcome::Error("invalid_envelope");
                         };
                         verify_batch_outcomes(&[env], &[encoded_len], limits)
@@ -9888,6 +9986,39 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
         }
     }
     render_zk_verify_batch_response(ok, statuses_json)
+}
+
+#[cfg(feature = "zk-verify-batch")]
+pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+    limits: ZkVerifyBatchLimits,
+) -> Result<Response> {
+    if body.len() > limits.max_body_bytes {
+        return verify_batch_limit_rejected("body_too_large", limits.max_body_bytes, body.len());
+    }
+    let format = match crate::utils::typed_request_content_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    tokio::task::spawn_blocking(move || handle_v1_zk_verify_batch_sync(format, body, limits))
+        .await
+        .map_err(|_| query_internal_error("ZK batch verification worker failed"))?
+}
+
+#[cfg(feature = "zk-verify-batch")]
+pub(crate) async fn handle_v1_zk_verify_batch_admitted(
+    format: crate::utils::TypedRequestContentFormat,
+    body: axum::body::Bytes,
+    limits: ZkVerifyBatchLimits,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<Response> {
+    run_admitted_blocking(
+        admission,
+        "ZK batch verification worker failed",
+        move || handle_v1_zk_verify_batch_sync(format, body, limits),
+    )
+    .await
 }
 
 /// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
@@ -9967,35 +10098,146 @@ fn zk_merkle_not_found() -> Error {
     ))
 }
 
-fn validated_confidential_tree_root(
-    asset_id: &iroha_data_model::asset::id::AssetDefinitionId,
-    st: &iroha_core::state::ZkAssetState,
-) -> Result<[u8; 32]> {
-    st.validate_tree_integrity().map_err(|error| {
-        zk_query_conversion_error(format!(
-            "asset `{asset_id}` confidential tree state is inconsistent with its persisted profile: {error}"
-        ))
-    })?;
-    st.current_root().map_err(|error| {
-        zk_query_conversion_error(format!(
-            "failed to compute current confidential root for asset `{asset_id}`: {error}"
-        ))
-    })
+fn confidential_checkpoint_validation_cap(reorg_depth_bound: u64) -> usize {
+    usize::try_from(reorg_depth_bound.saturating_add(1))
+        .unwrap_or(usize::MAX)
+        .min(iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2)
 }
 
-fn unique_commitment_index(commitments: &[[u8; 32]], commitment: &[u8; 32]) -> Result<usize> {
-    let mut found = None;
-    for (index, candidate) in commitments.iter().enumerate() {
-        if candidate == commitment {
-            if found.is_some() {
-                return Err(zk_query_conversion_error(
-                    "commitment appears more than once in the current frontier; path lookup by commitment is ambiguous",
-                ));
-            }
-            found = Some(index);
+fn validated_persisted_confidential_tree_root(
+    asset_id: &iroha_data_model::asset::id::AssetDefinitionId,
+    st: &iroha_core::state::ZkAssetState,
+    root_history_cap: usize,
+    checkpoint_cap: usize,
+    evaluated_block_height: u64,
+) -> Result<[u8; 32]> {
+    st.validate_tree_metadata().map_err(|error| {
+        zk_query_conversion_error(format!(
+            "asset `{asset_id}` confidential tree metadata is inconsistent with its persisted profile: {error}"
+        ))
+    })?;
+    if st.root_history.len() > root_history_cap {
+        return Err(zk_query_conversion_error(format!(
+            "asset `{asset_id}` confidential root history exceeds the configured bound"
+        )));
+    }
+    if st.frontier_checkpoints.len() > checkpoint_cap {
+        return Err(zk_query_conversion_error(format!(
+            "asset `{asset_id}` confidential checkpoint history exceeds the bounded query audit"
+        )));
+    }
+    for (index, root) in st.root_history.iter().copied().enumerate() {
+        if !iroha_core::zk::confidential_v2::confidential_tree_node_is_canonical_v2(root) {
+            return Err(zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential root_history[{index}] is not a canonical Pasta scalar"
+            )));
         }
     }
-    found.ok_or_else(zk_merkle_not_found)
+
+    let retained_first_count = st
+        .commitments
+        .len()
+        .checked_sub(st.root_history.len())
+        .and_then(|count| count.checked_add(1));
+    let mut previous_height = None;
+    let mut previous_commitment_count = None;
+    for (index, checkpoint) in st.frontier_checkpoints.iter().enumerate() {
+        if checkpoint.height > evaluated_block_height {
+            return Err(zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential checkpoint[{index}] is newer than the evaluated snapshot"
+            )));
+        }
+        if previous_height.is_some_and(|height| checkpoint.height <= height) {
+            return Err(zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential checkpoint heights are not strictly increasing"
+            )));
+        }
+        previous_height = Some(checkpoint.height);
+        if previous_commitment_count.is_some_and(|count| checkpoint.commitment_count < count) {
+            return Err(zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential checkpoint commitment counts decrease"
+            )));
+        }
+        previous_commitment_count = Some(checkpoint.commitment_count);
+        let commitment_count = usize::try_from(checkpoint.commitment_count).map_err(|_| {
+            zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential checkpoint[{index}] commitment count does not fit usize"
+            ))
+        })?;
+        if commitment_count > st.commitments.len() {
+            return Err(zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential checkpoint[{index}] exceeds the current frontier"
+            )));
+        }
+        if !iroha_core::zk::confidential_v2::confidential_tree_node_is_canonical_v2(checkpoint.root)
+        {
+            return Err(zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential checkpoint[{index}] root is not canonical"
+            )));
+        }
+        let retained_root = if commitment_count == 0 {
+            Some(st.tree_profile.empty_root())
+        } else {
+            retained_first_count
+                .filter(|first_count| commitment_count >= *first_count)
+                .and_then(|first_count| st.root_history.get(commitment_count - first_count))
+                .copied()
+        };
+        if retained_root.is_some_and(|root| root != checkpoint.root) {
+            return Err(zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential checkpoint[{index}] root does not match retained root history"
+            )));
+        }
+    }
+    Ok(st.persisted_root)
+}
+
+#[derive(Clone, Copy)]
+enum RequestedCommitmentPosition {
+    Missing,
+    Unique(usize),
+    Ambiguous,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static REQUESTED_COMMITMENT_INDEX_VISITS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_requested_commitment_index_visits() {
+    REQUESTED_COMMITMENT_INDEX_VISITS.with(|visits| visits.set(0));
+}
+
+#[cfg(test)]
+fn requested_commitment_index_visits() -> usize {
+    REQUESTED_COMMITMENT_INDEX_VISITS.with(std::cell::Cell::get)
+}
+
+fn index_requested_commitment_positions(
+    commitments: &[[u8; 32]],
+    requested: &[[u8; 32]],
+) -> HashMap<[u8; 32], RequestedCommitmentPosition> {
+    let mut positions = HashMap::with_capacity(requested.len());
+    for commitment in requested {
+        positions.insert(*commitment, RequestedCommitmentPosition::Missing);
+    }
+    for (index, commitment) in commitments.iter().enumerate() {
+        #[cfg(test)]
+        REQUESTED_COMMITMENT_INDEX_VISITS.with(|visits| {
+            visits.set(visits.get().saturating_add(1));
+        });
+        if let Some(position) = positions.get_mut(commitment) {
+            *position = match *position {
+                RequestedCommitmentPosition::Missing => RequestedCommitmentPosition::Unique(index),
+                RequestedCommitmentPosition::Unique(_) | RequestedCommitmentPosition::Ambiguous => {
+                    RequestedCommitmentPosition::Ambiguous
+                }
+            };
+        }
+    }
+    positions
 }
 
 fn zk_witness_snapshot_identity(
@@ -10033,10 +10275,10 @@ fn zk_witness_snapshot_identity(
 /// Returns recent shielded roots for the requested asset, bounded by the configured
 /// `confidential.tree_roots_history_len`. If the asset has no commitments, returns the canonical
 /// empty root defined by its persisted tree profile.
-pub async fn handle_v1_zk_roots(
+fn handle_v1_zk_roots_sync(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
-    NoritoJson(req): NoritoJson<ZkRootsGetRequestDto>,
+    req: ZkRootsGetRequestDto,
 ) -> Result<Response> {
     let state_view = state.view();
     let (evaluated_block_height, evaluated_block_hash, now_ms) =
@@ -10051,22 +10293,23 @@ pub async fn handle_v1_zk_roots(
         core::cmp::min(cap, req.max as usize)
     };
     let st = world.zk_assets().get(&ad).ok_or_else(zk_merkle_not_found)?;
-    let current_root = validated_confidential_tree_root(&ad, st)?;
+    let current_root = validated_persisted_confidential_tree_root(
+        &ad,
+        st,
+        cap.min(st.tree_profile.capacity()),
+        confidential_checkpoint_validation_cap(state_view.zk.reorg_depth_bound),
+        evaluated_block_height,
+    )?;
     // Root history stores non-empty prefixes. Expose the profile-defined anchor
     // as the sole root for an empty registered tree.
-    let roots_all = if st.commitments.is_empty() {
+    let roots_tail = if st.commitments.is_empty() {
         vec![current_root]
     } else {
-        st.root_history.clone()
-    };
-    let latest_opt = roots_all.last().copied();
-    let roots_tail: Vec<[u8; 32]> = if roots_all.len() <= want {
-        roots_all.clone()
-    } else {
-        roots_all[roots_all.len() - want..].to_vec()
+        let start = st.root_history.len().saturating_sub(want);
+        st.root_history[start..].to_vec()
     };
     let resp = ZkRootsGetResponseDto {
-        latest: latest_opt.map(hex::encode).unwrap_or_default(),
+        latest: hex::encode(current_root),
         roots: roots_tail.into_iter().map(hex::encode).collect(),
         evaluated_block_height,
         evaluated_block_hash,
@@ -10078,15 +10321,38 @@ pub async fn handle_v1_zk_roots(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 
+/// Execute the roots query on a blocking worker.
+pub async fn handle_v1_zk_roots(
+    state: Arc<CoreState>,
+    accept: Option<axum::http::HeaderValue>,
+    NoritoJson(req): NoritoJson<ZkRootsGetRequestDto>,
+) -> Result<Response> {
+    tokio::task::spawn_blocking(move || handle_v1_zk_roots_sync(state, accept, req))
+        .await
+        .map_err(|_| query_internal_error("ZK roots integrity worker failed"))?
+}
+
+pub(crate) async fn handle_v1_zk_roots_admitted(
+    state: Arc<CoreState>,
+    accept: Option<axum::http::HeaderValue>,
+    req: ZkRootsGetRequestDto,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<Response> {
+    run_admitted_blocking(admission, "ZK roots integrity worker failed", move || {
+        handle_v1_zk_roots_sync(state, accept, req)
+    })
+    .await
+}
+
 /// POST /v1/zk/merkle-path — current confidential commitment inclusion paths.
 ///
 /// Returns inclusion paths for commitments in the current `zk_assets` frontier.
 /// Path construction is selected exclusively by the tree profile persisted with
 /// the asset state; verifier-role bindings do not select the hash construction.
-pub async fn handle_v1_zk_merkle_path(
+fn handle_v1_zk_merkle_path_sync(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
-    NoritoJson(req): NoritoJson<ZkMerklePathGetRequestDto>,
+    req: ZkMerklePathGetRequestDto,
 ) -> Result<Response> {
     if req.commitments.len() > ZK_MERKLE_PATH_MAX_COMMITMENTS {
         return Err(zk_query_conversion_error(format!(
@@ -10111,24 +10377,54 @@ pub async fn handle_v1_zk_merkle_path(
     let world = state_view.world();
     let ad = resolve_asset_definition_selector(world, &req.asset_id, now_ms)?;
     let st = world.zk_assets().get(&ad).ok_or_else(zk_merkle_not_found)?;
-    let root = validated_confidential_tree_root(&ad, st)?;
+    let root = validated_persisted_confidential_tree_root(
+        &ad,
+        st,
+        state_view
+            .zk
+            .tree_roots_history_len
+            .get()
+            .min(st.tree_profile.capacity()),
+        confidential_checkpoint_validation_cap(state_view.zk.reorg_depth_bound),
+        evaluated_block_height,
+    )?;
+    let projection =
+        iroha_core::zk::confidential_v2::ConfidentialTreeProjectionV2::build(&st.commitments)
+            .map_err(|err| {
+                zk_query_conversion_error(format!(
+                    "failed to build confidential tree projection for asset `{ad}`: {err}"
+                ))
+            })?;
+    if projection.root() != root {
+        return Err(zk_query_conversion_error(format!(
+            "asset `{ad}` confidential tree projection root does not match the persisted current root"
+        )));
+    }
+    if projection.frontier().map_err(zk_query_conversion_error)? != st.tree_frontier {
+        return Err(zk_query_conversion_error(format!(
+            "asset `{ad}` confidential tree projection does not match the persisted frontier"
+        )));
+    }
+    let positions = index_requested_commitment_positions(&st.commitments, &requested);
 
     let mut paths = Vec::with_capacity(requested.len());
     for commitment in requested {
-        let leaf_index = unique_commitment_index(&st.commitments, &commitment)?;
-        let path = st
-            .tree_profile
-            .compute_path(&st.commitments, leaf_index)
-            .map_err(|err| {
-                zk_query_conversion_error(format!(
-                    "failed to compute commitment path at index {leaf_index}: {err}"
-                ))
-            })?;
-        if path.root != root {
-            return Err(zk_query_conversion_error(
-                "computed commitment path root does not match current frontier root",
-            ));
-        }
+        let leaf_index = match positions.get(&commitment).copied() {
+            Some(RequestedCommitmentPosition::Unique(index)) => index,
+            Some(RequestedCommitmentPosition::Ambiguous) => {
+                return Err(zk_query_conversion_error(
+                    "commitment appears more than once in the current frontier; path lookup by commitment is ambiguous",
+                ));
+            }
+            Some(RequestedCommitmentPosition::Missing) | None => {
+                return Err(zk_merkle_not_found());
+            }
+        };
+        let path = projection.compute_path(leaf_index).map_err(|err| {
+            zk_query_conversion_error(format!(
+                "failed to compute commitment path at index {leaf_index}: {err}"
+            ))
+        })?;
         let leaf_index = u32::try_from(leaf_index).map_err(|_| {
             zk_query_conversion_error("leaf index does not fit in the response schema")
         })?;
@@ -10149,19 +10445,11 @@ pub async fn handle_v1_zk_merkle_path(
         .map_err(|_| zk_query_conversion_error("tree depth does not fit in the response schema"))?;
     let next_zero_path = if st.commitments.len() < st.tree_profile.capacity() {
         let leaf_index = st.commitments.len();
-        let path = st
-            .tree_profile
-            .compute_path(&st.commitments, leaf_index)
-            .map_err(|err| {
-                zk_query_conversion_error(format!(
-                    "failed to compute next zero-leaf path at index {leaf_index}: {err}"
-                ))
-            })?;
-        if path.root != root {
-            return Err(zk_query_conversion_error(
-                "computed next zero-leaf path root does not match current frontier root",
-            ));
-        }
+        let path = projection.compute_path(leaf_index).map_err(|err| {
+            zk_query_conversion_error(format!(
+                "failed to compute next zero-leaf path at index {leaf_index}: {err}"
+            ))
+        })?;
         let leaf_index = u32::try_from(leaf_index).map_err(|_| {
             zk_query_conversion_error("next zero-leaf index does not fit in the response schema")
         })?;
@@ -10190,6 +10478,29 @@ pub async fn handle_v1_zk_merkle_path(
         Err(resp) => return Ok(resp),
     };
     Ok(crate::utils::respond_with_format(resp, format))
+}
+
+/// Execute confidential-tree integrity checks and path construction on a blocking worker.
+pub async fn handle_v1_zk_merkle_path(
+    state: Arc<CoreState>,
+    accept: Option<axum::http::HeaderValue>,
+    NoritoJson(req): NoritoJson<ZkMerklePathGetRequestDto>,
+) -> Result<Response> {
+    tokio::task::spawn_blocking(move || handle_v1_zk_merkle_path_sync(state, accept, req))
+        .await
+        .map_err(|_| query_internal_error("ZK Merkle-path worker failed"))?
+}
+
+pub(crate) async fn handle_v1_zk_merkle_path_admitted(
+    state: Arc<CoreState>,
+    accept: Option<axum::http::HeaderValue>,
+    req: ZkMerklePathGetRequestDto,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<Response> {
+    run_admitted_blocking(admission, "ZK Merkle-path worker failed", move || {
+        handle_v1_zk_merkle_path_sync(state, accept, req)
+    })
+    .await
 }
 
 /// Build a bounded V1 tally response without cloning malformed world state.
@@ -10222,6 +10533,12 @@ pub async fn handle_v1_zk_vote_tally(
     accept: Option<axum::http::HeaderValue>,
     NoritoJson(req): NoritoJson<ZkVoteGetTallyRequestDto>,
 ) -> Result<Response> {
+    if !iroha_data_model::governance::is_valid_governance_selector_v1(&req.election_id) {
+        return Err(zk_query_conversion_error(format!(
+            "election_id must match {}",
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
+        )));
+    }
     // Anchor both provenance and lookup to one immutable committed state view.
     let state_view = state.view();
     let (evaluated_block_height, evaluated_block_hash, _) =
@@ -10321,6 +10638,181 @@ pub struct EvidenceListQuery {
     pub kind: Option<String>,
 }
 
+#[derive(
+    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Raw evidence-list query whose values retain their exact decoded spelling.
+pub(crate) struct EvidenceListStringQuery {
+    /// Exact `limit` query value, when present.
+    pub limit: Option<String>,
+    /// Exact `offset` query value, when present.
+    pub offset: Option<String>,
+    /// Exact evidence-kind query value, when present.
+    pub kind: Option<String>,
+}
+
+fn invalid_evidence_list_pagination(field: &'static str, value: &str, expected: &str) -> Error {
+    Error::AppQueryValidation {
+        code: "sumeragi_evidence_pagination_invalid",
+        message: format!("invalid evidence {field} `{value}`; expected {expected}"),
+    }
+}
+
+fn parse_evidence_list_usize(value: &str, field: &'static str) -> Result<usize, Error> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err(invalid_evidence_list_pagination(
+            field,
+            value,
+            "a canonical unsigned decimal integer",
+        ));
+    }
+    let parsed = value.parse::<u64>().map_err(|_| {
+        invalid_evidence_list_pagination(field, value, "a canonical unsigned decimal integer")
+    })?;
+    usize::try_from(parsed).map_err(|_| {
+        invalid_evidence_list_pagination(field, value, "an integer representable by this server")
+    })
+}
+
+fn parse_evidence_list_kind(
+    value: &str,
+) -> Result<iroha_core::sumeragi::consensus::EvidenceKind, Error> {
+    use iroha_core::sumeragi::consensus::EvidenceKind;
+
+    match value {
+        "DoublePrepare" => Ok(EvidenceKind::DoublePrepare),
+        "DoubleCommit" => Ok(EvidenceKind::DoubleCommit),
+        "InvalidQc" => Ok(EvidenceKind::InvalidQc),
+        "InvalidProposal" => Ok(EvidenceKind::InvalidProposal),
+        "Censorship" => Ok(EvidenceKind::Censorship),
+        "SumeragiV2Equivocation" => Ok(EvidenceKind::SumeragiV2Equivocation),
+        _ => Err(Error::AppQueryValidation {
+            code: "sumeragi_evidence_kind_invalid",
+            message: format!(
+                "unsupported evidence kind `{value}`; expected one of DoublePrepare, DoubleCommit, InvalidQc, InvalidProposal, Censorship, SumeragiV2Equivocation"
+            ),
+        }),
+    }
+}
+
+fn validate_evidence_list_query(
+    query: &EvidenceListQuery,
+) -> Result<Option<iroha_core::sumeragi::consensus::EvidenceKind>, Error> {
+    if let Some(limit) = query.limit
+        && !(1..=1000).contains(&limit)
+    {
+        return Err(invalid_evidence_list_pagination(
+            "limit",
+            &limit.to_string(),
+            "an integer in 1..=1000",
+        ));
+    }
+    query
+        .kind
+        .as_deref()
+        .map(parse_evidence_list_kind)
+        .transpose()
+}
+
+impl TryFrom<EvidenceListStringQuery> for EvidenceListQuery {
+    type Error = Error;
+
+    fn try_from(raw: EvidenceListStringQuery) -> Result<Self, Self::Error> {
+        let query = Self {
+            limit: raw
+                .limit
+                .as_deref()
+                .map(|value| parse_evidence_list_usize(value, "limit"))
+                .transpose()?,
+            offset: raw
+                .offset
+                .as_deref()
+                .map(|value| parse_evidence_list_usize(value, "offset"))
+                .transpose()?,
+            kind: raw.kind,
+        };
+        validate_evidence_list_query(&query)?;
+        Ok(query)
+    }
+}
+
+#[cfg(test)]
+mod evidence_list_query_contract_tests {
+    use super::*;
+
+    fn raw_query(
+        limit: Option<&str>,
+        offset: Option<&str>,
+        kind: Option<&str>,
+    ) -> EvidenceListStringQuery {
+        EvidenceListStringQuery {
+            limit: limit.map(str::to_owned),
+            offset: offset.map(str::to_owned),
+            kind: kind.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn exact_evidence_query_contract_rejects_legacy_and_normalized_spellings() {
+        for kind in [
+            "DoublePrepare",
+            "DoubleCommit",
+            "InvalidQc",
+            "InvalidProposal",
+            "Censorship",
+            "SumeragiV2Equivocation",
+        ] {
+            EvidenceListQuery::try_from(raw_query(Some("1"), Some("0"), Some(kind)))
+                .unwrap_or_else(|error| panic!("canonical evidence kind `{kind}` failed: {error}"));
+        }
+
+        for kind in [
+            "DoublePrevote",
+            "DoublePrecommit",
+            "InvalidQC",
+            "doubleprepare",
+            " InvalidQc",
+            "InvalidQc ",
+            "null",
+            "NULL",
+            "",
+            "Unknown",
+        ] {
+            let error = EvidenceListQuery::try_from(raw_query(None, None, Some(kind)))
+                .expect_err("noncanonical evidence kind must fail closed");
+            let Error::AppQueryValidation { code, message } = error else {
+                panic!("noncanonical evidence kind `{kind}` returned the wrong error");
+            };
+            assert_eq!(code, "sumeragi_evidence_kind_invalid");
+            assert!(message.contains(kind));
+        }
+    }
+
+    #[test]
+    fn exact_evidence_query_contract_rejects_noncanonical_pagination() {
+        for limit in ["0", "1001", "01", " 1", "1 ", "+1", "null", ""] {
+            let error = EvidenceListQuery::try_from(raw_query(Some(limit), None, None))
+                .expect_err("invalid evidence limit must fail closed");
+            let Error::AppQueryValidation { code, .. } = error else {
+                panic!("invalid evidence limit `{limit}` returned the wrong error");
+            };
+            assert_eq!(code, "sumeragi_evidence_pagination_invalid");
+        }
+        for offset in ["01", " 0", "0 ", "+0", "-1", "null", ""] {
+            let error = EvidenceListQuery::try_from(raw_query(None, Some(offset), None))
+                .expect_err("invalid evidence offset must fail closed");
+            let Error::AppQueryValidation { code, .. } = error else {
+                panic!("invalid evidence offset `{offset}` returned the wrong error");
+            };
+            assert_eq!(code, "sumeragi_evidence_pagination_invalid");
+        }
+    }
+}
+
 /// GET /v1/sumeragi/evidence — list recent evidence entries (in-memory audit snapshot).
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_list(
@@ -10328,6 +10820,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
     crate::NoritoQuery(q): crate::NoritoQuery<EvidenceListQuery>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
+    let kind_filter = validate_evidence_list_query(&q)?;
     let world = state.world_view();
     let mut records: Vec<_> = world
         .consensus_evidence()
@@ -10340,24 +10833,12 @@ pub async fn handle_v1_sumeragi_evidence_list(
             .reverse()
     });
     // Optional kind filter
-    if let Some(kind_s) = q.kind.as_deref() {
-        use iroha_core::sumeragi::consensus::EvidenceKind;
-        let kind_opt = match kind_s {
-            "DoublePrepare" | "DoublePrevote" => Some(EvidenceKind::DoublePrepare),
-            "DoubleCommit" | "DoublePrecommit" => Some(EvidenceKind::DoubleCommit),
-            "InvalidQc" | "InvalidQC" => Some(EvidenceKind::InvalidQc),
-            "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
-            "Censorship" => Some(EvidenceKind::Censorship),
-            "SumeragiV2Equivocation" => Some(EvidenceKind::SumeragiV2Equivocation),
-            _ => None,
-        };
-        if let Some(k) = kind_opt {
-            records.retain(|rec| rec.evidence.kind == k);
-        }
+    if let Some(kind) = kind_filter {
+        records.retain(|record| record.evidence.kind == kind);
     }
     // Apply offset/limit
     let offset = q.offset.unwrap_or(0);
-    let limit = q.limit.unwrap_or(50).clamp(1, 1000);
+    let limit = q.limit.unwrap_or(50);
     let total = records.len();
     let slice = if offset >= total {
         &[][..]
@@ -10721,6 +11202,9 @@ mod zk_roots_selector_tests {
         let prefix_roots = tree_profile
             .compute_prefix_roots(&commitments)
             .expect("confidential-v2 prefix roots");
+        let projection =
+            iroha_core::zk::confidential_v2::ConfidentialTreeProjectionV2::build(&commitments)
+                .expect("confidential-v2 projection");
 
         let next_height =
             core::num::NonZeroU64::new((state.committed_height() as u64).saturating_add(1).max(1))
@@ -10734,6 +11218,8 @@ mod zk_roots_selector_tests {
             zk_state.tree_profile = tree_profile;
             zk_state.commitments = commitments;
             zk_state.root_history = root_history_override.unwrap_or(prefix_roots);
+            zk_state.tree_frontier = projection.frontier().expect("confidential-v2 frontier");
+            zk_state.persisted_root = root;
             world
                 .zk_assets_mut_for_testing()
                 .insert(definition_id.clone(), zk_state);
@@ -10741,6 +11227,35 @@ mod zk_roots_selector_tests {
         tx.apply();
         block.commit().expect("commit zk asset frontier for test");
         root
+    }
+
+    fn seed_zk_frontier_checkpoints_for_test(
+        state: &std::sync::Arc<iroha_core::state::State>,
+        definition_id: &AssetDefinitionId,
+        checkpoints: Vec<iroha_core::state::FrontierCheckpoint>,
+    ) {
+        let next_height =
+            core::num::NonZeroU64::new((state.committed_height() as u64).saturating_add(1).max(1))
+                .expect("next test block height is nonzero");
+        let header = iroha_data_model::block::BlockHeader::new(next_height, None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        {
+            let world = tx.world_mut_for_testing();
+            let mut zk_state = world
+                .zk_assets()
+                .get(definition_id)
+                .cloned()
+                .expect("seeded confidential asset state");
+            zk_state.frontier_checkpoints = checkpoints;
+            world
+                .zk_assets_mut_for_testing()
+                .insert(definition_id.clone(), zk_state);
+        }
+        tx.apply();
+        block
+            .commit()
+            .expect("commit frontier checkpoints for test");
     }
 
     fn assert_query_conversion_contains(err: Error, expected: &str) {
@@ -11448,6 +11963,39 @@ mod zk_roots_selector_tests {
         assert_eq!(payload.roots, vec![hex::encode(expected_root)]);
     }
 
+    #[test]
+    fn requested_commitment_positions_scan_the_frontier_once() {
+        fn indexed_commitment(index: u64) -> [u8; 32] {
+            let mut commitment = [0_u8; 32];
+            commitment[..8].copy_from_slice(&index.to_le_bytes());
+            commitment
+        }
+
+        let mut commitments = (1_u64..=1_000).map(indexed_commitment).collect::<Vec<_>>();
+        commitments.push(indexed_commitment(5));
+        let requested = [
+            indexed_commitment(5),
+            indexed_commitment(1_000),
+            indexed_commitment(2_000),
+        ];
+        reset_requested_commitment_index_visits();
+        let positions = index_requested_commitment_positions(&commitments, &requested);
+
+        assert_eq!(requested_commitment_index_visits(), commitments.len());
+        assert!(matches!(
+            positions.get(&requested[0]),
+            Some(RequestedCommitmentPosition::Ambiguous)
+        ));
+        assert!(matches!(
+            positions.get(&requested[1]),
+            Some(RequestedCommitmentPosition::Unique(999))
+        ));
+        assert!(matches!(
+            positions.get(&requested[2]),
+            Some(RequestedCommitmentPosition::Missing)
+        ));
+    }
+
     #[tokio::test]
     async fn handle_v1_zk_merkle_path_returns_batch_paths_in_request_order() {
         let (state, definition_id) = selector_state();
@@ -11786,7 +12334,7 @@ mod zk_roots_selector_tests {
         .await
         .expect_err("mismatched root history should fail");
 
-        assert_query_conversion_contains(err, "root history does not match");
+        assert_query_conversion_contains(err, "root history tail");
     }
 
     #[tokio::test]
@@ -11797,8 +12345,18 @@ mod zk_roots_selector_tests {
         let mut roots = profile
             .compute_prefix_roots(&commitments)
             .expect("canonical prefix roots");
-        roots[0] = [0xdd; 32];
+        let first_root = roots[0];
+        roots[0] = roots[1];
         seed_zk_asset_frontier_for_test(&state, &definition_id, commitments, Some(roots));
+        seed_zk_frontier_checkpoints_for_test(
+            &state,
+            &definition_id,
+            vec![iroha_core::state::FrontierCheckpoint {
+                height: 1,
+                commitment_count: 1,
+                root: first_root,
+            }],
+        );
 
         let err = handle_v1_zk_roots(
             state,
@@ -11811,7 +12369,7 @@ mod zk_roots_selector_tests {
         .await
         .expect_err("drift in any retained root must fail the query");
 
-        assert_query_conversion_contains(err, "root history does not match");
+        assert_query_conversion_contains(err, "does not match retained root history");
     }
 }
 
@@ -11990,831 +12548,6 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
             .map_or(Value::Null, Value::from),
     );
     Value::Object(map)
-}
-
-fn invalid_consensus_evidence_error(message: impl Into<String>) -> Error {
-    Error::AppQueryValidation {
-        code: "invalid_consensus_evidence",
-        message: message.into(),
-    }
-}
-
-fn decode_evidence_hex(value: &str) -> Result<ConsensusEvidence, Error> {
-    let cleaned: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
-    let body = cleaned
-        .strip_prefix("0x")
-        .or_else(|| cleaned.strip_prefix("0X"))
-        .unwrap_or(cleaned.as_str());
-    let bytes = hex::decode(body)
-        .map_err(|err| invalid_consensus_evidence_error(format!("evidence_hex: {err}")))?;
-    norito::decode_from_bytes::<ConsensusEvidence>(&bytes)
-        .map_err(|err| invalid_consensus_evidence_error(format!("evidence_hex decode: {err}")))
-}
-
-/// JSON payload accepted by `/v1/sumeragi/evidence`.
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-pub struct EvidenceSubmitRequestDto {
-    /// Hex-encoded consensus evidence payload.
-    pub evidence_hex: String,
-}
-
-/// Handle POST `/v1/sumeragi/evidence`, validating and forwarding consensus evidence.
-pub fn handle_post_sumeragi_evidence_submit(
-    sumeragi: SumeragiHandle,
-    request: EvidenceSubmitRequestDto,
-    state: &iroha_core::state::State,
-    chain_id: &ChainId,
-) -> Result<axum::response::Response, Error> {
-    let evidence = decode_and_validate_evidence(&request.evidence_hex, state, chain_id)?;
-    let kind = evidence.kind;
-    sumeragi.incoming_consensus_control_flow_message(ControlFlow::Evidence(evidence));
-    let payload = json_object(vec![
-        json_entry("status", "accepted"),
-        json_entry("kind", format!("{kind:?}")),
-    ]);
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    *resp.status_mut() = StatusCode::ACCEPTED;
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-fn decode_and_validate_evidence(
-    value: &str,
-    state: &iroha_core::state::State,
-    chain_id: &ChainId,
-) -> Result<ConsensusEvidence, Error> {
-    let evidence = decode_evidence_hex(value)?;
-    let world = state.world_view();
-    let (subject_height, _) = iroha_core::sumeragi::evidence_subject_height_view(&evidence);
-    let current_height = u64::try_from(state.committed_height()).unwrap_or(0);
-    let horizon = world
-        .sumeragi_npos_parameters()
-        .map(|params| params.evidence_horizon_blocks());
-    if !evidence_within_horizon(current_height, horizon, subject_height) {
-        return Ok(evidence);
-    }
-
-    let topology_peers = state.commit_topology_snapshot();
-    let height = subject_height.unwrap_or(current_height);
-    let (mode_tag, _, _, _) = iroha_core::sumeragi::status::mode_tags();
-    let fallback_mode = match mode_tag.as_str() {
-        iroha_core::sumeragi::consensus::PERMISSIONED_TAG => Some(ConsensusMode::Permissioned),
-        iroha_core::sumeragi::consensus::NPOS_TAG => Some(ConsensusMode::Npos),
-        _ => None,
-    };
-    if topology_peers.is_empty() {
-        return Err(invalid_consensus_evidence_error(
-            "invalid consensus evidence: commit topology unavailable",
-        ));
-    }
-    let topology = iroha_core::sumeragi::network_topology::Topology::new(topology_peers);
-    if let Some(fallback) = fallback_mode {
-        let consensus_mode = iroha_core::sumeragi::effective_consensus_mode_for_height_from_world(
-            &world, height, fallback,
-        );
-        let mode_tag = match consensus_mode {
-            ConsensusMode::Permissioned => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
-            ConsensusMode::Npos => iroha_core::sumeragi::consensus::NPOS_TAG,
-        };
-        let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
-            &world,
-            state.chain_id_ref(),
-            height,
-        ));
-        let context = iroha_core::sumeragi::EvidenceValidationContext {
-            topology: &topology,
-            chain_id,
-            mode_tag,
-            prf_seed,
-        };
-        return match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
-            Ok(()) => Ok(evidence),
-            Err(err) => Err(invalid_consensus_evidence_error(format!(
-                "invalid consensus evidence: {mode_tag}: {err}"
-            ))),
-        };
-    }
-
-    let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
-        &world,
-        state.chain_id_ref(),
-        height,
-    ));
-    let mut errors = Vec::new();
-    for mode_tag in [
-        iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
-        iroha_core::sumeragi::consensus::NPOS_TAG,
-    ] {
-        let context = iroha_core::sumeragi::EvidenceValidationContext {
-            topology: &topology,
-            chain_id,
-            mode_tag,
-            prf_seed,
-        };
-        match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
-            Ok(()) => return Ok(evidence),
-            Err(err) => errors.push(format!("{mode_tag}: {err}")),
-        }
-    }
-    let detail = errors.join("; ");
-    Err(invalid_consensus_evidence_error(format!(
-        "invalid consensus evidence: {detail}"
-    )))
-}
-
-fn evidence_within_horizon(
-    current_height: u64,
-    horizon: Option<u64>,
-    subject_height: Option<u64>,
-) -> bool {
-    let Some(horizon) = horizon else { return true };
-    if horizon == 0 {
-        return true;
-    }
-    subject_height.unwrap_or(current_height) >= current_height.saturating_sub(horizon)
-}
-
-#[cfg(test)]
-mod evidence_submit_tests {
-    use std::sync::{LazyLock, Mutex};
-
-    use iroha_core::sumeragi::consensus::{
-        Evidence, EvidenceKind, EvidencePayload, Phase, Vote, default_chain_order_hash,
-    };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{
-        block::BlockHeader,
-        consensus::VrfEpochRecord,
-        nexus::{DataSpaceId, LaneId},
-        parameter::system::SumeragiNposParameters,
-        peer::PeerId,
-        prelude::ChainId,
-    };
-    use norito::codec::Encode as _;
-
-    use super::*;
-
-    static MODE_TAG_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-    fn checked_consensus_bls_keypair(seed: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-            .expect("test consensus BLS fixture key derivation should succeed")
-    }
-
-    #[test]
-    fn checked_consensus_bls_keypair_uses_fallible_seed_derivation() {
-        let first = checked_consensus_bls_keypair(0x80);
-        let repeat = checked_consensus_bls_keypair(0x80);
-        let second = checked_consensus_bls_keypair(0x81);
-
-        assert_eq!(first.algorithm(), Algorithm::BlsNormal);
-        assert_eq!(first.public_key(), repeat.public_key());
-        assert_ne!(first.public_key(), second.public_key());
-    }
-
-    fn test_state_with_peer(peer: PeerId) -> iroha_core::state::State {
-        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        let query = iroha_core::query::store::LiveQueryStore::start_test();
-        let state = iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
-            kura,
-            query,
-        );
-        let mut block = state.commit_topology.block();
-        block.push(peer);
-        block.commit();
-        state
-    }
-
-    fn make_vote(
-        chain_id: &ChainId,
-        mode_tag: &str,
-        keypair: &KeyPair,
-        height: u64,
-        view: u64,
-        seed: u8,
-    ) -> Vote {
-        let hash = Hash::prehashed([seed; 32]);
-        let mut vote = Vote {
-            phase: Phase::Prepare,
-            block_hash: HashOf::from_untyped_unchecked(hash),
-            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            height,
-            view,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
-        };
-        let preimage = iroha_core::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote);
-        let signature = Signature::try_new(keypair.private_key(), &preimage)
-            .expect("sign Torii routing evidence fixture vote");
-        let payload = signature.payload().to_vec();
-        vote.bls_sig = payload;
-        vote
-    }
-
-    fn sample_evidence(chain_id: &ChainId, keypair: &KeyPair) -> Evidence {
-        let (mode_tag, _, _, _) = iroha_core::sumeragi::status::mode_tags();
-        let v1 = make_vote(chain_id, mode_tag.as_str(), keypair, 10, 3, 0x11);
-        let v2 = make_vote(chain_id, mode_tag.as_str(), keypair, 10, 3, 0x22);
-        Evidence {
-            kind: EvidenceKind::DoublePrepare,
-            payload: EvidencePayload::DoubleVote { v1, v2 },
-        }
-    }
-
-    #[test]
-    fn decode_evidence_hex_accepts_plain_and_prefixed() {
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = checked_consensus_bls_keypair(0x82);
-        let ev = sample_evidence(&chain_id, &keypair);
-        let encoded = norito::to_bytes(&ev).expect("encode evidence");
-        let plain = hex::encode(&encoded);
-        let prefixed = format!("0x{plain}");
-
-        let decoded_plain = decode_evidence_hex(&plain).expect("decode plain hex");
-        let decoded_prefixed = decode_evidence_hex(&prefixed).expect("decode 0x hex");
-
-        assert_eq!(decoded_plain.kind, EvidenceKind::DoublePrepare);
-        assert_eq!(decoded_prefixed.kind, EvidenceKind::DoublePrepare);
-    }
-
-    #[test]
-    fn decode_evidence_hex_rejects_invalid_hex() {
-        let err = decode_evidence_hex("not-a-hex").expect_err("expect error");
-        assert!(matches!(
-            err,
-            Error::AppQueryValidation {
-                code: "invalid_consensus_evidence",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn decode_evidence_hex_rejects_truncated_payload() {
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = checked_consensus_bls_keypair(0x83);
-        let ev = sample_evidence(&chain_id, &keypair);
-        let mut encoded = norito::to_bytes(&ev).expect("encode evidence");
-        encoded.pop();
-        let truncated = hex::encode(&encoded);
-        let err = decode_evidence_hex(&truncated).expect_err("expect decode failure");
-        assert!(matches!(
-            err,
-            Error::AppQueryValidation {
-                code: "invalid_consensus_evidence",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn decode_evidence_hex_ignores_whitespace() {
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = checked_consensus_bls_keypair(0x84);
-        let ev = sample_evidence(&chain_id, &keypair);
-        let encoded = norito::to_bytes(&ev).expect("encode evidence");
-        let hex = hex::encode(&encoded);
-        let mut spaced = String::from("0x");
-        for (idx, chunk) in hex.as_bytes().chunks(4).enumerate() {
-            if idx > 0 {
-                if idx % 2 == 0 {
-                    spaced.push('\n');
-                } else {
-                    spaced.push(' ');
-                }
-            }
-            spaced.push_str(std::str::from_utf8(chunk).expect("hex chunk"));
-        }
-
-        let decoded = decode_evidence_hex(&spaced).expect("decode spaced hex");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
-    }
-
-    #[test]
-    fn evidence_horizon_filter_rejects_stale_subject_heights() {
-        assert!(evidence_within_horizon(10, None, Some(1)));
-        assert!(evidence_within_horizon(10, Some(0), Some(1)));
-        assert!(evidence_within_horizon(10, Some(3), Some(7)));
-        assert!(!evidence_within_horizon(10, Some(3), Some(6)));
-        assert!(evidence_within_horizon(10, Some(3), None));
-    }
-
-    #[test]
-    fn decode_and_validate_evidence_rejects_structurally_invalid_payload() {
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = checked_consensus_bls_keypair(0x85);
-        let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
-        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
-        let vote = make_vote(&chain_id, mode_tag, &keypair, 42, 7, 0xAB);
-        let forged = Evidence {
-            kind: EvidenceKind::DoublePrepare,
-            payload: EvidencePayload::DoubleVote {
-                v1: vote.clone(),
-                v2: vote,
-            },
-        };
-        let encoded = hex::encode(norito::to_bytes(&forged).expect("encode evidence"));
-        let err = decode_and_validate_evidence(&encoded, &state, &chain_id)
-            .expect_err("invalid evidence must fail");
-        assert!(matches!(
-            err,
-            Error::AppQueryValidation {
-                code: "invalid_consensus_evidence",
-                message,
-            } if message.contains("invalid consensus evidence")
-        ));
-    }
-
-    #[test]
-    fn decode_and_validate_evidence_accepts_valid_payload() {
-        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = checked_consensus_bls_keypair(0x86);
-        let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
-        let (prev_mode, prev_staged, prev_activation, _) =
-            iroha_core::sumeragi::status::mode_tags();
-        iroha_core::sumeragi::status::set_mode_tags(
-            iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
-            None,
-            None,
-        );
-        let ev = sample_evidence(&chain_id, &keypair);
-        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
-        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
-            .expect("valid evidence should be accepted");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
-        iroha_core::sumeragi::status::set_mode_tags(
-            &prev_mode,
-            prev_staged.as_deref(),
-            prev_activation,
-        );
-    }
-
-    #[test]
-    fn decode_and_validate_evidence_rejects_mismatched_mode_tag() {
-        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = checked_consensus_bls_keypair(0x87);
-        let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
-        let (prev_mode, prev_staged, prev_activation, _) =
-            iroha_core::sumeragi::status::mode_tags();
-        iroha_core::sumeragi::status::set_mode_tags(
-            iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
-            None,
-            None,
-        );
-
-        let mode_tag = iroha_core::sumeragi::consensus::NPOS_TAG;
-        let v1 = make_vote(&chain_id, mode_tag, &keypair, 10, 3, 0x11);
-        let v2 = make_vote(&chain_id, mode_tag, &keypair, 10, 3, 0x22);
-        let ev = Evidence {
-            kind: EvidenceKind::DoublePrepare,
-            payload: EvidencePayload::DoubleVote { v1, v2 },
-        };
-        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
-        let err = decode_and_validate_evidence(&encoded, &state, &chain_id)
-            .expect_err("mismatched mode evidence must fail");
-        assert!(matches!(
-            err,
-            Error::AppQueryValidation {
-                code: "invalid_consensus_evidence",
-                message,
-            } if message.contains("invalid consensus evidence")
-        ));
-
-        iroha_core::sumeragi::status::set_mode_tags(
-            &prev_mode,
-            prev_staged.as_deref(),
-            prev_activation,
-        );
-    }
-
-    #[test]
-    fn decode_and_validate_evidence_uses_subject_height_seed() {
-        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let (prev_mode, prev_staged, prev_activation, _) =
-            iroha_core::sumeragi::status::mode_tags();
-        iroha_core::sumeragi::status::set_mode_tags(
-            iroha_core::sumeragi::consensus::NPOS_TAG,
-            None,
-            None,
-        );
-        let keypair0 = checked_consensus_bls_keypair(0x88);
-        let keypair1 = checked_consensus_bls_keypair(0x89);
-        let peer0 = PeerId::new(keypair0.public_key().clone());
-        let peer1 = PeerId::new(keypair1.public_key().clone());
-        let mut peer_list = vec![peer0.clone(), peer1.clone()];
-        peer_list.sort();
-        let topology = iroha_core::sumeragi::network_topology::Topology::new(peer_list.clone());
-        let height = 1_u64;
-        let view = 0_u64;
-        // Find two seeds that map to different leaders for the same (height, view).
-        let mut seed_epoch0 = None;
-        let mut seed_epoch1 = None;
-        let mut leader_epoch0 = 0usize;
-        for byte in 0u8..=u8::MAX {
-            let seed = [byte; 32];
-            let leader = topology.leader_index_prf(seed, height, view);
-            if seed_epoch0.is_none() {
-                seed_epoch0 = Some(seed);
-                leader_epoch0 = leader;
-                continue;
-            }
-            if leader != leader_epoch0 {
-                seed_epoch1 = Some(seed);
-                break;
-            }
-        }
-        let seed_epoch0 = seed_epoch0.expect("seed for epoch 0");
-        let seed_epoch1 = seed_epoch1.expect("seed for epoch 1");
-        let leader_epoch1 = topology.leader_index_prf(seed_epoch1, height, view);
-        assert_ne!(
-            leader_epoch0, leader_epoch1,
-            "seed search must pick distinct leaders"
-        );
-
-        let signer_peer = peer_list
-            .get(leader_epoch0)
-            .expect("leader index should be in range");
-        let signer_keypair = if signer_peer == &peer0 {
-            &keypair0
-        } else {
-            &keypair1
-        };
-
-        let world = iroha_core::state::World::default();
-        {
-            let mut block = world.block();
-            let params = SumeragiNposParameters {
-                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
-                ..SumeragiNposParameters::default()
-            };
-            block.parameters.get_mut().custom.insert(
-                SumeragiNposParameters::parameter_id(),
-                params.into_custom_parameter(),
-            );
-            block.vrf_epochs_mut_for_testing().insert(
-                0,
-                VrfEpochRecord {
-                    epoch: 0,
-                    seed: seed_epoch0,
-                    epoch_length: 1,
-                    commit_deadline_offset: 0,
-                    reveal_deadline_offset: 0,
-                    roster_len: 2,
-                    finalized: false,
-                    updated_at_height: 0,
-                    participants: Vec::new(),
-                    late_reveals: Vec::new(),
-                    committed_no_reveal: Vec::new(),
-                    no_participation: Vec::new(),
-                    penalties_applied: false,
-                    penalties_applied_at_height: None,
-                    validator_election: None,
-                },
-            );
-            block.vrf_epochs_mut_for_testing().insert(
-                1,
-                VrfEpochRecord {
-                    epoch: 1,
-                    seed: seed_epoch1,
-                    epoch_length: 1,
-                    commit_deadline_offset: 0,
-                    reveal_deadline_offset: 0,
-                    roster_len: 2,
-                    finalized: false,
-                    updated_at_height: 1,
-                    participants: Vec::new(),
-                    late_reveals: Vec::new(),
-                    committed_no_reveal: Vec::new(),
-                    no_participation: Vec::new(),
-                    penalties_applied: false,
-                    penalties_applied_at_height: None,
-                    validator_election: None,
-                },
-            );
-            block.commit();
-        }
-        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        let query = iroha_core::query::store::LiveQueryStore::start_test();
-        let state = iroha_core::state::State::new_for_testing(world, kura, query);
-        {
-            let mut block = state.commit_topology.block();
-            block.push(peer0);
-            block.push(peer1);
-            block.commit();
-        }
-
-        let mode_tag = iroha_core::sumeragi::consensus::NPOS_TAG;
-        // NPoS rotates the PRF leader to index 0 for signature validation.
-        let signer_index = 0;
-        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
-        v1.signer = signer_index;
-        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
-        v2.signer = signer_index;
-        let ev = Evidence {
-            kind: EvidenceKind::DoublePrepare,
-            payload: EvidencePayload::DoubleVote { v1, v2 },
-        };
-        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
-        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
-            .expect("evidence should validate with subject-height seed");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
-
-        iroha_core::sumeragi::status::set_mode_tags(
-            &prev_mode,
-            prev_staged.as_deref(),
-            prev_activation,
-        );
-    }
-
-    #[test]
-    fn decode_and_validate_evidence_permissioned_uses_prf_seed() {
-        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let (prev_mode, prev_staged, prev_activation, _) =
-            iroha_core::sumeragi::status::mode_tags();
-        iroha_core::sumeragi::status::set_mode_tags(
-            iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
-            None,
-            None,
-        );
-
-        let keypair0 = checked_consensus_bls_keypair(0x8A);
-        let keypair1 = checked_consensus_bls_keypair(0x8B);
-        let peer0 = PeerId::new(keypair0.public_key().clone());
-        let peer1 = PeerId::new(keypair1.public_key().clone());
-        let mut peer_list = vec![peer0.clone(), peer1.clone()];
-        peer_list.sort();
-        let topology = iroha_core::sumeragi::network_topology::Topology::new(peer_list.clone());
-
-        let height = 1_u64;
-        let view = 0_u64;
-        let canonical_leader = topology
-            .as_ref()
-            .first()
-            .expect("topology should have at least one peer")
-            .clone();
-        let mut seed_epoch1 = None;
-        for byte in 0u8..=u8::MAX {
-            let seed = [byte; 32];
-            let mut rotated = topology.clone();
-            rotated.shuffle_prf(seed, height);
-            rotated.nth_rotation(view);
-            let leader = rotated
-                .as_ref()
-                .first()
-                .expect("rotated topology should have at least one peer");
-            if leader != &canonical_leader {
-                seed_epoch1 = Some(seed);
-                break;
-            }
-        }
-        let seed_epoch1 = seed_epoch1.expect("must find a seed that changes permissioned leader");
-        let mut rotated = topology.clone();
-        rotated.shuffle_prf(seed_epoch1, height);
-        rotated.nth_rotation(view);
-        let signer_peer = rotated
-            .as_ref()
-            .first()
-            .expect("rotated topology should have at least one peer");
-        let signer_keypair = if signer_peer == &peer0 {
-            &keypair0
-        } else {
-            &keypair1
-        };
-
-        let world = iroha_core::state::World::default();
-        {
-            let mut block = world.block();
-            let params = SumeragiNposParameters {
-                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
-                ..SumeragiNposParameters::default()
-            };
-            block.parameters.get_mut().custom.insert(
-                SumeragiNposParameters::parameter_id(),
-                params.into_custom_parameter(),
-            );
-            block.vrf_epochs_mut_for_testing().insert(
-                0,
-                VrfEpochRecord {
-                    epoch: 0,
-                    seed: seed_epoch1,
-                    epoch_length: 1,
-                    commit_deadline_offset: 0,
-                    reveal_deadline_offset: 0,
-                    roster_len: 2,
-                    finalized: false,
-                    updated_at_height: 0,
-                    participants: Vec::new(),
-                    late_reveals: Vec::new(),
-                    committed_no_reveal: Vec::new(),
-                    no_participation: Vec::new(),
-                    penalties_applied: false,
-                    penalties_applied_at_height: None,
-                    validator_election: None,
-                },
-            );
-            block.vrf_epochs_mut_for_testing().insert(
-                1,
-                VrfEpochRecord {
-                    epoch: 1,
-                    seed: [0x00; 32],
-                    epoch_length: 1,
-                    commit_deadline_offset: 0,
-                    reveal_deadline_offset: 0,
-                    roster_len: 2,
-                    finalized: false,
-                    updated_at_height: 1,
-                    participants: Vec::new(),
-                    late_reveals: Vec::new(),
-                    committed_no_reveal: Vec::new(),
-                    no_participation: Vec::new(),
-                    penalties_applied: false,
-                    penalties_applied_at_height: None,
-                    validator_election: None,
-                },
-            );
-            block.commit();
-        }
-        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        let query = iroha_core::query::store::LiveQueryStore::start_test();
-        let state = iroha_core::state::State::new_for_testing(world, kura, query);
-        {
-            let mut block = state.commit_topology.block();
-            block.push(peer0);
-            block.push(peer1);
-            block.commit();
-        }
-
-        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
-        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
-        v1.signer = 0;
-        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
-        v2.signer = 0;
-        let ev = Evidence {
-            kind: EvidenceKind::DoublePrepare,
-            payload: EvidencePayload::DoubleVote { v1, v2 },
-        };
-        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
-        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
-            .expect("permissioned evidence should validate with PRF-seeded topology");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
-
-        iroha_core::sumeragi::status::set_mode_tags(
-            &prev_mode,
-            prev_staged.as_deref(),
-            prev_activation,
-        );
-    }
-
-    #[test]
-    fn decode_and_validate_evidence_unknown_mode_uses_dual_mode_prf_seed() {
-        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
-        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let (prev_mode, prev_staged, prev_activation, _) =
-            iroha_core::sumeragi::status::mode_tags();
-        // Force the fallback_mode == None branch.
-        iroha_core::sumeragi::status::set_mode_tags("", None, None);
-
-        let keypair0 = checked_consensus_bls_keypair(0x8C);
-        let keypair1 = checked_consensus_bls_keypair(0x8D);
-        let peer0 = PeerId::new(keypair0.public_key().clone());
-        let peer1 = PeerId::new(keypair1.public_key().clone());
-        let mut peer_list = vec![peer0.clone(), peer1.clone()];
-        peer_list.sort();
-        let topology = iroha_core::sumeragi::network_topology::Topology::new(peer_list.clone());
-
-        let height = 1_u64;
-        let view = 0_u64;
-        let canonical_leader = topology
-            .as_ref()
-            .first()
-            .expect("topology should have at least one peer")
-            .clone();
-        let mut seed_epoch1 = None;
-        for byte in 0u8..=u8::MAX {
-            let seed = [byte; 32];
-            let mut rotated = topology.clone();
-            rotated.shuffle_prf(seed, height);
-            rotated.nth_rotation(view);
-            let leader = rotated
-                .as_ref()
-                .first()
-                .expect("rotated topology should have at least one peer");
-            if leader != &canonical_leader {
-                seed_epoch1 = Some(seed);
-                break;
-            }
-        }
-        let seed_epoch1 = seed_epoch1.expect("must find a seed that changes permissioned leader");
-        let mut rotated = topology.clone();
-        rotated.shuffle_prf(seed_epoch1, height);
-        rotated.nth_rotation(view);
-        let signer_peer = rotated
-            .as_ref()
-            .first()
-            .expect("rotated topology should have at least one peer");
-        let signer_keypair = if signer_peer == &peer0 {
-            &keypair0
-        } else {
-            &keypair1
-        };
-
-        let world = iroha_core::state::World::default();
-        {
-            let mut block = world.block();
-            let params = SumeragiNposParameters {
-                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
-                ..SumeragiNposParameters::default()
-            };
-            block.parameters.get_mut().custom.insert(
-                SumeragiNposParameters::parameter_id(),
-                params.into_custom_parameter(),
-            );
-            block.vrf_epochs_mut_for_testing().insert(
-                0,
-                VrfEpochRecord {
-                    epoch: 0,
-                    seed: seed_epoch1,
-                    epoch_length: 1,
-                    commit_deadline_offset: 0,
-                    reveal_deadline_offset: 0,
-                    roster_len: 2,
-                    finalized: false,
-                    updated_at_height: 0,
-                    participants: Vec::new(),
-                    late_reveals: Vec::new(),
-                    committed_no_reveal: Vec::new(),
-                    no_participation: Vec::new(),
-                    penalties_applied: false,
-                    penalties_applied_at_height: None,
-                    validator_election: None,
-                },
-            );
-            block.vrf_epochs_mut_for_testing().insert(
-                1,
-                VrfEpochRecord {
-                    epoch: 1,
-                    seed: [0x00; 32],
-                    epoch_length: 1,
-                    commit_deadline_offset: 0,
-                    reveal_deadline_offset: 0,
-                    roster_len: 2,
-                    finalized: false,
-                    updated_at_height: 1,
-                    participants: Vec::new(),
-                    late_reveals: Vec::new(),
-                    committed_no_reveal: Vec::new(),
-                    no_participation: Vec::new(),
-                    penalties_applied: false,
-                    penalties_applied_at_height: None,
-                    validator_election: None,
-                },
-            );
-            block.commit();
-        }
-        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        let query = iroha_core::query::store::LiveQueryStore::start_test();
-        let state = iroha_core::state::State::new_for_testing(world, kura, query);
-        {
-            let mut block = state.commit_topology.block();
-            block.push(peer0);
-            block.push(peer1);
-            block.commit();
-        }
-
-        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
-        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
-        v1.signer = 0;
-        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
-        v2.signer = 0;
-        let ev = Evidence {
-            kind: EvidenceKind::DoublePrepare,
-            payload: EvidencePayload::DoubleVote { v1, v2 },
-        };
-        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
-        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
-            .expect("unknown-mode fallback should still validate with PRF-seeded topology");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
-
-        iroha_core::sumeragi::status::set_mode_tags(
-            &prev_mode,
-            prev_staged.as_deref(),
-            prev_activation,
-        );
-    }
 }
 
 fn reject_direct_multisig_signing(
@@ -13065,9 +12798,6 @@ pub fn accept_transaction_for_ingress(
                 tx_limits.max_signatures().get(),
                 authority_label,
             )
-        }
-        TransactionEntrypoint::PrivateKaigi(_) => {
-            (0, tx_limits.max_signatures().get(), "private_kaigi")
         }
         TransactionEntrypoint::Time(_) => (0, tx_limits.max_signatures().get(), "time"),
     };
@@ -26229,12 +25959,13 @@ mod multisig_selector_tests {
             None,
         );
         let world = World::default();
+        let world_view = world.view();
 
         assert_eq!(
-            multisig_proposal_operation_type(&world, &target, &proposal),
+            multisig_proposal_operation_type(&world_view, &target, &proposal),
             "MULTISIG_POLICY_CHANGE_INVALIDATION",
         );
-        let intent = multisig_proposal_intent(&world, &target, &proposal)
+        let intent = multisig_proposal_intent(&world_view, &target, &proposal)
             .expect("invalidation intent")
             .try_into_any_norito::<norito::json::Value>()
             .expect("invalidation intent value");
@@ -37701,7 +37432,6 @@ fn append_account_history_projections_for_tx(
                 },
             );
         }
-        TransactionEntrypoint::PrivateKaigi(_) => {}
     }
 }
 
@@ -39338,9 +39068,6 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(_) => {
                 "sealed_reveal".to_owned()
             }
-            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
-                "private_kaigi".to_owned()
-            }
             iroha_data_model::transaction::signed::TransactionEntrypoint::Time(_) => {
                 "time".to_owned()
             }
@@ -39358,7 +39085,6 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(reveal) => {
                 Some(reveal.signed_transaction().authority().to_string())
             }
-            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => None,
             _ => None,
         },
         // creation timestamp if External entrypoint
@@ -39375,9 +39101,6 @@ fn tx_field_value(
                     "{}",
                     reveal.signed_transaction().creation_time().as_millis()
                 ))
-            }
-            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
-                Some(tx.creation_time_ms.to_string())
             }
             _ => None,
         },
@@ -39409,9 +39132,6 @@ fn tx_field_value(
                     .metadata()
                     .get(&name)
                     .map(|json| json.get().clone()),
-                iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
-                    tx.metadata.get(&name).map(|json| json.get().clone())
-                }
                 _ => None,
             }
         }
@@ -39428,9 +39148,6 @@ fn tx_metadata_json_value(
     let raw = match &tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             signed.metadata().get(&name).map(|json| json.get().clone())
-        }
-        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
-            tx.metadata.get(&name).map(|json| json.get().clone())
         }
         _ => None,
     }?;
@@ -39777,7 +39494,6 @@ pub(crate) fn tx_references_account_id(
             signed.authority() == expected
                 || executable_contains_account_id(signed.instructions(), expected)
         }
-        TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
@@ -39806,17 +39522,6 @@ where
             matches_domain,
             asset_definition_domains,
         ),
-        TransactionEntrypoint::PrivateKaigi(private) => match &private.action {
-            iroha_data_model::transaction::PrivateKaigiAction::Create(create) => {
-                matches_domain(&create.call.id.domain_id)
-            }
-            iroha_data_model::transaction::PrivateKaigiAction::Join(join) => {
-                matches_domain(&join.call_id.domain_id)
-            }
-            iroha_data_model::transaction::PrivateKaigiAction::End(end) => {
-                matches_domain(&end.call_id.domain_id)
-            }
-        },
         TransactionEntrypoint::Time(entry) => entry.instructions.iter().any(|instruction| {
             instruction_matches_domain_predicate(
                 instruction,
@@ -40010,7 +39715,6 @@ fn tx_collect_asset_ids(
                 &mut visit_instruction,
             );
         }
-        TransactionEntrypoint::PrivateKaigi(_) => {}
         TransactionEntrypoint::Time(entry) => {
             for instr in entry.instructions.iter() {
                 visit_instruction(instr);
@@ -40272,17 +39976,11 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
             Some(format!("{}", signed.authority())),
             Some(signed.authority().clone()),
         ),
-        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
-            (None, None)
-        }
         _ => (None, None),
     };
     let ts_ms_opt: Option<i128> = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.creation_time().as_millis() as i128)
-        }
-        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
-            Some(i128::from(tx.creation_time_ms))
         }
         _ => None,
     };
@@ -40301,7 +39999,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     _ => false,
                 }
             }
-            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => false,
             _ => false,
         };
         if default_ok {
@@ -40329,9 +40026,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
     let metadata_map = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.metadata())
-        }
-        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
-            Some(&tx.metadata)
         }
         _ => None,
     };
@@ -40652,7 +40346,6 @@ fn tx_matches_account_history_subject(
             signed.authority().controller() == account_id.controller()
                 || executable_contains_account_id(signed.instructions(), account_id)
         }
-        TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
@@ -40704,7 +40397,6 @@ fn project_tx(
                     _ => false,
                 }
             }
-            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => false,
             _ => false,
         };
         if default_ok {
@@ -40786,9 +40478,6 @@ fn tx_to_query_row(tx: &iroha_data_model::query::CommittedTransaction) -> norito
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             metadata_to_json(signed.metadata())
         }
-        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
-            metadata_to_json(&tx.metadata)
-        }
         _ => norito::json::Value::Object(norito::json::Map::new()),
     };
     row.insert("metadata".into(), metadata);
@@ -40826,9 +40515,7 @@ fn tx_fee_projection(
         TransactionEntrypoint::SealedReveal(reveal) => {
             Some(reveal.signed_transaction().fee_payment_intent().clone())
         }
-        TransactionEntrypoint::SealedCommitment(_)
-        | TransactionEntrypoint::PrivateKaigi(_)
-        | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     };
     intent
 }
@@ -41038,10 +40725,6 @@ const ENDPOINT_ASSET_DEFINITIONS_LIST: &str = "/v1/assets/definitions";
 const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
-#[cfg(feature = "app_api")]
-pub const ENDPOINT_CONFIDENTIAL_NOTES: &str = "/v1/confidential/notes";
-#[cfg(feature = "app_api")]
-pub const ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT: &str = "/v1/confidential/relay/submit";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ASSET_HOLDERS: &str = "/v1/assets/{definition_id}/holders";
 #[cfg(feature = "app_api")]
@@ -48792,119 +48475,6 @@ pub async fn handle_v1_sumeragi_vrf_epoch(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
-}
-
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-pub struct VrfCommitRequestDto {
-    pub epoch: u64,
-    pub signer: u32,
-    pub commitment_hex: String,
-    pub bls_sig_hex: String,
-}
-
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-pub struct VrfRevealRequestDto {
-    pub epoch: u64,
-    pub signer: u32,
-    pub reveal_hex: String,
-    pub bls_sig_hex: String,
-}
-
-fn parse_hex32(value: &str, field: &'static str) -> Result<[u8; 32], Error> {
-    let trimmed = value.trim();
-    let body = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
-    let bytes = hex::decode(body).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!("{field}: {e}")),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "{field}: expected 32-byte value"
-            )),
-        )));
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-fn parse_hex_bytes(value: &str, field: &'static str) -> Result<Vec<u8>, Error> {
-    let trimmed = value.trim();
-    let body = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
-    let bytes = hex::decode(body).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!("{field}: {e}")),
-        ))
-    })?;
-    if bytes.is_empty() {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "{field}: expected non-empty hex value"
-            )),
-        )));
-    }
-    Ok(bytes)
-}
-
-pub fn handle_post_sumeragi_vrf_commit(
-    sumeragi: SumeragiHandle,
-    request: VrfCommitRequestDto,
-) -> Result<axum::response::Response, Error> {
-    let commitment = parse_hex32(&request.commitment_hex, "commitment_hex")?;
-    let bls_sig = parse_hex_bytes(&request.bls_sig_hex, "bls_sig_hex")?;
-    let commit = iroha_data_model::block::consensus::VrfCommit {
-        epoch: request.epoch,
-        commitment,
-        signer: request.signer,
-        bls_sig,
-    };
-    if !sumeragi.incoming_block_message(BlockMessage::VrfCommit(commit)) {
-        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
-    }
-    Ok(StatusCode::ACCEPTED.into_response())
-}
-
-pub fn handle_post_sumeragi_vrf_reveal(
-    sumeragi: SumeragiHandle,
-    request: VrfRevealRequestDto,
-) -> Result<axum::response::Response, Error> {
-    let reveal = parse_hex32(&request.reveal_hex, "reveal_hex")?;
-    let bls_sig = parse_hex_bytes(&request.bls_sig_hex, "bls_sig_hex")?;
-    let msg = iroha_data_model::block::consensus::VrfReveal {
-        epoch: request.epoch,
-        reveal,
-        signer: request.signer,
-        bls_sig,
-    };
-    if !sumeragi.incoming_block_message(BlockMessage::VrfReveal(msg)) {
-        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
-    }
-    Ok(StatusCode::ACCEPTED.into_response())
-}
-
-#[cfg(test)]
-mod sumeragi_vrf_endpoint_tests {
-    use super::*;
-
-    #[test]
-    fn vrf_signature_hex_parser_accepts_prefixed_payloads() {
-        let parsed = parse_hex_bytes(" 0x0a0B ", "bls_sig_hex").expect("valid signature hex");
-        assert_eq!(parsed, vec![0x0a, 0x0b]);
-    }
-
-    #[test]
-    fn vrf_signature_hex_parser_rejects_empty_payloads() {
-        assert!(parse_hex_bytes("", "bls_sig_hex").is_err());
-        assert!(parse_hex_bytes("0x", "bls_sig_hex").is_err());
-    }
 }
 
 /// GET /v1/sumeragi/commit-qcs/{block_hash} — return the full commit QC record for a block hash.
@@ -59247,69 +58817,10 @@ pub struct AccountFaucetPuzzleDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
-pub struct ConfidentialNotesQuery {
-    #[norito(default)]
-    pub asset_definition_id: Option<String>,
-    #[norito(default)]
-    pub from_block: Option<u64>,
-    #[norito(default)]
-    pub cursor: Option<String>,
-    #[norito(default)]
-    pub limit: Option<u64>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
-pub struct ConfidentialNoteRecordDto {
-    pub entrypoint_hash: String,
-    pub transaction_hash: String,
-    pub block: u64,
-    pub result_ok: bool,
-    pub authority: String,
-    pub metadata: Value,
-    pub instructions: Vec<Value>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
-pub struct ConfidentialNotesPageDto {
-    pub items: Vec<ConfidentialNoteRecordDto>,
-    pub next_cursor: Option<String>,
-    pub scanned_to_block: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
-pub struct ConfidentialRelaySubmitRequestDto {
-    pub signed_tx_hex: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
-pub struct ConfidentialRelaySubmitResponseDto {
-    pub tx_hash_hex: String,
-    pub source_tx_hash_hex: String,
-    pub status: &'static str,
-    pub relay_authority: String,
-}
-
-#[cfg(feature = "app_api")]
 impl crate::utils::extractors::SupportsNoritoDecode for AccountFaucetRequestDto {
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::json::from_slice::<Self>(bytes).map_err(|err| {
             norito::Error::Message(format!("invalid AccountFaucetRequestDto: {err}"))
-        })
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl crate::utils::extractors::SupportsNoritoDecode for ConfidentialRelaySubmitRequestDto {
-    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        norito::json::from_slice::<Self>(bytes).map_err(|err| {
-            norito::Error::Message(format!("invalid ConfidentialRelaySubmitRequestDto: {err}"))
         })
     }
 }
@@ -59442,14 +58953,6 @@ fn faucet_invalid_request(reason: &str) -> Error {
         code,
         message: reason.to_owned(),
     }
-}
-
-#[cfg(feature = "app_api")]
-fn confidential_invalid_request(reason: &str) -> Error {
-    iroha_logger::warn!(target: "torii.confidential", reason, "Confidential request rejected");
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        QueryExecutionFail::InvalidSingularParameters,
-    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -59847,327 +59350,6 @@ mod faucet_pow_tests {
     }
 }
 
-#[cfg(feature = "app_api")]
-const CONFIDENTIAL_NOTES_DEFAULT_LIMIT: u64 = 200;
-#[cfg(feature = "app_api")]
-const CONFIDENTIAL_NOTES_MAX_LIMIT: u64 = 1_000;
-
-#[cfg(feature = "app_api")]
-fn hex32(bytes: &[u8; 32]) -> String {
-    hex::encode(bytes)
-}
-
-#[cfg(feature = "app_api")]
-fn string_array(values: impl IntoIterator<Item = String>) -> Value {
-    Value::Array(values.into_iter().map(Value::String).collect())
-}
-
-#[cfg(feature = "app_api")]
-fn zk_instruction_record(kind: &'static str, payload: Map) -> Value {
-    let mut by_kind = Map::new();
-    by_kind.insert(kind.to_string(), Value::Object(payload));
-    let mut root = Map::new();
-    root.insert("zk".to_string(), Value::Object(by_kind));
-    Value::Object(root)
-}
-
-#[cfg(feature = "app_api")]
-fn confidential_note_instruction_payload(
-    instruction: &InstructionBox,
-    asset: &AssetDefinitionId,
-) -> Option<Value> {
-    if let Some(shield) = instruction.as_any().downcast_ref::<dm::isi::zk::Shield>() {
-        if shield.asset != *asset {
-            return None;
-        }
-        let mut payload = Map::new();
-        payload.insert("asset".into(), Value::String(shield.asset.to_string()));
-        payload.insert("from".into(), Value::String(shield.from.to_string()));
-        payload.insert("amount".into(), Value::String(shield.amount.to_string()));
-        payload.insert(
-            "note_commitment".into(),
-            Value::String(hex32(&shield.note_commitment)),
-        );
-        return Some(zk_instruction_record("Shield", payload));
-    }
-
-    if let Some(transfer) = instruction
-        .as_any()
-        .downcast_ref::<dm::isi::zk::ZkTransfer>()
-    {
-        if transfer.asset != *asset {
-            return None;
-        }
-        let mut payload = Map::new();
-        payload.insert("asset".into(), Value::String(transfer.asset.to_string()));
-        payload.insert(
-            "inputs".into(),
-            string_array(transfer.inputs.iter().map(hex32)),
-        );
-        payload.insert(
-            "outputs".into(),
-            string_array(transfer.outputs.iter().map(hex32)),
-        );
-        if let Some(root_hint) = transfer.root_hint.as_ref() {
-            payload.insert("root_hint".into(), Value::String(hex32(root_hint)));
-        }
-        return Some(zk_instruction_record("ZkTransfer", payload));
-    }
-
-    if let Some(unshield) = instruction.as_any().downcast_ref::<dm::isi::zk::Unshield>() {
-        if unshield.asset != *asset {
-            return None;
-        }
-        let mut payload = Map::new();
-        payload.insert("asset".into(), Value::String(unshield.asset.to_string()));
-        payload.insert("to".into(), Value::String(unshield.to.to_string()));
-        payload.insert(
-            "public_amount".into(),
-            Value::String(unshield.public_amount.to_string()),
-        );
-        payload.insert(
-            "inputs".into(),
-            string_array(unshield.inputs.iter().map(hex32)),
-        );
-        if let Some(root_hint) = unshield.root_hint.as_ref() {
-            payload.insert("root_hint".into(), Value::String(hex32(root_hint)));
-        }
-        return Some(zk_instruction_record("Unshield", payload));
-    }
-
-    None
-}
-
-#[cfg(feature = "app_api")]
-fn confidential_notes_cursor(cursor: Option<&str>) -> Result<Option<u64>> {
-    let Some(raw) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    raw.parse::<u64>()
-        .map(Some)
-        .map_err(|_| confidential_invalid_request("invalid confidential notes cursor"))
-}
-
-#[cfg(feature = "app_api")]
-fn decode_relay_signed_transaction(raw: &str) -> Result<SignedTransaction> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(confidential_invalid_request(
-            "signed_tx_hex must not be empty",
-        ));
-    }
-    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-        return Err(confidential_invalid_request(
-            "signed_tx_hex must be plain hex without 0x prefix",
-        ));
-    }
-    let bytes =
-        hex::decode(trimmed).map_err(|_| confidential_invalid_request("invalid signed_tx_hex"))?;
-    <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
-        .map_err(|_| confidential_invalid_request("invalid versioned signed transaction bytes"))
-}
-
-#[cfg(feature = "app_api")]
-fn relayable_zk_transfer_instruction(tx: &SignedTransaction) -> Result<InstructionBox> {
-    let Executable::Instructions(instructions) = tx.instructions() else {
-        return Err(confidential_invalid_request(
-            "confidential relay accepts exactly one ZkTransfer instruction",
-        ));
-    };
-    if instructions.len() != 1 {
-        return Err(confidential_invalid_request(
-            "confidential relay accepts exactly one ZkTransfer instruction",
-        ));
-    }
-    let instruction = instructions
-        .first()
-        .cloned()
-        .ok_or_else(|| confidential_invalid_request("missing relay instruction"))?;
-    if instruction
-        .as_any()
-        .downcast_ref::<dm::isi::zk::ZkTransfer>()
-        .is_none()
-    {
-        return Err(confidential_invalid_request(
-            "confidential relay only accepts ZkTransfer",
-        ));
-    }
-    Ok(instruction)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_v1_confidential_notes(
-    state: Arc<CoreState>,
-    crate::NoritoQuery(query): crate::NoritoQuery<ConfidentialNotesQuery>,
-) -> Result<impl IntoResponse> {
-    let asset_literal = query
-        .asset_definition_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| confidential_invalid_request("asset_definition_id is required"))?;
-    let asset = asset_literal
-        .parse::<AssetDefinitionId>()
-        .map_err(|_| confidential_invalid_request("invalid asset_definition_id"))?;
-    let max_height = state.committed_height() as u64;
-    let requested_start = confidential_notes_cursor(query.cursor.as_deref())?
-        .or(query.from_block)
-        .unwrap_or(max_height);
-    let start_height = requested_start.min(max_height);
-    let limit = query
-        .limit
-        .unwrap_or(CONFIDENTIAL_NOTES_DEFAULT_LIMIT)
-        .min(CONFIDENTIAL_NOTES_MAX_LIMIT);
-    let mut items = Vec::new();
-    let mut scanned_to_block = start_height;
-    let mut next_cursor = None;
-
-    if start_height > 0 && limit > 0 {
-        let mut height = start_height;
-        loop {
-            scanned_to_block = height;
-            let Some(nonzero_height) = nonzero_height(height) else {
-                break;
-            };
-            if let Some(block) = state.block_by_height(nonzero_height) {
-                let block_ref = block.as_ref();
-                for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref)
-                {
-                    if result.as_ref().is_err() {
-                        continue;
-                    }
-                    let confidential_instructions: Vec<Value> = tx
-                        .instructions()
-                        .explicit_instructions()
-                        .filter_map(|instruction| {
-                            confidential_note_instruction_payload(instruction, &asset)
-                        })
-                        .collect();
-                    if confidential_instructions.is_empty() {
-                        continue;
-                    }
-                    let tx_hash = entrypoint_hash.to_string();
-                    items.push(ConfidentialNoteRecordDto {
-                        entrypoint_hash: tx_hash.clone(),
-                        transaction_hash: tx_hash,
-                        block: height,
-                        result_ok: true,
-                        authority: crate::account_literal::display_literal(tx.authority()),
-                        metadata: metadata_to_json(tx.metadata()),
-                        instructions: confidential_instructions,
-                    });
-                }
-            }
-            if items.len() as u64 >= limit {
-                next_cursor = height
-                    .checked_sub(1)
-                    .filter(|next| *next > 0)
-                    .map(|next| next.to_string());
-                break;
-            }
-            if height == 1 {
-                break;
-            }
-            height -= 1;
-        }
-    }
-
-    Ok(JsonBody(ConfidentialNotesPageDto {
-        items,
-        next_cursor,
-        scanned_to_block,
-    })
-    .into_response())
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_v1_confidential_relay_submit(
-    app: crate::SharedAppState,
-    crate::NoritoJson(req): crate::NoritoJson<ConfidentialRelaySubmitRequestDto>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    let Some(signer) = app.account_faucet.as_ref() else {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted("Confidential relay disabled".into()),
-        ));
-    };
-    let source_tx = decode_relay_signed_transaction(&req.signed_tx_hex)?;
-    if source_tx.chain() != app.chain_id.as_ref() {
-        return Err(confidential_invalid_request(
-            "signed transaction chain does not match this Torii",
-        ));
-    }
-    source_tx.verify_signature().map_err(|err| {
-        let reason = format!("signed transaction signature verification failed: {err}");
-        confidential_invalid_request(&reason)
-    })?;
-    let source_tx_hash_hex = hex::encode(source_tx.hash().as_ref());
-    let instruction = relayable_zk_transfer_instruction(&source_tx)?;
-
-    let attachments = source_tx.attachments().cloned();
-    let mut builder = TransactionBuilder::new(
-        (*app.chain_id).clone(),
-        signer.authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([instruction])
-    .with_metadata(source_tx.metadata().clone());
-    builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let mut builder = quote_app_api_transaction_builder(
-        builder,
-        app.queue.as_ref(),
-        app.state.as_ref(),
-        ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT,
-    )?;
-    if let Some(attachments) = attachments {
-        builder = builder.with_attachments(attachments);
-    }
-    let tx = sign_app_api_transaction(
-        builder,
-        signer.signer.private_key(),
-        ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-
-    handle_transaction_with_metrics(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        tx,
-        telemetry,
-        ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT,
-    )
-    .await?;
-
-    let response = ConfidentialRelaySubmitResponseDto {
-        tx_hash_hex,
-        source_tx_hash_hex,
-        status: "QUEUED",
-        relay_authority: signer.authority.to_string(),
-    };
-    let mut resp = Response::new(Body::from(
-        norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
-    ));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok((StatusCode::ACCEPTED, resp))
-}
-
-#[cfg(all(feature = "app_api", test))]
-mod confidential_notes_tests {
-    use super::*;
-
-    #[test]
-    fn confidential_notes_cursor_rejects_invalid_values() {
-        assert!(confidential_notes_cursor(Some("not-a-height")).is_err());
-        assert_eq!(confidential_notes_cursor(Some("42")).unwrap(), Some(42));
-        assert_eq!(confidential_notes_cursor(Some("")).unwrap(), None);
-    }
-}
 struct NormalizedAccountOnboarding {
     request: AccountOnboardingPlanRequestDto,
     account_id: AccountId,
@@ -65152,9 +64334,9 @@ fn external_signed_transaction_results(
             let signed = match entrypoint {
                 TransactionEntrypoint::External(signed) => signed,
                 TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => return None,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    return None;
+                }
             };
             Some((entrypoint_hash, signed, result))
         })

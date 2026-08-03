@@ -198,13 +198,6 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     Builtin::EscrowCancel.source_name(),
     Builtin::EscrowOpenDispute.source_name(),
     Builtin::EscrowResolveDispute.source_name(),
-    Builtin::AnonymousEscrowOpenOffer.source_name(),
-    Builtin::AnonymousEscrowAccept.source_name(),
-    Builtin::AnonymousEscrowMarkPaymentSent.source_name(),
-    Builtin::AnonymousEscrowRelease.source_name(),
-    Builtin::AnonymousEscrowCancel.source_name(),
-    Builtin::AnonymousEscrowOpenDispute.source_name(),
-    Builtin::AnonymousEscrowResolveDispute.source_name(),
     Builtin::SoracloudReadCommittedState.source_name(),
     Builtin::SoracloudEmitStateMutation.source_name(),
     Builtin::SoracloudEmitMailboxMessage.source_name(),
@@ -219,7 +212,6 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     Builtin::RegisterPeer.source_name(),
     Builtin::UnregisterPeer.source_name(),
     Builtin::ScExecuteSubmitBallot.source_name(),
-    Builtin::ScExecuteUnshield.source_name(),
     Builtin::ResolveAccountAlias.source_name(),
     Builtin::AxtBegin.source_name(),
     Builtin::AxtTouch.source_name(),
@@ -336,27 +328,6 @@ fn instruction_box_is_hintable(instr: &InstructionBox) -> bool {
             || any
                 .downcast_ref::<DMEscrow::ResolveEscrowDispute>()
                 .is_some()
-            || any
-                .downcast_ref::<DMEscrow::OpenAnonymousAssetEscrow>()
-                .is_some()
-            || any
-                .downcast_ref::<DMEscrow::AcceptAnonymousAssetEscrow>()
-                .is_some()
-            || any
-                .downcast_ref::<DMEscrow::MarkAnonymousEscrowPaymentSent>()
-                .is_some()
-            || any
-                .downcast_ref::<DMEscrow::ReleaseAnonymousAssetEscrow>()
-                .is_some()
-            || any
-                .downcast_ref::<DMEscrow::CancelAnonymousAssetEscrow>()
-                .is_some()
-            || any
-                .downcast_ref::<DMEscrow::OpenAnonymousEscrowDispute>()
-                .is_some()
-            || any
-                .downcast_ref::<DMEscrow::ResolveAnonymousEscrowDispute>()
-                .is_some()
         {
             return true;
         }
@@ -382,29 +353,6 @@ fn is_literal_name_expr(expr: &Expr) -> bool {
     )
 }
 
-fn anonymous_escrow_request_literal_is_hintable(name: &str, args: &[Expr]) -> bool {
-    use iroha_data_model::isi::escrow as DMEscrow;
-
-    let Some(payload) = args.first().and_then(decode_norito_bytes_literal) else {
-        return false;
-    };
-    match name {
-        name if name == Builtin::AnonymousEscrowOpenOffer.source_name() => {
-            norito::decode_canonical::<DMEscrow::OpenAnonymousAssetEscrow>(&payload).is_ok()
-        }
-        name if name == Builtin::AnonymousEscrowRelease.source_name() => {
-            norito::decode_canonical::<DMEscrow::ReleaseAnonymousAssetEscrow>(&payload).is_ok()
-        }
-        name if name == Builtin::AnonymousEscrowCancel.source_name() => {
-            norito::decode_canonical::<DMEscrow::CancelAnonymousAssetEscrow>(&payload).is_ok()
-        }
-        name if name == Builtin::AnonymousEscrowResolveDispute.source_name() => {
-            norito::decode_canonical::<DMEscrow::ResolveAnonymousEscrowDispute>(&payload).is_ok()
-        }
-        _ => false,
-    }
-}
-
 fn escrow_call_is_hintable(name: &str, args: &[Expr]) -> Option<bool> {
     if [
         Builtin::EscrowOpenOffer,
@@ -414,24 +362,11 @@ fn escrow_call_is_hintable(name: &str, args: &[Expr]) -> Option<bool> {
         Builtin::EscrowCancel,
         Builtin::EscrowOpenDispute,
         Builtin::EscrowResolveDispute,
-        Builtin::AnonymousEscrowAccept,
-        Builtin::AnonymousEscrowMarkPaymentSent,
-        Builtin::AnonymousEscrowOpenDispute,
     ]
     .into_iter()
     .any(|builtin| builtin.source_name() == name)
     {
         Some(args.first().is_some_and(is_literal_name_expr))
-    } else if [
-        Builtin::AnonymousEscrowOpenOffer,
-        Builtin::AnonymousEscrowRelease,
-        Builtin::AnonymousEscrowCancel,
-        Builtin::AnonymousEscrowResolveDispute,
-    ]
-    .into_iter()
-    .any(|builtin| builtin.source_name() == name)
-    {
-        Some(anonymous_escrow_request_literal_is_hintable(name, args))
     } else {
         None
     }
@@ -1807,7 +1742,7 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             unreachable!("kind() strips provenance wrappers")
         }
         Expr::Call { name, args, .. } => {
-            if name == Builtin::CreateTrigger.source_name()
+            if name == Builtin::RegisterTrigger.source_name()
                 || name == Builtin::RegisterTrigger.source_name()
             {
                 let literal = args.first().is_some_and(is_literal_trigger_spec);
@@ -2399,7 +2334,7 @@ mod tests {
     #[test]
     fn lint_nonliteral_trigger_spec_warns() {
         let program =
-            parse("fn main() { let spec = Json::parse(\"{}\"); ledger::trigger::create(spec); }")
+            parse("fn main() { let spec = Json::parse(\"{}\"); ledger::trigger::register(spec); }")
                 .expect("parse trigger");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
@@ -2407,7 +2342,7 @@ mod tests {
 
     #[test]
     fn lint_literal_trigger_spec_is_silent() {
-        let program = parse("fn main() { ledger::trigger::create(Json::parse(\"{}\")); }")
+        let program = parse("fn main() { ledger::trigger::register(Json::parse(\"{}\")); }")
             .expect("parse trigger");
         let warnings = lint_program(&program);
         assert!(!warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
@@ -2527,7 +2462,7 @@ fn main() {
     }
 
     #[test]
-    fn lint_inline_zk_builders_are_precise_access() {
+    fn lint_inline_submit_ballot_builder_is_precise_access() {
         let program = parse(
             r#"
 fn main() {
@@ -2539,23 +2474,14 @@ fn main() {
     blob("proof"),
     blob("vk")
   );
-  let _unshield = build_unshield_inline(
-    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    authority(),
-    1,
-    blob("0000000000000000000000000000000000000000000000000000000000000000"),
-    "halo2",
-    blob("proof"),
-    blob("vk")
-  );
 }
 "#,
         )
-        .expect("parse inline ZK builders");
+        .expect("parse inline submit-ballot builder");
         let warnings = lint_program(&program);
         assert!(
             !warnings.iter().any(|w| w.code == "opaque-access-hints"),
-            "inline ZK builders only construct payloads and should not warn about access hints"
+            "the inline submit-ballot builder only constructs a payload and should not warn about access hints"
         );
     }
 
@@ -2636,80 +2562,6 @@ fn main() {
         assert!(
             warnings.iter().any(|w| w.code == "opaque-access-hints"),
             "dynamic escrow names should still warn"
-        );
-    }
-
-    #[test]
-    fn lint_named_anonymous_escrow_literal_name_is_precise_access() {
-        let program = parse(
-            r#"
-fn main() {
-  ledger::escrow::anonymous::accept(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer"));
-}
-"#,
-        )
-        .expect("parse named anonymous escrow helpers");
-        let warnings = lint_program(&program);
-        assert!(
-            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
-            "literal anonymous escrow lifecycle helpers should not warn"
-        );
-    }
-
-    #[test]
-    fn lint_anonymous_escrow_request_literal_is_precise_access() {
-        use iroha_data_model::{
-            asset::AssetDefinitionId,
-            isi::escrow::OpenAnonymousAssetEscrow,
-            proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-        };
-
-        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
-            .parse()
-            .expect("asset definition");
-        let escrow_name: iroha_data_model::name::Name =
-            "shielded_offer".parse().expect("escrow name");
-        let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
-        let backend = "halo2/ipa/poly-open".to_string();
-        let proof = ProofAttachment::new_ref(
-            backend.clone(),
-            ProofBox::new(backend.clone(), vec![1, 2, 3]),
-            VerifyingKeyId::new(backend, "escrow_vk"),
-        );
-        let request = OpenAnonymousAssetEscrow::new(
-            escrow_id,
-            asset_def,
-            vec![[0x11; 32]],
-            [0x22; 32],
-            proof,
-            None,
-        );
-        let request_literal = norito::to_bytes(&request)
-            .expect("encode anonymous escrow request")
-            .into_iter()
-            .map(|byte| format!("\\x{byte:02x}"))
-            .collect::<String>();
-        let src = format!(
-            r#"fn main() {{ ledger::escrow::anonymous::open_offer(b"{request_literal}"); }}"#
-        );
-        let program = parse(&src).expect("parse anonymous escrow request helper");
-        let warnings = lint_program(&program);
-        assert!(
-            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
-            "decodable anonymous escrow request should not warn"
-        );
-    }
-
-    #[test]
-    fn lint_anonymous_escrow_malformed_request_still_warns() {
-        let program = parse(r#"fn main() { ledger::escrow::anonymous::open_offer(b"\x00"); }"#)
-            .expect("parse malformed anonymous escrow request helper");
-        let warnings = lint_program(&program);
-        assert!(
-            warnings.iter().any(|w| w.code == "opaque-access-hints"),
-            "malformed anonymous escrow requests should still warn"
         );
     }
 

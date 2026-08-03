@@ -847,8 +847,7 @@ fn context_digest(context: &VegaMdlProofContextV1<'_>) -> Result<[u8; 32], VegaM
             context.statement_schema_digest,
             context.engine_manifest_digest,
         ]
-        .iter()
-        .any(|digest| *digest == [0; 32])
+        .contains(&[0; 32])
     {
         return Err(VegaMdlProofErrorV1::InvalidContext);
     }

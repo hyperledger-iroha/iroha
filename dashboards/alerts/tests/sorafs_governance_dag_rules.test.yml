@@ -12,6 +12,12 @@ tests:
         values: '4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000'
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="deal_settlement",sink="filesystem"}'
         values: '1000+0x100'
+      - series: 'sorafs_governance_dag_validation_failure_total'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sorafs_governance_dag_ipfs_pin_lag_seconds'
+        values: '2000 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000'
+      - series: 'sorafs_governance_dag_mirror_drift'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
     alert_rule_test:
       - alertname: SoraFSGovernanceDagPublishFailures
         eval_time: 1m
@@ -27,9 +33,49 @@ tests:
             exp_annotations:
               summary: "SoraFS Governance DAG publication failures detected"
               description: |
-                Governance DAG publication failed for payload kind deal_settlement on
-                sink filesystem within the last 15 minutes. Check filesystem/IPFS sink
-                health and retry the affected evidence bundle before relying on the public head.
+                Governance DAG publication failed on sink filesystem within the last
+                15 minutes. Check the fixed-profile Kubo
+                publisher and authenticated signed-head service before retrying the evidence bundle.
+      - alertname: SoraFSGovernanceDagValidationFailures
+        eval_time: 1m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagValidationFailures
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS Governance DAG validation failures detected"
+              description: |
+                The supervised Governance DAG service rejected authenticated publication or mirror
+                state within the last 15 minutes. Investigate before restoring readiness.
+      - alertname: SoraFSGovernanceDagPinLagHigh
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagPinLagHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS Governance DAG Kubo pin lag is high"
+              description: |
+                Verified Kubo pin lag has exceeded 30 minutes for 10 minutes. Check authenticated
+                Kubo ingress, object repair, and the rotating retained-object audit.
+      - alertname: SoraFSGovernanceDagMirrorDrift
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagMirrorDrift
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS Governance DAG mirror drift detected"
+              description: |
+                The supervised service has been unable to prove that its mirror, sealed checkpoint,
+                and public objects are coherent for five minutes. Keep public reads unavailable until
+                deterministic recovery and a complete coherent reconciliation succeed.
       - alertname: SoraFSGovernanceDagBacklogHigh
         eval_time: 5m
         exp_alerts: []
@@ -72,8 +118,8 @@ tests:
               summary: "SoraFS Governance DAG has no recent successful publication"
               description: |
                 Governance DAG sink filesystem has no successful publication timestamp
-                within the last hour. Verify the local publisher and any downstream IPFS/IPNS
-                bridge before publishing rollout evidence.
+                within the last hour. Verify the fixed-profile Kubo publisher and authenticated
+                signed-head service before publishing rollout evidence.
   - interval: 1m
     input_series:
       - series: 'sorafs_governance_dag_publish_total{payload_kind="deal_settlement",result="failure",sink="filesystem"}'
@@ -84,6 +130,12 @@ tests:
         values: '0 60 120 180 240 300 360 420 480 540 600 660'
       - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="deal_settlement",sink="filesystem"}'
         values: '0 60 120 180 240 300 360 420 480 540 600 660'
+      - series: 'sorafs_governance_dag_validation_failure_total'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'sorafs_governance_dag_ipfs_pin_lag_seconds'
+        values: '0 60 120 180 240 300 360 420 480 540 600 660'
+      - series: 'sorafs_governance_dag_mirror_drift'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0'
     alert_rule_test:
       - alertname: SoraFSGovernanceDagPublishFailures
         eval_time: 11m
@@ -95,5 +147,14 @@ tests:
         eval_time: 11m
         exp_alerts: []
       - alertname: SoraFSGovernanceDagNoRecentPublish
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagValidationFailures
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagPinLagHigh
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagMirrorDrift
         eval_time: 11m
         exp_alerts: []

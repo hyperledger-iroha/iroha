@@ -118,6 +118,10 @@ pub struct PortablePath(String);
 
 impl PortablePath {
     /// Parse and validate one canonical portable path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManifestError`] when `raw` is not a canonical portable package path.
     pub fn new(raw: &str) -> Result<Self, ManifestError> {
         validate_portable_path(raw, false).map(Self)
     }
@@ -168,6 +172,10 @@ pub struct DependencyPath(String);
 
 impl DependencyPath {
     /// Parse a portable relative dependency path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManifestError`] when `raw` is not a valid portable relative dependency path.
     pub fn new(raw: &str) -> Result<Self, ManifestError> {
         validate_portable_path(raw, true).map(Self)
     }

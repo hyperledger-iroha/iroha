@@ -32,6 +32,10 @@ SORAFS_GOVERNANCE_DAG_PLAN = DOCS_SOURCE_DIR / "sorafs_governance_dag_plan.md"
 SORAFS_GOVERNANCE_DAG_SERVICE_RS = (
     REPO_ROOT / "crates" / "sorafs_node" / "src" / "governance_service.rs"
 )
+SORAFS_GOVERNANCE_RS = REPO_ROOT / "crates" / "sorafs_node" / "src" / "governance.rs"
+SORAFS_GOVERNANCE_DAG_KUBO_WORKFLOW = (
+    REPO_ROOT / ".github" / "workflows" / "sorafs-governance-dag-kubo.yml"
+)
 SORAFS_HEDGING_PLAN = DOCS_SOURCE_DIR / "sorafs_hedging_plan.md"
 SORAFS_MODERATION_PANEL_PLAN = DOCS_SOURCE_DIR / "sorafs_moderation_panel_plan.md"
 SORAFS_ORDERBOOK_PLAN = DOCS_SOURCE_DIR / "sorafs_orderbook_plan.md"
@@ -21583,7 +21587,7 @@ def test_pdp_provider_protocol_exposes_only_the_canonical_v1_api_family() -> Non
     assert exposed == {}
 
 
-def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
+def test_governance_dag_publication_service_is_documented_as_shipped() -> None:
     source = read(SORAFS_GOVERNANCE_DAG_PLAN)
     service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
 
@@ -21593,49 +21597,127 @@ def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
         r"\s+", " ", source[outstanding_start:outstanding_end]
     )
     required_shipped = (
-        "The `sorafs_governance_dag` service implementation, exposed through the public `run_governance_dag_service` library launcher, is the always-on production service",
-        "uploads and recursively pins every new block plus the signed head",
-        "authenticated HTTP compare-and-swap or IPNS resolve/publish/",
-        "A service-specific authenticated checkpoint and write-ahead publish intent",
-        "bounded public mirror, head, block, node, checkpoint, health, and Prometheus surface",
+        "The public head has one transport: an authenticated signed-HTTP endpoint with strong-ETag compare-and-swap and readback verification.",
+        "Before the public-head CAS, the service verifies or repairs every retained block and head object",
+        "The only V1 postures are `GovernanceDagRequestIngressEnforcementV1::ExclusiveAuthenticatedReceiver` and `GovernanceDagRequestReplayPostureV1::SharedSealedAtomicConsumeUntilExpiry`.",
+        "Each read reopens the typed mirror and sealed checkpoint, verifies both retained roots and all provider bindings, and checks one shared readiness epoch before and after the read.",
+        "SF-12 deployment qualification still requires the supervised broker and genuine HSM, sealed-store, exclusive authenticated Kubo/head receivers",
     )
     normalized_source = re.sub(r"\s+", " ", source)
     assert [phrase for phrase in required_shipped if phrase not in normalized_source] == []
-    assert "unimplemented IPFS/IPNS publisher" in normalized_source
-    assert "deployment/package integration" in normalized_source
+    assert "reconciled SF-12 rollout gate" in normalized_outstanding
     assert "RocksDB/IPLD backend only if" in normalized_outstanding
-    assert "IPFS Cluster pinning and IPNS head publication" not in normalized_outstanding
+    assert "Reconcile the rollout checker" not in normalized_outstanding
 
     for marker in (
         "async fn ipfs_add_verified(",
         "async fn ipfs_pin(",
         "async fn ipfs_verify_pin(",
         "async fn ipfs_cat(",
-        "async fn publish_ipns_head(",
+        "async fn put_signed_http_head(",
+        "async fn fetch_signed_http_head(",
         "GovernanceDagSealedCheckpointStore",
         "GovernanceDagSealedStateSlot::PublishIntent",
         "run_governance_dag_service",
         '"/v1/sorafs/governance/dag/checkpoint"',
         "sorafs_governance_dag_ipfs_pin_lag_seconds",
-        "real_kubo_publication_ipns_restart_and_tamper_lane",
+        "real_kubo_publication_signed_head_restart_and_tamper_lane",
     ):
         assert marker in service
+
+
+def test_governance_dag_rollout_constants_and_bindings_are_source_bound() -> None:
+    checker = read(SCRIPTS_DIR / "check_sorafs_governance_dag_rollout_evidence.py")
+    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
+    governance = read(SORAFS_GOVERNANCE_RS)
+    kubo_workflow = read(SORAFS_GOVERNANCE_DAG_KUBO_WORKFLOW)
+
+    for checker_marker, source_marker in (
+        (
+            "KUBO_UNIXFS_CHUNK_SIZE_BYTES = 1024 * 1024",
+            "const IPFS_UNIXFS_CHUNK_BYTES: usize = 1024 * 1024;",
+        ),
+        (
+            "KUBO_UNIXFS_MAX_LINKS_PER_NODE = 1024",
+            "const IPFS_UNIXFS_MAX_FILE_LINKS: usize = 1024;",
+        ),
+        (
+            "MIRROR_RETENTION_MAX_ENTRIES = 65_536",
+            "pub const GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1: usize = 65_536;",
+        ),
+        (
+            "MIRROR_RETENTION_MAX_BYTES = 512 * 1024 * 1024",
+            "pub const GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1: u64 = 512 * 1024 * 1024;",
+        ),
+        (
+            "STEADY_AUDIT_MAX_ENTRIES_PER_POLL = 64",
+            "const STEADY_IPFS_AUDIT_MAX_ENTRIES_PER_POLL: usize = 64;",
+        ),
+        (
+            "STEADY_AUDIT_MAX_BYTES_PER_POLL = 16 * 1024 * 1024",
+            "const STEADY_IPFS_AUDIT_MAX_BYTES_PER_POLL: u64 = 16 * 1024 * 1024;",
+        ),
+    ):
+        assert checker_marker in checker
+        assert source_marker in service
+
+    for marker in (
+        '("cid-version", "1")',
+        '("hash", "sha2-256")',
+        '("chunker", "size-1048576")',
+        '("max-file-links", "1024")',
+        '("raw-leaves", "true")',
+        'const KUBO_CONFORMANCE_VERSION_V1: &str = "0.42.0";',
+        '("below-chunk", IPFS_UNIXFS_CHUNK_BYTES - 1)',
+        '("at-chunk", IPFS_UNIXFS_CHUNK_BYTES)',
+        '("over-chunk", IPFS_UNIXFS_CHUNK_BYTES + 1)',
+        '("max-object", GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1)',
+    ):
+        assert marker in service
+    for marker in (
+        "GOVERNANCE_DAG_REQUEST_INGRESS_BINDING_DOMAIN_V1",
+        "pub fn binding_digest(self) -> [u8; 32]",
+        "pub struct GovernanceDagVerifiedHttpRequestV1",
+        "pub fn verify_http_request<B: AsRef<[u8]>>",
+        "request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses",
+    ):
+        assert marker in governance
+    for marker in (
+        "state.metrics.mirror_drift = 1;",
+        "failed_object_repair_latches_mirror_drift_until_coherent_retry",
+    ):
+        assert marker in service
+    for marker in (
+        '"kubo_ingress_binding_digest_hex"',
+        '"signed_head_ingress_binding_digest_hex"',
+    ):
+        assert marker in checker
+    for marker in (
+        "KUBO_VERSION: v0.42.0",
+        "KUBO_LINUX_AMD64_SHA512:",
+        "sha512sum --check --strict",
+        "SORAFS_RUN_KUBO_INTEGRATION: \"1\"",
+        "real_kubo_publication_signed_head_restart_and_tamper_lane",
+        "-- --ignored --exact --nocapture",
+    ):
+        assert marker in kubo_workflow
 
 
 def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the runner dry-run emits the checker-backed `evidence_contract` map for selected SF-12 evidence kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
-        "Mirror datastore, checkpoint recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance approval artifacts must carry the same `public_head_cid_hex` as a valid publisher-service artifact",
-        "Ingest-service artifacts also bind `source_count` to the unique canonical `payload_kinds` inventory and reject duplicate or unknown payload-kind entries before promotion can report ready",
-        "Publisher-service and IPFS/IPNS end-to-end artifacts also bind `block_count` to the unique canonical `block_refs` inventory, bind `payload_kind_count` to the unique canonical `payload_kinds` inventory, require reviewed `governance-dag-block-*` block-reference labels without non-production markers, and reject duplicate block-reference entries and duplicate or unknown payload-kind entries before promotion can report ready",
+        "Evidence payloads and nested dashboard route rows are schema-closed.",
+        "Mirror datastore, checkpoint recovery, dashboard, observability, `publication_e2e`, and governance approval artifacts must carry the same `public_head_cid_hex` as a valid publisher-service artifact",
+        "governance approval artifacts must match that publisher policy digest plus its receiver-policy, replay-namespace, and replica-set qualification digests and the complete per-Kubo and per-signed- head ingress-binding digests before promotion.",
+        "Publisher evidence must prove the deterministic 1 MiB/raw-leaf/balanced Kubo UnixFS profile, locally derived CIDv1 SHA-256 roots, strong single-ETag signed-HTTP CAS and readback, and the exact exclusive receiver/shared sealed atomic replay qualification.",
+        "Mirror and governance evidence must bind the protocol-fixed 65,536-block/512 MiB suffix.",
+        "Recovery, observability, dashboard, and `publication_e2e` evidence respectively prove same-CID post-loss repair, the full-first then 64-entry/16 MiB rotating audit, fresh checkpoint-coherent reads, and reader withdrawal after service liveness ends.",
         "Dashboard API artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready",
-        "Governance DAG payload-safety artifacts must explicitly set `payload_bytes_included`, `raw_head_included`, `raw_car_included`, `mirror_drift_detected`, `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
         "Governance DAG aggregate promotion also rechecks the lane-proven relationships: public-head bound artifact fingerprints must match `valid_public_head_cids`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
-        "Governance DAG rollout summaries must expose exactly one active public head CID, one active publisher policy digest, and one active checkpoint digest; mixed valid public-head, policy, or checkpoint anchors fail closed before final promotion can report ready.",
-        "collection planner with dry-run evidence-contract export and schema-closed plan validation",
+        "Governance DAG rollout summaries must expose exactly one active public head CID, publisher policy digest, checkpoint digest, receiver-policy digest, replay-namespace digest, replica-set digest, Kubo ingress-binding digest, and signed-head ingress-binding digest; mixed valid anchors fail closed before final promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -21686,13 +21768,16 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     assert "value.strip() not in REQUIRED_PAYLOAD_KIND_SET" not in checker
     assert "value not in REQUIRED_PAYLOAD_KIND_SET" in checker
     assert "def require_only_required_values(" in checker
+    assert "def require_exact_fields(" in checker
+    assert "EVIDENCE_REQUIRED_FIELDS[kind.name]" in checker
+    assert "ROUTE_REQUIRED_FIELDS" in checker
     assert "BLOCK_REF_LABEL_PATTERN" in checker
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in checker
     assert "require_scalar_inventory_labels(" in checker
     assert "pattern=BLOCK_REF_LABEL_PATTERN" in checker
     assert 'require_false(payload, "payload_bytes_included", errors)' in checker
     assert 'require_false(payload, "raw_head_included", errors)' in checker
-    assert 'require_false(payload, "raw_car_included", errors)' in checker
+    assert '"raw_car",' in checker
     assert 'require_false(payload, "mirror_drift_detected", errors)' in checker
     assert 'require_false(payload, "raw_blocks_included", errors)' in checker
     assert 'require_false(payload, "raw_checkpoint_included", errors)' in checker
@@ -21737,10 +21822,16 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
         "test_publisher_payload_kinds_must_not_include_unknown_values"
         in checker_test
     )
-    assert "test_ipfs_block_refs_must_not_duplicate" in checker_test
-    assert "test_ipfs_block_refs_must_use_production_family" in checker_test
-    assert "test_ipfs_payload_kinds_must_not_duplicate" in checker_test
-    assert "test_ipfs_payload_kinds_must_not_include_unknown_values" in checker_test
+    assert "test_publication_block_refs_must_not_duplicate" in checker_test
+    assert "test_publication_block_refs_must_use_production_family" in checker_test
+    assert "test_publication_payload_kinds_must_not_duplicate" in checker_test
+    assert "test_publication_payload_kinds_must_not_include_unknown_values" in checker_test
+    assert "test_evidence_payloads_are_schema_closed" in checker_test
+    assert "test_publisher_requires_fixed_unixfs_and_signed_http_contract" in checker_test
+    assert "test_publisher_requires_qualified_exclusive_ingress_and_shared_replay" in checker_test
+    assert "test_governance_approval_must_bind_publisher_ingress_qualification" in checker_test
+    assert "test_fixed_retention_contract_is_exact_across_mirror_and_approval" in checker_test
+    assert "test_rotating_audit_budgets_are_fixed_v1_values" in checker_test
     assert (
         "test_payload_kinds_reject_trim_normalized_and_unicode_variants"
         in checker_test
@@ -21815,7 +21906,11 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "write_payload_atomic" in builder
     assert "must not be a symlink" in builder
     assert "raw_head_included" in builder
-    assert "raw_car_included" in builder
+    assert "KUBO_UNIXFS_PROFILE" in builder
+    assert "MIRROR_RETENTION_MAX_ENTRIES" in builder
+    assert "STEADY_AUDIT_MAX_ENTRIES_PER_POLL" in builder
+    assert "INGRESS_QUALIFICATION_DIGEST_KINDS" in builder
+    assert "--receiver-policy-digest-hex" in builder
     assert "raw_checkpoint_included" in builder
     assert "response_bodies_included" in builder
     assert "test_generated_canaries_pass_full_governance_dag_gate" in builder_test
@@ -21830,11 +21925,13 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
         "test_publisher_block_ref_inventory_rejects_placeholder_marker"
         in builder_test
     )
-    assert "test_ipfs_block_ref_inventory_must_match_block_count" in builder_test
+    assert "test_publication_block_ref_inventory_must_match_block_count" in builder_test
     assert (
-        "test_ipfs_block_ref_inventory_must_use_production_family"
+        "test_publication_block_ref_inventory_must_use_production_family"
         in builder_test
     )
+    assert "test_generated_canaries_encode_fixed_first_release_constants" in builder_test
+    assert "test_ingress_qualification_digests_are_required_before_write" in builder_test
     assert "test_missing_dashboard_route_coverage_fails_closed" in builder_test
     assert "test_dashboard_canary_requires_route_body_digest" in builder_test
     assert "test_unknown_verified_claim_fails_before_write" in builder_test
@@ -21852,14 +21949,17 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind publisher_service" in publisher_example
     assert "--policy-digest-hex" in publisher_example
+    assert "--receiver-policy-digest-hex" in publisher_example
     assert "--block-ref governance-dag-block-07" in publisher_example
-    assert "--verified-claim car_segments_pinned" in publisher_example
+    assert "--verified-claim strong_single_etag_verified" in publisher_example
+    assert "--verified-claim authenticated_ingress_qualified" in publisher_example
     assert "--payload-kind orderbook-settlement-receipt" in publisher_example
     assert "--kind dashboard_api" in dashboard_example
     assert "--route checkpoint" in dashboard_example
     assert "--route-body-blake3-hex" in dashboard_example
+    assert "--verified-claim reader_withdrawal_verified" in dashboard_example
     assert "build_sorafs_governance_dag_canary.py" in docs
-    assert "payload-free Governance DAG canary builder" in docs
+    assert "payload-free canary JSON" in docs
     assert "--route-body-blake3-hex" in docs
 
 

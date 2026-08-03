@@ -11315,6 +11315,7 @@ mod tests {
 
     use super::super::serviced_candidate_store::ProducerContinuationSourceClass;
     use super::*;
+    use crate::sumeragi::v2_chunks::encode_payload;
 
     #[derive(Debug)]
     struct TestAggregator;
@@ -11859,16 +11860,13 @@ mod tests {
             height: successor.height,
             view: 0,
         };
-        let proposal_subject = subject(0x72);
+        let mut proposal_subject = subject(0x72);
         let proposal_body = b"parent-auth-body".to_vec();
-        let manifest = wire::PayloadManifest::derive(
-            &successor,
-            proposal_round,
-            proposal_subject,
-            u64::try_from(proposal_body.len()).expect("fixture body length fits u64"),
-            &[proposal_body],
-        )
-        .expect("valid successor manifest");
+        proposal_subject.payload_hash = Hash::new(&proposal_body);
+        let manifest = encode_payload(&successor, proposal_round, proposal_subject, &proposal_body)
+            .expect("encode successor fixture payload")
+            .manifest()
+            .clone();
         let proposer = successor.leader(0);
         let mut proposal = wire::Proposal {
             round: proposal_round,
@@ -12145,14 +12143,12 @@ mod tests {
             view: 1,
         };
         let locked_subject = subject(0x32);
-        let exact_manifest = wire::PayloadManifest::derive(
-            &context,
-            locked_round,
-            locked_subject,
-            5,
-            &[b"chunk".to_vec()],
-        )
-        .expect("exact locked manifest");
+        let locked_payload = [0x32, 2];
+        let exact_manifest =
+            encode_payload(&context, locked_round, locked_subject, &locked_payload)
+                .expect("encode exact locked payload")
+                .manifest()
+                .clone();
         let exact = wire::Proposal {
             round: locked_round,
             proposer: context.leader(locked_round.view),
@@ -12176,14 +12172,10 @@ mod tests {
         let later = wire::Proposal {
             round: later_round,
             proposer: context.leader(later_round.view),
-            manifest: wire::PayloadManifest::derive(
-                &context,
-                later_round,
-                locked_subject,
-                5,
-                &[b"chunk".to_vec()],
-            )
-            .expect("later same-subject manifest"),
+            manifest: encode_payload(&context, later_round, locked_subject, &locked_payload)
+                .expect("encode later same-subject payload")
+                .manifest()
+                .clone(),
             ..exact
         };
         assert!(proposal_is_safe_for_lock(
@@ -12201,6 +12193,7 @@ mod tests {
             view: prepared_round.view + 1,
             ..prepared_round
         };
+        let prepared_payload = [0x33, 2];
         let highest_prepare = wire::QuorumCertificate {
             round: prepared_round,
             proposal_round: prepared_round,
@@ -12214,14 +12207,15 @@ mod tests {
             round: proposal_round,
             proposer: context.leader(proposal_round.view),
             subject: prepared_subject,
-            manifest: wire::PayloadManifest::derive(
+            manifest: encode_payload(
                 &context,
                 proposal_round,
                 prepared_subject,
-                5,
-                &[b"chunk".to_vec()],
+                &prepared_payload,
             )
-            .expect("prepared-subject manifest"),
+            .expect("encode prepared-subject payload")
+            .manifest()
+            .clone(),
             justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
                 timeout_certificate: wire::TimeoutCertificate {
                     round: prepared_round,
@@ -12353,9 +12347,17 @@ mod tests {
             height: context.height,
             view: 0,
         };
-        let manifest =
-            wire::PayloadManifest::derive(context, round, subject, 5, &[b"chunk".to_vec()])
-                .expect("valid fixture manifest");
+        let payload = b"chunk";
+        let chunks = wire::encode_payload_chunks(context.da_layout, payload)
+            .expect("encode complete canonical fixture chunks");
+        let manifest = wire::PayloadManifest::derive(
+            context,
+            round,
+            subject,
+            u64::try_from(payload.len()).expect("fixture payload length fits u64"),
+            &chunks,
+        )
+        .expect("valid fixture manifest");
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(wire::Proposal {
             round,
             proposer,
@@ -13556,14 +13558,11 @@ mod tests {
             view: tag.view(),
         };
         let subject = subject(0x4A);
-        let manifest = wire::PayloadManifest::derive(
-            &adapter.wire_context,
-            round,
-            subject,
-            5,
-            &[b"producer-retirement-body".to_vec()],
-        )
-        .expect("derive body manifest");
+        let payload = [0x4A, 2];
+        let manifest = encode_payload(&adapter.wire_context, round, subject, &payload)
+            .expect("encode producer-retirement payload")
+            .manifest()
+            .clone();
         adapter
             .defer_body_pipeline_stage_for_test(
                 tag,
@@ -14246,14 +14245,16 @@ mod tests {
 
         let proposal_round = wire::ConsensusRound { view: 1, ..round };
         let proposal_subject = subject(0xC3);
-        let manifest = wire::PayloadManifest::derive(
+        let proposal_payload = [0xC3, 2];
+        let manifest = encode_payload(
             &adapter.wire_context,
             proposal_round,
             proposal_subject,
-            5,
-            &[b"chunk".to_vec()],
+            &proposal_payload,
         )
-        .expect("derive proposal manifest");
+        .expect("encode proposal payload")
+        .manifest()
+        .clone();
         let mut proposal_key = None;
         for (variant, signers) in signer_subsets.iter().enumerate() {
             let marker = u8::try_from(variant).expect("small carrier variant");
@@ -14901,14 +14902,11 @@ mod tests {
             view: 0,
         };
         let subject = subject(0x97);
-        let manifest = wire::PayloadManifest::derive(
-            &adapter.wire_context,
-            round,
-            subject,
-            5,
-            &[b"chunk".to_vec()],
-        )
-        .expect("valid certified-body manifest");
+        let payload = [0x97, 2];
+        let manifest = encode_payload(&adapter.wire_context, round, subject, &payload)
+            .expect("encode certified-body payload")
+            .manifest()
+            .clone();
         let (durable, validated) =
             validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let execution_commitment = validated.execution_commitment();
@@ -15103,12 +15101,18 @@ mod tests {
         adapter
             .body_available(tag, manifest.clone())
             .expect("register exact manifest");
+        let alternate_body = b"other";
+        let alternate_chunks =
+            wire::encode_payload_chunks(adapter.wire_context.da_layout, alternate_body)
+                .expect("encode complete canonical alternate-body chunks");
+        // Deliberately bind the complete canonical alternate body to the
+        // original subject so this remains a manifest-conflict negative.
         let conflicting = wire::PayloadManifest::derive(
             &adapter.wire_context,
             manifest.round,
             manifest.subject,
-            5,
-            &[b"other".to_vec()],
+            u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+            &alternate_chunks,
         )
         .expect("structurally valid conflicting manifest");
 
@@ -15146,12 +15150,17 @@ mod tests {
         else {
             panic!("fixture is a proposal")
         };
+        let alternate_body = b"other";
+        let alternate_chunks = wire::encode_payload_chunks(context.da_layout, alternate_body)
+            .expect("encode complete canonical alternate-body chunks");
+        // Deliberately bind the complete canonical alternate body to the
+        // original subject so this remains a manifest-conflict negative.
         conflicting_proposal.manifest = wire::PayloadManifest::derive(
             &context,
             conflicting_proposal.round,
             conflicting_proposal.subject,
-            5,
-            &[b"other".to_vec()],
+            u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+            &alternate_chunks,
         )
         .expect("structurally valid alternate manifest");
         let conflicting = AuthenticatedConsensusMessage::for_test(conflicting);
@@ -15214,12 +15223,17 @@ mod tests {
             else {
                 panic!("fixture is a proposal")
             };
+            let alternate_body = b"other";
+            let alternate_chunks = wire::encode_payload_chunks(context.da_layout, alternate_body)
+                .expect("encode complete canonical alternate-body chunks");
+            // Deliberately bind the complete canonical alternate body to the
+            // original subject so this remains a manifest-conflict negative.
             conflicting_proposal.manifest = wire::PayloadManifest::derive(
                 &context,
                 conflicting_proposal.round,
                 conflicting_proposal.subject,
-                5,
-                &[b"other".to_vec()],
+                u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+                &alternate_chunks,
             )
             .expect("structurally valid alternate manifest");
             conflicting_proposal.clone()
@@ -16899,14 +16913,16 @@ mod tests {
                 && certificate.phase == wire::GlobalPhase::Prepare
         )));
 
-        let manifest = wire::PayloadManifest::derive(
+        let locked_payload = [0xBE, 2];
+        let manifest = encode_payload(
             &adapter.wire_context,
             wire_round,
             locked_subject,
-            5,
-            &[b"chunk".to_vec()],
+            &locked_payload,
         )
-        .expect("derive the certified body manifest");
+        .expect("encode the certified body payload")
+        .manifest()
+        .clone();
         let (durable, _) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let validated = ValidatedBodyReceipt::for_test_with_commitment(
             durable.clone(),
@@ -19521,14 +19537,16 @@ mod tests {
             view: 0,
         };
         let locally_validated_subject = subject(0x87);
-        let locally_validated_manifest = wire::PayloadManifest::derive(
+        let locally_validated_payload = [0x87, 2];
+        let locally_validated_manifest = encode_payload(
             &context,
             round,
             locally_validated_subject,
-            5,
-            &[b"local".to_vec()],
+            &locally_validated_payload,
         )
-        .expect("derive locally validated manifest");
+        .expect("encode locally validated payload")
+        .manifest()
+        .clone();
         let (_, locally_validated_receipt) =
             validated_receipts_for_manifest(&context, &locally_validated_manifest);
         let locally_validated_commitment = locally_validated_receipt.execution_commitment();
@@ -19790,14 +19808,11 @@ mod tests {
         let proposal_round = wire::ConsensusRound { view: 2, ..round };
         let proposal_subject = bound_subject;
         let proposal_body = vec![0x83, 2];
-        let proposal_manifest = wire::PayloadManifest::derive(
-            &context,
-            proposal_round,
-            proposal_subject,
-            u64::try_from(proposal_body.len()).expect("proposal body length"),
-            &[proposal_body],
-        )
-        .expect("derive later-view proposal manifest");
+        let proposal_manifest =
+            encode_payload(&context, proposal_round, proposal_subject, &proposal_body)
+                .expect("encode later-view proposal payload")
+                .manifest()
+                .clone();
         let proposer = context.leader(proposal_round.view);
         let mut conflicting_proposal = wire::Proposal {
             round: proposal_round,
@@ -20114,9 +20129,11 @@ mod tests {
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&prepare_refs)
                 .expect("aggregate PrepareQC"),
         };
-        let manifest =
-            wire::PayloadManifest::derive(&context, round, subject, 5, &[b"chunk".to_vec()])
-                .expect("valid protected-body manifest");
+        let protected_payload = [13, 2];
+        let manifest = encode_payload(&context, round, subject, &protected_payload)
+            .expect("encode protected-body payload")
+            .manifest()
+            .clone();
         let core_manifest = adapter
             .registry
             .manifest_to_core(&manifest, &context)

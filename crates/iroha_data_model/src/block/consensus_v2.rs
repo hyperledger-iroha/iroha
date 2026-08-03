@@ -9,6 +9,7 @@ use core::fmt;
 use std::{collections::BTreeSet, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
 
@@ -47,7 +48,7 @@ pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;
 pub const fn is_valid_committee_size(validator_count: usize) -> bool {
     validator_count >= MIN_VALIDATORS_PER_HEIGHT
         && validator_count <= MAX_VALIDATORS_PER_HEIGHT
-        && (validator_count - 1) % 3 == 0
+        && (validator_count - 1).is_multiple_of(3)
 }
 /// Protocol-wide upper bound for one authenticated RS16 chunk.
 pub const MAX_DA_CHUNK_SIZE_BYTES: u32 = 256 * 1024;
@@ -294,9 +295,9 @@ pub struct DataAvailabilityLayout {
     pub encoding: PayloadEncoding,
     /// Maximum encoded chunk size in bytes.
     pub chunk_size_bytes: u32,
-    /// Data shards per stripe; zero for plain chunking.
+    /// Data shards per RS16 stripe.
     pub data_shards: u16,
-    /// Parity shards per stripe; zero for plain chunking.
+    /// Parity shards per RS16 stripe.
     pub parity_shards: u16,
     /// Maximum canonical body size accepted at this height.
     pub max_payload_size_bytes: u64,
@@ -317,8 +318,6 @@ pub struct DataAvailabilityLayout {
     deny_unknown_fields
 )]
 pub enum PayloadEncoding {
-    /// Split the canonical payload into unencoded chunks.
-    Plain,
     /// Encode payload stripes with the deterministic RS16 layout.
     ReedSolomon16,
 }
@@ -1619,6 +1618,83 @@ pub struct PayloadManifest {
     pub chunk_root: Hash,
 }
 
+/// Encode a canonical payload into the complete ordered RS16 chunk sequence
+/// committed by [`PayloadManifest`].
+///
+/// This is the single owner of layout-driven striping, zero padding, and
+/// parity ordering. Callers must never substitute raw payload slices for the
+/// encoded chunk sequence accepted by [`PayloadManifest::derive`].
+///
+/// # Errors
+///
+/// Returns an error when the layout is invalid, the payload is empty or over
+/// the frozen size bound, or the complete encoded sequence cannot be formed.
+pub fn encode_payload_chunks(
+    layout: DataAvailabilityLayout,
+    payload: &[u8],
+) -> Result<Vec<Vec<u8>>, ValidationError> {
+    validate_data_availability_layout(layout)?;
+    let payload_size =
+        u64::try_from(payload.len()).map_err(|_| ValidationError::PayloadTooLarge)?;
+    if payload.is_empty() {
+        return Err(ValidationError::PayloadSizeMismatch);
+    }
+    if payload_size > layout.max_payload_size_bytes {
+        return Err(ValidationError::PayloadTooLarge);
+    }
+
+    let chunk_size = usize::try_from(layout.chunk_size_bytes)
+        .map_err(|_| ValidationError::InvalidChunkLength)?;
+    let data_shards = usize::from(layout.data_shards);
+    let parity_shards = usize::from(layout.parity_shards);
+    let data_chunk_count = payload.len().div_ceil(chunk_size);
+    let stripe_count = data_chunk_count.div_ceil(data_shards);
+    let stripe_width = data_shards
+        .checked_add(parity_shards)
+        .ok_or(ValidationError::ChunkCountTooLarge)?;
+    let encoded_chunk_count = stripe_count
+        .checked_mul(stripe_width)
+        .ok_or(ValidationError::ChunkCountTooLarge)?;
+    let expected_chunk_count = usize::try_from(expected_encoded_chunk_count(payload_size, layout)?)
+        .map_err(|_| ValidationError::ChunkCountTooLarge)?;
+    if encoded_chunk_count != expected_chunk_count {
+        return Err(ValidationError::PayloadSizeMismatch);
+    }
+
+    let mut encoded = Vec::with_capacity(encoded_chunk_count);
+    let symbol_count = chunk_size / 2;
+    for stripe in 0..stripe_count {
+        let mut data = Vec::with_capacity(data_shards);
+        let mut symbols = Vec::with_capacity(data_shards);
+        for within in 0..data_shards {
+            let data_index = stripe
+                .checked_mul(data_shards)
+                .and_then(|base| base.checked_add(within))
+                .ok_or(ValidationError::ChunkCountTooLarge)?;
+            let offset = data_index
+                .checked_mul(chunk_size)
+                .ok_or(ValidationError::PayloadTooLarge)?;
+            let mut chunk = vec![0_u8; chunk_size];
+            if offset < payload.len() {
+                let end = offset.saturating_add(chunk_size).min(payload.len());
+                chunk[..end - offset].copy_from_slice(&payload[offset..end]);
+            }
+            symbols.push(rs16::symbols_from_chunk(symbol_count, &chunk));
+            data.push(chunk);
+        }
+        let parity = rs16::encode_parity(&symbols, parity_shards)
+            .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)?;
+        encoded.extend(data);
+        for shard in parity {
+            encoded.push(
+                rs16::chunk_from_symbols(&shard, chunk_size)
+                    .map_err(|_| ValidationError::InvalidChunkLength)?,
+            );
+        }
+    }
+    Ok(encoded)
+}
+
 impl PayloadManifest {
     /// Derive the only canonical manifest for an encoded chunk sequence.
     ///
@@ -1645,8 +1721,8 @@ impl PayloadManifest {
             chunk_root,
         };
         manifest.validate(context)?;
-        for (index, chunk) in encoded_chunks.iter().enumerate() {
-            validate_encoded_chunk_len(&manifest, index, chunk.len())?;
+        for chunk in encoded_chunks {
+            validate_encoded_chunk_len(&manifest, chunk.len())?;
         }
         Ok(manifest)
     }
@@ -1759,7 +1835,7 @@ impl PayloadChunk {
             .chunk_hashes
             .get(index)
             .ok_or(ValidationError::ChunkIndexOutOfRange)?;
-        validate_encoded_chunk_len(manifest, index, self.bytes.len())?;
+        validate_encoded_chunk_len(manifest, self.bytes.len())?;
         let chunk_hash = Hash::new(&self.bytes);
         if &chunk_hash != expected_hash {
             return Err(ValidationError::ChunkHashMismatch);
@@ -2396,7 +2472,7 @@ pub struct CommitCertificateResponseSignaturePayload {
     pub responder: PeerId,
 }
 
-/// Authenticated NPoS randomness commitment for one frozen epoch roster.
+/// Authenticated `NPoS` randomness commitment for one frozen epoch roster.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2410,11 +2486,11 @@ pub struct VrfCommit {
     pub commitment: [u8; 32],
     /// Signer index in the immutable height-context roster.
     pub signer: ValidatorIndex,
-    /// Signature over the canonical NPoS VRF-commit preimage.
+    /// Signature over the canonical `NPoS` `VRF`-commit preimage.
     pub bls_sig: Vec<u8>,
 }
 
-/// Authenticated NPoS randomness reveal for one frozen epoch roster.
+/// Authenticated `NPoS` randomness reveal for one frozen epoch roster.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2430,7 +2506,7 @@ pub struct VrfReveal {
     pub signer: ValidatorIndex,
     /// Canonical Norito-encoded VRF proof whose verified output equals `reveal`.
     pub vrf_proof: Vec<u8>,
-    /// Signature over the canonical NPoS VRF-reveal preimage.
+    /// Signature over the canonical `NPoS` `VRF`-reveal preimage.
     pub bls_sig: Vec<u8>,
 }
 
@@ -2473,9 +2549,9 @@ pub enum ConsensusMessageV2Payload {
     CommitCertificateRequest(CommitCertificateRequest),
     /// Response carrying the active height context's durable `CommitQC`.
     CommitCertificateResponse(CommitCertificateResponse),
-    /// NPoS epoch-randomness commitment.
+    /// `NPoS` epoch-randomness commitment.
     VrfCommit(VrfCommit),
-    /// NPoS epoch-randomness reveal.
+    /// `NPoS` epoch-randomness reveal.
     VrfReveal(VrfReveal),
 }
 
@@ -4042,7 +4118,6 @@ fn expected_encoded_chunk_count(
     let payload = u128::from(payload_size_bytes);
     let chunk_size = u128::from(layout.chunk_size_bytes);
     let count = match layout.encoding {
-        PayloadEncoding::Plain => return Err(ValidationError::InvalidDataAvailabilityLayout),
         PayloadEncoding::ReedSolomon16 => {
             let data_shards = u128::from(layout.data_shards);
             let stripe_payload = chunk_size
@@ -4060,8 +4135,7 @@ fn expected_encoded_chunk_count(
 fn validate_data_availability_layout(
     layout: DataAvailabilityLayout,
 ) -> Result<(), ValidationError> {
-    if layout.encoding != PayloadEncoding::ReedSolomon16
-        || layout.chunk_size_bytes == 0
+    if layout.chunk_size_bytes == 0
         || layout.chunk_size_bytes > MAX_DA_CHUNK_SIZE_BYTES
         || !layout.chunk_size_bytes.is_multiple_of(2)
         || layout.data_shards == 0
@@ -4092,24 +4166,14 @@ fn validate_data_availability_layout(
 
 fn validate_encoded_chunk_len(
     manifest: &PayloadManifest,
-    _index: usize,
     actual: usize,
 ) -> Result<(), ValidationError> {
     let chunk_size = usize::try_from(manifest.layout.chunk_size_bytes)
         .map_err(|_| ValidationError::InvalidChunkLength)?;
-    if actual == 0 || actual > chunk_size {
-        return Err(ValidationError::InvalidChunkLength);
-    }
     match manifest.layout.encoding {
-        PayloadEncoding::Plain => {
-            return Err(ValidationError::InvalidDataAvailabilityLayout);
-        }
-        PayloadEncoding::ReedSolomon16 if actual != chunk_size => {
-            return Err(ValidationError::InvalidChunkLength);
-        }
-        PayloadEncoding::ReedSolomon16 => {}
+        PayloadEncoding::ReedSolomon16 if actual == chunk_size => Ok(()),
+        PayloadEncoding::ReedSolomon16 => Err(ValidationError::InvalidChunkLength),
     }
-    Ok(())
 }
 
 fn validated_total_power(roster: &[ValidatorPower]) -> Result<u64, ValidationError> {
@@ -4254,6 +4318,48 @@ mod tests {
         let legacy_implicit_zero_bytes = 0_u32.to_le_bytes();
         let mut legacy_implicit_zero = legacy_implicit_zero_bytes.as_slice();
         assert!(GlobalPhase::decode_all(&mut legacy_implicit_zero).is_err());
+    }
+
+    #[test]
+    fn payload_encoding_uses_natural_zero_tag_and_rejects_retired_tag_one() {
+        let canonical = PayloadEncoding::ReedSolomon16.encode();
+        assert_eq!(canonical, 0_u32.to_le_bytes());
+        assert_eq!(
+            PayloadEncoding::decode_all(&mut canonical.as_slice())
+                .expect("decode canonical RS16 payload encoding"),
+            PayloadEncoding::ReedSolomon16
+        );
+
+        let retired_tag = 1_u32.to_le_bytes();
+        assert!(
+            PayloadEncoding::decode_all(&mut retired_tag.as_slice()).is_err(),
+            "retired payload-encoding tag 1 must fail closed"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn payload_encoding_json_rejects_retired_plain_variant() {
+        let canonical = norito::json::to_value(&PayloadEncoding::ReedSolomon16)
+            .expect("serialize canonical RS16 payload encoding");
+        assert_eq!(
+            norito::json::from_value::<PayloadEncoding>(canonical.clone())
+                .expect("decode canonical RS16 payload encoding"),
+            PayloadEncoding::ReedSolomon16
+        );
+
+        let mut retired = canonical;
+        let encoding = retired
+            .as_object_mut()
+            .expect("adjacently tagged payload encoding")
+            .get_mut("encoding")
+            .expect("payload encoding tag");
+        assert_eq!(encoding.as_str(), Some("reed_solomon16"));
+        *encoding = norito::json::Value::String("plain".to_owned());
+        assert!(
+            norito::json::from_value::<PayloadEncoding>(retired).is_err(),
+            "retired Plain payload encoding must fail closed"
+        );
     }
 
     #[test]
@@ -4554,6 +4660,11 @@ mod tests {
         }
     }
 
+    fn rs16_fixture_chunks(context: &HeightContext, payload: &[u8]) -> Vec<Vec<u8>> {
+        encode_payload_chunks(context.da_layout, payload)
+            .expect("fixture payload encoding succeeds")
+    }
+
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
         ExecutionCommitment::new(
             Hash::new([seed, 3]),
@@ -4588,7 +4699,8 @@ mod tests {
 
     fn manifest(context: &HeightContext) -> PayloadManifest {
         let subject = subject(9);
-        PayloadManifest::derive(context, round(context, 1), subject, 4, &[b"body".to_vec()])
+        let encoded_chunks = rs16_fixture_chunks(context, b"body");
+        PayloadManifest::derive(context, round(context, 1), subject, 4, &encoded_chunks)
             .expect("valid canonical manifest")
     }
 
@@ -4813,6 +4925,35 @@ mod tests {
     }
 
     #[test]
+    fn payload_chunk_encoding_is_complete_padded_and_deterministic() {
+        let context = context(&[1, 1, 1, 1]);
+        let payload = b"abcdef";
+        let chunks = encode_payload_chunks(context.da_layout, payload)
+            .expect("canonical payload encoding succeeds");
+        assert_eq!(chunks.len(), 4);
+        assert!(chunks.iter().all(|chunk| chunk.len() == 4));
+        assert_eq!(chunks[0], b"abcd");
+        assert_eq!(chunks[1], chunks[0]);
+        assert_eq!(chunks[2], [b'e', b'f', 0, 0]);
+        assert_eq!(chunks[3], chunks[2]);
+        assert_eq!(
+            chunks,
+            encode_payload_chunks(context.da_layout, payload)
+                .expect("repeated canonical encoding succeeds")
+        );
+
+        let manifest = PayloadManifest::derive(
+            &context,
+            round(&context, 1),
+            subject(9),
+            u64::try_from(payload.len()).expect("fixture payload length fits u64"),
+            &chunks,
+        )
+        .expect("complete encoded chunks derive a valid manifest");
+        assert_eq!(manifest.validate(&context), Ok(()));
+    }
+
+    #[test]
     fn height_context_rejects_noncanonical_rosters_and_quorums() {
         let mut empty = context(&[1, 1, 1, 1]);
         empty.roster.clear();
@@ -4854,15 +4995,6 @@ mod tests {
 
         let largest = context(&vec![1; MAX_VALIDATORS_PER_HEIGHT]);
         assert_eq!(largest.validate(), Ok(()));
-
-        let mut plain_da = context(&[1, 1, 1, 1]);
-        plain_da.da_layout.encoding = PayloadEncoding::Plain;
-        plain_da.da_layout.data_shards = 0;
-        plain_da.da_layout.parity_shards = 0;
-        assert_eq!(
-            plain_da.validate(),
-            Err(ValidationError::InvalidDataAvailabilityLayout)
-        );
 
         let mut odd_rs16_symbols = context(&[1, 1, 1, 1]);
         odd_rs16_symbols.da_layout.chunk_size_bytes = 3;
@@ -4966,9 +5098,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x13, 0x00, 0xcf, 0x26, 0xd2, 0x40, 0x58, 0x12, 0x45, 0x68, 0xee, 0x55, 0xde, 0xa8,
-                0xee, 0xce, 0x18, 0xda, 0xf5, 0xed, 0x0d, 0xaf, 0x9b, 0xf0, 0x45, 0x63, 0x70, 0xac,
-                0x50, 0xfa, 0x41, 0x4d,
+                0x06, 0xfd, 0x74, 0x10, 0x75, 0x8d, 0x71, 0xbb, 0x75, 0xff, 0xf8, 0x45, 0xd6, 0x8f,
+                0x38, 0xdc, 0xda, 0x6f, 0x7b, 0x52, 0xd1, 0x79, 0x91, 0xdb, 0x1c, 0xe9, 0x9e, 0xe0,
+                0x29, 0xb4, 0x7c, 0x37,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -4992,9 +5124,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x2d, 0xcb, 0xf6, 0x22, 0xa5, 0x46, 0x47, 0x3b, 0xf2, 0x5c, 0xf7, 0x88, 0x06, 0x22,
-                0xe2, 0x6e, 0x69, 0x28, 0xd5, 0x2b, 0x52, 0x1b, 0x6c, 0x3a, 0x47, 0xf4, 0xba, 0xe8,
-                0xf8, 0xb9, 0xb8, 0xa5,
+                0x63, 0xe4, 0x91, 0xf6, 0x3a, 0x8e, 0x16, 0xc8, 0x2b, 0x73, 0x30, 0xf7, 0x0e, 0x30,
+                0x4e, 0x09, 0x32, 0x22, 0xe1, 0xdf, 0xb7, 0xf2, 0x53, 0x95, 0x9a, 0x87, 0xbc, 0x48,
+                0xaa, 0x46, 0xd1, 0x5f,
             ],
             "intentional transition-identity changes require updating this golden"
         );
@@ -5829,7 +5961,7 @@ mod tests {
         let round = round(&context, 1);
         let mut response_subject = subject(9);
         response_subject.payload_hash = Hash::new(&body);
-        let chunks = body.chunks(4).map(<[u8]>::to_vec).collect::<Vec<_>>();
+        let chunks = rs16_fixture_chunks(&context, &body);
         let manifest = PayloadManifest::derive(
             &context,
             round,

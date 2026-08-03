@@ -37,7 +37,7 @@ use std::{
     path::PathBuf,
     ptr,
     str::FromStr,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -134,7 +134,7 @@ use iroha_data_model::{
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         zk::{
             CancelConfidentialPolicyTransition, CreateElection, FinalizeElection, RegisterZkAsset,
-            ScheduleConfidentialPolicyTransition, Shield, SubmitBallot, Unshield, ZkTransfer,
+            ScheduleConfidentialPolicyTransition, SubmitBallot,
         },
     },
     kaigi::{
@@ -172,9 +172,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, PrivateCreateKaigi,
-        PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
-        PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
         TransactionSubmissionReceipt,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
@@ -214,7 +212,7 @@ use norito::{
     codec::{DecodeAll, Encode},
     core::{self as norito_core},
     decode_from_bytes,
-    json::{self, JsonDeserialize, Map, Value},
+    json::{self, Map, Value},
 };
 use rand_core_06::OsRng;
 use sorafs_car::{
@@ -8433,8 +8431,65 @@ fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<Instructio
     Ok(InstructionBox::from(TransferAssetBatch::new(entries)))
 }
 
+fn validate_governance_selector_payload(
+    payload: Option<&json::Value>,
+    field: &str,
+    context: &str,
+) -> napi::Result<()> {
+    let Some(json::Value::Object(fields)) = payload else {
+        return Ok(());
+    };
+    let Some(selector) = fields.get(field) else {
+        return Ok(());
+    };
+    let json::Value::String(selector) = selector else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "{context}.{field} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
+            ),
+        ));
+    };
+    if !iroha_data_model::governance::is_valid_governance_selector_v1(selector) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "{context}.{field} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_governance_instruction_selectors(value: &json::Value) -> napi::Result<()> {
+    let json::Value::Object(instruction) = value else {
+        return Ok(());
+    };
+    for (variant, field) in [
+        ("CastZkBallot", "election_id"),
+        ("CastPlainBallot", "referendum_id"),
+        ("FinalizeReferendum", "referendum_id"),
+    ] {
+        validate_governance_selector_payload(instruction.get(variant), field, variant)?;
+    }
+    for zk_key in ["zk", "Zk", "ZK"] {
+        let Some(json::Value::Object(zk)) = instruction.get(zk_key) else {
+            continue;
+        };
+        for variant in ["CreateElection", "SubmitBallot", "FinalizeElection"] {
+            validate_governance_selector_payload(
+                zk.get(variant),
+                "election_id",
+                &format!("{zk_key}.{variant}"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
 fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
+    validate_governance_instruction_selectors(&value)?;
     // These instructions carry release-critical JSON contracts. The generic
     // `InstructionBox` decoder may accept data-model defaults and unknown
     // fields, so route these envelopes through explicit strict parsers.
@@ -10204,20 +10259,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                         json::from_value(payload).map_err(norito_to_napi)?;
                     return Ok(Box::new(instruction).into_instruction_box());
                 }
-                if let Some(payload) = zk_map.remove("Shield") {
-                    let instruction: Shield = json::from_value(payload).map_err(norito_to_napi)?;
-                    return Ok(Box::new(instruction).into_instruction_box());
-                }
-                if let Some(payload) = zk_map.remove("ZkTransfer") {
-                    let instruction: ZkTransfer =
-                        json::from_value(payload).map_err(norito_to_napi)?;
-                    return Ok(Box::new(instruction).into_instruction_box());
-                }
-                if let Some(payload) = zk_map.remove("Unshield") {
-                    let instruction: Unshield =
-                        json::from_value(payload).map_err(norito_to_napi)?;
-                    return Ok(Box::new(instruction).into_instruction_box());
-                }
                 if let Some(payload) = zk_map.remove("CreateElection") {
                     let instruction: CreateElection =
                         json::from_value(payload).map_err(norito_to_napi)?;
@@ -11222,27 +11263,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         ));
     }
 
-    if let Some(shield) = instruction_ref.as_any().downcast_ref::<Shield>() {
-        return Ok(zk_json_value(
-            "Shield",
-            json::to_value(shield).map_err(norito_to_napi)?,
-        ));
-    }
-
-    if let Some(transfer) = instruction_ref.as_any().downcast_ref::<ZkTransfer>() {
-        return Ok(zk_json_value(
-            "ZkTransfer",
-            json::to_value(transfer).map_err(norito_to_napi)?,
-        ));
-    }
-
-    if let Some(unshield) = instruction_ref.as_any().downcast_ref::<Unshield>() {
-        return Ok(zk_json_value(
-            "Unshield",
-            json::to_value(unshield).map_err(norito_to_napi)?,
-        ));
-    }
-
     if let Some(create) = instruction_ref.as_any().downcast_ref::<CreateElection>() {
         return Ok(zk_json_value(
             "CreateElection",
@@ -12180,34 +12200,6 @@ pub struct JsExternalTransactionSignature {
     pub authority: Option<String>,
 }
 
-/// Result of building an authority-free private Kaigi transaction entrypoint.
-#[napi(object)]
-pub struct JsPrivateKaigiTransactionEntrypoint {
-    /// Norito-encoded transaction entrypoint bytes.
-    pub transaction_entrypoint: Buffer,
-    /// Canonical pipeline hash used by Torii status polling.
-    pub hash: Buffer,
-    /// Action hash bound into the fee-spend proof.
-    pub action_hash: Buffer,
-}
-
-/// Result of building a private Kaigi confidential XOR fee-spend envelope.
-#[napi(object)]
-pub struct JsPrivateKaigiFeeSpendEnvelope {
-    /// Asset definition that the confidential fee spend targets.
-    pub asset_definition_id: String,
-    /// Recent shielded Merkle root bound into the spend.
-    pub anchor_root: Buffer,
-    /// Consumed nullifiers for the fee spend.
-    pub nullifiers: Vec<Buffer>,
-    /// Output commitments created by the fee spend.
-    pub output_commitments: Vec<Buffer>,
-    /// Encrypted payloads attached to the output commitments.
-    pub encrypted_change_payloads: Vec<Buffer>,
-    /// Norito-encoded `OpenVerifyEnvelope` payload.
-    pub proof: Buffer,
-}
-
 /// Input note material for confidential transfer/unshield proof construction.
 #[napi(object)]
 #[derive(Clone)]
@@ -12288,142 +12280,6 @@ pub struct JsConfidentialUnshieldProofEnvelopeV3 {
     pub root: Buffer,
     /// Norito-encoded `OpenVerifyEnvelope` payload.
     pub proof: Buffer,
-}
-
-fn parse_private_kaigi_json<T>(context: &str, payload: &str) -> napi::Result<T>
-where
-    T: JsonDeserialize,
-{
-    json::from_json(payload).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid {context} json: {err}"),
-        )
-    })
-}
-
-fn parse_kaigi_id_literal(value: &str, context: &str) -> napi::Result<KaigiId> {
-    let trimmed = value.trim();
-    let Some((domain, call_name)) = trimmed.split_once(':') else {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must be in `domain.dataspace:callName` format"),
-        ));
-    };
-    let domain_id = DomainId::parse_fully_qualified(domain).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid {context} domain id: {err}"),
-        )
-    })?;
-    let call_name = Name::from_str(call_name).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid {context} call name: {err}"),
-        )
-    })?;
-    Ok(KaigiId::new(domain_id, call_name))
-}
-
-fn normalize_private_kaigi_creation_time_ms(creation_time_ms: Option<i64>) -> napi::Result<u64> {
-    creation_time_ms.map_or_else(
-        || {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
-                .map_err(norito_to_napi)
-        },
-        |ms| js_number_to_u64(ms, "creation_time_ms"),
-    )
-}
-
-fn normalize_private_kaigi_ended_at_ms(ended_at_ms: Option<i64>) -> napi::Result<Option<u64>> {
-    ended_at_ms
-        .map(|value| js_number_to_u64(value, "ended_at_ms"))
-        .transpose()
-}
-
-fn validate_private_kaigi_fee_fixture(
-    vk_backend: &str,
-    vk_circuit_id: &str,
-    vk_bytes: &[u8],
-) -> napi::Result<Vec<u8>> {
-    if vk_backend != "halo2/ipa" {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!(
-                "unsupported private Kaigi fee transfer verifier backend `{vk_backend}`; expected halo2/ipa"
-            ),
-        ));
-    }
-    if vk_bytes.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "vk_bytes must be present for private Kaigi fee spend construction",
-        ));
-    }
-
-    let network_vk =
-        iroha_data_model::proof::VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes.to_vec());
-    let fixture = halo2_fixture_envelope(
-        vk_circuit_id.to_owned(),
-        hash_verifying_key_box(&network_vk),
-    );
-    let fixture_vk_bytes = fixture.vk_bytes.ok_or_else(|| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("unsupported private Kaigi fee verifier circuit `{vk_circuit_id}`"),
-        )
-    })?;
-    if fixture_vk_bytes != vk_bytes {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!(
-                "private Kaigi fee verifier `{vk_backend}::{vk_circuit_id}` does not match the built-in fixture circuit"
-            ),
-        ));
-    }
-    Ok(fixture.proof_bytes)
-}
-
-fn build_private_kaigi_fee_change_payload(
-    asset_definition_id: &str,
-    action_hash_hex: &str,
-    fee_amount: &str,
-) -> Vec<u8> {
-    json::to_string(&norito_json!({
-        "schema": "iroha.private_kaigi.change.v1",
-        "asset_definition_id": asset_definition_id,
-        "action_hash_hex": action_hash_hex,
-        "fee_amount": fee_amount,
-        "change_amount": "0",
-    }))
-    .expect("private Kaigi change payload JSON serialization")
-    .into_bytes()
-}
-
-fn normalize_private_kaigi_fee_amount(fee_amount: &str) -> napi::Result<String> {
-    if fee_amount.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "fee_amount must be non-empty",
-        ));
-    }
-    parse_canonical_quantity_text(fee_amount, "fee_amount")?;
-    Ok(fee_amount.to_owned())
-}
-
-fn normalize_private_kaigi_nonce(nonce: Option<u32>) -> napi::Result<Option<NonZeroU32>> {
-    nonce
-        .map(|value| {
-            NonZeroU32::new(value).ok_or_else(|| {
-                napi::Error::new(
-                    napi::Status::InvalidArg,
-                    "nonce must be non-zero (fits in u32)",
-                )
-            })
-        })
-        .transpose()
 }
 
 fn parse_fixed_32_hex(context: &str, value: &str) -> napi::Result<[u8; 32]> {
@@ -12592,47 +12448,6 @@ fn parse_confidential_unshield_outputs_v3(
             })
         })
         .collect()
-}
-
-fn private_kaigi_fee_aux_json(
-    action_hash_hex: &str,
-    chain_id: &str,
-    asset_definition_id: &str,
-    fee_amount: &str,
-) -> Vec<u8> {
-    json::to_string(&norito_json!({
-        "schema": "iroha.private_kaigi.fee.v1",
-        "action_hash_hex": action_hash_hex,
-        "chain_id": chain_id,
-        "asset_definition_id": asset_definition_id,
-        "fee_amount": fee_amount,
-    }))
-    .expect("private Kaigi fee aux JSON serialization")
-    .into_bytes()
-}
-
-fn build_private_kaigi_fee_digest(label: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(label);
-    for part in parts {
-        hasher.update(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_le_bytes());
-        hasher.update(part);
-    }
-    *hasher.finalize().as_bytes()
-}
-
-fn build_private_kaigi_entrypoint_result(
-    tx: PrivateKaigiTransaction,
-) -> JsPrivateKaigiTransactionEntrypoint {
-    let action_hash = tx.action_hash();
-    let hash = tx.hash();
-    let entrypoint = TransactionEntrypoint::PrivateKaigi(tx);
-    let entrypoint_bytes = Encode::encode(&entrypoint);
-    JsPrivateKaigiTransactionEntrypoint {
-        transaction_entrypoint: Buffer::from(entrypoint_bytes),
-        hash: Buffer::from(hash.as_ref().to_vec()),
-        action_hash: Buffer::from(action_hash.as_ref().to_vec()),
-    }
 }
 
 const EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES: usize = 1024 * 1024;
@@ -12878,30 +12693,6 @@ pub fn finalize_signed_transaction(
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_transaction),
         hash: Buffer::from(tx.hash().as_ref().to_vec()),
-    })
-}
-
-fn encode_private_kaigi_fee_proof(
-    proof_bytes: &[u8],
-    action_hash_hex: &str,
-    chain_id: &str,
-    asset_definition_id: &str,
-    fee_amount: &str,
-) -> napi::Result<Vec<u8>> {
-    let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
-        norito::decode_from_bytes(proof_bytes).map_err(|err| {
-            napi::Error::new(
-                napi::Status::GenericFailure,
-                format!("failed to decode private Kaigi fee proof fixture: {err}"),
-            )
-        })?;
-    envelope.aux =
-        private_kaigi_fee_aux_json(action_hash_hex, chain_id, asset_definition_id, fee_amount);
-    norito::to_bytes(&envelope).map_err(|err| {
-        napi::Error::new(
-            napi::Status::GenericFailure,
-            format!("failed to encode private Kaigi fee proof envelope: {err}"),
-        )
     })
 }
 
@@ -13397,186 +13188,6 @@ pub fn build_ivm_proved_transaction(
     )
 }
 
-/// Build a private Kaigi create transaction entrypoint.
-#[napi]
-#[allow(clippy::needless_pass_by_value)]
-pub fn build_private_create_kaigi_transaction(
-    chain_id: String,
-    call_json: String,
-    artifacts_json: String,
-    fee_spend_json: String,
-    metadata_json: Option<String>,
-    creation_time_ms: Option<i64>,
-    nonce: Option<u32>,
-) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
-    let chain: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
-    let call: PrivateKaigiTemplate = parse_private_kaigi_json("private create call", &call_json)?;
-    let artifacts: PrivateKaigiArtifacts =
-        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
-    let fee_spend: PrivateKaigiFeeSpend =
-        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
-    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
-    let tx = PrivateKaigiTransaction {
-        chain,
-        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
-        nonce: normalize_private_kaigi_nonce(nonce)?,
-        metadata,
-        action: PrivateKaigiAction::Create(PrivateCreateKaigi { call }),
-        artifacts,
-        fee_spend,
-    };
-    Ok(build_private_kaigi_entrypoint_result(tx))
-}
-
-/// Build a deterministic confidential XOR fee-spend envelope for private Kaigi.
-///
-/// This helper only supports transfer verifying keys whose circuit id matches one of the
-/// built-in Halo2 fixture circuits. The caller must pass the active `vk_transfer` record bytes
-/// advertised by the network so the helper can verify the local fixture matches the network VK.
-#[napi]
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-pub fn build_private_kaigi_fee_spend(
-    chain_id: String,
-    asset_definition_id: String,
-    action_hash: Uint8Array,
-    anchor_root_hex: String,
-    fee_amount: String,
-    vk_backend: String,
-    vk_circuit_id: String,
-    vk_bytes: Uint8Array,
-) -> napi::Result<JsPrivateKaigiFeeSpendEnvelope> {
-    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid asset definition id: {err}"),
-        )
-    })?;
-    if action_hash.len() != 32 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "action_hash must be exactly 32 bytes",
-        ));
-    }
-    let anchor_root = parse_fixed_32_hex("anchor_root_hex", &anchor_root_hex)?;
-    let fee_amount = normalize_private_kaigi_fee_amount(&fee_amount)?;
-    let vk_backend = vk_backend.trim();
-    let vk_circuit_id = vk_circuit_id.trim();
-    let proof_bytes =
-        validate_private_kaigi_fee_fixture(vk_backend, vk_circuit_id, vk_bytes.as_ref())?;
-    let asset_definition_string = asset_definition_id.to_string();
-    let action_hash_hex = hex::encode(action_hash.as_ref());
-    let nullifier = build_private_kaigi_fee_digest(
-        b"iroha.private_kaigi.fee.nullifier.v1",
-        &[
-            action_hash.as_ref(),
-            chain_id.as_bytes(),
-            asset_definition_string.as_bytes(),
-        ],
-    );
-    let output_commitment = build_private_kaigi_fee_digest(
-        b"iroha.private_kaigi.fee.output.v1",
-        &[
-            action_hash.as_ref(),
-            fee_amount.as_bytes(),
-            anchor_root.as_slice(),
-        ],
-    );
-    let encrypted_change_payload = build_private_kaigi_fee_change_payload(
-        &asset_definition_string,
-        &action_hash_hex,
-        &fee_amount,
-    );
-    let encoded = encode_private_kaigi_fee_proof(
-        &proof_bytes,
-        &action_hash_hex,
-        chain_id.trim(),
-        &asset_definition_string,
-        &fee_amount,
-    )?;
-
-    Ok(JsPrivateKaigiFeeSpendEnvelope {
-        asset_definition_id: asset_definition_id.to_string(),
-        anchor_root: Buffer::from(anchor_root.to_vec()),
-        nullifiers: vec![Buffer::from(nullifier.to_vec())],
-        output_commitments: vec![Buffer::from(output_commitment.to_vec())],
-        encrypted_change_payloads: vec![Buffer::from(encrypted_change_payload)],
-        proof: Buffer::from(encoded),
-    })
-}
-
-/// Build a private Kaigi join transaction entrypoint.
-#[napi]
-#[allow(clippy::needless_pass_by_value)]
-pub fn build_private_join_kaigi_transaction(
-    chain_id: String,
-    call_id: String,
-    artifacts_json: String,
-    fee_spend_json: String,
-    metadata_json: Option<String>,
-    creation_time_ms: Option<i64>,
-    nonce: Option<u32>,
-) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
-    let chain: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
-    let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
-    let artifacts: PrivateKaigiArtifacts =
-        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
-    let fee_spend: PrivateKaigiFeeSpend =
-        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
-    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
-    let tx = PrivateKaigiTransaction {
-        chain,
-        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
-        nonce: normalize_private_kaigi_nonce(nonce)?,
-        metadata,
-        action: PrivateKaigiAction::Join(PrivateJoinKaigi { call_id }),
-        artifacts,
-        fee_spend,
-    };
-    Ok(build_private_kaigi_entrypoint_result(tx))
-}
-
-/// Build a private Kaigi end transaction entrypoint.
-#[napi]
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-pub fn build_private_end_kaigi_transaction(
-    chain_id: String,
-    call_id: String,
-    ended_at_ms: Option<i64>,
-    artifacts_json: String,
-    fee_spend_json: String,
-    metadata_json: Option<String>,
-    creation_time_ms: Option<i64>,
-    nonce: Option<u32>,
-) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
-    let chain: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
-    let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
-    let ended_at_ms = normalize_private_kaigi_ended_at_ms(ended_at_ms)?;
-    let artifacts: PrivateKaigiArtifacts =
-        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
-    let fee_spend: PrivateKaigiFeeSpend =
-        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
-    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
-    let tx = PrivateKaigiTransaction {
-        chain,
-        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
-        nonce: normalize_private_kaigi_nonce(nonce)?,
-        metadata,
-        action: PrivateKaigiAction::End(PrivateEndKaigi {
-            call_id,
-            ended_at_ms,
-        }),
-        artifacts,
-        fee_spend,
-    };
-    Ok(build_private_kaigi_entrypoint_result(tx))
-}
-
 /// Build a Norito-encoded trigger action that executes on a time schedule.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -13945,58 +13556,6 @@ mod tests {
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(error.reason.contains(field));
             assert!(error.reason.contains("safe integer"));
-        }
-    }
-
-    #[test]
-    fn private_kaigi_timestamp_inputs_enforce_js_safe_integer_range() {
-        let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
-            .expect("JavaScript safe integer must fit in i64");
-
-        assert_eq!(
-            normalize_private_kaigi_creation_time_ms(Some(maximum))
-                .expect("creation time at JavaScript's safe integer limit must be accepted"),
-            JS_MAX_SAFE_INTEGER_U64
-        );
-        assert_eq!(
-            normalize_private_kaigi_ended_at_ms(Some(maximum))
-                .expect("end time at JavaScript's safe integer limit must be accepted"),
-            Some(JS_MAX_SAFE_INTEGER_U64)
-        );
-
-        for (field, error) in [
-            (
-                "creation_time_ms",
-                normalize_private_kaigi_creation_time_ms(Some(maximum + 1))
-                    .expect_err("creation time above the safe integer limit must be rejected"),
-            ),
-            (
-                "ended_at_ms",
-                normalize_private_kaigi_ended_at_ms(Some(maximum + 1))
-                    .expect_err("end time above the safe integer limit must be rejected"),
-            ),
-        ] {
-            assert_eq!(error.status, napi::Status::InvalidArg);
-            assert!(error.reason.contains(field));
-            assert!(error.reason.contains("safe integer"));
-        }
-    }
-
-    #[test]
-    fn private_kaigi_fee_amount_requires_canonical_quantity_text() {
-        let wide = "340282366920938463463374607431768211456.25";
-        for amount in ["0", "1.25", wide] {
-            assert_eq!(
-                normalize_private_kaigi_fee_amount(amount)
-                    .expect("canonical private Kaigi fee Quantity"),
-                amount
-            );
-        }
-
-        for amount in ["", "-1", "01", "1.0", "+1", " 1", "1 ", "1e3"] {
-            let error = normalize_private_kaigi_fee_amount(amount)
-                .expect_err("invalid private Kaigi fee Quantity must be rejected");
-            assert_eq!(error.status, napi::Status::InvalidArg);
         }
     }
 
@@ -14426,6 +13985,38 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn retired_generic_zk_instruction_variants_are_not_parseable() {
+        for variant in [
+            ["Sh", "ield"].concat(),
+            ["Zk", "Transfer"].concat(),
+            ["Un", "shield"].concat(),
+        ] {
+            let payload = format!(r#"{{"Zk":{{"{variant}":{{}}}}}}"#);
+            let error = instruction_from_json(&payload)
+                .expect_err("retired generic privacy instruction must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert_eq!(error.reason, "unsupported zk instruction variant");
+        }
+
+        let source = include_str!("lib.rs");
+        for retired_type_use in [
+            ["let instruction: ", "Sh", "ield"].concat(),
+            ["downcast_ref::<", "Sh", "ield", ">"].concat(),
+            ["let instruction: ", "Zk", "Transfer"].concat(),
+            ["downcast_ref::<", "Zk", "Transfer", ">"].concat(),
+            ["let instruction: ", "Un", "shield"].concat(),
+            ["downcast_ref::<", "Un", "shield", ">"].concat(),
+        ] {
+            assert!(
+                !source.contains(&retired_type_use),
+                "JS host must not compile against retired type use {retired_type_use}"
+            );
+        }
+        assert!(source.contains("RegisterZkAsset"));
+        assert!(source.contains("build_confidential_unshield_proof_v3_with_paths"));
+    }
 
     #[test]
     fn subscription_draft_instruction_json_roundtrips() {
@@ -15421,6 +15012,36 @@ seiyaku Privacy {
             "CastPlainBallot".to_owned(),
             json::Value::Object(fields),
         )]))
+    }
+
+    fn governance_selector_instruction_json(variant: &str, selector: &str) -> json::Value {
+        match variant {
+            "CastZkBallot" => norito_json!({
+                "CastZkBallot": norito_json!({ "election_id": selector })
+            }),
+            "CastPlainBallot" => norito_json!({
+                "CastPlainBallot": norito_json!({ "referendum_id": selector })
+            }),
+            "FinalizeReferendum" => norito_json!({
+                "FinalizeReferendum": norito_json!({ "referendum_id": selector })
+            }),
+            "CreateElection" => norito_json!({
+                "zk": norito_json!({
+                    "CreateElection": norito_json!({ "election_id": selector })
+                })
+            }),
+            "SubmitBallot" => norito_json!({
+                "zk": norito_json!({
+                    "SubmitBallot": norito_json!({ "election_id": selector })
+                })
+            }),
+            "FinalizeElection" => norito_json!({
+                "zk": norito_json!({
+                    "FinalizeElection": norito_json!({ "election_id": selector })
+                })
+            }),
+            _ => panic!("unsupported governance selector instruction {variant}"),
+        }
     }
 
     fn account_json_literal(account: &AccountId) -> String {
@@ -18085,6 +17706,60 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn governance_selectors_are_canonical_at_instruction_construction() {
+        const VARIANTS: [&str; 6] = [
+            "CastZkBallot",
+            "CastPlainBallot",
+            "FinalizeReferendum",
+            "CreateElection",
+            "SubmitBallot",
+            "FinalizeElection",
+        ];
+        let maximum = "a".repeat(128);
+        for selector in ["a", maximum.as_str()] {
+            for variant in VARIANTS {
+                let value = governance_selector_instruction_json(variant, selector);
+                validate_governance_instruction_selectors(&value).unwrap_or_else(|error| {
+                    panic!(
+                        "valid {variant} selector of length {} was rejected: {}",
+                        selector.len(),
+                        error.reason
+                    )
+                });
+            }
+        }
+
+        let overlong = "a".repeat(129);
+        for (case, selector) in [
+            ("empty", ""),
+            ("dot", "."),
+            ("leading dot", ".hidden"),
+            ("slash", "a/b"),
+            ("percent", "a%2Fb"),
+            ("whitespace", "a b"),
+            ("control", "a\0b"),
+            ("Unicode", "投票"),
+            ("129 bytes", overlong.as_str()),
+        ] {
+            for variant in VARIANTS {
+                let error =
+                    value_to_instruction(governance_selector_instruction_json(variant, selector))
+                        .expect_err(
+                            "noncanonical selector must fail before instruction construction",
+                        );
+                assert_eq!(error.status, napi::Status::InvalidArg);
+                assert!(
+                    error
+                        .reason
+                        .contains("must be 1-128 RFC 3986 unreserved ASCII characters"),
+                    "unexpected {variant} {case} rejection: {}",
+                    error.reason
+                );
+            }
+        }
+    }
+
+    #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_deprecated_keys() {
         let mut inner = json::Map::new();
         let owner = canonical_owner_literal("wonderland");
@@ -19744,78 +19419,6 @@ seiyaku Privacy {
             parse_account_id(&tampered, "authority account id").is_err(),
             "payload/checksum tampering must be rejected"
         );
-    }
-
-    #[test]
-    fn build_transaction_accepts_taira_i105_shield_fields() {
-        disable_packed_struct_once();
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let authority = AccountId::new(keypair.public_key().clone());
-        let authority_i105 = AccountAddress::from_account_id(&authority)
-            .expect("account address")
-            .to_i105_for_discriminant(369)
-            .expect("taira i105");
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("domain"),
-            "rose".parse().expect("name"),
-        );
-        let instruction = Shield::new(
-            asset_definition,
-            authority.clone(),
-            7_u128,
-            [0x11; 32],
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
-                [0x22; 32],
-                [0x33; 24],
-                b"ciphertext".to_vec(),
-            ),
-        );
-        let instruction_box: InstructionBox = instruction.into();
-        let mut instruction_json =
-            instruction_to_json_value(&instruction_box).expect("instruction json");
-        instruction_json
-            .get_mut("zk")
-            .and_then(json::Value::as_object_mut)
-            .and_then(|zk| zk.get_mut("Shield"))
-            .and_then(json::Value::as_object_mut)
-            .expect("shield payload")
-            .insert(
-                "from".to_owned(),
-                json::Value::String(authority_i105.clone()),
-            );
-        let instruction_json =
-            json::to_json(&instruction_json).expect("serialized instruction json");
-        let (_, secret_bytes) = keypair.private_key().to_bytes();
-
-        let result = build_transaction(
-            chain_id.to_string(),
-            authority_i105,
-            vec![instruction_json],
-            authority_fee_payment_json(),
-            None,
-            None,
-            None,
-            None,
-            Uint8Array::from(secret_bytes.to_vec()),
-            None,
-        )
-        .expect("transaction built");
-
-        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
-        assert_eq!(tx.authority(), &authority);
-        match tx.instructions() {
-            Executable::Instructions(batch) => {
-                assert_eq!(batch.len(), 1);
-                let first = batch.iter().next().expect("shield instruction");
-                let shield = first
-                    .as_any()
-                    .downcast_ref::<Shield>()
-                    .expect("shield instruction");
-                assert_eq!(shield.from, authority);
-            }
-            other => panic!("expected instruction batch, got {other:?}"),
-        }
     }
 
     #[test]

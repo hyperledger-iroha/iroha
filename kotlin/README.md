@@ -349,6 +349,8 @@ have a gap.
 
 ### Kagemusha proof artifacts
 
+ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
+native signer method; confidential movement uses the typed Kagemusha lifecycle.
 `core-jvm` exposes the exact ABI-21/V4 typed Kagemusha init, fractional append/change,
 verification, and redemption builders through the fixed native surface. It also provides exact
 scaled amounts, V4 artifact streaming and backend-capability checks, plus the sole current
@@ -449,11 +451,11 @@ whitespace normalization fail closed.
 
 | Tool | Version | Required For |
 |------|---------|-------------|
-| JDK | 21+ | All modules |
+| JDK | 21 | All modules |
 | Android SDK | compileSdk 35 | `client-android` |
-| Rust | 1.92+ | Native `.so` build |
-| Android NDK | 28+ | Native `.so` build |
-| `cargo-ndk` | any | Native `.so` build |
+| Rust | exactly 1.93.1 | Native `.so` build |
+| Android NDK | exactly 28.0.12674087-beta2 (r28-beta2) | Native `.so` build |
+| `cargo-ndk` | exactly 4.1.2 | Native `.so` build |
 
 ### Step 1: Build core-jvm
 
@@ -477,13 +479,15 @@ The `libconnect_norito_bridge.so` files are **not tracked in git** — they are 
 
 ```bash
 # Install Rust Android targets
-rustup target add aarch64-linux-android x86_64-linux-android
+rustup target add --toolchain 1.93.1 aarch64-linux-android x86_64-linux-android
 
 # Install cargo-ndk
-cargo install cargo-ndk
+cargo install cargo-ndk --version 4.1.2 --locked
 
-# Verify Android NDK
-echo $ANDROID_NDK_HOME  # must point to NDK 28+
+# Select the authenticated Android NDK and an external artifact root
+export ANDROID_NDK_HOME=/absolute/path/to/android-ndk/28.0.12674087
+export MOBILE_SDK_ANDROID_ARTIFACT_DIR=/absolute/non-symlink/path/to/android-artifacts
+mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 ```
 
 **Build the .so files:**
@@ -500,18 +504,21 @@ This Gradle task (and every `client-android` release assembly):
    seal after every ABI build. Each cargo-ndk destination is transient because
    Cargo can copy unrelated workspace `cdylib` outputs there; only the exact
    `libconnect_norito_bridge.so` name is promoted into the authoritative raw
-   directory under `client-android/build/native/cargo-ndk/<mode>/`. Compiler
-   state remains isolated in `client-android/build/native/cargo-target/<mode>/`
-   through a mode-specific `CARGO_TARGET_DIR`. Every raw and stripped/provenance
+   directory under the external
+   `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/native/cargo-ndk/<mode>/`.
+   Compiler state remains isolated in its sibling
+   `native/cargo-target/<mode>/` through a mode-specific `CARGO_TARGET_DIR`.
+   Every raw and stripped/provenance
    promotion re-authenticates the saved source commit and selected dependency-
    closure fingerprint immediately before and after the promotion; the source
    sampler itself rejects commit or fingerprint drift during authentication.
 3. Copies the raw libraries to a distinct generated directory, then canonically
    strips only those copies with the selected Android NDK's
    `llvm-strip --strip-unneeded`
-4. Writes the authoritative libraries under
-   `client-android/build/generated/jniLibs/<mode>/`
-5. Generates `client-android/build/generated/nativeProvenance/<mode>/iroha/native-build-provenance-v1.json`
+4. Writes the authoritative libraries under the external
+   `client-android/generated/jniLibs/<mode>/` subtree
+5. Generates the external
+   `client-android/generated/nativeProvenance/<mode>/iroha/native-build-provenance-v1.json`
    with the ABI, feature state, source commit/scoped dirty bit, dependency-
    closure `source_fingerprint_sha256`, toolchain identity, and raw/stripped
    sizes and hashes
@@ -536,14 +543,28 @@ The production-gated form passes `--features privacy-production-enabled` to
 `connect_norito_bridge`; the default form intentionally omits that feature so
 unaudited native proving remains disabled.
 
-First build takes ~5-10 minutes (compiles all Rust dependencies). Incremental builds are faster.
+For every ABI, Gradle resolves canonical `cargo`, `rustc`, and `rustdoc`
+executables from exact Rust 1.93.1. It requires one job, incremental compilation
+off, offline dependency resolution, and `RUSTC_BOOTSTRAP=1`, then invokes the
+Cargo build with the exact root lock contract:
+
+```text
+build --locked --offline --jobs 1 -Z unstable-options \
+  --lockfile-path <canonical-iroha-root>/Cargo.lock
+```
+
+There is no alternate-lock or compatibility override.
+
+The first build takes ~5-10 minutes because it compiles all Rust dependencies.
+The isolated target can reuse dependency artifacts, but compiler incremental
+state remains disabled.
 
 **Output:**
 
 | ABI | File |
 |-----|------|
-| arm64-v8a | `client-android/build/generated/jniLibs/<mode>/arm64-v8a/libconnect_norito_bridge.so` |
-| x86_64 | `client-android/build/generated/jniLibs/<mode>/x86_64/libconnect_norito_bridge.so` |
+| arm64-v8a | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/arm64-v8a/libconnect_norito_bridge.so` |
+| x86_64 | `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/<mode>/x86_64/libconnect_norito_bridge.so` |
 
 `<mode>` is `default` unless the property is exactly
 `-PprivacyProductionEnabled=true`, in which case it is `production`. Any value
@@ -711,13 +732,14 @@ the record.
 
 ## Musubi V1 registry reads
 
-`MusubiToriiClientV1` is the signer-free, read-only client for the eleven typed
+`MusubiToriiClientV1` is the signer-free, read-only client for the twelve typed
 `/v1/musubi/queries/*` POST routes. The `sdk.musubi` models preserve structural
 package IDs, immutable namespace bindings, canonical structured SemVer
 requirements, exact unsigned integers, finalized cursors, archive commitments,
 and chain/genesis identity without legacy aliases or compatibility decoding.
 Unknown fields, unsupported ABI/edition versions, and noncanonical names or
-requirements are rejected.
+requirements are rejected. Each manifest, verification-lock parent, and
+resolver row must use a distinct parent-local alias for every dependency.
 
 The canonical cross-SDK JSON contract is
 [`fixtures/musubi/sdk_v1.json`](../fixtures/musubi/sdk_v1.json), owned by the Rust
@@ -742,7 +764,7 @@ replacement; and Parliament-enacted package ownership recovery,
 permanent-alias retargeting, artifact takedown, and registry-policy replacement.
 Each builder exposes `barePayload()`, `concreteFrame()`, and
 `toInstructionBox()`; transaction encoding preserves the dynamic pair inline,
-while standalone boxes use Rust's exact tuple schema. All eighteen cases and
+while standalone boxes use Rust's exact tuple schema. All nineteen cases and
 their four wire layers are checked against
 [`fixtures/musubi/instructions_v1.json`](../fixtures/musubi/instructions_v1.json).
 

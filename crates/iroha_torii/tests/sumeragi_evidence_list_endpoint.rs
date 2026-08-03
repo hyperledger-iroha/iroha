@@ -21,7 +21,7 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::EvidenceRecord},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
 };
-use iroha_torii::{EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
+use iroha_torii::{Error, EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
 
 fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
@@ -211,4 +211,51 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             .map(str::len),
         Some(64),
     );
+
+    for kind in [
+        "DoublePrepare",
+        "DoubleCommit",
+        "InvalidQc",
+        "InvalidProposal",
+        "Censorship",
+        "SumeragiV2Equivocation",
+    ] {
+        let query = EvidenceListQuery {
+            limit: None,
+            offset: None,
+            kind: Some(kind.to_owned()),
+        };
+        assert!(
+            handle_v1_sumeragi_evidence_list(State(state.clone()), NoritoQuery(query), None)
+                .await
+                .is_ok(),
+            "canonical evidence kind `{kind}` must be accepted"
+        );
+    }
+
+    for kind in [
+        "DoublePrevote",
+        "DoublePrecommit",
+        "InvalidQC",
+        "doubleprepare",
+        " InvalidQc",
+        "InvalidQc ",
+        "null",
+        "NULL",
+        "",
+        "Unknown",
+    ] {
+        let query = EvidenceListQuery {
+            limit: None,
+            offset: None,
+            kind: Some(kind.to_owned()),
+        };
+        let result =
+            handle_v1_sumeragi_evidence_list(State(state.clone()), NoritoQuery(query), None).await;
+        let Err(Error::AppQueryValidation { code, message }) = result else {
+            panic!("noncanonical evidence kind `{kind}` must fail closed");
+        };
+        assert_eq!(code, "sumeragi_evidence_kind_invalid");
+        assert!(message.contains(kind));
+    }
 }

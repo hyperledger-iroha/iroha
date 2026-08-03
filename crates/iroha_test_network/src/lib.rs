@@ -135,6 +135,23 @@ fn checked_key_pair_from_seed(seed: impl Into<Vec<u8>>, algorithm: Algorithm) ->
         .expect("fixture seed must derive a valid keypair")
 }
 
+const P2P_SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b":p2p-soranet-transport";
+
+fn checked_soranet_transport_key_pair_from_seed(mut seed: Vec<u8>) -> KeyPair {
+    seed.extend_from_slice(P2P_SORANET_TRANSPORT_SEED_DOMAIN);
+    checked_key_pair_from_seed(seed, Algorithm::Ed25519)
+}
+
+fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPair {
+    loop {
+        let candidate = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked random SoraNet transport keypair");
+        if candidate.public_key() != streaming.public_key() {
+            return candidate;
+        }
+    }
+}
+
 pub use crate::config::genesis as genesis_factory;
 /// Build the default minimal genesis with additional post-topology transactions.
 ///
@@ -5844,6 +5861,34 @@ const SORA_PROFILE_STREAM_PUBLIC_KEY: &str =
 const SORA_PROFILE_STREAM_PRIVATE_KEY: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
 static SORA_PROFILE_STREAM_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
+static SORA_PROFILE_SORANET_TRANSPORT_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
+
+// Schema-completion sentinel used only while projecting genesis-dependent
+// runtime configuration before the signed genesis block exists. It is never
+// emitted into a peer run config and must not be treated as a trust anchor.
+const NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001";
+
+fn genesis_expected_hash_config_literal(hash_body: &str) -> String {
+    norito::literal::format("hash", &hash_body.to_ascii_uppercase())
+}
+
+fn ensure_non_runtime_genesis_expected_hash_for_config_projection(table: &mut Table) {
+    let genesis = table
+        .entry("genesis".to_owned())
+        .or_insert_with(|| Value::Table(Table::new()));
+    let Some(genesis) = genesis.as_table_mut() else {
+        // Preserve an invalid non-table value so normal config parsing reports it.
+        return;
+    };
+    genesis
+        .entry("expected_hash".to_owned())
+        .or_insert_with(|| {
+            Value::String(genesis_expected_hash_config_literal(
+                NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+            ))
+        });
+}
 
 fn sora_profile_bls_pop_hex() -> &'static str {
     SORA_PROFILE_BLS_POP_HEX.get_or_init(|| {
@@ -5913,6 +5958,8 @@ fn sora_profile_detection_defaults() -> Table {
             .expect("sora profile streaming private key should parse");
         KeyPair::new(public_key, private_key).expect("sora profile streaming keypair should match")
     });
+    let soranet_transport_keypair = SORA_PROFILE_SORANET_TRANSPORT_KEYPAIR
+        .get_or_init(|| checked_soranet_transport_key_pair_from_seed(b"sora-profile".to_vec()));
     let p2p_literal = socket_addr!(127.0.0.1:1337).to_literal();
     let torii_literal = socket_addr!(127.0.0.1:8080).to_literal();
     let mut table = Table::new()
@@ -5921,6 +5968,14 @@ fn sora_profile_detection_defaults() -> Table {
         .write(
             "private_key",
             ExposedPrivateKey(bls_keypair.private_key().clone()).to_string(),
+        )
+        .write(
+            "soranet_transport_public_key",
+            soranet_transport_keypair.public_key().to_string(),
+        )
+        .write(
+            "soranet_transport_private_key",
+            ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
         )
         .write(
             ["streaming", "identity_public_key"],
@@ -5937,13 +5992,15 @@ fn sora_profile_detection_defaults() -> Table {
             ["genesis", "public_key"],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().to_string(),
         );
+    ensure_non_runtime_genesis_expected_hash_for_config_projection(&mut table);
     ensure_sora_profile_trusted_peer_pop(&mut table);
     table
 }
 
-fn apply_streaming_identity_defaults_for_detection(merged: &mut Table) {
-    // Profile detection does not depend on streaming identity, but config parsing does.
-    // Always force the deterministic Ed25519 keys so BLS identities never trip validation here.
+fn apply_identity_defaults_for_detection(merged: &mut Table) {
+    // Profile detection does not depend on the streaming or SoraNet transport identities, but
+    // config parsing does. Force distinct deterministic Ed25519 keys so the BLS node identity
+    // never leaks into either transport-specific role during profile projection.
     let mut streaming = match merged.remove("streaming") {
         Some(Value::Table(table)) => table,
         _ => Table::new(),
@@ -5957,6 +6014,19 @@ fn apply_streaming_identity_defaults_for_detection(merged: &mut Table) {
         Value::String(SORA_PROFILE_STREAM_PRIVATE_KEY.to_string()),
     );
     merged.insert("streaming".into(), Value::Table(streaming));
+
+    let soranet_transport_keypair = SORA_PROFILE_SORANET_TRANSPORT_KEYPAIR
+        .get_or_init(|| checked_soranet_transport_key_pair_from_seed(b"sora-profile".to_vec()));
+    merged.insert(
+        "soranet_transport_public_key".into(),
+        Value::String(soranet_transport_keypair.public_key().to_string()),
+    );
+    merged.insert(
+        "soranet_transport_private_key".into(),
+        Value::String(
+            ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
+        ),
+    );
 }
 
 fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
@@ -5964,7 +6034,7 @@ fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
     for layer in config_layers {
         merge_tables(&mut merged, layer);
     }
-    apply_streaming_identity_defaults_for_detection(&mut merged);
+    apply_identity_defaults_for_detection(&mut merged);
     ensure_sora_profile_trusted_peer_pop(&mut merged);
     merged
 }
@@ -6106,9 +6176,10 @@ fn resolve_kura_store_dir(
 }
 
 fn parse_actual_config_for_genesis(
-    merged: Table,
+    mut merged: Table,
     config_layers: &[Table],
 ) -> Option<iroha_config::parameters::actual::Root> {
+    ensure_non_runtime_genesis_expected_hash_for_config_projection(&mut merged);
     let reader = ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged));
@@ -7663,7 +7734,7 @@ impl NetworkBuilder {
                 .expect("final custom genesis should be cached exactly once");
         }
 
-        Network {
+        let mut network = Network {
             env,
             peers,
             observers,
@@ -7684,7 +7755,22 @@ impl NetworkBuilder {
             topology_entries,
             auto_populate_trusted_peer_pops,
             _permit: permit,
-        }
+        };
+
+        // The test-network generator is the operator provisioning both the
+        // signed in-memory genesis and its independent runtime trust anchor.
+        // Insert this generated layer before caller layers so deliberate
+        // wrong-hash configurations remain observable by negative tests.
+        let expected_hash_layer = Table::new().write(
+            ["genesis", "expected_hash"],
+            genesis_expected_hash_config_literal(&network.genesis().0.hash().to_string()),
+        );
+        debug_assert!(
+            !network.config_layers.is_empty(),
+            "test network must retain its generated base config layer"
+        );
+        network.config_layers.insert(1, expected_hash_layer);
+        network
     }
 
     /// Same as [`Self::build`], but also creates a [`Runtime`].
@@ -7852,6 +7938,7 @@ pub struct NetworkPeer {
     span: tracing::Span,
     key_pair: KeyPair,
     streaming_key_pair: KeyPair,
+    soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
     bls_pop: Option<Vec<u8>>,
     dir: PathBuf,
@@ -8908,6 +8995,16 @@ impl NetworkPeer {
         self.streaming_key_pair.public_key()
     }
 
+    /// Return the dedicated Ed25519 key pair used by this peer's SoraNet transport.
+    pub fn soranet_transport_key_pair(&self) -> &KeyPair {
+        &self.soranet_transport_key_pair
+    }
+
+    /// Return the dedicated SoraNet transport public key.
+    pub fn soranet_transport_public_key(&self) -> &PublicKey {
+        self.soranet_transport_key_pair.public_key()
+    }
+
     pub fn bls_key_pair(&self) -> Option<&KeyPair> {
         self.bls_key_pair.as_ref()
     }
@@ -9302,6 +9399,15 @@ impl NetworkPeer {
                 ExposedPrivateKey(self.key_pair.private_key().clone()).to_string(),
             )
             .write(
+                "soranet_transport_public_key",
+                self.soranet_transport_public_key().to_string(),
+            )
+            .write(
+                "soranet_transport_private_key",
+                ExposedPrivateKey(self.soranet_transport_key_pair.private_key().clone())
+                    .to_string(),
+            )
+            .write(
                 ["streaming", "identity_public_key"],
                 self.streaming_public_key().to_string(),
             )
@@ -9503,8 +9609,22 @@ impl NetworkPeerBuilder {
             .as_ref()
             .map(|seed_bytes| checked_key_pair_from_seed(seed_bytes.clone(), Algorithm::Ed25519))
             .unwrap_or_else(|| {
-                KeyPair::try_random().expect("generate checked random streaming keypair")
+                KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+                    .expect("generate checked random streaming keypair")
             });
+        let soranet_transport_key_pair = seed.as_ref().map_or_else(
+            || random_soranet_transport_key_pair_distinct_from(&streaming_key_pair),
+            |seed_bytes| {
+                let pair =
+                    checked_soranet_transport_key_pair_from_seed(seed_bytes.clone());
+                assert_ne!(
+                    pair.public_key(),
+                    streaming_key_pair.public_key(),
+                    "domain-separated SoraNet transport identity must differ from streaming identity"
+                );
+                pair
+            },
+        );
 
         let bls_key = if let Some(mut seed_bytes) = seed.clone() {
             seed_bytes.extend_from_slice(b":bls");
@@ -9549,6 +9669,7 @@ impl NetworkPeerBuilder {
             span,
             key_pair,
             streaming_key_pair,
+            soranet_transport_key_pair,
             bls_key_pair,
             bls_pop,
             dir,
@@ -10049,6 +10170,11 @@ mod sora_profile_tests {
         let config =
             iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(defaults))
                 .expect("sora profile detection defaults should parse");
+        assert_eq!(
+            config.genesis.expected_hash.to_string(),
+            NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+            "profile detection must use only the marked non-runtime projection sentinel"
+        );
         assert_eq!(
             config.streaming.key_material.identity().algorithm(),
             iroha_crypto::Algorithm::Ed25519
@@ -11082,13 +11208,17 @@ mod tests {
         let (block_height, _rx) = tokio::sync::watch::channel(None);
 
         let storage_root = dir.path().to_path_buf();
+        let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate once-block fallback streaming key");
+        let soranet_transport_key_pair =
+            random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
 
         let peer = NetworkPeer {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
-            streaming_key_pair: KeyPair::try_random()
-                .expect("generate once-block fallback streaming key"),
+            streaming_key_pair,
+            soranet_transport_key_pair,
             bls_key_pair: None,
             bls_pop: None,
             dir: storage_root,
@@ -11124,13 +11254,17 @@ mod tests {
         let (block_height, _rx) = tokio::sync::watch::channel(None);
 
         let storage_root = dir.path().to_path_buf();
+        let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate wait-block watchdog streaming key");
+        let soranet_transport_key_pair =
+            random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
 
         let peer = NetworkPeer {
             mnemonic: "wait-block-watchdog".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate wait-block watchdog peer key"),
-            streaming_key_pair: KeyPair::try_random()
-                .expect("generate wait-block watchdog streaming key"),
+            streaming_key_pair,
+            soranet_transport_key_pair,
             bls_key_pair: None,
             bls_pop: None,
             dir: storage_root,
@@ -11168,13 +11302,17 @@ mod tests {
             total: 1,
             non_empty: 1,
         }));
+        let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate wait-block best-effort streaming key");
+        let soranet_transport_key_pair =
+            random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
 
         let peer = NetworkPeer {
             mnemonic: "wait-block-best-effort".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate wait-block best-effort peer key"),
-            streaming_key_pair: KeyPair::try_random()
-                .expect("generate wait-block best-effort streaming key"),
+            streaming_key_pair,
+            soranet_transport_key_pair,
             bls_key_pair: None,
             bls_pop: None,
             dir: dir.path().to_path_buf(),
@@ -13754,7 +13892,7 @@ exit 0
         for layer in &config_layers {
             merge_tables(&mut merged, layer);
         }
-        apply_streaming_identity_defaults_for_detection(&mut merged);
+        apply_identity_defaults_for_detection(&mut merged);
         ensure_sora_profile_trusted_peer_pop(&mut merged);
 
         let actual = parse_actual_config_for_genesis(merged, &config_layers)
@@ -14080,8 +14218,12 @@ exit 0
             .to_string();
             let streaming_secret =
                 ExposedPrivateKey(peer.streaming_key_pair().private_key().clone()).to_string();
+            let soranet_transport_secret =
+                ExposedPrivateKey(peer.soranet_transport_key_pair().private_key().clone())
+                    .to_string();
             assert!(!serialized.contains(&consensus_secret));
             assert!(!serialized.contains(&streaming_secret));
+            assert!(!serialized.contains(&soranet_transport_secret));
         }
         drop(first);
 
@@ -14580,10 +14722,100 @@ exit 0
         );
         layers.extend(config_layers);
 
-        let actual = resolve_actual_config(&peer, &layers);
+        let actual = resolve_actual_config(&peer, &layers)
+            .expect("builder config layers should parse once chain/genesis are provided");
+        assert_eq!(
+            actual.genesis.expected_hash.to_string(),
+            NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+            "pre-genesis projection must receive only the non-runtime schema sentinel"
+        );
+    }
+
+    fn assert_network_config_binds_exact_signed_genesis_hash(network: &Network) {
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let actual = resolve_actual_config(&network.peers()[0], &layers)
+            .expect("generated network configuration must parse");
+        let exact_hash = network.genesis().0.hash();
+        assert_eq!(
+            actual.genesis.expected_hash, exact_hash,
+            "runtime config must bind the exact signed in-memory genesis header"
+        );
+        assert_ne!(
+            actual.genesis.expected_hash.to_string(),
+            NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+            "the projection sentinel must never escape into runtime network layers"
+        );
+        let projection_sentinel_literal = genesis_expected_hash_config_literal(
+            NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+        );
         assert!(
-            actual.is_some(),
-            "builder config layers should parse once chain/genesis are provided"
+            layers.iter().all(|layer| {
+                get_nested_value(layer, &["genesis", "expected_hash"]).and_then(Value::as_str)
+                    != Some(projection_sentinel_literal.as_str())
+            }),
+            "no emitted network config layer may contain the projection sentinel"
+        );
+    }
+
+    #[test]
+    fn network_config_layers_bind_default_and_custom_signed_genesis_expected_hashes() {
+        init_instruction_registry();
+        {
+            let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(1));
+            assert_network_config_binds_exact_signed_genesis_hash(&network);
+        }
+
+        let custom =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(1).with_genesis_block(
+                |topology, topology_entries| {
+                    genesis_factory(Vec::new(), topology, topology_entries)
+                },
+            ));
+        assert_network_config_binds_exact_signed_genesis_hash(&custom);
+    }
+
+    #[test]
+    fn caller_wrong_genesis_expected_hash_remains_effective_for_adversarial_startup() {
+        // Iroha hashes carry an odd final-byte marker; keep this wrong anchor
+        // canonical so the daemon reaches the hash-agreement check.
+        const WRONG_HASH_BODY: &str =
+            "0000000000000000000000000000000000000000000000000000000000000003";
+        let wrong_hash_literal = genesis_expected_hash_config_literal(WRONG_HASH_BODY);
+        let caller_wrong_hash_literal = wrong_hash_literal.clone();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(1).with_config_layer(
+                move |layer| {
+                    layer.write(["genesis", "expected_hash"], caller_wrong_hash_literal);
+                },
+            ));
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let anchors = layers
+            .iter()
+            .filter_map(|layer| {
+                get_nested_value(layer, &["genesis", "expected_hash"]).and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>();
+        let exact_hash_literal =
+            genesis_expected_hash_config_literal(&network.genesis().0.hash().to_string());
+        assert_eq!(
+            anchors,
+            [exact_hash_literal.as_str(), wrong_hash_literal.as_str()],
+            "the generated anchor must precede a caller override"
+        );
+
+        let actual = resolve_actual_config(&network.peers()[0], &layers)
+            .expect("a canonical wrong hash must remain syntactically valid");
+        assert_eq!(actual.genesis.expected_hash.to_string(), WRONG_HASH_BODY);
+        assert_ne!(
+            actual.genesis.expected_hash,
+            network.genesis().0.hash(),
+            "the harness must not repair an adversarial caller override"
         );
     }
 
@@ -15402,6 +15634,18 @@ exit 0
             Algorithm::Ed25519,
             "streaming identity should remain Ed25519 even with BLS peers"
         );
+        assert_eq!(
+            peer.soranet_transport_public_key()
+                .try_algorithm()
+                .expect("fixture SoraNet transport public key must be well-formed"),
+            Algorithm::Ed25519,
+            "SoraNet transport identity must be Ed25519"
+        );
+        assert_ne!(
+            peer.soranet_transport_public_key(),
+            peer.streaming_public_key(),
+            "SoraNet transport and streaming identities must be distinct"
+        );
         assert!(
             peer.bls_public_key().is_some(),
             "expected BLS key material to remain available"
@@ -15437,6 +15681,55 @@ exit 0
             identity_private.starts_with("8026"),
             "private key should be hex-like multihash"
         );
+
+        let transport_public = table
+            .get("soranet_transport_public_key")
+            .and_then(toml::Value::as_str)
+            .expect("SoraNet transport public key string");
+        let transport_public: PublicKey = transport_public
+            .parse()
+            .expect("SoraNet transport public key parses");
+        assert_eq!(transport_public, *peer.soranet_transport_public_key());
+        assert_eq!(transport_public.algorithm(), Algorithm::Ed25519);
+        assert_ne!(transport_public, parsed);
+        let transport_private = table
+            .get("soranet_transport_private_key")
+            .and_then(toml::Value::as_str)
+            .expect("SoraNet transport private key string");
+        assert!(
+            transport_private.starts_with("8026"),
+            "SoraNet transport private key should be hex-like multihash"
+        );
+        let transport_private: PrivateKey = transport_private
+            .parse()
+            .expect("SoraNet transport private key parses");
+        let transport_pair = KeyPair::new(transport_public, transport_private)
+            .expect("base config SoraNet transport key pair must match");
+        assert_eq!(&transport_pair, peer.soranet_transport_key_pair());
+    }
+
+    #[test]
+    fn seeded_peer_derives_domain_separated_soranet_transport_identity() {
+        let seed = b"deterministic-peer-identity".to_vec();
+        let expected = checked_soranet_transport_key_pair_from_seed(seed.clone());
+        let raw_seed_identity = checked_key_pair_from_seed(seed.clone(), Algorithm::Ed25519);
+        let first_env = Environment::new();
+        let first = NetworkPeerBuilder::new()
+            .with_seed(Some(seed.clone()))
+            .build(&first_env);
+        let second_env = Environment::new();
+        let second = NetworkPeerBuilder::new()
+            .with_seed(Some(seed))
+            .build(&second_env);
+
+        assert_eq!(first.soranet_transport_key_pair(), &expected);
+        assert_eq!(second.soranet_transport_key_pair(), &expected);
+        assert_ne!(
+            first.soranet_transport_public_key(),
+            raw_seed_identity.public_key(),
+            "transport derivation must never consume the raw streaming seed"
+        );
+        assert_eq!(P2P_SORANET_TRANSPORT_SEED_DOMAIN, b":p2p-soranet-transport");
     }
 
     #[test]
@@ -16096,6 +16389,86 @@ exit 0
 
         assert_eq!(peer.restart_genesis_file(false), Some(later_genesis_path));
 
+        Ok(())
+    }
+
+    fn parse_peer_run_config(path: &Path) -> Result<iroha_config::parameters::actual::Root> {
+        let reader = ConfigReader::new()
+            .with_env(MockEnv::default())
+            .read_toml_with_extends(path)
+            .map_err(|error| eyre!("read peer run config {}: {error:?}", path.display()))?;
+        let user = iroha_config::parameters::user::Root::read_and_complete(reader)
+            .map_err(|error| eyre!("complete peer run config {}: {error:?}", path.display()))?;
+        user.parse()
+            .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))
+    }
+
+    #[tokio::test]
+    async fn peer_run_configs_reuse_exact_genesis_expected_hash_without_hashing_restart_artifact()
+    -> Result<()> {
+        let network = NetworkBuilder::new().with_peers(1).build();
+        let peer = network.peers()[0].clone();
+        let genesis = network.genesis();
+        let expected_hash = genesis.0.hash();
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+
+        let no_local_genesis_config = peer
+            .write_run_config(layers.iter().map(Cow::Borrowed), None, None, 0)
+            .await?;
+        assert_eq!(
+            parse_peer_run_config(&no_local_genesis_config)?
+                .genesis
+                .expected_hash,
+            expected_hash,
+            "a first start without a local artifact must still receive the operator anchor"
+        );
+
+        let bootstrap_config = peer
+            .write_run_config(layers.iter().map(Cow::Borrowed), Some(&genesis), None, 1)
+            .await?;
+        assert_eq!(
+            parse_peer_run_config(&bootstrap_config)?
+                .genesis
+                .expected_hash,
+            expected_hash
+        );
+
+        let genesis_path = peer
+            .restart_genesis_file(false)
+            .expect("bootstrap must persist a restart genesis artifact");
+        // This test isolates config provenance. `irohad` separately tests that a
+        // well-formed local genesis with a different hash is rejected.
+        fs::write(&genesis_path, b"attacker-controlled replacement")?;
+        let restart_config = peer
+            .write_run_config(
+                layers.iter().map(Cow::Borrowed),
+                None,
+                Some(&genesis_path),
+                2,
+            )
+            .await?;
+        assert_eq!(
+            parse_peer_run_config(&restart_config)?
+                .genesis
+                .expected_hash,
+            expected_hash,
+            "restart must reuse the independently provisioned anchor"
+        );
+
+        let restart_table: Table = toml::from_str(&fs::read_to_string(&restart_config)?)?;
+        let configured_file = get_nested_value(&restart_table, &["genesis", "file"])
+            .and_then(Value::as_str)
+            .expect("restart run config must select the persisted genesis artifact");
+        let expected_file = genesis_path.to_string_lossy();
+        assert_eq!(configured_file, expected_file.as_ref());
+        assert_eq!(
+            fs::read(&genesis_path)?,
+            b"attacker-controlled replacement",
+            "the harness must neither rewrite nor authenticate restart bytes from themselves"
+        );
         Ok(())
     }
 

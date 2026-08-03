@@ -401,17 +401,16 @@ pub mod fixed_bytes_hex {
     }
 
     fn parse_hex_bytes<const N: usize>(raw: &str) -> Result<[u8; N], json::Error> {
-        let trimmed = raw.trim();
-        let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
-            if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+        let without_scheme = if let Some((scheme, rest)) = raw.split_once(':') {
+            if scheme.eq_ignore_ascii_case("blake2b32") {
                 rest
             } else {
                 return Err(json::Error::Message("expected hex string".to_string()));
             }
         } else {
-            trimmed
+            raw
         };
-        let mut body = without_scheme.trim();
+        let mut body = without_scheme;
         if let Some(stripped) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
             body = stripped;
         }

@@ -18,6 +18,18 @@ use tower::ServiceExt as _; // for Router::oneshot
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 
+fn zk_vote_tally_app(state: Arc<CoreState>) -> Router {
+    Router::new().route(
+        "/v1/zk/vote/tally",
+        post(
+            move |req: iroha_torii::NoritoJson<iroha_torii::ZkVoteGetTallyRequestDto>| {
+                let state = state.clone();
+                async move { iroha_torii::handle_v1_zk_vote_tally(State(state), None, req).await }
+            },
+        ),
+    )
+}
+
 fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -245,15 +257,7 @@ async fn zk_vote_tally_endpoint_returns_404_for_missing_election() {
     let query = LiveQueryStore::start_test();
     let state = Arc::new(CoreState::new_for_testing(World::default(), kura, query));
 
-    let app = Router::new().route(
-        "/v1/zk/vote/tally",
-        post({
-            let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::ZkVoteGetTallyRequestDto>| async move {
-                iroha_torii::handle_v1_zk_vote_tally(State(state), None, req).await
-            }
-        }),
-    );
+    let app = zk_vote_tally_app(state);
 
     let body_value =
         iroha_torii::json_object(vec![iroha_torii::json_entry("election_id", "nonexistent")]);
@@ -266,4 +270,71 @@ async fn zk_vote_tally_endpoint_returns_404_for_missing_election() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn zk_vote_tally_endpoint_enforces_canonical_selector_for_json_and_norito() {
+    let state = Arc::new(CoreState::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    ));
+    let app = zk_vote_tally_app(state);
+
+    for election_id in [
+        String::new(),
+        ".".to_owned(),
+        ".hidden".to_owned(),
+        "election/alias".to_owned(),
+        "election%2Falias".to_owned(),
+        "election alias".to_owned(),
+        "élection".to_owned(),
+        "a".repeat(129),
+    ] {
+        let dto = iroha_torii::ZkVoteGetTallyRequestDto {
+            election_id: election_id.clone(),
+        };
+        let json =
+            norito::json::to_string(&iroha_torii::json_object(vec![iroha_torii::json_entry(
+                "election_id",
+                election_id.clone(),
+            )]))
+            .expect("serialize JSON tally request");
+        let norito = norito::to_bytes(&dto).expect("encode Norito tally request");
+
+        for (content_type, body) in [
+            ("application/json", json.into_bytes()),
+            ("application/x-norito", norito),
+        ] {
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/v1/zk/vote/tally")
+                .header(http::header::CONTENT_TYPE, content_type)
+                .body(axum::body::Body::from(body))
+                .expect("build tally request");
+            let response = app.clone().oneshot(request).await.expect("route response");
+            assert_eq!(
+                response.status(),
+                http::StatusCode::BAD_REQUEST,
+                "{content_type} accepted noncanonical selector {election_id:?}"
+            );
+        }
+    }
+
+    for election_id in ["a".to_owned(), "a".repeat(128)] {
+        let json =
+            norito::json::to_string(&iroha_torii::json_object(vec![iroha_torii::json_entry(
+                "election_id",
+                election_id,
+            )]))
+            .expect("serialize valid tally request");
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/v1/zk/vote/tally")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(json))
+            .expect("build valid tally request");
+        let response = app.clone().oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+    }
 }

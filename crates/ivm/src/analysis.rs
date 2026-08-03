@@ -666,11 +666,7 @@ fn transfer_static_state_syscall(
         facts.mark_content_mutable(10);
         return;
     }
-    if matches!(
-        number,
-        crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
-            | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
-    ) {
+    if number == crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO {
         let path = match (facts.names[10], facts.norito_keys[11]) {
             (Some(base), Some(key)) => Some(StaticStatePath::MapChild { base, key }),
             _ => None,

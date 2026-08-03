@@ -13,10 +13,12 @@ MOBILE_CHECKER_TEST="$ROOT_DIR/scripts/check_mobile_sdk_artifacts_test.sh"
 ANDROID_BUILDER="$ROOT_DIR/kotlin/client-android/build.gradle.kts"
 JVM_NATIVE_GATE="$ROOT_DIR/ci/check_kagemusha_jvm_native_bridge.sh"
 MOBILE_WORKFLOW="$ROOT_DIR/.github/workflows/mobile_sdk_artifacts.yml"
-TEST_ROOT="$(mktemp -d /tmp/iroha-mobile-python312-contract.XXXXXX)"
+TEST_ROOT=""
 
 cleanup() {
-  rm -rf -- "$TEST_ROOT"
+  if [[ -n "$TEST_ROOT" && -d "$TEST_ROOT" ]]; then
+    rm -rf -- "$TEST_ROOT"
+  fi
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -107,6 +109,10 @@ expect_failure_containing() {
 }
 
 PYTHON312="$(find_python312)" || fail "no trusted Python 3.12 executable is available"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-mobile-python312-contract.XXXXXX")"
+TEST_ROOT="$("$PYTHON312" -I -S -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$TEST_ROOT")"
 [[ "$PYTHON312" == /* && -f "$PYTHON312" && ! -L "$PYTHON312" && -x "$PYTHON312" ]] \
   || fail "Python 3.12 discovery did not return a canonical regular executable"
 
@@ -126,6 +132,14 @@ grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$MOBILE_CHECKER" \
   || fail "mobile checker does not expose the canonical Python override"
 grep -Fq '"$CHECK_PYTHON_BINARY" -I -S "$@"' "$MOBILE_CHECKER" \
   || fail "mobile checker does not isolate Python helpers from site packages"
+grep -Fq 'NORITO_BRIDGE_BUILD_LOCK_FDS' "$APPLE_BUILDER" \
+  || fail "Apple builder does not authenticate inherited target/stage/output locks"
+[[ "$(grep -Fc 'NORITO_BRIDGE_BUILD_LOCK_HELD' "$APPLE_BUILDER")" -eq 1 ]] \
+  || fail "Apple builder must mention the retired boolean lock bypass only in its rejection list"
+if grep -Fq 'MOBILE_SDK_SKIP_BINARY_INSPECTION' "$MOBILE_CHECKER"; then
+  grep -Fq 'is retired; binary inspection is mandatory' "$MOBILE_CHECKER" \
+    || fail "mobile checker still permits binary-inspection bypass"
+fi
 grep -Fq 'export MOBILE_SDK_PYTHON_BINARY="$TEST_PYTHON_BINARY"' "$MOBILE_CHECKER_TEST" \
   || fail "mobile checker self-test does not bind its authenticated Python"
 grep -Fq 'System.getenv("MOBILE_SDK_PYTHON_BINARY")' "$ANDROID_BUILDER" \
@@ -153,6 +167,13 @@ grep -Fq 'bash scripts/tests/mobile_sdk_python312_contract.sh' "$MOBILE_WORKFLOW
   || fail "mobile workflow does not run the Python 3.12 contract"
 grep -Fq '"scripts/tests/mobile_sdk_python312_contract.sh"' "$MOBILE_WORKFLOW" \
   || fail "mobile workflow does not trigger on Python 3.12 contract changes"
+
+expect_failure_containing \
+  "retired Apple Cargo lock override" \
+  "MOBILE_SDK_APPLE_CARGO_LOCK_PATH is not part of the first-release artifact contract" \
+  env \
+    MOBILE_SDK_APPLE_CARGO_LOCK_PATH="$ROOT_DIR/Cargo.lock" \
+    /bin/bash "$MOBILE_CHECKER" --root "$ROOT_DIR" --apple-only
 
 mkdir -p "$TEST_ROOT/hostile-path" "$TEST_ROOT/forged-sdk"
 ln -s "$PYTHON312" "$TEST_ROOT/python312-link"
@@ -224,6 +245,22 @@ expect_failure_containing \
     MOBILE_SDK_PYTHON_BINARY=/bin/bash \
     /bin/bash "$JVM_NATIVE_GATE" --resolve-python312-for-test
 
+APPLE_CARGO_TARGET="$TEST_ROOT/apple-cargo-target"
+APPLE_BUILD_DIR="$TEST_ROOT/apple-build"
+APPLE_OUT_DIR="$TEST_ROOT/apple-out"
+APPLE_USER_HOME="$("$PYTHON312" -I -S -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
+APPLE_RUSTUP="$APPLE_USER_HOME/.cargo/bin/rustup"
+[[ -x "$APPLE_RUSTUP" ]] || fail "pinned rustup is unavailable"
+APPLE_RUSTC="$("$APPLE_RUSTUP" which --toolchain 1.93.1 rustc)"
+APPLE_RUSTDOC="$("$APPLE_RUSTUP" which --toolchain 1.93.1 rustdoc)"
+mkdir -p "$APPLE_CARGO_TARGET" "$APPLE_BUILD_DIR" "$APPLE_OUT_DIR"
+expect_failure_containing \
+  "retired Apple boolean lock bypass" \
+  "NORITO_BRIDGE_BUILD_LOCK_HELD is not part of the first-release build contract" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    NORITO_BRIDGE_BUILD_LOCK_HELD=1 \
+    /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
 expect_failure_containing \
   "Apple builder canonical Python override" \
   "Unknown argument" \
@@ -231,7 +268,80 @@ expect_failure_containing \
     PATH="$TEST_ROOT/hostile-path" \
     SDKROOT="$TEST_ROOT/forged-sdk" \
     MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
-    NORITO_BRIDGE_BUILD_LOCK_HELD=1 \
+    NORITO_BRIDGE_BUILD_DIR="$APPLE_BUILD_DIR" \
+    NORITO_BRIDGE_OUT_DIR="$APPLE_OUT_DIR" \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_OFFLINE=true \
+    CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
+    RUSTC="$APPLE_RUSTC" \
+    RUSTC_BOOTSTRAP=1 \
+    RUSTDOC="$APPLE_RUSTDOC" \
     /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
+
+expect_failure_containing \
+  "forged Apple lock descriptors" \
+  "NoritoBridge build lock is not authenticated" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    NORITO_BRIDGE_BUILD_DIR="$APPLE_BUILD_DIR" \
+    NORITO_BRIDGE_OUT_DIR="$APPLE_OUT_DIR" \
+    NORITO_BRIDGE_BUILD_LOCK_FDS=1,2,3 \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_OFFLINE=true \
+    CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
+    RUSTC="$APPLE_RUSTC" \
+    RUSTC_BOOTSTRAP=1 \
+    RUSTDOC="$APPLE_RUSTDOC" \
+    /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
+
+for deployment_case in wrong empty; do
+  if [[ "$deployment_case" == "wrong" ]]; then
+    deployment_assignment="IPHONEOS_DEPLOYMENT_TARGET=14.0"
+    deployment_error="IPHONEOS_DEPLOYMENT_TARGET is fixed at 15.0"
+  else
+    deployment_assignment="MACOSX_DEPLOYMENT_TARGET="
+    deployment_error="MACOSX_DEPLOYMENT_TARGET is fixed at 12.0"
+  fi
+  expect_failure_containing \
+    "Apple $deployment_case deployment target" \
+    "$deployment_error" \
+    env \
+      "$deployment_assignment" \
+      MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+      NORITO_BRIDGE_BUILD_DIR="$APPLE_BUILD_DIR" \
+      NORITO_BRIDGE_OUT_DIR="$APPLE_OUT_DIR" \
+      CARGO_BUILD_JOBS=1 \
+      CARGO_INCREMENTAL=0 \
+      CARGO_NET_OFFLINE=true \
+      CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
+      RUSTC="$APPLE_RUSTC" \
+      RUSTC_BOOTSTRAP=1 \
+      RUSTDOC="$APPLE_RUSTDOC" \
+      /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
+done
+
+OVERLAP_DIR="$TEST_ROOT/apple-overlap"
+OVERLAP_OUT="$TEST_ROOT/apple-overlap-out"
+mkdir -p "$OVERLAP_DIR" "$OVERLAP_OUT"
+printf 'preserve\n' >"$OVERLAP_DIR/target-sentinel"
+expect_failure_containing \
+  "Apple builder target/build overlap" \
+  "Cargo target, build, and output directories must be pairwise disjoint" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    NORITO_BRIDGE_BUILD_DIR="$OVERLAP_DIR" \
+    NORITO_BRIDGE_OUT_DIR="$OVERLAP_OUT" \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_OFFLINE=true \
+    CARGO_TARGET_DIR="$OVERLAP_DIR" \
+    RUSTC="$APPLE_RUSTC" \
+    RUSTC_BOOTSTRAP=1 \
+    RUSTDOC="$APPLE_RUSTDOC" \
+    /bin/bash "$APPLE_BUILDER" --python-contract-test-invalid-option
+[[ "$(<"$OVERLAP_DIR/target-sentinel")" == "preserve" ]] \
+  || fail "Apple builder modified an overlapped Cargo target before rejecting it"
 
 printf 'mobile Python 3.12 contract tests passed\n'

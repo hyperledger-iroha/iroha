@@ -272,42 +272,6 @@
         assert_eq!(items, vec!["a".to_owned(), "b".to_owned()]);
     }
 
-    fn anonymous_asset_escrow_record_for_batch_test(
-        label: &str,
-        seed: u8,
-    ) -> iroha_data_model::escrow::AnonymousAssetEscrowRecord {
-        let seller_keypair =
-            checked_routed_read_test_keypair(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
-        let asset_definition: AssetDefinitionId =
-            "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset id");
-        let proof = iroha_data_model::escrow::AnonymousAssetEscrowProofRecord {
-            nullifiers: vec![[seed; 32]],
-            output_commitments: vec![[seed.wrapping_add(1); 32]],
-            proof_hash: [seed.wrapping_add(2); 32],
-            envelope_hash: Some([seed.wrapping_add(3); 32]),
-            root_hint: Some([seed.wrapping_add(4); 32]),
-            recorded_at_ms: u64::from(seed),
-        };
-        iroha_data_model::escrow::AnonymousAssetEscrowRecord {
-            id: iroha_data_model::escrow::EscrowId::new(Hash::new(label)),
-            seller: AccountId::new(seller_keypair.public_key().clone()),
-            buyer: None,
-            asset_definition,
-            escrow_commitment: [seed.wrapping_add(5); 32],
-            status: iroha_data_model::escrow::AssetEscrowStatus::Open,
-            evidence_hashes: Vec::new(),
-            opening: proof,
-            release: None,
-            cancellation: None,
-            created_at_ms: u64::from(seed),
-            accepted_at_ms: None,
-            payment_sent_at_ms: None,
-            disputed_at_ms: None,
-            closed_at_ms: None,
-            resolution: None,
-        }
-    }
-
     fn checked_routed_read_test_keypair(
         seed: Vec<u8>,
         algorithm: iroha_crypto::Algorithm,
@@ -343,50 +307,6 @@
             routed_read_test_account(0x62),
             "routed-read account fixture seeds must produce distinct accounts"
         );
-    }
-
-    #[test]
-    fn merge_query_batch_boxes_accepts_anonymous_asset_escrow_records() {
-        let first = anonymous_asset_escrow_record_for_batch_test("anonymous-escrow-first", 0x71);
-        let second = anonymous_asset_escrow_record_for_batch_test("anonymous-escrow-second", 0x72);
-
-        let batch = merge_query_batch_boxes(
-            iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(vec![
-                first.clone(),
-            ]),
-            iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(vec![
-                second.clone(),
-            ]),
-        )
-        .expect("anonymous escrow batches should merge");
-
-        let iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) = batch
-        else {
-            panic!("expected anonymous asset escrow batch");
-        };
-        assert_eq!(items, vec![first, second]);
-    }
-
-    #[test]
-    fn canonicalize_query_batch_box_deduplicates_anonymous_asset_escrow_records() {
-        let first = anonymous_asset_escrow_record_for_batch_test("anonymous-escrow-first", 0x71);
-        let second = anonymous_asset_escrow_record_for_batch_test("anonymous-escrow-second", 0x72);
-        let batch = canonicalize_query_batch_box(
-            iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(vec![
-                second.clone(),
-                first.clone(),
-                second.clone(),
-            ]),
-            iroha_data_model::query::parameters::Pagination::default(),
-        );
-
-        let iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) = batch
-        else {
-            panic!("expected anonymous asset escrow batch");
-        };
-        assert_eq!(items.len(), 2);
-        assert!(items.contains(&first));
-        assert!(items.contains(&second));
     }
 
     #[test]

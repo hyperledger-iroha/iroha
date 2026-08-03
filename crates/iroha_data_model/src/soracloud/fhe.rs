@@ -1756,50 +1756,48 @@ impl SoracloudFhePolicyRecordV1 {
             .last_key_value()
             .expect("non-empty history established above")
             .0;
-        match self.active_version {
-            Some(active_version) => {
-                if active_count != 1 || active_version != latest_version {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "soracloud fhe policy record",
-                        field: "active_version",
-                        reason: "the sole active version must be the latest version".to_string(),
-                    });
-                }
-                for (version, state) in &self.versions {
-                    if *version != active_version
-                        && state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Superseded
-                    {
-                        return Err(SoracloudManifestError::InvalidField {
-                            manifest: "soracloud fhe policy record",
-                            field: "versions.lifecycle",
-                            reason: "all older versions must be superseded".to_string(),
-                        });
-                    }
-                }
+        if let Some(active_version) = self.active_version {
+            if active_count != 1 || active_version != latest_version {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe policy record",
+                    field: "active_version",
+                    reason: "the sole active version must be the latest version".to_string(),
+                });
             }
-            None => {
-                if active_count != 0
-                    || self.versions.get(&latest_version).is_none_or(|state| {
-                        state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Revoked
-                    })
+            for (version, state) in &self.versions {
+                if *version != active_version
+                    && state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Superseded
                 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "soracloud fhe policy record",
-                        field: "active_version",
-                        reason: "revoked policies must have no active version and a revoked latest version"
-                            .to_string(),
+                        field: "versions.lifecycle",
+                        reason: "all older versions must be superseded".to_string(),
                     });
                 }
-                for (version, state) in &self.versions {
-                    if *version != latest_version
-                        && state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Superseded
-                    {
-                        return Err(SoracloudManifestError::InvalidField {
-                            manifest: "soracloud fhe policy record",
-                            field: "versions.lifecycle",
-                            reason: "all pre-revocation versions must be superseded".to_string(),
-                        });
-                    }
+            }
+        } else {
+            if active_count != 0
+                || self.versions.get(&latest_version).is_none_or(|state| {
+                    state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Revoked
+                })
+            {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe policy record",
+                    field: "active_version",
+                    reason:
+                        "revoked policies must have no active version and a revoked latest version"
+                            .to_string(),
+                });
+            }
+            for (version, state) in &self.versions {
+                if *version != latest_version
+                    && state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Superseded
+                {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe policy record",
+                        field: "versions.lifecycle",
+                        reason: "all pre-revocation versions must be superseded".to_string(),
+                    });
                 }
             }
         }

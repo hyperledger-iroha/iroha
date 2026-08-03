@@ -85,6 +85,7 @@ fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_dataspace_name_owner_by_id(FindDataspaceNameOwnerById),
         visit_find_musubi_exact_package_v1(FindMusubiExactPackageV1),
         visit_find_musubi_exact_release_v1(FindMusubiExactReleaseV1),
+        visit_find_musubi_provider_bundle_attestation_v1(FindMusubiProviderBundleAttestationV1),
         visit_find_musubi_resolver_index_v1(FindMusubiResolverIndexV1),
         visit_find_musubi_versions_v1(FindMusubiVersionsV1),
         visit_find_musubi_maintainers_v1(FindMusubiMaintainersV1),
@@ -239,6 +240,10 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
 
 #[cfg(feature = "fast_dsl")]
 /// Reconstruct and dispatch an iterable query from its fast-DSL components.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive fast-DSL query inventory stays together so new item kinds cannot silently restore no-op dispatch"
+)]
 pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &QueryWithParams) {
     let Some((item, predicate_bytes, selector_bytes, query_payload)) =
         query_with_params.fast_dsl_parts()
@@ -354,8 +359,7 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
         | query_mod::QueryItemKind::Rwa
         | query_mod::QueryItemKind::ProofRecord
         | query_mod::QueryItemKind::DefiOracleAttestation
-        | query_mod::QueryItemKind::AssetEscrowRecord
-        | query_mod::QueryItemKind::AnonymousAssetEscrowRecord => {}
+        | query_mod::QueryItemKind::AssetEscrowRecord => {}
     }
 }
 
@@ -593,6 +597,9 @@ macro_rules! query_visitors {
             visit_find_musubi_exact_release_v1(
                 &$crate::query::musubi::prelude::FindMusubiExactReleaseV1
             ),
+            visit_find_musubi_provider_bundle_attestation_v1(
+                &$crate::query::musubi::prelude::FindMusubiProviderBundleAttestationV1
+            ),
             visit_find_musubi_resolver_index_v1(
                 &$crate::query::musubi::prelude::FindMusubiResolverIndexV1
             ),
@@ -701,7 +708,6 @@ mod tests {
             SingularQueryBox::FindAssetDefinitionById(_) => {}
             SingularQueryBox::FindNftById(_) => {}
             SingularQueryBox::FindAssetEscrowById(_) => {}
-            SingularQueryBox::FindAnonymousAssetEscrowById(_) => {}
             SingularQueryBox::FindTriggerById(_) => {}
             SingularQueryBox::FindOracleFeedById(_) => {}
             SingularQueryBox::FindOracleDisputeById(_) => {}
@@ -767,6 +773,7 @@ mod tests {
             SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
             SingularQueryBox::FindMusubiExactPackageV1(_) => {}
             SingularQueryBox::FindMusubiExactReleaseV1(_) => {}
+            SingularQueryBox::FindMusubiProviderBundleAttestationV1(_) => {}
             SingularQueryBox::FindMusubiResolverIndexV1(_) => {}
             SingularQueryBox::FindMusubiVersionsV1(_) => {}
             SingularQueryBox::FindMusubiMaintainersV1(_) => {}
@@ -824,7 +831,7 @@ mod tests {
 
     #[derive(Default)]
     struct MusubiVisitor {
-        seen: [bool; 10],
+        seen: [bool; 11],
     }
 
     impl Visit for MusubiVisitor {
@@ -840,6 +847,13 @@ mod tests {
             _: &query_mod::musubi::FindMusubiExactReleaseV1,
         ) {
             self.seen[1] = true;
+        }
+
+        fn visit_find_musubi_provider_bundle_attestation_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiProviderBundleAttestationV1,
+        ) {
+            self.seen[10] = true;
         }
 
         fn visit_find_musubi_resolver_index_v1(
@@ -899,7 +913,8 @@ mod tests {
             MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
             MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1, MusubiPackageIdV1,
             MusubiPackageNameV1, MusubiPackagePageQueryV1, MusubiPackageScopeV1,
-            MusubiPageRequestV1, MusubiReleaseIdV1, MusubiResolverIndexQueryV1, MusubiVersionV1,
+            MusubiPageRequestV1, MusubiProviderBundleAttestationKeyV1, MusubiReleaseIdV1,
+            MusubiResolverIndexQueryV1, MusubiVersionV1,
         };
 
         let package = MusubiPackageIdV1::new(
@@ -924,6 +939,16 @@ mod tests {
             .into(),
             query_mod::musubi::FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 { release })
                 .into(),
+            query_mod::musubi::FindMusubiProviderBundleAttestationV1::new(
+                MusubiProviderBundleAttestationKeyV1 {
+                    archive_id: ArchiveId::new([0xA4; 32]),
+                    replication_order: crate::sorafs::pin_registry::ReplicationOrderId::new(
+                        [0xA5; 32],
+                    ),
+                    provider_id: crate::sorafs::capacity::ProviderId::new([0xA6; 32]),
+                },
+            )
+            .into(),
             query_mod::musubi::FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
                 package: package.clone(),
                 requirement: None,
@@ -999,7 +1024,7 @@ mod tests {
     #[test]
     fn musubi_v1_singular_query_inventory_dispatches_every_typed_hook() {
         let queries = musubi_v1_singular_queries();
-        assert_eq!(queries.len(), 10);
+        assert_eq!(queries.len(), 11);
 
         let mut visitor = MusubiVisitor::default();
         for query in &queries {
@@ -1007,7 +1032,7 @@ mod tests {
             visit_singular_query(&mut visitor, query);
         }
 
-        assert_eq!(visitor.seen, [true; 10]);
+        assert_eq!(visitor.seen, [true; 11]);
     }
 
     #[test]

@@ -43,6 +43,7 @@ pub mod isi {
             error::MintabilityError,
         },
         nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
+        privacy::PrivacyStatementDigestV1,
     };
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
@@ -1297,6 +1298,82 @@ pub mod isi {
         }
     }
 
+    fn coherent_execution_dataspace(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Option<DataSpaceId>, Error> {
+        if state_transaction.current_dataspace_id
+            != state_transaction.world.current_dataspace_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "transaction and world execution dataspaces are inconsistent".into(),
+            ));
+        }
+        Ok(state_transaction.current_dataspace_id)
+    }
+
+    /// Validate a proof- or governance-committed transparent balance partition.
+    ///
+    /// This path never consults account bindings or mutable asset aliases. A
+    /// restricted definition must name one exact non-universal dataspace, and
+    /// a non-universal execution route must be that same dataspace.
+    pub(crate) fn validate_committed_public_balance_scope(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition_id: &AssetDefinitionId,
+        scope: AssetBalanceScope,
+        operation: &str,
+    ) -> Result<(), Error> {
+        let definition = state_transaction
+            .world
+            .asset_definition(definition_id)
+            .map_err(Error::from)?;
+        let execution_dataspace = coherent_execution_dataspace(state_transaction)?;
+        match (definition.balance_scope_policy(), scope) {
+            (AssetBalancePolicy::Global, AssetBalanceScope::Global) => {
+                ensure_global_asset_write_on_authoritative_route(
+                    state_transaction,
+                    definition_id,
+                    operation,
+                )?;
+            }
+            (
+                AssetBalancePolicy::DataspaceRestricted,
+                AssetBalanceScope::Dataspace(dataspace),
+            ) => {
+                if dataspace == DataSpaceId::UNIVERSAL {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "the universal coordinator is not a restricted public balance scope"
+                            .into(),
+                    ));
+                }
+                if let Some(route) = execution_dataspace
+                    && route != DataSpaceId::UNIVERSAL
+                    && route != dataspace
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "committed public balance scope {} does not match execution dataspace {}",
+                            dataspace.as_u64(),
+                            route.as_u64(),
+                        )
+                        .into(),
+                    ));
+                }
+            }
+            (AssetBalancePolicy::Global, AssetBalanceScope::Dataspace(_)) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "global asset definition requires the global public balance scope".into(),
+                ));
+            }
+            (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Global) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "dataspace-restricted asset definition requires an exact public balance scope"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn bare_restricted_asset_home_dataspace_hint(
         state_transaction: &StateTransaction<'_, '_>,
         asset_id: &AssetId,
@@ -1608,6 +1685,8 @@ pub mod isi {
         VpnLease(Vec<u8>),
         /// Move value from verified fee-sponsor custody.
         FeeSponsor(Vec<u8>),
+        /// Move one exact transparent balance effect authorized by a native privacy proof.
+        PrivacyPublicBridge(Vec<u8>),
     }
 
     /// One-shot authorization and deterministic execution context for a numeric movement.
@@ -1813,6 +1892,12 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::FeeSponsorCustody,
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
+                RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(binding) => (
+                    "privacy-public-bridge",
+                    binding,
+                    NumericAssetTransferSourcePolicy::User,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
             };
             Self {
                 debit: NumericMovementDebitAuthorization::Protocol,
@@ -1966,6 +2051,24 @@ pub mod isi {
             amount: Quantity,
             authorization: NumericAssetMovementAuthorization,
         ) -> Result<Self, Error> {
+            Self::prepare_with_scope(
+                state_transaction,
+                source_id,
+                destination_id,
+                amount,
+                authorization,
+                NumericAssetTransferScopePolicy::Ambient,
+            )
+        }
+
+        fn prepare_with_scope(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            source_id: AssetId,
+            destination_id: AssetId,
+            amount: Quantity,
+            authorization: NumericAssetMovementAuthorization,
+            scope_policy: NumericAssetTransferScopePolicy,
+        ) -> Result<Self, Error> {
             let resolved_source = state_transaction
                 .world
                 .resolve_asset_id_for_current_scope(&source_id)?;
@@ -1977,7 +2080,7 @@ pub mod isi {
                 source_id,
                 destination_id,
                 amount,
-                NumericAssetTransferScopePolicy::Ambient,
+                scope_policy,
                 authority_policy,
                 authorization.source_policy,
                 authorization.control_policy,
@@ -2034,6 +2137,61 @@ pub mod isi {
             destination_id,
             amount,
             authorization,
+        )?
+        .apply(state_transaction)
+    }
+
+    /// Apply one exact transparent balance mutation authorized by a verified
+    /// native privacy statement.
+    pub(crate) fn execute_verified_privacy_public_balance_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        statement_digest: PrivacyStatementDigestV1,
+        definition_id: &AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
+        source_account: &AccountId,
+        destination_account: &AccountId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        validate_committed_public_balance_scope(
+            state_transaction,
+            definition_id,
+            public_balance_scope,
+            "privacy bridge transfer",
+        )?;
+        if source_account == destination_account {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "privacy public bridge source and destination must differ".into(),
+            ));
+        }
+        let source_id = AssetId::with_scope(
+            definition_id.clone(),
+            source_account.clone(),
+            public_balance_scope,
+        );
+        let destination_id = AssetId::with_scope(
+            definition_id.clone(),
+            destination_account.clone(),
+            public_balance_scope,
+        );
+        let binding = canonical_numeric_movement_binding(&(
+            statement_digest,
+            definition_id.clone(),
+            public_balance_scope,
+            source_account.clone(),
+            destination_account.clone(),
+            amount.clone(),
+        ))?;
+        PreparedNumericAssetMovement::prepare_with_scope(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                submitting_authority,
+                RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(binding),
+            ),
+            NumericAssetTransferScopePolicy::ExplicitBilateral,
         )?
         .apply(state_transaction)
     }
@@ -4434,6 +4592,17 @@ pub mod isi {
                 (source_id, destination_id)
             }
             NumericAssetTransferScopePolicy::ExplicitBilateral => {
+                if source_id.scope() != destination_id.scope() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "explicit bilateral transfer must preserve one exact balance scope".into(),
+                    ));
+                }
+                validate_committed_public_balance_scope(
+                    state_transaction,
+                    source_id.definition(),
+                    *source_id.scope(),
+                    "explicit bilateral transfer",
+                )?;
                 let definition = state_transaction
                     .world
                     .asset_definition(source_id.definition())
@@ -9456,6 +9625,158 @@ pub mod query {
                     .is_none(),
                 "global bucket must stay empty for restricted assets"
             );
+        }
+
+        #[test]
+        fn committed_public_balance_scope_respects_policy_and_private_route() {
+            let domain_id =
+                DomainId::try_new("public_asset_scope", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let global_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "global_coin".parse().expect("global asset name"),
+            );
+            let restricted_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "private_coin".parse().expect("restricted asset name"),
+            );
+            let global_definition = AssetDefinition::numeric(
+                global_definition_id.clone(),
+                "global coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&ALICE_ID);
+            let restricted_definition = AssetDefinition::numeric(
+                restricted_definition_id.clone(),
+                "private coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&ALICE_ID);
+            let state = State::new(
+                World::with(
+                    [domain],
+                    [account],
+                    [global_definition, restricted_definition],
+                ),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            isi::validate_committed_public_balance_scope(
+                &stx,
+                &global_definition_id,
+                iroha_data_model::asset::AssetBalanceScope::Global,
+                "test",
+            )
+            .expect("global definition accepts only the global balance scope");
+
+            let private_dataspace = DataSpaceId::new(7);
+            stx.current_dataspace_id = Some(private_dataspace);
+            stx.world.current_dataspace_id = Some(private_dataspace);
+            isi::validate_committed_public_balance_scope(
+                &stx,
+                &restricted_definition_id,
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(private_dataspace),
+                "test",
+            )
+            .expect("restricted definition accepts its exact execution scope");
+        }
+
+        #[test]
+        fn committed_public_balance_scope_rejects_universal_partition() {
+            let domain_id =
+                DomainId::try_new("unanchored_public_asset", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "private_coin".parse().expect("asset name"),
+            );
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "private coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&ALICE_ID);
+            let state = State::new(
+                World::with([domain], [account], [definition]),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let error = isi::validate_committed_public_balance_scope(
+                &stx,
+                &definition_id,
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+                "test",
+            )
+            .expect_err("the universal coordinator must not become a balance partition");
+            assert!(
+                error
+                    .to_string()
+                    .contains("universal coordinator is not a restricted public balance scope"),
+                "unexpected scope error: {error}"
+            );
+        }
+
+        #[test]
+        fn committed_public_balance_scope_ignores_ambiguous_account_bindings() {
+            let domain_id =
+                DomainId::try_new("ambiguous_public_asset", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+                b"public-asset-scope-ambiguous-account",
+            ));
+            let account = NewAccount::new(ALICE_ID.clone())
+                .with_uaid(Some(uaid))
+                .build(&ALICE_ID);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "private_coin".parse().expect("asset name"),
+            );
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "private coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&ALICE_ID);
+            let mut world = World::with([domain], [account], [definition]);
+            let mut bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+            bindings.bind_account(DataSpaceId::new(7), ALICE_ID.clone());
+            bindings.bind_account(DataSpaceId::new(8), ALICE_ID.clone());
+            world.uaid_dataspaces.insert(uaid, bindings);
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            isi::validate_committed_public_balance_scope(
+                &stx,
+                &definition_id,
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+                "test",
+            )
+            .expect("a proof-committed scope must not consult mutable account bindings");
         }
 
         #[test]

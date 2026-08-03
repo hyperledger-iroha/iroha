@@ -2002,18 +2002,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        AssetDefinitionId,
         domain::DomainId,
-        kaigi::{
-            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-            KaigiRoomPolicy,
-        },
         metadata::Metadata,
         name::Name,
         transaction::{
-            PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
-            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint,
-            TransactionResult,
+            FeePaymentIntent, TransactionBuilder, TransactionEntrypoint, TransactionResult,
         },
     };
 
@@ -2044,55 +2037,24 @@ mod tests {
             .expect("frame raw predicate node payload")
     }
 
-    fn sample_private_committed_tx() -> CommittedTransaction {
+    fn sample_committed_tx() -> CommittedTransaction {
         let mut metadata = Metadata::default();
-        metadata.insert(Name::from_str("topic").expect("metadata key"), "private");
-        let entrypoint = TransactionEntrypoint::PrivateKaigi(PrivateKaigiTransaction {
-            chain: "test-chain".parse().expect("chain"),
-            creation_time_ms: 77,
-            nonce: None,
-            metadata,
-            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
-                call: PrivateKaigiTemplate {
-                    id: KaigiId::new(
-                        DomainId::try_new("kaigi", "universal").expect("domain"),
-                        Name::from_str("room").expect("call"),
-                    ),
-                    title: None,
-                    description: None,
-                    max_participants: Some(2),
-                    gas_rate_per_minute: 1,
-                    metadata: Metadata::default(),
-                    scheduled_start_ms: None,
-                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-                    room_policy: KaigiRoomPolicy::Authenticated,
-                    relay_manifest: None,
-                },
-            }),
-            artifacts: PrivateKaigiArtifacts {
-                commitment: KaigiParticipantCommitment {
-                    commitment: Hash::new(b"commitment"),
-                    alias_tag: None,
-                },
-                nullifier: KaigiParticipantNullifier {
-                    digest: Hash::new(b"nullifier"),
-                    issued_at_ms: 77,
-                },
-                roster_root: Hash::new(b"root"),
-                proof: vec![1, 2, 3],
-            },
-            fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").expect("domain"),
-                    Name::from_str("xor").expect("name"),
-                ),
-                anchor_root: Hash::new(b"anchor"),
-                nullifiers: vec![[0xAA; 32]],
-                output_commitments: vec![[0xBB; 32]],
-                encrypted_change_payloads: vec![vec![0xCC]],
-                proof: vec![0xDD],
-            },
-        });
+        metadata.insert(Name::from_str("topic").expect("metadata key"), "example");
+        let (public_key, private_key) =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)
+                .expect("fixture seed derives Ed25519 keypair")
+                .into_parts();
+        let mut builder = TransactionBuilder::new(
+            "test-chain".parse().expect("chain"),
+            crate::account::AccountId::new(public_key),
+            FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(core::time::Duration::from_millis(77));
+        let signed = builder
+            .with_metadata(metadata)
+            .with_instructions::<crate::isi::InstructionBox>([])
+            .sign(&private_key);
+        let entrypoint = TransactionEntrypoint::External(signed);
         let result = TransactionResult::new(Ok(crate::trigger::DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
@@ -2107,26 +2069,26 @@ mod tests {
     }
 
     #[test]
-    fn predicate_matches_private_kaigi_null_authority_and_metadata() {
-        let tx = sample_private_committed_tx();
+    fn predicate_matches_external_authority_and_metadata() {
+        let tx = sample_committed_tx();
 
-        assert!(CommittedTxPredicate::AuthorityExists(false).applies(&tx));
+        assert!(CommittedTxPredicate::AuthorityExists(true).applies(&tx));
         assert!(CommittedTxPredicate::TsEq(77).applies(&tx));
         assert!(
             CommittedTxPredicate::MetadataEq {
                 key: Name::from_str("topic").expect("metadata key"),
-                value: iroha_primitives::json::Json::new("private"),
+                value: iroha_primitives::json::Json::new("example"),
             }
             .applies(&tx)
         );
-        assert!(!CommittedTxPredicate::AuthorityExists(true).applies(&tx));
+        assert!(!CommittedTxPredicate::AuthorityExists(false).applies(&tx));
     }
 
     #[test]
     fn predicate_applies_extended_atoms_and_boolean_forms() {
-        let tx = sample_private_committed_tx();
+        let tx = sample_committed_tx();
         let topic = Name::from_str("topic").expect("metadata key");
-        let private = iroha_primitives::json::Json::new("private");
+        let private = iroha_primitives::json::Json::new("example");
         let public = iroha_primitives::json::Json::new("public");
         let other_block =
             HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(b"other block"));
@@ -2523,7 +2485,7 @@ mod tests {
         ];
         let fail_closed =
             norito::json::to_json(&CommittedTxPredicate::Const(false)).expect("const false JSON");
-        let tx = sample_private_committed_tx();
+        let tx = sample_committed_tx();
 
         for predicate in invalid {
             assert!(validate_committed_tx_predicate(&predicate).is_err());

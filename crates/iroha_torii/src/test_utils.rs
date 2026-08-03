@@ -630,6 +630,11 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         common: A::Common {
             chain: ChainId::from("test-chain"),
             key_pair: checked_random_keypair("minimal root node key fixture"),
+            soranet_transport_key_pair: KeyPair::try_from_seed(
+                b"iroha:torii:test-utils:soranet-transport:v1".to_vec(),
+                Algorithm::Ed25519,
+            )
+            .expect("minimal root SoraNet transport key fixture"),
             peer: Peer::new(
                 socket_addr!(127.0.0.1:0),
                 checked_random_keypair("minimal root peer public key fixture")

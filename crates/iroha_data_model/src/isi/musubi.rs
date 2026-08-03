@@ -5,13 +5,15 @@
 //! revision, and Parliament recovery carries an exact action-bound decision.
 
 use super::*;
+use crate::error::ParseError;
 use crate::musubi::{
-    ArchiveId, MusubiAliasNameV1, MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1,
-    MusubiGovernanceDecisionV1, MusubiNamespaceBindingV1, MusubiNamespaceDelegationV1,
-    MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageRoleV1,
-    MusubiProviderBundleVerificationAttestationV1, MusubiPublicationV1, MusubiReasonV1,
-    MusubiRegistryPolicyV1, MusubiReleaseDigestV1, MusubiReleaseIdV1, MusubiReleaseMetadataV1,
-    MusubiSeedIngressReceiptV1,
+    ArchiveId, MUSUBI_MAX_PACKAGE_OWNERS_V1, MusubiAliasNameV1, MusubiArchiveCommitmentV1,
+    MusubiArchiveLocationIdV1, MusubiGovernanceDecisionV1, MusubiNamespaceBindingV1,
+    MusubiNamespaceDelegationV1, MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageRoleV1,
+    MusubiProviderBundleAttestationSetDigestV1, MusubiProviderBundleVerificationAttestationV1,
+    MusubiPublicationV1, MusubiReasonV1, MusubiRegistryPolicyV1, MusubiReleaseDigestV1,
+    MusubiReleaseIdV1, MusubiReleaseMetadataV1, MusubiSeedIngressReceiptV1,
+    validate_musubi_account_id_v1,
 };
 use crate::sorafs::pin_registry::{ManifestDigest, ReplicationOrderId};
 
@@ -85,7 +87,57 @@ impl RegisterMusubiArchiveV1 {
 impl crate::seal::Instruction for RegisterMusubiArchiveV1 {}
 
 isi! {
-    /// Add or renew one SoraFS location for a registered archive.
+    /// Register one immutable provider attestation for later compact location-set commitments.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct RegisterMusubiProviderBundleAttestationV1 {
+        /// Exactly one complete signed provider bundle-verification attestation.
+        pub attestation: MusubiProviderBundleVerificationAttestationV1,
+        /// Compare-and-set archive location revision authorizing this staged attestation.
+        pub expected_location_revision: u64,
+    }
+}
+
+impl RegisterMusubiProviderBundleAttestationV1 {
+    /// First-release stable wire identifier.
+    pub const WIRE_ID: &'static str = "iroha.musubi.v1.provider_bundle_attestation.register";
+
+    /// Construct a manager-relayable immutable provider-attestation registration.
+    #[must_use]
+    pub const fn new(
+        attestation: MusubiProviderBundleVerificationAttestationV1,
+        expected_location_revision: u64,
+    ) -> Self {
+        Self {
+            attestation,
+            expected_location_revision,
+        }
+    }
+
+    /// Validate the complete attestation and location revision before immutable registration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when the attestation is invalid or the expected
+    /// location revision is zero.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.attestation.validate()?;
+        if self.expected_location_revision == 0 {
+            return Err(ParseError::new(
+                "Musubi provider attestation location revision must be nonzero",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl crate::seal::Instruction for RegisterMusubiProviderBundleAttestationV1 {}
+
+isi! {
+    /// Add or renew one `SoraFS` location for a registered archive.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -96,12 +148,12 @@ isi! {
         pub archive_id: ArchiveId,
         /// Stable location identity.
         pub location_id: MusubiArchiveLocationIdV1,
-        /// Registry-grade SoraFS pin manifest.
+        /// Registry-grade `SoraFS` pin manifest.
         pub pin_manifest: ManifestDigest,
         /// Replication order whose finalized completions prove availability.
         pub replication_order: ReplicationOrderId,
-        /// Sorted, provider-distinct parsed-bundle attestations for finalized completions.
-        pub provider_attestations: Vec<MusubiProviderBundleVerificationAttestationV1>,
+        /// Digest of the sorted independently registered provider-attestation set.
+        pub provider_attestation_set_digest: MusubiProviderBundleAttestationSetDigestV1,
         /// Earliest epoch at which renewal should occur.
         pub renew_after_epoch: u64,
         /// Epoch after which the location is invalid.
@@ -114,6 +166,32 @@ isi! {
 impl AddMusubiArchiveLocationV1 {
     /// First-release stable wire identifier.
     pub const WIRE_ID: &'static str = "iroha.musubi.v1.archive_location.add";
+
+    /// Validate exact archive/location identities, attestation-set commitment, and renewal bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when an identity or digest is zero, the renewal
+    /// bounds are invalid, or the expected location revision is zero.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        if self.archive_id.is_zero()
+            || self.location_id.is_zero()
+            || self.pin_manifest.as_bytes().iter().all(|byte| *byte == 0)
+            || self
+                .replication_order
+                .as_bytes()
+                .iter()
+                .all(|byte| *byte == 0)
+            || self.provider_attestation_set_digest.is_zero()
+            || self.renew_after_epoch >= self.expires_at_epoch
+            || self.expected_location_revision == 0
+        {
+            return Err(ParseError::new(
+                "Musubi archive location request is invalid or noncanonical",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl crate::seal::Instruction for AddMusubiArchiveLocationV1 {}
@@ -282,6 +360,25 @@ isi! {
 impl InviteMusubiPackageMaintainerV1 {
     /// First-release stable wire identifier.
     pub const WIRE_ID: &'static str = "iroha.musubi.v1.package_member.invite";
+
+    /// Validate the structural invitation and bounded invited account identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when the package, account, invitation identity,
+    /// expiry, role, or expected governance revision is invalid.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        validate_musubi_account_id_v1(&self.invited_account)?;
+        if self.invite_id.is_zero()
+            || self.expires_at_height == 0
+            || self.expected_governance_revision == 0
+            || matches!(self.role, MusubiPackageRoleV1::Maintainer(role) if role.is_empty())
+        {
+            return Err(ParseError::new("Musubi package invitation is invalid"));
+        }
+        Ok(())
+    }
 }
 
 impl crate::seal::Instruction for InviteMusubiPackageMaintainerV1 {}
@@ -356,6 +453,25 @@ isi! {
 impl SetMusubiPackageMaintainerRoleV1 {
     /// First-release stable wire identifier.
     pub const WIRE_ID: &'static str = "iroha.musubi.v1.package_member.set_role";
+
+    /// Validate the package, bounded member account, role, and revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when the package or account is invalid, the role
+    /// label is empty, or the expected governance revision is zero.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        validate_musubi_account_id_v1(&self.account)?;
+        if self.expected_governance_revision == 0
+            || matches!(self.role, MusubiPackageRoleV1::Maintainer(role) if role.is_empty())
+        {
+            return Err(ParseError::new(
+                "Musubi package maintainer role request is invalid",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl crate::seal::Instruction for SetMusubiPackageMaintainerRoleV1 {}
@@ -380,6 +496,23 @@ isi! {
 impl RemoveMusubiPackageMaintainerV1 {
     /// First-release stable wire identifier.
     pub const WIRE_ID: &'static str = "iroha.musubi.v1.package_member.remove";
+
+    /// Validate the package, bounded member account, and revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when the package or account is invalid or the
+    /// expected governance revision is zero.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.package.validate()?;
+        validate_musubi_account_id_v1(&self.account)?;
+        if self.expected_governance_revision == 0 {
+            return Err(ParseError::new(
+                "Musubi package maintainer removal request is invalid",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl crate::seal::Instruction for RemoveMusubiPackageMaintainerV1 {}
@@ -444,6 +577,29 @@ isi! {
 impl RecoverMusubiPackageV1 {
     /// First-release stable wire identifier.
     pub const WIRE_ID: &'static str = "iroha.musubi.v1.parliament.package_recover";
+
+    /// Validate the enacted decision shape and bounded replacement-owner set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when the decision, package, owner set, account
+    /// identity, or expected governance revision is invalid.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.decision.validate()?;
+        self.package.validate()?;
+        if self.owners.is_empty()
+            || self.owners.len() > MUSUBI_MAX_PACKAGE_OWNERS_V1
+            || self.owners.windows(2).any(|pair| pair[0] >= pair[1])
+            || self.expected_governance_revision == 0
+        {
+            return Err(ParseError::new(
+                "Musubi Parliament package recovery request is invalid",
+            ));
+        }
+        self.owners
+            .iter()
+            .try_for_each(validate_musubi_account_id_v1)
+    }
 }
 
 impl crate::seal::Instruction for RecoverMusubiPackageV1 {}
@@ -594,12 +750,16 @@ impl_decode_musubi_instruction!(RegisterMusubiArchiveV1 {
     staging_receipt: MusubiSeedIngressReceiptV1,
     expected_policy_revision: u64,
 });
+impl_decode_musubi_instruction!(RegisterMusubiProviderBundleAttestationV1 {
+    attestation: MusubiProviderBundleVerificationAttestationV1,
+    expected_location_revision: u64,
+});
 impl_decode_musubi_instruction!(AddMusubiArchiveLocationV1 {
     archive_id: ArchiveId,
     location_id: MusubiArchiveLocationIdV1,
     pin_manifest: ManifestDigest,
     replication_order: ReplicationOrderId,
-    provider_attestations: Vec<MusubiProviderBundleVerificationAttestationV1>,
+    provider_attestation_set_digest: MusubiProviderBundleAttestationSetDigestV1,
     renew_after_epoch: u64,
     expires_at_epoch: u64,
     expected_location_revision: u64,
@@ -692,17 +852,31 @@ impl_decode_musubi_instruction!(AssertMusubiReleaseDigestV1 {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
     use norito::core::DecodeFromSlice;
 
     use super::*;
     use crate::{
+        account::{MultisigMember, MultisigPolicy},
         musubi::{
-            ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiContentDigestV1,
-            MusubiKotodamaEditionV1, MusubiPackageScopeV1, MusubiRegistrySnapshotV1,
-            MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiResolutionProofV1,
-            MusubiVerificationLockV1,
+            ArchiveId, MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1, MUSUBI_REGISTRY_VERSION_V1,
+            MusubiAbiBindingV1, MusubiContentDigestV1, MusubiKotodamaEditionV1,
+            MusubiPackageScopeV1, MusubiProviderBundleAttestationSetDigestV1,
+            MusubiProviderBundleVerificationApprovalV1,
+            MusubiProviderBundleVerificationAttestationV1,
+            MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
+            MusubiRegistrySnapshotV1, MusubiReleaseManifestV1, MusubiReleaseMetadataV1,
+            MusubiResolutionProofV1, MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
+            MusubiVerificationLockV1, musubi_provider_bundle_attestation_set_digest_v1,
         },
         nexus::DataSpaceId,
+        sorafs::{
+            capacity::ProviderId,
+            pin_registry::{
+                ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+                ProviderIngestFinalizedAnchorV1,
+            },
+        },
     };
 
     fn package() -> MusubiPackageIdV1 {
@@ -715,6 +889,80 @@ mod tests {
 
     fn release() -> MusubiReleaseIdV1 {
         MusubiReleaseIdV1::new(package(), "1.2.3".parse().expect("version"))
+    }
+
+    fn provider_attestation() -> MusubiProviderBundleVerificationAttestationV1 {
+        let keypair =
+            KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("provider keypair");
+        let owner = AccountId::new(keypair.public_key().clone());
+        let binding = MusubiProviderBundleVerificationBindingV1 {
+            chain_id: "musubi-isi-test".into(),
+            genesis_block_hash: [0x52; 32],
+            provider_id: ProviderId::new([0x53; 32]),
+            completed_by: owner.clone(),
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                owner,
+                ProviderIngestCompletionSignerPolicyV1 {
+                    policy_id: [0x54; 32],
+                    revision: 1,
+                    predecessor_digest: None,
+                    policy_digest: [0x55; 32],
+                },
+            ),
+            replication_order: ReplicationOrderId::new([0x56; 32]),
+            assignment_revision: 1,
+            completion_epoch: 2,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: 3,
+                block_hash: [0x57; 32],
+            },
+            archive_id: ArchiveId::new([0x58; 32]),
+            bundle_digest: MusubiContentDigestV1::new([0x59; 32]),
+            descriptor_digest: MusubiContentDigestV1::new([0x5A; 32]),
+            semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new([0x5B; 32]),
+            verification_lock_digest: MusubiVerificationLockDigestV1::new([0x5C; 32]),
+            source_tree_digest: MusubiContentDigestV1::new([0x5D; 32]),
+        };
+        let payload = MusubiProviderBundleVerificationPayloadV1 {
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            binding,
+        };
+        let attestation = MusubiProviderBundleVerificationAttestationV1 {
+            approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+                public_key: keypair.public_key().clone(),
+                signature: SignatureOf::try_from_hash(
+                    keypair.private_key(),
+                    payload.signing_hash(),
+                )
+                .expect("provider approval"),
+            }],
+            payload,
+        };
+        attestation.validate().expect("provider attestation");
+        attestation
+    }
+
+    fn oversized_account() -> AccountId {
+        let members = (0_u16..256)
+            .map(|index| {
+                let mut seed = [0xB5; 32];
+                seed[..2].copy_from_slice(&index.to_le_bytes());
+                let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+                    .expect("oversized account keypair");
+                MultisigMember::new(keypair.public_key().clone(), 1)
+                    .expect("oversized account member")
+            })
+            .collect();
+        let account = AccountId::new_multisig(
+            MultisigPolicy::new(1, members).expect("oversized account controller"),
+        );
+        assert!(
+            norito::to_bytes(&account)
+                .expect("account canonical encoding")
+                .len()
+                > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1
+        );
+        account
     }
 
     fn assert_slice_roundtrip<T>(value: T)
@@ -749,6 +997,81 @@ mod tests {
             invite_id: crate::musubi::MusubiInviteIdV1::new([0x34; 32]),
             expected_governance_revision: 9,
         });
+    }
+
+    #[test]
+    fn provider_attestation_registration_and_location_commitment_roundtrip() {
+        let attestation = provider_attestation();
+        let registration = RegisterMusubiProviderBundleAttestationV1::new(attestation.clone(), 7);
+        registration.validate().expect("valid registration");
+        assert_slice_roundtrip(registration.clone());
+
+        let boxed = InstructionBox::from(registration.clone());
+        assert_eq!(
+            crate::isi::instruction_wire_id(&boxed),
+            Some(RegisterMusubiProviderBundleAttestationV1::WIRE_ID)
+        );
+        assert_eq!(
+            boxed
+                .as_any()
+                .downcast_ref::<RegisterMusubiProviderBundleAttestationV1>(),
+            Some(&registration)
+        );
+
+        let binding = &attestation.payload.binding;
+        let set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+            binding.archive_id,
+            binding.replication_order,
+            &[attestation.reference()],
+        )
+        .expect("provider set digest");
+        let mut location = AddMusubiArchiveLocationV1 {
+            archive_id: binding.archive_id,
+            location_id: MusubiArchiveLocationIdV1::new([0x61; 32]),
+            pin_manifest: ManifestDigest::new([0x62; 32]),
+            replication_order: binding.replication_order,
+            provider_attestation_set_digest: set_digest,
+            renew_after_epoch: 10,
+            expires_at_epoch: 20,
+            expected_location_revision: 8,
+        };
+        location.validate().expect("valid compact location request");
+        assert_slice_roundtrip(location.clone());
+
+        location.provider_attestation_set_digest =
+            MusubiProviderBundleAttestationSetDigestV1::new([0; 32]);
+        assert!(location.validate().is_err());
+        let invalid_registration = RegisterMusubiProviderBundleAttestationV1::new(attestation, 0);
+        assert!(invalid_registration.validate().is_err());
+    }
+
+    #[test]
+    fn account_bearing_governance_instructions_enforce_the_shared_bound() {
+        let account = oversized_account();
+        let package = package();
+        let invitation = InviteMusubiPackageMaintainerV1 {
+            package: package.clone(),
+            invite_id: crate::musubi::MusubiInviteIdV1::new([0x71; 32]),
+            invited_account: account.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            expires_at_height: 10,
+            expected_governance_revision: 1,
+        };
+        let role = SetMusubiPackageMaintainerRoleV1 {
+            package: package.clone(),
+            account: account.clone(),
+            role: MusubiPackageRoleV1::Owner,
+            expected_governance_revision: 1,
+        };
+        let removal = RemoveMusubiPackageMaintainerV1 {
+            package,
+            account,
+            expected_governance_revision: 1,
+        };
+
+        assert!(invitation.validate().is_err());
+        assert!(role.validate().is_err());
+        assert!(removal.validate().is_err());
     }
 
     #[test]
@@ -797,6 +1120,7 @@ mod tests {
         let ids = [
             RegisterMusubiNamespaceBindingV1::WIRE_ID,
             RegisterMusubiArchiveV1::WIRE_ID,
+            RegisterMusubiProviderBundleAttestationV1::WIRE_ID,
             AddMusubiArchiveLocationV1::WIRE_ID,
             RetireMusubiArchiveLocationV1::WIRE_ID,
             PublishMusubiReleaseV1::WIRE_ID,

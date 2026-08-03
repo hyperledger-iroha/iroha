@@ -417,6 +417,25 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
         self.config.write_text(config, encoding="utf-8")
         self.assert_rejected("must not materialize a validator private key")
 
+    def test_materialized_soranet_transport_identity_is_rejected_from_public_config(self) -> None:
+        for placeholder, materialized in (
+            (
+                "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY",
+                "ed01200000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            (
+                "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY",
+                "802620000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ):
+            with self.subTest(placeholder=placeholder):
+                original = self.config.read_text(encoding="utf-8")
+                self.config.write_text(
+                    original.replace(placeholder, materialized, 1), encoding="utf-8"
+                )
+                self.assert_rejected("must retain every runtime-identity placeholder")
+                self.config.write_text(original, encoding="utf-8")
+
     def test_unrelated_config_extension_is_rejected(self) -> None:
         with self.config.open("a", encoding="utf-8") as stream:
             stream.write("\n[unreviewed_release_input]\nopaque_value = \"forbidden\"\n")

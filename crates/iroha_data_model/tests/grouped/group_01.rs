@@ -26,8 +26,6 @@ mod ballot_proof_roundtrip;
 mod blockheader_roundtrip;
 #[path = "../confidential_encrypted_payload_vectors.rs"]
 mod confidential_encrypted_payload_vectors;
-#[path = "../confidential_wallet_fixtures.rs"]
-mod confidential_wallet_fixtures;
 #[path = "../consensus_roundtrip.rs"]
 mod consensus_roundtrip;
 #[path = "../consensus_state_roundtrip.rs"]
@@ -36,8 +34,6 @@ mod consensus_state_roundtrip;
 mod da_ingest_roundtrip;
 #[path = "../data_model.rs"]
 mod data_model;
-#[path = "../dump_wallet_flow_hex.rs"]
-mod dump_wallet_flow_hex;
 #[path = "../find_roles_by_account_id.rs"]
 mod find_roles_by_account_id;
 #[path = "../id_json.rs"]

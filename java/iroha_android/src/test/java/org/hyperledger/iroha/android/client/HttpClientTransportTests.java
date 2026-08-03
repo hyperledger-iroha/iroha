@@ -4920,7 +4920,7 @@ public final class HttpClientTransportTests {
               object(loadSharedBfvFixture(), "operation_vectors");
           final Map<String, Object> material =
               object(operationVectors, "full_bootstrap_material");
-          material.put("vk_commitment_hex", string(material, "expected_statement_digest_hex"));
+          material.put("vk_commitment_hex", string(material, "expected_material_digest_hex"));
           assertBfvOperationKeyComponentVectors(operationVectors);
         },
         "full-bootstrap verifier commitment drift must be rejected");
@@ -5783,8 +5783,7 @@ public final class HttpClientTransportTests {
             "verifier_key_digest_hex",
             "verifier_key_material_commitment_hex",
             "vk_commitment_hex",
-            "expected_material_digest_hex",
-            "expected_statement_digest_hex");
+            "expected_material_digest_hex");
     final List<String> uniqueDigestValues = new ArrayList<>();
     for (final String field : digestFields) {
       final String value = string(material, field);
@@ -5801,9 +5800,6 @@ public final class HttpClientTransportTests {
     assert string(material, "verifier_key_material_commitment_hex")
             .equals(string(material, "vk_commitment_hex"))
         : "full-bootstrap verifier-key commitment mismatch";
-    assert !string(material, "expected_material_digest_hex")
-            .equals(string(material, "expected_statement_digest_hex"))
-        : "full-bootstrap material and statement digests must differ";
   }
 
   private static void assertBfvRnsModulusChainFixture(

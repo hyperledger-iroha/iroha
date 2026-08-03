@@ -9,7 +9,9 @@
 
 use std::{borrow::ToOwned as _, collections::BTreeSet, vec::Vec};
 
-use iroha_executor_data_model::permission::Permission;
+use iroha_executor_data_model::permission::{
+    Permission, asset_definition::CanManageAssetDefinitionAlias,
+};
 
 use crate::{
     Execute,
@@ -2900,7 +2902,7 @@ mod tests {
 
         assert!(holder_revoke.is_err());
         assert!(matches!(
-            asset_definition::asset_definition_alias_namespace_scope(match &exact.scope {
+            super::asset_definition::asset_definition_alias_namespace_scope(match &exact.scope {
                 AssetDefinitionAliasPermissionScope::Alias(alias) => alias,
                 _ => unreachable!("test constructs an exact alias"),
             }).expect("valid exact alias namespace"),

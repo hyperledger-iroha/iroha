@@ -1,4 +1,4 @@
-//! Durable, namespace-bound replay ledgers for SoraNet admission credentials.
+//! Durable, namespace-bound replay ledgers for `SoraNet` admission credentials.
 //!
 //! Replay records are security state rather than cache entries. Active records
 //! are never evicted to make room, every accepted insertion is persisted before
@@ -267,14 +267,14 @@ impl PersistentReplayLedger {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            fs::create_dir_all(parent).map_err(io_error)?;
+            fs::create_dir_all(parent).map_err(|error| io_error(&error))?;
         }
         let mut file = match fs::File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return self.persist(),
-            Err(error) => return Err(io_error(error)),
+            Err(error) => return Err(io_error(&error)),
         };
-        let metadata = file.metadata().map_err(io_error)?;
+        let metadata = file.metadata().map_err(|error| io_error(&error))?;
         if !metadata.is_file() {
             return Err(ReplayLedgerError::Snapshot(
                 "snapshot path is not a regular file".to_owned(),
@@ -297,7 +297,7 @@ impl PersistentReplayLedger {
         (&mut file)
             .take(read_limit)
             .read_to_end(&mut bytes)
-            .map_err(io_error)?;
+            .map_err(|error| io_error(&error))?;
         if bytes.is_empty() {
             return Err(ReplayLedgerError::Snapshot("snapshot is empty".to_owned()));
         }
@@ -380,7 +380,7 @@ impl PersistentReplayLedger {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            fs::create_dir_all(parent).map_err(io_error)?;
+            fs::create_dir_all(parent).map_err(|error| io_error(&error))?;
         }
         let mut entries: Vec<_> = self
             .records
@@ -407,12 +407,12 @@ impl PersistentReplayLedger {
             )));
         }
         let temporary_path = temporary_path(path);
-        let mut temporary = fs::File::create(&temporary_path).map_err(io_error)?;
+        let mut temporary = fs::File::create(&temporary_path).map_err(|error| io_error(&error))?;
         temporary
             .write_all(&encoded)
             .and_then(|()| temporary.sync_all())
-            .map_err(io_error)?;
-        fs::rename(&temporary_path, path).map_err(io_error)?;
+            .map_err(|error| io_error(&error))?;
+        fs::rename(&temporary_path, path).map_err(|error| io_error(&error))?;
         #[cfg(unix)]
         if let Some(parent) = path
             .parent()
@@ -420,7 +420,7 @@ impl PersistentReplayLedger {
         {
             fs::File::open(parent)
                 .and_then(|directory| directory.sync_all())
-                .map_err(io_error)?;
+                .map_err(|error| io_error(&error))?;
         }
         Ok(())
     }
@@ -454,7 +454,7 @@ fn temporary_path(path: &Path) -> PathBuf {
     PathBuf::from(temporary)
 }
 
-fn io_error(error: io::Error) -> ReplayLedgerError {
+fn io_error(error: &io::Error) -> ReplayLedgerError {
     ReplayLedgerError::Io(error.to_string())
 }
 

@@ -3240,9 +3240,7 @@ impl GossipTransaction {
         match self.as_entrypoint() {
             TransactionEntrypoint::External(signed) => signed,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => {
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
                 panic!("gossip entrypoint is not a signed transaction")
             }
         }

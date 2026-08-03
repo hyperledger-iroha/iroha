@@ -2042,6 +2042,7 @@ mod tests {
             v2_body_store::{
                 BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,
             },
+            v2_chunks::encode_payload,
             v2_effects::ApplyTask,
         },
         tx::AcceptedTransaction,
@@ -2697,14 +2698,10 @@ mod tests {
                 block_hash: body.hash(),
                 payload_hash: Hash::new(&canonical_wire),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &context,
-                round,
-                subject,
-                u64::try_from(canonical_wire.len()).expect("body length"),
-                std::slice::from_ref(&canonical_wire),
-            )
-            .expect("fixture manifest");
+            let manifest = encode_payload(&context, round, subject, &canonical_wire)
+                .expect("encode canonical fixture payload")
+                .manifest()
+                .clone();
             let execution_commitment = service
                 .validate_candidate(&context, &body)
                 .expect("derive exact fixture execution commitment");
@@ -3095,14 +3092,10 @@ mod tests {
             block_hash: body.hash(),
             payload_hash: Hash::new(&canonical_wire),
         };
-        let manifest = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject,
-            u64::try_from(canonical_wire.len()).expect("successor body length"),
-            std::slice::from_ref(&canonical_wire),
-        )
-        .expect("derive successor payload manifest");
+        let manifest = encode_payload(&context, round, subject, &canonical_wire)
+            .expect("encode successor payload")
+            .manifest()
+            .clone();
         let execution_commitment = fixture
             .service
             .validate_candidate(&context, &body)
@@ -4802,14 +4795,15 @@ mod tests {
                 .body
                 .encode_wire()
                 .expect("encode unchanged locked body");
-            let reproposal_manifest = wire::PayloadManifest::derive(
+            let reproposal_manifest = encode_payload(
                 &fixture.context,
                 later_round,
                 fixture.task.subject(),
-                u64::try_from(canonical_wire.len()).expect("body length"),
-                std::slice::from_ref(&canonical_wire),
+                &canonical_wire,
             )
-            .expect("derive later-round manifest for unchanged locked body");
+            .expect("encode unchanged locked body for its later round")
+            .manifest()
+            .clone();
             let durable = store
                 .store(reproposal_manifest, canonical_wire.clone())
                 .expect("persist later-round manifest for unchanged locked body");

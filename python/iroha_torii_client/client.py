@@ -840,6 +840,12 @@ __all__ = [
     "PipelinePreflightQueue",
     "PipelinePreflightFees",
     "PipelinePreflight",
+    "SumeragiEvidenceRecordBase",
+    "SumeragiDoubleVoteEvidenceRecord",
+    "SumeragiInvalidQcEvidenceRecord",
+    "SumeragiInvalidProposalEvidenceRecord",
+    "SumeragiCensorshipEvidenceRecord",
+    "SumeragiV2EquivocationEvidenceRecord",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "KaigiRelaySummary",
@@ -919,6 +925,7 @@ __all__ = [
     "OfflineTopUpFinalityValidatorPower",
     "OfflineTopUpFinalityDualQuorum",
     "OfflineTopUpFinalityNextEpochSnapshot",
+    "OfflineTopUpFinalitySnapshotBootstrapAnchor",
     "OfflineTopUpFinalityHeightContext",
     "OfflineTopUpFinalityCompactQc",
     "OfflineTopUpAnchorMerkleProof",
@@ -2545,38 +2552,101 @@ SUMERAGI_EVIDENCE_KIND_FILTERS = {
     "InvalidQc",
     "InvalidProposal",
     "Censorship",
+    "SumeragiV2Equivocation",
 }
 SUMERAGI_EVIDENCE_PHASES = {"Prepare", "Commit", "NewView"}
+SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES = {
+    "proposal",
+    "phase_vote",
+    "timeout_vote",
+}
 
 
 @dataclass(frozen=True)
-class SumeragiEvidenceRecord:
-    """Evidence payload returned by ``GET /v1/sumeragi/evidence``."""
+class SumeragiEvidenceRecordBase:
+    """Fields common to exact evidence records returned by Torii."""
 
     kind: str
     recorded_height: int
     recorded_view: int
     recorded_ms: int
-    phase: Optional[str] = None
-    height: Optional[int] = None
-    view: Optional[int] = None
-    epoch: Optional[int] = None
-    signer: Optional[str] = None
-    block_hash: Optional[str] = None
-    block_hash_1: Optional[str] = None
-    block_hash_2: Optional[str] = None
-    parent_state_root: Optional[str] = None
-    post_state_root_1: Optional[str] = None
-    post_state_root_2: Optional[str] = None
-    subject_block_hash: Optional[str] = None
-    payload_hash: Optional[str] = None
-    tx_hash: Optional[str] = None
-    receipt_count: Optional[int] = None
-    min_height: Optional[int] = None
-    max_height: Optional[int] = None
-    signers: Optional[List[str]] = None
-    reason: Optional[str] = None
-    detail: Optional[str] = None
+    consensus_admitted_height: Optional[int]
+
+
+@dataclass(frozen=True)
+class SumeragiDoubleVoteEvidenceRecord(SumeragiEvidenceRecordBase):
+    """Exact ``DoublePrepare`` or ``DoubleCommit`` evidence projection."""
+
+    kind: Literal["DoublePrepare", "DoubleCommit"]
+    phase: Literal["Prepare", "Commit", "NewView"]
+    height: int
+    view: int
+    epoch: int
+    signer: int
+    block_hash_1: str
+    block_hash_2: str
+
+
+@dataclass(frozen=True)
+class SumeragiInvalidQcEvidenceRecord(SumeragiEvidenceRecordBase):
+    """Exact ``InvalidQc`` evidence projection."""
+
+    kind: Literal["InvalidQc"]
+    height: int
+    view: int
+    epoch: int
+    subject_block_hash: str
+    phase: Literal["Prepare", "Commit", "NewView"]
+    reason: str
+
+
+@dataclass(frozen=True)
+class SumeragiInvalidProposalEvidenceRecord(SumeragiEvidenceRecordBase):
+    """Exact ``InvalidProposal`` evidence projection."""
+
+    kind: Literal["InvalidProposal"]
+    height: int
+    view: int
+    epoch: int
+    subject_block_hash: str
+    payload_hash: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SumeragiCensorshipEvidenceRecord(SumeragiEvidenceRecordBase):
+    """Exact ``Censorship`` evidence projection."""
+
+    kind: Literal["Censorship"]
+    tx_hash: str
+    receipt_count: int
+    signers: List[str]
+    submitted_at_height_min: Optional[int]
+    submitted_at_height_max: Optional[int]
+
+
+@dataclass(frozen=True)
+class SumeragiV2EquivocationEvidenceRecord(SumeragiEvidenceRecordBase):
+    """Exact ``SumeragiV2Equivocation`` evidence projection."""
+
+    kind: Literal["SumeragiV2Equivocation"]
+    class_: Literal["proposal", "phase_vote", "timeout_vote"]
+    height: int
+    view: int
+    epoch: int
+    signer: int
+    context_id: str
+    artifact_hash_1: str
+    artifact_hash_2: str
+
+
+SumeragiEvidenceRecord = Union[
+    SumeragiDoubleVoteEvidenceRecord,
+    SumeragiInvalidQcEvidenceRecord,
+    SumeragiInvalidProposalEvidenceRecord,
+    SumeragiCensorshipEvidenceRecord,
+    SumeragiV2EquivocationEvidenceRecord,
+]
 
 
 @dataclass(frozen=True)
@@ -4388,7 +4458,7 @@ class OfflineTopUpFinalityConsensusMode:
 class OfflineTopUpFinalityPayloadEncoding:
     """Adjacent-tag data-availability payload encoding."""
 
-    encoding: Literal["plain", "reed_solomon16"]
+    encoding: Literal["reed_solomon16"]
     details: None = None
 
 
@@ -4457,6 +4527,7 @@ class OfflineTopUpFinalityQuorumCertificate:
     """Closed structural representation of a Sumeragi-v2 QC."""
 
     round: OfflineTopUpFinalityConsensusRound
+    proposal_round: OfflineTopUpFinalityConsensusRound
     phase: OfflineTopUpFinalityGlobalPhase
     subject: OfflineTopUpFinalityBlockSubject
     execution_commitment: OfflineTopUpFinalityExecutionCommitment
@@ -4494,6 +4565,16 @@ class OfflineTopUpFinalityNextEpochSnapshot:
 
 
 @dataclass(frozen=True)
+class OfflineTopUpFinalitySnapshotBootstrapAnchor:
+    """Audited snapshot authority replacing an unavailable parent CommitQC."""
+
+    snapshot_height: int
+    snapshot_block_hash: str
+    snapshot_block_creation_time_ms: int
+    snapshot_state_hash: str
+
+
+@dataclass(frozen=True)
 class OfflineTopUpFinalityHeightContext:
     """Bounded projection of the immutable finality height context."""
 
@@ -4506,6 +4587,7 @@ class OfflineTopUpFinalityHeightContext:
     next_epoch_snapshot: Optional[OfflineTopUpFinalityNextEpochSnapshot]
     mode: OfflineTopUpFinalityConsensusMode
     parent_commit_qc: Optional[OfflineTopUpFinalityQuorumCertificate]
+    snapshot_bootstrap: Optional[OfflineTopUpFinalitySnapshotBootstrapAnchor]
     nexus_amx_context_hash: str
     execution_policy_hash: str
     da_layout: OfflineTopUpFinalityDataAvailabilityLayout
@@ -4933,6 +5015,11 @@ def _offline_top_up_finality_consensus_mode(
     value: Any, context: str
 ) -> OfflineTopUpFinalityConsensusMode:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("mode", "details"),
+    )
     mode = _offline_required(record, "mode", context)
     if mode not in ("permissioned", "npos"):
         raise RuntimeError(f"{context}.mode must be permissioned or npos")
@@ -4945,11 +5032,14 @@ def _offline_top_up_finality_payload_encoding(
     value: Any, context: str
 ) -> OfflineTopUpFinalityPayloadEncoding:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("encoding", "details"),
+    )
     encoding = _offline_required(record, "encoding", context)
-    if encoding not in ("plain", "reed_solomon16"):
-        raise RuntimeError(
-            f"{context}.encoding must be plain or reed_solomon16"
-        )
+    if encoding != "reed_solomon16":
+        raise RuntimeError(f"{context}.encoding must be reed_solomon16")
     if _offline_required(record, "details", context) is not None:
         raise RuntimeError(f"{context}.details must be null for a unit variant")
     return OfflineTopUpFinalityPayloadEncoding(encoding=encoding, details=None)
@@ -4959,6 +5049,11 @@ def _offline_top_up_finality_phase(
     value: Any, context: str
 ) -> OfflineTopUpFinalityGlobalPhase:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("phase", "details"),
+    )
     phase = _offline_required(record, "phase", context)
     if phase not in ("prepare", "commit"):
         raise RuntimeError(f"{context}.phase must be prepare or commit")
@@ -4971,6 +5066,18 @@ def _offline_top_up_finality_da_layout(
     value: Any, context: str
 ) -> OfflineTopUpFinalityDataAvailabilityLayout:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "encoding",
+            "chunk_size_bytes",
+            "data_shards",
+            "parity_shards",
+            "max_payload_size_bytes",
+            "max_chunk_count",
+        ),
+    )
     encoding = _offline_top_up_finality_payload_encoding(
         _offline_required(record, "encoding", context), f"{context}.encoding"
     )
@@ -4984,20 +5091,14 @@ def _offline_top_up_finality_da_layout(
         _offline_required(record, "data_shards", context),
         f"{context}.data_shards",
         (1 << 16) - 1,
+        positive=True,
     )
     parity_shards = _offline_unsigned(
         _offline_required(record, "parity_shards", context),
         f"{context}.parity_shards",
         (1 << 16) - 1,
+        positive=True,
     )
-    if encoding.encoding == "plain" and (data_shards != 0 or parity_shards != 0):
-        raise RuntimeError(f"{context} plain encoding requires zero shard counts")
-    if encoding.encoding == "reed_solomon16" and (
-        data_shards == 0 or parity_shards == 0
-    ):
-        raise RuntimeError(
-            f"{context} reed_solomon16 encoding requires positive shard counts"
-        )
     return OfflineTopUpFinalityDataAvailabilityLayout(
         encoding=encoding,
         chunk_size_bytes=chunk_size_bytes,
@@ -5022,6 +5123,11 @@ def _offline_top_up_finality_round(
     value: Any, context: str
 ) -> OfflineTopUpFinalityConsensusRound:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("context_id", "height", "view"),
+    )
     return OfflineTopUpFinalityConsensusRound(
         context_id=_offline_top_up_finality_height_context_id(
             _offline_required(record, "context_id", context), f"{context}.context_id"
@@ -5047,6 +5153,12 @@ def _offline_top_up_finality_subject(
     round_height: int,
 ) -> OfflineTopUpFinalityBlockSubject:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("block_hash", "payload_hash"),
+        optional=("parent_block_hash",),
+    )
     raw_parent = record.get("parent_block_hash")
     parent_block_hash = (
         None
@@ -5075,6 +5187,21 @@ def _offline_top_up_finality_execution_commitment(
     require_topup: bool,
 ) -> OfflineTopUpFinalityExecutionCommitment:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "parent_state_root",
+            "post_state_root",
+            "ordinary_writes_root",
+            "topup_anchor_count",
+            "native_amx_application_manifest_version",
+            "native_amx_application_manifest_root",
+            "native_amx_application_manifest_count",
+            "executed_block_wire_hash",
+        ),
+        optional=("topup_anchor_root",),
+    )
     topup_anchor_count = _offline_unsigned(
         _offline_required(record, "topup_anchor_count", context),
         f"{context}.topup_anchor_count",
@@ -5155,9 +5282,28 @@ def _offline_top_up_finality_qc(
     require_topup: bool,
 ) -> OfflineTopUpFinalityQuorumCertificate:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "round",
+            "proposal_round",
+            "phase",
+            "subject",
+            "execution_commitment",
+            "signers",
+            "aggregate_signature",
+        ),
+    )
     round_ = _offline_top_up_finality_round(
         _offline_required(record, "round", context), f"{context}.round"
     )
+    proposal_round = _offline_top_up_finality_round(
+        _offline_required(record, "proposal_round", context),
+        f"{context}.proposal_round",
+    )
+    if proposal_round != round_:
+        raise RuntimeError(f"{context}.proposal_round must equal round")
     phase = _offline_top_up_finality_phase(
         _offline_required(record, "phase", context), f"{context}.phase"
     )
@@ -5188,6 +5334,7 @@ def _offline_top_up_finality_qc(
         raise RuntimeError(f"{context}.aggregate_signature must not be all zero")
     return OfflineTopUpFinalityQuorumCertificate(
         round=round_,
+        proposal_round=proposal_round,
         phase=phase,
         subject=_offline_top_up_finality_subject(
             _offline_required(record, "subject", context),
@@ -5208,6 +5355,11 @@ def _offline_top_up_finality_validator_power(
     value: Any, context: str
 ) -> OfflineTopUpFinalityValidatorPower:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("validator", "power"),
+    )
     validator = _offline_exact_string(
         _offline_required(record, "validator", context), f"{context}.validator"
     )
@@ -5232,6 +5384,11 @@ def _offline_top_up_finality_quorum(
     roster: Tuple[OfflineTopUpFinalityValidatorPower, ...],
 ) -> OfflineTopUpFinalityDualQuorum:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("min_signers", "total_power"),
+    )
     quorum = OfflineTopUpFinalityDualQuorum(
         min_signers=_offline_unsigned(
             _offline_required(record, "min_signers", context),
@@ -5266,6 +5423,19 @@ def _offline_top_up_finality_next_epoch_snapshot(
     current_mode: OfflineTopUpFinalityConsensusMode,
 ) -> OfflineTopUpFinalityNextEpochSnapshot:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "epoch",
+            "epoch_end_height",
+            "mode",
+            "roster",
+            "validator_set_pops",
+            "quorum",
+            "leader_seed",
+        ),
+    )
     epoch = _offline_unsigned(
         _offline_required(record, "epoch", context),
         f"{context}.epoch",
@@ -5339,6 +5509,43 @@ def _offline_top_up_finality_next_epoch_snapshot(
     )
 
 
+def _offline_top_up_finality_snapshot_bootstrap_anchor(
+    value: Any, context: str
+) -> OfflineTopUpFinalitySnapshotBootstrapAnchor:
+    record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "snapshot_height",
+            "snapshot_block_hash",
+            "snapshot_block_creation_time_ms",
+            "snapshot_state_hash",
+        ),
+    )
+    return OfflineTopUpFinalitySnapshotBootstrapAnchor(
+        snapshot_height=_offline_unsigned(
+            _offline_required(record, "snapshot_height", context),
+            f"{context}.snapshot_height",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        ),
+        snapshot_block_hash=_offline_hash_literal(
+            _offline_required(record, "snapshot_block_hash", context),
+            f"{context}.snapshot_block_hash",
+        ),
+        snapshot_block_creation_time_ms=_offline_unsigned(
+            _offline_required(record, "snapshot_block_creation_time_ms", context),
+            f"{context}.snapshot_block_creation_time_ms",
+            _OFFLINE_MAX_U64,
+        ),
+        snapshot_state_hash=_offline_hash_literal(
+            _offline_required(record, "snapshot_state_hash", context),
+            f"{context}.snapshot_state_hash",
+        ),
+    )
+
+
 def _offline_top_up_finality_height_context(
     value: Any,
     context: str,
@@ -5346,6 +5553,28 @@ def _offline_top_up_finality_height_context(
     expected_finalized_height: int,
 ) -> OfflineTopUpFinalityHeightContext:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "context_id",
+            "chain_id",
+            "protocol_version",
+            "height",
+            "epoch",
+            "epoch_end_height",
+            "mode",
+            "nexus_amx_context_hash",
+            "execution_policy_hash",
+            "da_layout",
+            "leader_seed",
+        ),
+        optional=(
+            "next_epoch_snapshot",
+            "parent_commit_qc",
+            "snapshot_bootstrap",
+        ),
+    )
     context_id = _offline_top_up_finality_height_context_id(
         _offline_required(record, "context_id", context), f"{context}.context_id"
     )
@@ -5400,10 +5629,6 @@ def _offline_top_up_finality_height_context(
             successor_height=height + 1,
             current_mode=mode,
         )
-    if (height == epoch_end_height) != (next_epoch_snapshot is not None):
-        raise RuntimeError(
-            f"{context}.next_epoch_snapshot must be present exactly at epoch end"
-        )
     raw_parent_qc = record.get("parent_commit_qc")
     parent_commit_qc = (
         None
@@ -5414,13 +5639,29 @@ def _offline_top_up_finality_height_context(
             require_topup=False,
         )
     )
-    if (height == 1) != (parent_commit_qc is None):
-        raise RuntimeError(
-            f"{context}.parent_commit_qc must be absent only at genesis height"
-        )
     if parent_commit_qc is not None and parent_commit_qc.round.height + 1 != height:
         raise RuntimeError(
             f"{context}.parent_commit_qc.round.height must immediately precede height"
+        )
+    raw_snapshot_bootstrap = record.get("snapshot_bootstrap")
+    snapshot_bootstrap = (
+        None
+        if raw_snapshot_bootstrap is None
+        else _offline_top_up_finality_snapshot_bootstrap_anchor(
+            raw_snapshot_bootstrap,
+            f"{context}.snapshot_bootstrap",
+        )
+    )
+    if parent_commit_qc is not None and snapshot_bootstrap is not None:
+        raise RuntimeError(
+            f"{context}.parent_commit_qc and snapshot_bootstrap are mutually exclusive"
+        )
+    if (
+        snapshot_bootstrap is not None
+        and snapshot_bootstrap.snapshot_height + 1 != height
+    ):
+        raise RuntimeError(
+            f"{context}.snapshot_bootstrap.snapshot_height must immediately precede height"
         )
     return OfflineTopUpFinalityHeightContext(
         context_id=context_id,
@@ -5432,6 +5673,7 @@ def _offline_top_up_finality_height_context(
         next_epoch_snapshot=next_epoch_snapshot,
         mode=mode,
         parent_commit_qc=parent_commit_qc,
+        snapshot_bootstrap=snapshot_bootstrap,
         nexus_amx_context_hash=_offline_hash_literal(
             _offline_required(record, "nexus_amx_context_hash", context),
             f"{context}.nexus_amx_context_hash",
@@ -5456,6 +5698,11 @@ def _offline_top_up_anchor_merkle_proof(
     expected_leaf_count: int,
 ) -> OfflineTopUpAnchorMerkleProof:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("leaf_index", "leaf_count", "siblings"),
+    )
     leaf_count = _offline_unsigned(
         _offline_required(record, "leaf_count", context),
         f"{context}.leaf_count",
@@ -5679,6 +5926,11 @@ def _offline_top_up_finality_proof(
     expected_finalized_height: int,
 ) -> OfflineTopUpFinalityProof:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("version", "anchor", "commit_qc", "anchor_path"),
+    )
     version = _offline_unsigned(
         _offline_required(record, "version", context),
         f"{context}.version",
@@ -5690,6 +5942,11 @@ def _offline_top_up_finality_proof(
     anchor_context = f"{context}.anchor"
     raw_anchor = _offline_mapping(
         _offline_required(record, "anchor", context), anchor_context
+    )
+    _offline_exact_object_fields(
+        raw_anchor,
+        anchor_context,
+        required=("topup_operation_id", "anchor_digest"),
     )
     topup_operation_id = _offline_fixed_bytes(
         _offline_required(raw_anchor, "topup_operation_id", anchor_context),
@@ -5714,45 +5971,38 @@ def _offline_top_up_finality_proof(
     commit_qc = _offline_mapping(
         _offline_required(record, "commit_qc", context), commit_qc_context
     )
+    _offline_exact_object_fields(
+        commit_qc,
+        commit_qc_context,
+        required=("height_context", "certificate"),
+    )
     height_context_context = f"{commit_qc_context}.height_context"
-    height_context = _offline_mapping(
+    height_context = _offline_top_up_finality_height_context(
         _offline_required(commit_qc, "height_context", commit_qc_context),
         height_context_context,
+        expected_finalized_height=expected_finalized_height,
     )
-    context_height = _offline_unsigned(
-        _offline_required(height_context, "height", height_context_context),
-        f"{height_context_context}.height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if context_height != expected_finalized_height:
-        raise RuntimeError(
-            f"{height_context_context}.height does not match finalized_block_height"
-        )
 
     certificate_context = f"{commit_qc_context}.certificate"
-    certificate = _offline_mapping(
+    certificate = _offline_top_up_finality_qc(
         _offline_required(commit_qc, "certificate", commit_qc_context),
         certificate_context,
+        require_topup=True,
     )
-    round_context = f"{certificate_context}.round"
-    certificate_round = _offline_mapping(
-        _offline_required(certificate, "round", certificate_context), round_context
-    )
-    certificate_height = _offline_unsigned(
-        _offline_required(certificate_round, "height", round_context),
-        f"{round_context}.height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if certificate_height != expected_finalized_height:
+    if certificate.round.context_id != height_context.context_id:
         raise RuntimeError(
-            f"{round_context}.height does not match finalized_block_height"
+            f"{certificate_context}.round.context_id does not match height_context.context_id"
+        )
+    if certificate.round.height != height_context.height:
+        raise RuntimeError(
+            f"{certificate_context}.round.height does not match height_context.height"
         )
 
     anchor_path_context = f"{context}.anchor_path"
-    anchor_path = _offline_mapping(
-        _offline_required(record, "anchor_path", context), anchor_path_context
+    anchor_path = _offline_top_up_anchor_merkle_proof(
+        _offline_required(record, "anchor_path", context),
+        anchor_path_context,
+        expected_leaf_count=certificate.execution_commitment.topup_anchor_count,
     )
     return OfflineTopUpFinalityProof(
         version=1,
@@ -5760,14 +6010,11 @@ def _offline_top_up_finality_proof(
             topup_operation_id=topup_operation_id,
             anchor_digest=anchor_digest,
         ),
-        commit_qc=cast(
-            Mapping[str, Any],
-            _snapshot_offline_json(commit_qc, commit_qc_context),
+        commit_qc=OfflineTopUpFinalityCompactQc(
+            height_context=height_context,
+            certificate=certificate,
         ),
-        anchor_path=cast(
-            Mapping[str, Any],
-            _snapshot_offline_json(anchor_path, anchor_path_context),
-        ),
+        anchor_path=anchor_path,
     )
 
 
@@ -13616,8 +13863,12 @@ class ToriiClient:
     def get_governance_proposal(self, proposal_id: str) -> GovernanceProposalStatus:
         """Fetch proposal metadata via ``GET /v1/gov/proposals/{id}``."""
 
+        proposal_id = self._require_governance_proposal_id_v1(
+            proposal_id,
+            context="governance proposal proposal_id",
+        )
         payload = self._get_json_object(
-            f"/v1/gov/proposals/{proposal_id}",
+            f"/v1/gov/proposals/{quote(proposal_id, safe='')}",
             context="governance proposal",
         )
         found = bool(payload.get("found"))
@@ -13627,8 +13878,12 @@ class ToriiClient:
     def get_governance_locks(self, referendum_id: str) -> GovernanceLocksOverview:
         """Return lock escrow information for a referendum."""
 
+        referendum_id = self._require_governance_selector_v1(
+            referendum_id,
+            context="governance locks referendum_id",
+        )
         payload = self._get_json_object(
-            f"/v1/gov/locks/{referendum_id}",
+            f"/v1/gov/locks/{quote(referendum_id, safe='')}",
             context="governance locks",
         )
         rid = str(payload.get("referendum_id") or referendum_id)
@@ -13654,8 +13909,12 @@ class ToriiClient:
     def get_governance_referendum(self, referendum_id: str) -> GovernanceReferendumStatus:
         """Fetch referendum status via ``GET /v1/gov/referenda/{id}``."""
 
+        referendum_id = self._require_governance_selector_v1(
+            referendum_id,
+            context="governance referendum referendum_id",
+        )
         payload = self._get_json_object(
-            f"/v1/gov/referenda/{referendum_id}",
+            f"/v1/gov/referenda/{quote(referendum_id, safe='')}",
             context="governance referendum",
         )
         found = bool(payload.get("found"))
@@ -13665,8 +13924,12 @@ class ToriiClient:
     def get_governance_tally(self, referendum_id: str) -> GovernanceTallySummary:
         """Return the quadratic tally summary for a referendum."""
 
+        referendum_id = self._require_governance_selector_v1(
+            referendum_id,
+            context="governance tally referendum_id",
+        )
         payload = self._get_json_object(
-            f"/v1/gov/tally/{referendum_id}",
+            f"/v1/gov/tally/{quote(referendum_id, safe='')}",
             context="governance tally",
         )
         rid = str(payload.get("referendum_id") or referendum_id)
@@ -13758,6 +14021,18 @@ class ToriiClient:
     ) -> GovernanceInstructionDraft:
         """Draft a FinalizeReferendum transaction via ``POST /v1/gov/finalize``."""
 
+        referendum_id = self._require_governance_proposal_id_v1(
+            referendum_id,
+            context="governance finalize referendum_id",
+        )
+        proposal_id = self._require_governance_proposal_id_v1(
+            proposal_id,
+            context="governance finalize proposal_id",
+        )
+        if referendum_id != proposal_id:
+            raise RuntimeError(
+                "governance finalize referendum_id must equal proposal_id"
+            )
         payload = {"referendum_id": referendum_id, "proposal_id": proposal_id}
         body = self._post_json(
             "/v1/gov/finalize",
@@ -13779,6 +14054,10 @@ class ToriiClient:
     ) -> GovernanceInstructionDraft:
         """Draft an EnactReferendum transaction via ``POST /v1/gov/enact``."""
 
+        proposal_id = self._require_governance_proposal_id_v1(
+            proposal_id,
+            context="governance enact proposal_id",
+        )
         payload: Dict[str, Any] = {"proposal_id": proposal_id}
         if preimage_hash:
             payload["preimage_hash"] = preimage_hash
@@ -13809,6 +14088,10 @@ class ToriiClient:
     ) -> BallotSubmitResult:
         """Submit a quadratic ballot via ``POST /v1/gov/ballots/plain``."""
 
+        referendum_id = self._require_governance_selector_v1(
+            referendum_id,
+            context="plain ballot referendum_id",
+        )
         payload: Dict[str, Any] = {
             "authority": authority,
             "chain_id": chain_id,
@@ -13824,41 +14107,6 @@ class ToriiClient:
             "/v1/gov/ballots/plain",
             payload,
             context="plain ballot",
-        )
-        return BallotSubmitResult(
-            ok=bool(body.get("ok")),
-            accepted=bool(body.get("accepted")),
-            reason=body.get("reason"),
-            tx_instructions=self._parse_tx_instructions(body.get("tx_instructions")),
-        )
-
-    def submit_zk_ballot(
-        self,
-        *,
-        authority: str,
-        chain_id: str,
-        election_id: str,
-        proof_b64: str,
-        public: Optional[Mapping[str, Any]] = None,
-    ) -> BallotSubmitResult:
-        """Submit a zk ballot via ``POST /v1/gov/ballots/zk``."""
-
-        payload: Dict[str, Any] = {
-            "authority": authority,
-            "chain_id": chain_id,
-            "election_id": election_id,
-            "proof_b64": proof_b64,
-        }
-        public_inputs = self._normalize_governance_zk_public_inputs(
-            public,
-            context="zk ballot public inputs",
-        )
-        if public_inputs is not None:
-            payload["public"] = public_inputs
-        body = self._post_json(
-            "/v1/gov/ballots/zk",
-            payload,
-            context="zk ballot",
         )
         return BallotSubmitResult(
             ok=bool(body.get("ok")),
@@ -13888,6 +14136,10 @@ class ToriiClient:
         duration_blocks, direction, and nullifier.
         """
 
+        election_id = self._require_governance_selector_v1(
+            election_id,
+            context="zk ballot v1 election_id",
+        )
         payload: Dict[str, Any] = {
             "authority": authority,
             "chain_id": chain_id,
@@ -17768,119 +18020,236 @@ class ToriiClient:
     def _parse_sumeragi_evidence_record(payload: Any, *, context: str) -> SumeragiEvidenceRecord:
         record = ToriiClient._ensure_mapping(payload, context)
 
-        def pick(primary: str, alternate: str) -> Any:
-            if primary in record:
-                return record.get(primary)
-            return record.get(alternate)
+        kind_value = record.get("kind")
+        kind = ToriiClient._require_non_empty_string(kind_value, f"{context}.kind")
+        if kind != kind_value:
+            raise RuntimeError(f"{context}.kind must not contain surrounding whitespace")
+        common_fields = {
+            "kind",
+            "recorded_height",
+            "recorded_view",
+            "recorded_ms",
+            "consensus_admitted_height",
+        }
+        required_variant_fields: set[str]
+        optional_variant_fields: set[str] = set()
+        if kind in {"DoublePrepare", "DoubleCommit"}:
+            required_variant_fields = {
+                "phase",
+                "height",
+                "view",
+                "epoch",
+                "signer",
+                "block_hash_1",
+                "block_hash_2",
+            }
+        elif kind == "InvalidQc":
+            required_variant_fields = {
+                "height",
+                "view",
+                "epoch",
+                "subject_block_hash",
+                "phase",
+                "reason",
+            }
+        elif kind == "InvalidProposal":
+            required_variant_fields = {
+                "height",
+                "view",
+                "epoch",
+                "subject_block_hash",
+                "payload_hash",
+                "reason",
+            }
+        elif kind == "Censorship":
+            required_variant_fields = {"tx_hash", "receipt_count", "signers"}
+            optional_variant_fields = {
+                "submitted_at_height_min",
+                "submitted_at_height_max",
+            }
+        elif kind == "SumeragiV2Equivocation":
+            required_variant_fields = {
+                "class",
+                "height",
+                "view",
+                "epoch",
+                "signer",
+                "context_id",
+                "artifact_hash_1",
+                "artifact_hash_2",
+            }
+        else:
+            allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_KIND_FILTERS))
+            raise RuntimeError(f"{context}.kind must be one of: {allowed}")
 
-        kind = ToriiClient._require_non_empty_string(record.get("kind"), f"{context}.kind")
-        recorded_height = ToriiClient._coerce_unsigned(
-            pick("recorded_height", "recordedHeight"),
-            f"{context}.recorded_height",
+        required_fields = common_fields | required_variant_fields
+        allowed_fields = required_fields | optional_variant_fields
+        actual_fields = set(record)
+        missing = sorted(required_fields - actual_fields)
+        unexpected = sorted(str(field) for field in actual_fields - allowed_fields)
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected {', '.join(unexpected)}")
+            raise RuntimeError(
+                f"{context} must use the exact server fields ({'; '.join(details)})"
+            )
+
+        def json_unsigned(field: str, *, maximum: Optional[int] = None) -> int:
+            value = record[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise RuntimeError(f"{context}.{field} must be a non-negative JSON integer")
+            if maximum is not None and value > maximum:
+                raise RuntimeError(f"{context}.{field} must be <= {maximum}")
+            return value
+
+        def evidence_hash(field: str) -> str:
+            return ToriiClient._require_exact_lower_hex_string(
+                record[field],
+                context=f"{context}.{field}",
+                expected_length=64,
+            )
+
+        def exact_non_empty_string_for_value(value: Any, field_context: str) -> str:
+            literal = ToriiClient._require_non_empty_string(value, field_context)
+            if literal != value:
+                raise RuntimeError(
+                    f"{field_context} must not contain surrounding whitespace"
+                )
+            return literal
+
+        def exact_non_empty_string(field: str) -> str:
+            return exact_non_empty_string_for_value(
+                record[field], f"{context}.{field}"
+            )
+
+        admitted_value = record["consensus_admitted_height"]
+        consensus_admitted_height = (
+            None
+            if admitted_value is None
+            else json_unsigned("consensus_admitted_height")
         )
-        recorded_view = ToriiClient._coerce_unsigned(
-            pick("recorded_view", "recordedView"),
-            f"{context}.recorded_view",
-        )
-        recorded_ms = ToriiClient._coerce_unsigned(
-            pick("recorded_ms", "recordedMs"),
-            f"{context}.recorded_ms",
-        )
+        common = {
+            "kind": kind,
+            "recorded_height": json_unsigned("recorded_height"),
+            "recorded_view": json_unsigned("recorded_view"),
+            "recorded_ms": json_unsigned("recorded_ms"),
+            "consensus_admitted_height": consensus_admitted_height,
+        }
 
         if kind in {"DoublePrepare", "DoubleCommit"}:
-            phase_value = pick("phase", "phase")
-            phase_literal = ToriiClient._require_non_empty_string(phase_value, f"{context}.phase")
-            if phase_literal not in SUMERAGI_EVIDENCE_PHASES:
+            phase = exact_non_empty_string("phase")
+            if phase not in SUMERAGI_EVIDENCE_PHASES:
                 allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_PHASES))
                 raise RuntimeError(f"{context}.phase must be one of: {allowed}")
-            return SumeragiEvidenceRecord(
-                kind=kind,
-                recorded_height=recorded_height,
-                recorded_view=recorded_view,
-                recorded_ms=recorded_ms,
-                phase=phase_literal,
-                height=ToriiClient._coerce_unsigned(pick("height", "height"), f"{context}.height"),
-                view=ToriiClient._coerce_unsigned(pick("view", "view"), f"{context}.view"),
-                epoch=ToriiClient._coerce_unsigned(pick("epoch", "epoch"), f"{context}.epoch"),
-                signer=ToriiClient._require_non_empty_string(pick("signer", "signer"), f"{context}.signer"),
-                block_hash_1=ToriiClient._require_hex_string(
-                    pick("block_hash_1", "blockHash1"),
-                    f"{context}.block_hash_1",
-                ),
-                block_hash_2=ToriiClient._require_hex_string(
-                    pick("block_hash_2", "blockHash2"),
-                    f"{context}.block_hash_2",
-                ),
+            block_hash_1 = evidence_hash("block_hash_1")
+            block_hash_2 = evidence_hash("block_hash_2")
+            if block_hash_1 == block_hash_2:
+                raise RuntimeError(f"{context} block hashes must identify distinct blocks")
+            return SumeragiDoubleVoteEvidenceRecord(
+                **common,
+                phase=cast(Literal["Prepare", "Commit", "NewView"], phase),
+                height=json_unsigned("height"),
+                view=json_unsigned("view"),
+                epoch=json_unsigned("epoch"),
+                signer=json_unsigned("signer", maximum=0xFFFFFFFF),
+                block_hash_1=block_hash_1,
+                block_hash_2=block_hash_2,
             )
         if kind == "InvalidQc":
-            phase_literal = ToriiClient._require_non_empty_string(pick("phase", "phase"), f"{context}.phase")
-            if phase_literal not in SUMERAGI_EVIDENCE_PHASES:
+            phase = exact_non_empty_string("phase")
+            if phase not in SUMERAGI_EVIDENCE_PHASES:
                 allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_PHASES))
                 raise RuntimeError(f"{context}.phase must be one of: {allowed}")
-            return SumeragiEvidenceRecord(
-                kind=kind,
-                recorded_height=recorded_height,
-                recorded_view=recorded_view,
-                recorded_ms=recorded_ms,
-                phase=phase_literal,
-                height=ToriiClient._coerce_unsigned(pick("height", "height"), f"{context}.height"),
-                view=ToriiClient._coerce_unsigned(pick("view", "view"), f"{context}.view"),
-                epoch=ToriiClient._coerce_unsigned(pick("epoch", "epoch"), f"{context}.epoch"),
-                subject_block_hash=ToriiClient._require_hex_string(
-                    pick("subject_block_hash", "subjectBlockHash"),
-                    f"{context}.subject_block_hash",
-                ),
-                reason=ToriiClient._require_non_empty_string(pick("reason", "reason"), f"{context}.reason"),
+            return SumeragiInvalidQcEvidenceRecord(
+                **common,
+                height=json_unsigned("height"),
+                view=json_unsigned("view"),
+                epoch=json_unsigned("epoch"),
+                subject_block_hash=evidence_hash("subject_block_hash"),
+                phase=cast(Literal["Prepare", "Commit", "NewView"], phase),
+                reason=exact_non_empty_string("reason"),
             )
         if kind == "InvalidProposal":
-            return SumeragiEvidenceRecord(
-                kind=kind,
-                recorded_height=recorded_height,
-                recorded_view=recorded_view,
-                recorded_ms=recorded_ms,
-                height=ToriiClient._coerce_unsigned(pick("height", "height"), f"{context}.height"),
-                view=ToriiClient._coerce_unsigned(pick("view", "view"), f"{context}.view"),
-                epoch=ToriiClient._coerce_unsigned(pick("epoch", "epoch"), f"{context}.epoch"),
-                subject_block_hash=ToriiClient._require_hex_string(
-                    pick("subject_block_hash", "subjectBlockHash"),
-                    f"{context}.subject_block_hash",
-                ),
-                payload_hash=ToriiClient._require_hex_string(
-                    pick("payload_hash", "payloadHash"),
-                    f"{context}.payload_hash",
-                ),
-                reason=ToriiClient._require_non_empty_string(pick("reason", "reason"), f"{context}.reason"),
+            return SumeragiInvalidProposalEvidenceRecord(
+                **common,
+                height=json_unsigned("height"),
+                view=json_unsigned("view"),
+                epoch=json_unsigned("epoch"),
+                subject_block_hash=evidence_hash("subject_block_hash"),
+                payload_hash=evidence_hash("payload_hash"),
+                reason=exact_non_empty_string("reason"),
             )
         if kind == "Censorship":
-            signers_value = record.get("signers")
-            signers = (
-                [ToriiClient._require_non_empty_string(item, f"{context}.signers") for item in signers_value]
-                if isinstance(signers_value, list)
-                else None
+            signers_value = record["signers"]
+            if not isinstance(signers_value, list):
+                raise RuntimeError(f"{context}.signers must be a JSON array")
+            signers = [
+                exact_non_empty_string_for_value(
+                    signer, f"{context}.signers[{index}]"
+                )
+                for index, signer in enumerate(signers_value)
+            ]
+            receipt_count = json_unsigned("receipt_count")
+            if receipt_count != len(signers):
+                raise RuntimeError(f"{context}.receipt_count must equal len(signers)")
+            has_min = "submitted_at_height_min" in record
+            has_max = "submitted_at_height_max" in record
+            if (
+                has_min != has_max
+                or (receipt_count > 0 and not has_min)
+                or (receipt_count == 0 and has_min)
+            ):
+                raise RuntimeError(
+                    f"{context} must include both submitted_at_height bounds "
+                    "exactly when receipts are present"
+                )
+            submitted_at_height_min = (
+                json_unsigned("submitted_at_height_min") if has_min else None
             )
-            return SumeragiEvidenceRecord(
-                kind=kind,
-                recorded_height=recorded_height,
-                recorded_view=recorded_view,
-                recorded_ms=recorded_ms,
-                tx_hash=ToriiClient._require_hex_string(pick("tx_hash", "txHash"), f"{context}.tx_hash"),
-                receipt_count=ToriiClient._coerce_unsigned(pick("receipt_count", "receiptCount"), f"{context}.receipt_count"),
-                min_height=ToriiClient._coerce_unsigned(pick("min_height", "minHeight"), f"{context}.min_height"),
-                max_height=ToriiClient._coerce_unsigned(pick("max_height", "maxHeight"), f"{context}.max_height"),
+            submitted_at_height_max = (
+                json_unsigned("submitted_at_height_max") if has_max else None
+            )
+            if (
+                submitted_at_height_min is not None
+                and submitted_at_height_max is not None
+                and submitted_at_height_min > submitted_at_height_max
+            ):
+                raise RuntimeError(
+                    f"{context}.submitted_at_height_min must be <= "
+                    "submitted_at_height_max"
+                )
+            return SumeragiCensorshipEvidenceRecord(
+                **common,
+                tx_hash=evidence_hash("tx_hash"),
+                receipt_count=receipt_count,
                 signers=signers,
+                submitted_at_height_min=submitted_at_height_min,
+                submitted_at_height_max=submitted_at_height_max,
             )
-        detail_value = record.get("detail")
-        detail = (
-            ToriiClient._require_non_empty_string(detail_value, f"{context}.detail")
-            if isinstance(detail_value, str)
-            else None
-        )
-        return SumeragiEvidenceRecord(
-            kind=kind,
-            recorded_height=recorded_height,
-            recorded_view=recorded_view,
-            recorded_ms=recorded_ms,
-            detail=detail,
+
+        evidence_class = exact_non_empty_string("class")
+        if evidence_class not in SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES:
+            allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES))
+            raise RuntimeError(f"{context}.class must be one of: {allowed}")
+        artifact_hash_1 = evidence_hash("artifact_hash_1")
+        artifact_hash_2 = evidence_hash("artifact_hash_2")
+        if artifact_hash_1 == artifact_hash_2:
+            raise RuntimeError(f"{context} artifact hashes must identify distinct artifacts")
+        return SumeragiV2EquivocationEvidenceRecord(
+            **common,
+            class_=cast(
+                Literal["proposal", "phase_vote", "timeout_vote"], evidence_class
+            ),
+            height=json_unsigned("height"),
+            view=json_unsigned("view"),
+            epoch=json_unsigned("epoch"),
+            signer=json_unsigned("signer", maximum=0xFFFFFFFF),
+            context_id=evidence_hash("context_id"),
+            artifact_hash_1=artifact_hash_1,
+            artifact_hash_2=artifact_hash_2,
         )
 
     @staticmethod
@@ -18632,20 +19001,6 @@ class ToriiClient:
         raise RuntimeError(f"{context} must be an object")
 
     @staticmethod
-    def _reject_governance_public_input_key(
-        target: MutableMapping[str, Any],
-        key: str,
-        canonical_key: str,
-        *,
-        context: str,
-    ) -> None:
-        if key not in target:
-            return
-        raise RuntimeError(
-            f"{context} must use {canonical_key} (unsupported key {key})"
-        )
-
-    @staticmethod
     def _normalize_governance_public_hex_hint(
         target: MutableMapping[str, Any],
         key: str,
@@ -18691,6 +19046,42 @@ class ToriiClient:
         target[key] = raw.lower()
 
     @staticmethod
+    def _require_governance_selector_v1(value: Any, *, context: str) -> str:
+        if not isinstance(value, str):
+            raise RuntimeError(f"{context} must be a string")
+        try:
+            encoded = value.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise RuntimeError(
+                f"{context} must be a canonical governance selector V1"
+            ) from exc
+        if not encoded or len(encoded) > 128 or encoded[0] == ord("."):
+            raise RuntimeError(
+                f"{context} must be a canonical governance selector V1"
+            )
+        if any(
+            not (
+                ord("A") <= byte <= ord("Z")
+                or ord("a") <= byte <= ord("z")
+                or ord("0") <= byte <= ord("9")
+                or byte in b"-._~"
+            )
+            for byte in encoded
+        ):
+            raise RuntimeError(
+                f"{context} must be a canonical governance selector V1"
+            )
+        return value
+
+    @classmethod
+    def _require_governance_proposal_id_v1(cls, value: Any, *, context: str) -> str:
+        return cls._require_exact_lower_hex_string(
+            value,
+            context=context,
+            expected_length=64,
+        )
+
+    @staticmethod
     def _ensure_governance_lock_hints_complete(
         owner: Any,
         amount: Any,
@@ -18726,81 +19117,6 @@ class ToriiClient:
             _decode_i105_string(trimmed)
         except ValueError as exc:
             raise RuntimeError(f"{context}.owner must be a canonical I105 account id") from exc
-
-    @classmethod
-    def _normalize_governance_zk_public_inputs(
-        cls,
-        value: Optional[Mapping[str, Any]],
-        *,
-        context: str,
-    ) -> Optional[Dict[str, Any]]:
-        if value is None:
-            return None
-        if not isinstance(value, Mapping):
-            raise RuntimeError(f"{context} must be an object")
-        normalized = dict(value)
-        cls._reject_governance_public_input_key(
-            normalized,
-            "durationBlocks",
-            "duration_blocks",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "root_hint_hex",
-            "root_hint",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "rootHintHex",
-            "root_hint",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "rootHint",
-            "root_hint",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "nullifier_hex",
-            "nullifier",
-            context=context,
-        )
-        cls._reject_governance_public_input_key(
-            normalized,
-            "nullifierHex",
-            "nullifier",
-            context=context,
-        )
-        cls._normalize_governance_public_hex_hint(
-            normalized,
-            "root_hint",
-            context=context,
-        )
-        cls._normalize_governance_public_hex_hint(
-            normalized,
-            "nullifier",
-            context=context,
-        )
-        cls._ensure_governance_lock_hints_complete(
-            normalized.get("owner"),
-            normalized.get("amount"),
-            normalized.get("duration_blocks"),
-            context=context,
-        )
-        if normalized.get("amount") is not None:
-            normalized["amount"] = cls._quantity(
-                normalized["amount"],
-                f"{context}.amount",
-            )
-        cls._ensure_governance_owner_canonical(
-            normalized.get("owner"),
-            context=context,
-        )
-        return normalized
 
     @staticmethod
     def _parse_string_list(value: Any, *, context: str) -> List[str]:

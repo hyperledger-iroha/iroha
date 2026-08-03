@@ -583,6 +583,45 @@ public struct RegisterMusubiArchiveV1: MusubiInstructionV1 {
     }
 }
 
+/// Register one immutable provider attestation for later location-set commitments.
+public struct RegisterMusubiProviderBundleAttestationV1: MusubiInstructionV1 {
+    public static let stableWireID =
+        "iroha.musubi.v1.provider_bundle_attestation.register"
+    public static let schemaName =
+        "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1"
+
+    public let attestation: MusubiProviderBundleVerificationAttestationV1
+    public let expectedLocationRevision: UInt64
+
+    public init(
+        attestation: MusubiProviderBundleVerificationAttestationV1,
+        expectedLocationRevision: UInt64
+    ) throws {
+        guard expectedLocationRevision > 0 else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi provider attestation location revision must be non-zero."
+            )
+        }
+        try musubiValidateControllerApprovalsV1(
+            attestation.approvals,
+            account: attestation.payload.binding.completionAuthority.providerOwner,
+            field: "provider owner"
+        )
+        self.attestation = attestation
+        self.expectedLocationRevision = expectedLocationRevision
+    }
+
+    public var wireID: String { Self.stableWireID }
+    public var concreteSchemaName: String { Self.schemaName }
+
+    public func barePayload() throws -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(try MusubiInstructionNoritoV1.providerAttestation(attestation))
+        writer.writeField(CompactNorito.encodeUInt64(expectedLocationRevision))
+        return writer.data
+    }
+}
+
 /// Add or renew one finalized SoraFS location for a registered archive.
 public struct AddMusubiArchiveLocationV1: MusubiInstructionV1 {
     public static let stableWireID = "iroha.musubi.v1.archive_location.add"
@@ -593,7 +632,7 @@ public struct AddMusubiArchiveLocationV1: MusubiInstructionV1 {
     public let locationID: MusubiDigest32V1
     public let pinManifest: MusubiDigest32V1
     public let replicationOrder: MusubiDigest32V1
-    public let providerAttestations: [MusubiProviderBundleVerificationAttestationV1]
+    public let providerAttestationSetDigest: MusubiProviderBundleAttestationSetDigestV1
     public let renewAfterEpoch: UInt64
     public let expiresAtEpoch: UInt64
     public let expectedLocationRevision: UInt64
@@ -603,63 +642,23 @@ public struct AddMusubiArchiveLocationV1: MusubiInstructionV1 {
         locationID: MusubiDigest32V1,
         pinManifest: MusubiDigest32V1,
         replicationOrder: MusubiDigest32V1,
-        providerAttestations: [MusubiProviderBundleVerificationAttestationV1],
+        providerAttestationSetDigest: MusubiProviderBundleAttestationSetDigestV1,
         renewAfterEpoch: UInt64,
         expiresAtEpoch: UInt64,
         expectedLocationRevision: UInt64
     ) throws {
         guard [archiveID, locationID, pinManifest, replicationOrder]
             .allSatisfy({ $0.bytes.contains(where: { $0 != 0 }) }),
-            !providerAttestations.isEmpty, providerAttestations.count <= 64,
+            providerAttestationSetDigest.bytes.contains(where: { $0 != 0 }),
             renewAfterEpoch < expiresAtEpoch,
             expectedLocationRevision > 0 else {
             throw MusubiV1Error.invalidValue("Musubi archive location request is invalid.")
-        }
-        var previousProvider: [UInt8]?
-        var commonBinding: MusubiProviderBundleVerificationBindingV1?
-        for attestation in providerAttestations {
-            let binding = attestation.payload.binding
-            if let previousProvider {
-                guard previousProvider.lexicographicallyPrecedes(binding.providerID.bytes) else {
-                    throw MusubiV1Error.invalidValue(
-                        "Musubi provider attestations must be provider-sorted and distinct."
-                    )
-                }
-            }
-            guard binding.archiveID == archiveID,
-                  binding.replicationOrder == replicationOrder else {
-                throw MusubiV1Error.invalidValue(
-                    "Musubi provider attestation does not bind the archive location."
-                )
-            }
-            if let commonBinding {
-                guard binding.chainID == commonBinding.chainID,
-                      binding.genesisBlockHash == commonBinding.genesisBlockHash,
-                      binding.bundleDigest == commonBinding.bundleDigest,
-                      binding.descriptorDigest == commonBinding.descriptorDigest,
-                      binding.semanticReleaseManifestDigest
-                        == commonBinding.semanticReleaseManifestDigest,
-                      binding.verificationLockDigest == commonBinding.verificationLockDigest,
-                      binding.sourceTreeDigest == commonBinding.sourceTreeDigest else {
-                    throw MusubiV1Error.invalidValue(
-                        "Musubi provider attestations disagree about bundle commitments."
-                    )
-                }
-            } else {
-                commonBinding = binding
-            }
-            try musubiValidateControllerApprovalsV1(
-                attestation.approvals,
-                account: binding.completionAuthority.providerOwner,
-                field: "provider owner"
-            )
-            previousProvider = binding.providerID.bytes
         }
         self.archiveID = archiveID
         self.locationID = locationID
         self.pinManifest = pinManifest
         self.replicationOrder = replicationOrder
-        self.providerAttestations = providerAttestations
+        self.providerAttestationSetDigest = providerAttestationSetDigest
         self.renewAfterEpoch = renewAfterEpoch
         self.expiresAtEpoch = expiresAtEpoch
         self.expectedLocationRevision = expectedLocationRevision
@@ -674,12 +673,7 @@ public struct AddMusubiArchiveLocationV1: MusubiInstructionV1 {
         writer.writeField(MusubiInstructionNoritoV1.digest32(locationID))
         writer.writeField(MusubiInstructionNoritoV1.digest32(pinManifest))
         writer.writeField(MusubiInstructionNoritoV1.digest32(replicationOrder))
-        writer.writeField(
-            try CompactNorito.encodeVec(
-                providerAttestations,
-                encode: MusubiInstructionNoritoV1.providerAttestation
-            )
-        )
+        writer.writeField(MusubiInstructionNoritoV1.digest32(providerAttestationSetDigest))
         writer.writeField(CompactNorito.encodeUInt64(renewAfterEpoch))
         writer.writeField(CompactNorito.encodeUInt64(expiresAtEpoch))
         writer.writeField(CompactNorito.encodeUInt64(expectedLocationRevision))
@@ -1405,12 +1399,38 @@ private enum MusubiInstructionNoritoV1 {
         newtype(Data(value.bytes))
     }
 
+    static func digest32(_ value: MusubiProviderBundleAttestationSetDigestV1) -> Data {
+        newtype(Data(value.bytes))
+    }
+
     static func newtype(_ payload: Data) -> Data {
         var writer = CompactNoritoWriter()
         writer.writeField(payload)
         return writer.data
     }
 
+}
+
+func musubiProviderBundleAttestationDigestV1(
+    _ attestation: MusubiProviderBundleVerificationAttestationV1
+) throws -> MusubiProviderBundleAttestationDigestV1 {
+    let canonical = try MusubiInstructionNoritoV1.providerAttestation(attestation)
+    let digest = try MusubiInstructionNoritoV1.domainHash(
+        domain: "iroha.musubi.provider-bundle-attestation.digest.v1",
+        payload: canonical
+    )
+    return try MusubiProviderBundleAttestationDigestV1(bytes: Array(digest))
+}
+
+func musubiReleaseManifestDigestV1(
+    _ manifest: MusubiReleaseManifestV1
+) throws -> MusubiDigest32V1 {
+    let canonical = try MusubiInstructionNoritoV1.releaseManifest(manifest)
+    let digest = try MusubiInstructionNoritoV1.domainHash(
+        domain: "iroha.musubi.release-digest.v1",
+        payload: canonical
+    )
+    return try MusubiDigest32V1(bytes: Array(digest))
 }
 
 private func musubiValidateControllerApprovalsV1(
