@@ -76,7 +76,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
-    asset::AssetDefinitionId,
+    asset::{AssetBalanceScope, AssetDefinitionId},
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
     prelude::{AccountId, ChainId},
@@ -1913,6 +1913,7 @@ pub fn build_signed_orchard_note_action_v1(
     let mut statement = OrchardHalo2ActionsStatementV1 {
         context: statement_context(&context, profile),
         asset_definition_id: request.asset_definition_id,
+        public_balance_scope: AssetBalanceScope::Global,
         pool_id: request.pool_id,
         anchor: request.anchor,
         anchor_epoch: request.anchor_epoch,
@@ -2163,6 +2164,7 @@ pub fn build_signed_ivm_private_note_action_v1(
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: statement_context(&context, profile),
         asset_definition_id: request.asset_definition_id,
+        public_balance_scope: AssetBalanceScope::Global,
         pool_id: request.pool_id,
         program_id,
         action_digest: PrivacyActionDigestV1::new([0; 32]),

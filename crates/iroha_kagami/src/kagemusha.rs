@@ -2371,11 +2371,17 @@ mod tests {
         )));
 
         let mut retry_report = std::io::BufWriter::new(Vec::new());
-        prepare_release_circuit_params_v4(
+        let error = prepare_release_circuit_params_v4(
             PrepareReleaseCircuitParamsV4Args { output_dir },
             &mut retry_report,
         )
         .expect_err("closed publication must refuse to overwrite the complete directory");
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to overwrite or alias an existing circuit-parameter directory"),
+            "unexpected retry error: {error:#}"
+        );
     }
 
     #[cfg(unix)]
@@ -2558,6 +2564,7 @@ mod tests {
     #[test]
     fn every_command_publication_handles_commit_uncertainty() {
         let source = include_str!("kagemusha.rs");
+        let taira_source = include_str!("kagemusha/taira.rs");
         assert_eq!(
             source
                 .matches("publish_new_durable_file(writer, &args.")
@@ -2568,6 +2575,15 @@ mod tests {
         assert!(
             !source.contains("write_new_durable_file(&args."),
             "command dispatch must not discard a low-level publication outcome"
+        );
+        assert_eq!(
+            taira_source.matches("publish_new_durable_file(").count(),
+            3,
+            "Taira roster, genesis, and operator identity publication must share the explicit outcome boundary"
+        );
+        assert!(
+            !taira_source.contains("write_new_durable_file("),
+            "Taira command publication must not discard a low-level publication outcome"
         );
         assert_eq!(
             source

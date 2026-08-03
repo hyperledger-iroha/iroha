@@ -611,7 +611,6 @@ class TransactionDraft:
         mode: str = "Hybrid",
         allow_shield: bool = True,
         allow_unshield: bool = True,
-        vk_transfer: Optional[VerifyingKeyLike] = None,
         vk_unshield: Optional[VerifyingKeyLike] = None,
         vk_shield: Optional[VerifyingKeyLike] = None,
     ) -> TransactionDraft:
@@ -627,7 +626,6 @@ class TransactionDraft:
                 mode=mode,
                 allow_shield=bool(allow_shield),
                 allow_unshield=bool(allow_unshield),
-                vk_transfer=vk_transfer,
                 vk_unshield=vk_unshield,
                 vk_shield=vk_shield,
             )

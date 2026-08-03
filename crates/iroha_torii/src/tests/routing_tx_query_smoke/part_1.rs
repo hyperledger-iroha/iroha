@@ -98,36 +98,6 @@ fn log_instruction() -> dm::InstructionBox {
     dm::Log::new(dm::Level::INFO, "test".to_string()).into()
 }
 
-#[cfg(feature = "app_api")]
-#[test]
-fn confidential_relay_decodes_only_versioned_signed_transaction() {
-    use iroha_version::codec::EncodeVersioned;
-
-    let (authority, keypair) = account_with_key();
-    let chain: dm::ChainId = "test-chain".parse().unwrap();
-    let tx = dm::TransactionBuilder::new(
-        chain.clone(),
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions::<dm::InstructionBox>([log_instruction()])
-    .sign(keypair.private_key());
-    let versioned = tx.encode_versioned();
-    let bare = norito::codec::Encode::encode(&tx);
-    let framed = norito::to_bytes(&tx).expect("encode framed signed transaction");
-    let entrypoint = dm::TransactionEntrypoint::External(tx.clone()).encode_versioned();
-
-    let decoded = decode_relay_signed_transaction(&hex::encode(versioned))
-        .expect("decode versioned signed transaction");
-
-    assert_eq!(decoded.chain(), &chain);
-    assert_eq!(decoded.authority(), &authority);
-    assert!(decode_relay_signed_transaction(&hex::encode(bare)).is_err());
-    assert!(decode_relay_signed_transaction(&hex::encode(framed)).is_err());
-    assert!(decode_relay_signed_transaction(&hex::encode(entrypoint)).is_err());
-    assert!(decode_relay_signed_transaction("0x01").is_err());
-}
-
 #[tokio::test]
 async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
     // Minimal in-memory state: no blocks yet

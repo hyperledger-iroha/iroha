@@ -18986,7 +18986,6 @@ class ToriiClient(_BaseToriiClient):
         mode: str = "Hybrid",
         allow_shield: bool = True,
         allow_unshield: bool = True,
-        vk_transfer: Optional[Union[str, Mapping[str, Any]]] = None,
         vk_unshield: Optional[Union[str, Mapping[str, Any]]] = None,
         vk_shield: Optional[Union[str, Mapping[str, Any]]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
@@ -19007,7 +19006,6 @@ class ToriiClient(_BaseToriiClient):
             mode=mode,
             allow_shield=allow_shield,
             allow_unshield=allow_unshield,
-            vk_transfer=vk_transfer,
             vk_unshield=vk_unshield,
             vk_shield=vk_shield,
         )

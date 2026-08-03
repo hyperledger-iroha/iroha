@@ -33,7 +33,7 @@ use iroha_config_base::{
     toml::{TomlSource, WriteExt as _},
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PrivateKey, PublicKey};
-use iroha_data_model::{account::AccountId, name::Name};
+use iroha_data_model::account::AccountId;
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
 use toml::{Table, Value as TomlValue};
