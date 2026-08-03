@@ -15770,7 +15770,7 @@ pub(crate) mod valid {
             }
         }
 
-        fn weighted_merge_reference_fixture(
+        fn equal_vote_merge_reference_fixture(
             signers: &[iroha_data_model::block::consensus_v2::ValidatorIndex],
         ) -> (
             State,
@@ -15784,7 +15784,7 @@ pub(crate) mod valid {
             state.nexus.write().enabled = true;
             let chain_id = state.chain_id.clone();
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let parent_hash = HashOf::from_untyped_unchecked(Hash::new(b"weighted-merge-parent"));
+            let parent_hash = HashOf::from_untyped_unchecked(Hash::new(b"equal-vote-merge-parent"));
             let block = SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
                 leader.private_key(),
                 |header| {
@@ -15799,15 +15799,16 @@ pub(crate) mod valid {
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>();
             validators.sort();
-            let roster =
-                validators
-                    .iter()
-                    .cloned()
-                    .zip([34_u64, 33, 32, 1])
-                    .map(|(validator, power)| {
-                        iroha_data_model::block::consensus_v2::ValidatorPower { validator, power }
-                    })
-                    .collect::<Vec<_>>();
+            let roster = validators
+                .iter()
+                .cloned()
+                .map(
+                    |validator| iroha_data_model::block::consensus_v2::ValidatorPower {
+                        validator,
+                        power: 1,
+                    },
+                )
+                .collect::<Vec<_>>();
             let height_context = iroha_data_model::block::consensus_v2::HeightContext {
                 chain_id: chain_id.clone(),
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -15822,27 +15823,27 @@ pub(crate) mod valid {
                         snapshot_height: 1,
                         snapshot_block_hash: parent_hash,
                         snapshot_block_creation_time_ms: 1,
-                        snapshot_state_hash: Hash::new(b"weighted-merge-snapshot-state"),
+                        snapshot_state_hash: Hash::new(b"equal-vote-merge-snapshot-state"),
                     },
                 ),
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
-                    .expect("weighted fixture has a canonical dual quorum"),
+                    .expect("equal-vote fixture has a canonical quorum"),
                 roster,
-                nexus_amx_context_hash: Hash::new(b"weighted-merge-nexus-context"),
+                nexus_amx_context_hash: Hash::new(b"equal-vote-merge-nexus-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
-                    encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::Plain,
+                    encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1_024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4_096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0x42; 32],
             };
             height_context
                 .validate()
-                .expect("weighted fixture height context is valid");
+                .expect("equal-vote fixture height context is valid");
 
             let mut signers_bitmap = vec![0_u8; validators.len().div_ceil(8)];
             for signer in signers {
@@ -15860,7 +15861,7 @@ pub(crate) mod valid {
             let validator_set_hash = HashOf::new(&validators);
             let reference = CertifiedMergeLedgerReference {
                 version: 1,
-                entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"weighted-merge-sidecar")),
+                entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"equal-vote-merge-sidecar")),
                 encoded_len: 1,
                 // Merge-ledger epochs are independently contiguous and do not
                 // reuse the validator-election epoch from the height context.
@@ -15883,7 +15884,7 @@ pub(crate) mod valid {
                     signers_bitmap,
                     signer_proofs,
                     aggregate_signature: vec![0x5A; 96],
-                    message_digest: Hash::new(b"weighted-merge-qc"),
+                    message_digest: Hash::new(b"equal-vote-merge-qc"),
                 },
             };
             let profile = ConsensusValidationProfile::SumeragiV2 {
@@ -15899,8 +15900,8 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn merge_reference_rejects_count_quorum_without_weighted_quorum() {
-            let (state, block, bundle, profile) = weighted_merge_reference_fixture(&[1, 2, 3]);
+        fn merge_reference_rejects_equal_vote_subquorum() {
+            let (state, block, bundle, profile) = equal_vote_merge_reference_fixture(&[1, 2]);
             let view = state.query_view();
             let error = ValidBlock::validate_execution_context_merge_reference(
                 &block,
@@ -15909,19 +15910,19 @@ pub(crate) mod valid {
                 &bundle,
                 &profile,
             )
-            .expect_err("three low-power signers hold only 66/100 voting power");
+            .expect_err("two signers do not satisfy the three-vote quorum");
 
             assert!(matches!(
                 error,
                 BlockValidationError::ExecutionContextInvalid(reason)
                     if reason.contains("dual quorum")
-                        && reason.contains("insufficient signed voting power")
+                        && reason.contains("insufficient signer count")
             ));
         }
 
         #[test]
-        fn merge_reference_accepts_distinct_merge_epoch_with_weighted_quorum() {
-            let (state, block, bundle, profile) = weighted_merge_reference_fixture(&[0, 1, 3]);
+        fn merge_reference_accepts_distinct_merge_epoch_with_equal_vote_quorum() {
+            let (state, block, bundle, profile) = equal_vote_merge_reference_fixture(&[0, 1, 3]);
             let view = state.query_view();
             ValidBlock::validate_execution_context_merge_reference(
                 &block,
@@ -15930,10 +15931,7 @@ pub(crate) mod valid {
                 &bundle,
                 &profile,
             )
-            .expect(
-                "an independently contiguous merge epoch with three signers holding 68/100 \
-                 voting power satisfies both strict quorums",
-            );
+            .expect("an independently contiguous merge epoch with three signers satisfies quorum");
         }
 
         struct AutonomousAnchorFixture {
@@ -18365,12 +18363,12 @@ pub(crate) mod valid {
                 nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
-                    encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::Plain,
+                    encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0x41; 32],
             };
@@ -19313,12 +19311,12 @@ pub(crate) mod valid {
                 nexus_amx_context_hash: Hash::new(b"forged-first-seal-nexus"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: DataAvailabilityLayout {
-                    encoding: PayloadEncoding::Plain,
+                    encoding: PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1_024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4_096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0x42; 32],
             };
@@ -23702,12 +23700,12 @@ pub(crate) mod valid {
                 nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: consensus_v2::DataAvailabilityLayout {
-                    encoding: consensus_v2::PayloadEncoding::Plain,
+                    encoding: consensus_v2::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0x51; 32],
             };

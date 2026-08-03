@@ -2,11 +2,13 @@
 
 use std::{collections::BTreeSet, num::NonZeroU64, vec::Vec};
 
+use iroha_crypto::HashOf;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use super::{AccountController, AccountId, rekey::AccountAlias};
+use crate::isi::InstructionBox;
 
 /// Guardian that can participate in social recovery for an account alias.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
@@ -182,6 +184,12 @@ pub struct AccountRecoveryRequest {
     pub proposed_controller: AccountController,
     /// Guardian approvals collected so far.
     pub approvals: BTreeSet<AccountId>,
+    /// Native multisig proposals invalidated atomically by finalization.
+    ///
+    /// The hashes are retained on the terminal request so clients can resolve
+    /// corresponding `CANCELED` or already-`EXPIRED` evidence after the alias
+    /// rekeys.
+    pub invalidated_multisig_proposal_hashes: Vec<HashOf<Vec<InstructionBox>>>,
     /// Account that proposed the recovery request.
     pub proposed_by: AccountId,
     /// Earliest block-time timestamp (unix ms) at which finalization is permitted.
@@ -205,6 +213,7 @@ impl AccountRecoveryRequest {
             active_account_id_at_proposal,
             proposed_controller,
             approvals: BTreeSet::new(),
+            invalidated_multisig_proposal_hashes: Vec::new(),
             proposed_by,
             execute_after_ms,
             status: AccountRecoveryStatus::Pending,
@@ -271,6 +280,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
+    use crate::{Level, isi::Log, nexus::DataSpaceId};
 
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -338,5 +348,46 @@ mod tests {
         let approvals = BTreeSet::from([first.subject_id(), second.subject_id()]);
         assert_eq!(policy.approval_weight(&approvals), 5);
         assert!(policy.quorum_reached(&approvals));
+    }
+
+    #[test]
+    fn recovery_request_roundtrips_terminal_multisig_evidence() {
+        let alias = AccountAlias::domainless(
+            "company".parse().expect("account alias name"),
+            DataSpaceId::UNIVERSAL,
+        );
+        let active = account(1);
+        let mut request = AccountRecoveryRequest::new(
+            alias,
+            active,
+            AccountController::single(
+                account(2)
+                    .controller()
+                    .single_signatory()
+                    .expect("single-key fixture")
+                    .clone(),
+            ),
+            account(3),
+            259_200_001,
+        );
+        let invalidated_instructions = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "invalidated by account recovery".to_owned(),
+        ))];
+        request.invalidated_multisig_proposal_hashes = vec![HashOf::new(&invalidated_instructions)];
+        request.finalize();
+
+        let encoded = norito::to_bytes(&request).expect("encode recovery request");
+        let decoded = norito::decode_from_bytes::<AccountRecoveryRequest>(&encoded)
+            .expect("decode recovery request");
+        assert_eq!(decoded, request);
+
+        #[cfg(feature = "json")]
+        {
+            let json = norito::json::to_json(&request).expect("encode recovery request JSON");
+            let decoded = norito::json::from_str::<AccountRecoveryRequest>(&json)
+                .expect("decode recovery request JSON");
+            assert_eq!(decoded, request);
+        }
     }
 }

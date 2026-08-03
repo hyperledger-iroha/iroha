@@ -5,11 +5,12 @@ use std::{
 };
 
 use super::{
-    CertificateRef, ConsensusMessageV2, DurableState, EventTag, Generation, HeightContext,
-    MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest, PersistenceId, Phase, Proposal,
-    ProposalJustification, Quorum, QuorumCertificate, QuorumError, ReplayError, Round,
-    SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
-    TimeoutSignatureGroup, TimeoutVote, ValidatorId, Vote, VotingPower, WalEntry, WalRecord,
+    CertificateRef, Committee, CommitteeRole, ConsensusMessageV2, DurableState, EventTag,
+    Generation, HeightContext, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest,
+    PersistenceId, Phase, Proposal, ProposalJustification, Quorum, QuorumCertificate, QuorumError,
+    ReplayError, Round, SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject,
+    TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote, ValidatorId, Vote, VotingPower,
+    WalEntry, WalRecord,
     refinement::{
         self, BoundaryCapabilityKey, CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_FOREIGN,
         CERTIFICATE_EVIDENCE_INCOMING, CERTIFICATE_EVIDENCE_LOCAL, CONTINUATION_DECIDE,
@@ -655,6 +656,8 @@ pub struct Reducer {
     signature_queue: VecDeque<SignableMessage>,
     replay_resumed: bool,
     applied_subject: Option<Subject>,
+    // Volatile, view-scoped admission for Set B body work and new votes.
+    fallback_active: bool,
 }
 
 impl Reducer {
@@ -668,6 +671,47 @@ impl Reducer {
             .iter()
             .map(|validator| validator.id())
             .collect()
+    }
+
+    fn local_committee_role(&self) -> Option<CommitteeRole> {
+        let local = self.local_validator?;
+        let index = self
+            .context
+            .roster()
+            .iter()
+            .position(|validator| validator.id() == local)?;
+        let index = u32::try_from(index).ok()?;
+        Committee::project(&self.context, self.durable.current_view())
+            .ok()?
+            .role(index)
+            .ok()
+    }
+
+    fn local_candidate_body_eligible(&self) -> bool {
+        match self.local_committee_role() {
+            Some(CommitteeRole::SetBValidator) => self.fallback_active,
+            Some(
+                CommitteeRole::Leader | CommitteeRole::SetAValidator | CommitteeRole::ProxyTail,
+            ) => true,
+            None => false,
+        }
+    }
+
+    fn local_certified_candidate_body_eligible(&self) -> bool {
+        self.local_validator.is_none() || self.local_candidate_body_eligible()
+    }
+
+    fn record_is_role_eligible(&self, record: &WalRecord) -> bool {
+        match record {
+            WalRecord::PrepareIntent(_) | WalRecord::LockAndCommit { .. } => {
+                self.local_candidate_body_eligible()
+            }
+            WalRecord::ProposalIntent(_)
+            | WalRecord::ObservePrepare(_)
+            | WalRecord::TimeoutIntent(_)
+            | WalRecord::InstallTimeout(_)
+            | WalRecord::Decision(_) => true,
+        }
     }
 
     /// Constructs a fresh reducer at view zero.
@@ -790,6 +834,7 @@ impl Reducer {
             signature_queue: VecDeque::new(),
             replay_resumed,
             applied_subject: None,
+            fallback_active: false,
         })
     }
 
@@ -1272,7 +1317,7 @@ impl Reducer {
                 self.on_timeout_certificate(certificate, false)
             }
             Event::TimeoutElapsed { .. } => self.on_timeout_elapsed(),
-            Event::RetransmitElapsed { .. } => Ok(self.on_retransmit_elapsed()),
+            Event::RetransmitElapsed { .. } => self.on_retransmit_elapsed(),
             Event::BodyAvailable { round, subject, .. } => {
                 Ok(self.on_body_available(round, subject))
             }
@@ -2267,6 +2312,19 @@ impl Reducer {
                 },
                 WalRecord::LockAndCommit { prepare, .. },
             ) => prepare.round() == *round && prepare.subject() == *subject,
+            (Event::RetransmitElapsed { .. }, WalRecord::PrepareIntent(vote)) => {
+                self.candidate.as_ref().is_some_and(|proposal| {
+                    vote.round() == proposal.round()
+                        && vote.subject() == proposal.manifest().subject()
+                        && self.body_state(vote.round(), vote.subject()) == BodyState::Validated
+                })
+            }
+            (Event::RetransmitElapsed { .. }, WalRecord::LockAndCommit { prepare, .. }) => {
+                self.pending_prepare
+                    .get(&prepare.reference())
+                    .is_some_and(|retained| retained == prepare)
+                    && self.body_state(prepare.round(), prepare.subject()) == BodyState::Validated
+            }
             (Event::TimeoutElapsed { .. }, WalRecord::TimeoutIntent(vote)) => {
                 vote.round() == Round::new(self.context.height(), self.durable.current_view())
             }
@@ -2808,6 +2866,7 @@ impl Reducer {
         };
         VolatileSummary {
             candidate_present: self.candidate.is_some(),
+            fallback_active: self.fallback_active,
             body_work: Self::cardinality(self.body_work.len()),
             pending_prepare: Self::cardinality(self.pending_prepare.len()),
             known_prepare: Self::cardinality(self.known_prepare.len()),
@@ -3061,7 +3120,8 @@ impl Reducer {
             Effect::Persist { entry, .. } => {
                 after.pending_persistence.as_ref().and_then(|pending| {
                     (pending.entry == *entry
-                        && self.event_may_start_record(event, pending.entry.record()))
+                        && self.event_may_start_record(event, pending.entry.record())
+                        && after.record_is_role_eligible(pending.entry.record()))
                     .then(|| {
                         let mut key = EffectCapabilityKey {
                             kind: EFFECT_PERSIST,
@@ -3091,7 +3151,22 @@ impl Reducer {
                                 && certificate.validate(&after.context).is_ok()
                                 && certified_sources == &after.frozen_archive_sources()
                         });
-                if round.height() != after.context.height() || !certificate_valid {
+                let role_eligible = certificate.as_ref().map_or_else(
+                    || after.local_candidate_body_eligible(),
+                    |certificate| {
+                        after
+                            .durable
+                            .decision()
+                            .is_some_and(|decision| decision == certificate)
+                            || after
+                                .durable
+                                .locked()
+                                .is_some_and(|locked| locked == certificate)
+                            || after.local_certified_candidate_body_eligible()
+                    },
+                );
+                if round.height() != after.context.height() || !certificate_valid || !role_eligible
+                {
                     None
                 } else {
                     work.map(|work| {
@@ -3122,16 +3197,24 @@ impl Reducer {
                         ..
                     } if event_round == round && event_subject == subject
                 );
-                let certified_retry = matches!(event, Event::RetransmitElapsed { .. })
+                let retransmit_retry = matches!(event, Event::RetransmitElapsed { .. })
                     && (after.durable.decision().is_some_and(|decision| {
                         after.decision_body_round(decision) == *round
                             && decision.subject() == *subject
                     }) || (after.durable.decision().is_none()
                         && after.durable.locked().is_some_and(|locked| {
                             locked.round() == *round && locked.subject() == *subject
-                        })));
+                        }))
+                        || after.pending_prepare.values().any(|certificate| {
+                            certificate.round() == *round && certificate.subject() == *subject
+                        })
+                        || (after.fallback_active
+                            && after.candidate.as_ref().is_some_and(|proposal| {
+                                proposal.round() == *round
+                                    && proposal.manifest().subject() == *subject
+                            })));
                 (after.body_state(*round, *subject) == BodyState::Available
-                    && (newly_available || certified_retry))
+                    && (newly_available || retransmit_retry))
                     .then(|| EffectCapabilityKey {
                         kind: EFFECT_STORE,
                         tag: Self::tag_projection(after.current_tag()),
@@ -3150,16 +3233,24 @@ impl Reducer {
                         ..
                     } if event_round == round && event_subject == subject
                 );
-                let certified_retry = matches!(event, Event::RetransmitElapsed { .. })
+                let retransmit_retry = matches!(event, Event::RetransmitElapsed { .. })
                     && (after.durable.decision().is_some_and(|decision| {
                         after.decision_body_round(decision) == *round
                             && decision.subject() == *subject
                     }) || (after.durable.decision().is_none()
                         && after.durable.locked().is_some_and(|locked| {
                             locked.round() == *round && locked.subject() == *subject
-                        })));
+                        }))
+                        || after.pending_prepare.values().any(|certificate| {
+                            certificate.round() == *round && certificate.subject() == *subject
+                        })
+                        || (after.fallback_active
+                            && after.candidate.as_ref().is_some_and(|proposal| {
+                                proposal.round() == *round
+                                    && proposal.manifest().subject() == *subject
+                            })));
                 (after.body_state(*round, *subject) == BodyState::Durable
-                    && (newly_durable || certified_retry))
+                    && (newly_durable || retransmit_retry))
                     .then(|| EffectCapabilityKey {
                         kind: EFFECT_VALIDATE,
                         tag: Self::tag_projection(after.current_tag()),
@@ -3418,7 +3509,16 @@ impl Reducer {
             });
         if self.body_state(round, subject) == BodyState::Missing {
             let key = CertificateRef::new(self.context.id(), round, Phase::Prepare, subject);
-            let fetch = if let Some(certificate) = self.pending_prepare.get(&key).cloned() {
+            let certificate = self.pending_prepare.get(&key).cloned();
+            let eligible = if certificate.is_some() {
+                self.local_certified_candidate_body_eligible()
+            } else {
+                self.local_candidate_body_eligible()
+            };
+            if !eligible {
+                return Ok(StepOutcome::applied(Vec::new()));
+            }
+            let fetch = if let Some(certificate) = certificate {
                 // A PrepareQC may race ahead of its proposal. Preserve its
                 // certified sources when the proposal later contributes the
                 // manifest so acquisition can be monotonically upgraded.
@@ -3739,6 +3839,9 @@ impl Reducer {
         round: Round,
         subject: Subject,
     ) -> Result<StepOutcome, ReducerError> {
+        if !self.local_candidate_body_eligible() {
+            return Ok(StepOutcome::applied(Vec::new()));
+        }
         if self.durable.timeout_intent(round).is_some() {
             return Ok(StepOutcome::ignored(IgnoreReason::ViewClosed));
         }
@@ -3763,6 +3866,9 @@ impl Reducer {
         &mut self,
         prepare: QuorumCertificate,
     ) -> Result<StepOutcome, ReducerError> {
+        if !self.local_candidate_body_eligible() {
+            return Ok(StepOutcome::applied(Vec::new()));
+        }
         let proposal_round = prepare.proposal_round();
         let round = Round::new(self.context.height(), self.durable.current_view());
         if proposal_round != round {
@@ -3970,7 +4076,12 @@ impl Reducer {
         let validated =
             self.body_state(certificate.round(), certificate.subject()) == BodyState::Validated;
         let view_closed = self.durable.timeout_intent(certificate.round()).is_some();
-        if current && validated && !view_closed && self.local_validator.is_some() {
+        if current
+            && validated
+            && !view_closed
+            && self.local_validator.is_some()
+            && self.local_candidate_body_eligible()
+        {
             let mut outcome = self.persist_commit_intent(certificate)?;
             effects.append(&mut outcome.effects);
             return Ok(StepOutcome::applied(effects));
@@ -3978,6 +4089,7 @@ impl Reducer {
 
         if current
             && self.body_state(certificate.round(), certificate.subject()) == BodyState::Missing
+            && self.local_certified_candidate_body_eligible()
         {
             effects.push(self.ensure_body_fetch(&certificate));
         }
@@ -4058,7 +4170,19 @@ impl Reducer {
         Ok(StepOutcome::applied(vec![effect]))
     }
 
-    fn on_retransmit_elapsed(&mut self) -> StepOutcome {
+    fn on_retransmit_elapsed(&mut self) -> Result<StepOutcome, ReducerError> {
+        let current_view = self.durable.current_view();
+        if self
+            .candidate
+            .as_ref()
+            .is_some_and(|proposal| proposal.round().view() == current_view)
+            || self
+                .pending_prepare
+                .values()
+                .any(|certificate| certificate.round().view() == current_view)
+        {
+            self.fallback_active = true;
+        }
         let mut effects: Vec<_> = self
             .outbound_control
             .values()
@@ -4088,21 +4212,38 @@ impl Reducer {
                 }
                 BodyState::Validated | BodyState::Invalid => {}
             }
-            return StepOutcome::applied(effects);
+            return Ok(StepOutcome::applied(effects));
         }
 
         if let Some(certificate) = self
             .pending_prepare
             .values()
-            .find(|certificate| {
-                certificate.round().view() == self.durable.current_view()
-                    && self.body_state(certificate.round(), certificate.subject())
-                        == BodyState::Missing
-            })
+            .find(|certificate| certificate.round().view() == self.durable.current_view())
             .cloned()
         {
-            effects.push(self.ensure_body_fetch(&certificate));
-            return StepOutcome::applied(effects);
+            let round = certificate.round();
+            let subject = certificate.subject();
+            match self.body_state(round, subject) {
+                BodyState::Missing => effects.push(self.ensure_body_fetch(&certificate)),
+                BodyState::Available => effects.push(Effect::StoreBody {
+                    tag: self.current_tag(),
+                    round,
+                    subject,
+                }),
+                BodyState::Durable => effects.push(Effect::ValidateBody {
+                    tag: self.current_tag(),
+                    round,
+                    subject,
+                }),
+                BodyState::Validated
+                    if self.local_validator.is_some() && self.local_candidate_body_eligible() =>
+                {
+                    let mut outcome = self.persist_commit_intent(certificate)?;
+                    effects.append(&mut outcome.effects);
+                }
+                BodyState::Validated | BodyState::Invalid => {}
+            }
+            return Ok(StepOutcome::applied(effects));
         }
 
         if let Some(locked) = self.durable.locked().cloned() {
@@ -4122,26 +4263,58 @@ impl Reducer {
             };
             if let Some(effect) = effect {
                 effects.push(effect);
-                return StepOutcome::applied(effects);
+                return Ok(StepOutcome::applied(effects));
             }
         }
 
-        if let Some(proposal) = self.candidate.clone()
-            && self.body_state(proposal.round(), proposal.manifest().subject())
-                == BodyState::Missing
-        {
-            effects.push(Effect::FetchBody {
-                tag: self.current_tag(),
-                round: proposal.round(),
-                subject: proposal.manifest().subject(),
-                manifest: Some(*proposal.manifest()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            });
-            return StepOutcome::applied(effects);
+        if let Some(proposal) = self.candidate.clone() {
+            let round = proposal.round();
+            let subject = proposal.manifest().subject();
+            match self.body_state(round, subject) {
+                BodyState::Missing if self.local_candidate_body_eligible() => {
+                    effects.push(Effect::FetchBody {
+                        tag: self.current_tag(),
+                        round,
+                        subject,
+                        manifest: Some(*proposal.manifest()),
+                        certified_sources: Vec::new(),
+                        certificate: None,
+                    });
+                }
+                BodyState::Available if self.local_candidate_body_eligible() => {
+                    effects.push(Effect::StoreBody {
+                        tag: self.current_tag(),
+                        round,
+                        subject,
+                    });
+                }
+                BodyState::Durable if self.local_candidate_body_eligible() => {
+                    effects.push(Effect::ValidateBody {
+                        tag: self.current_tag(),
+                        round,
+                        subject,
+                    });
+                }
+                BodyState::Validated if self.local_candidate_body_eligible() => {
+                    let key =
+                        CertificateRef::new(self.context.id(), round, Phase::Prepare, subject);
+                    let mut outcome = if let Some(prepare) = self.pending_prepare.get(&key).cloned()
+                    {
+                        self.persist_commit_intent(prepare)?
+                    } else {
+                        self.persist_prepare_intent(round, subject)?
+                    };
+                    effects.append(&mut outcome.effects);
+                }
+                BodyState::Missing
+                | BodyState::Available
+                | BodyState::Durable
+                | BodyState::Validated
+                | BodyState::Invalid => {}
+            }
         }
 
-        StepOutcome::applied(effects)
+        Ok(StepOutcome::applied(effects))
     }
 
     fn remember_control(&mut self, message: ConsensusMessageV2) {
@@ -4370,6 +4543,13 @@ impl Reducer {
         let mut durable = self.durable.clone();
         durable.apply(&self.context, self.local_validator, &pending.entry)?;
         self.durable = durable;
+        if matches!(pending.entry.record(), WalRecord::InstallTimeout(_)) {
+            // Fallback is scoped to the exact proposal generation, not merely
+            // the numeric view. A same-view TC upgrade clears the candidate and
+            // body work just like a normal view change, so Set B must wait for
+            // the replacement proposal's own retransmission boundary.
+            self.fallback_active = false;
+        }
         self.pending_persistence = None;
 
         if matches!(pending.entry.record(), WalRecord::LockAndCommit { .. }) {
@@ -5625,7 +5805,7 @@ mod source_link_tests {
 
     #[test]
     fn certificate_evidence_priority_and_signer_bitmap_match_the_roster_bound() {
-        assert_eq!(MAX_VOTING_ROSTER_LEN, u128::BITS as usize);
+        assert!(MAX_VOTING_ROSTER_LEN <= u128::BITS as usize);
         let fixture = reducer();
         let certificate = certificate(
             &fixture.context,

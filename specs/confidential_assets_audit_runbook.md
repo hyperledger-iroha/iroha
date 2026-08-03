@@ -9,15 +9,19 @@ when validating confidential-asset flows. It complements the rotation playbook
 
 ## 1. Selective Disclosure & Event Feeds
 
-- Every confidential instruction emits a structured `ConfidentialEvent` payload
-  (`Shielded`, `Transferred`, `Unshielded`) captured in
-  `crates/iroha_data_model/src/events/data/events.rs:198` and serialized by the
-  executors (`crates/iroha_core/src/smartcontracts/isi/world.rs:3699`–`4021`).
-  The regression suite exercises the concrete payloads so auditors can rely on
-  deterministic JSON layouts (`crates/iroha_core/tests/zk_confidential_events.rs:19`–`299`).
-- Torii exposes these events via the standard SSE/WebSocket pipeline; auditors
-  subscribe using `ConfidentialEventFilter` (`crates/iroha_data_model/src/events/data/filters.rs:82`),
-  optionally scoping to a single asset definition. CLI example:
+- Native private transfers emit `ConfidentialEvent::Transferred`; the retired
+  generic deposit and withdrawal instructions have no public event variants.
+  The event payload and filter live in
+  `crates/iroha_data_model/src/events/data/events.rs` and
+  `crates/iroha_data_model/src/events/data/filters.rs`. Kagemusha top-up and
+  redemption use their typed, authenticated request flow, covered by the
+  Kagemusha tests in `crates/iroha_core/src/smartcontracts/isi/offline.rs`.
+- Torii exposes data events via the standard SSE/WebSocket pipeline. Auditors
+  subscribe to confidential transfers with `ConfidentialEventFilter`,
+  optionally scoping to one asset definition, and use `EscrowEventFilter` for
+  native escrow lifecycle events. The sealed anonymous-escrow transfer and its
+  authenticated event context are covered in
+  `crates/iroha_core/src/smartcontracts/isi/escrow.rs`. CLI example:
 
   ```bash
   iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
@@ -54,7 +58,8 @@ when validating confidential-asset flows. It complements the rotation playbook
 - For production rehearsals or emergency windows, operators attach evidence to
   `status.md` entries (e.g., the multi-lane rehearsal log) and include:
   `curl` proof of policy transitions, Grafana snapshots, and the relevant event
-  digests so auditors can reconstruct mint→transfer→reveal timelines.
+  digests so auditors can reconstruct Kagemusha top-up→private
+  transfer→redemption or anonymous-escrow open→close timelines.
 
 ## 4. External Review Cadence
 

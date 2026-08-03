@@ -14,4 +14,8 @@
 --route checkpoint
 --route-latency-ms 200
 --route-body-blake3-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---verified-claim runtime_ipfs_backed
+--verified-claim service_mirror_capability_installed
+--verified-claim fresh_checkpoint_coherent_reads_verified
+--verified-claim liveness_bound_reader_verified
+--verified-claim unready_reader_rejected
+--verified-claim reader_withdrawal_verified

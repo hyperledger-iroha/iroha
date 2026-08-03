@@ -2068,49 +2068,41 @@ CRDT/commutative precompiles (optional)
 
 ---
 
-## ZK Assets (Halo2 Shielded Pools)
+## ZK Assets (protocol-bound confidential ledger)
 
-Goal
-- Allow an issuer‑permitted asset to be converted into a confidential form, transacted privately in a shielded pool using Halo2 circuits, and redeemed back into transparent tokens at parity. Preserve total supply, prevent double spends (nullifiers), and keep verification deterministic and bounded.
+The first release does not expose generic deposit, transfer, or withdrawal
+instructions. Public settlement belongs exclusively to Kagemusha V4:
 
-Issuer gating (normative)
-- AssetDefinition metadata must set `ZkConvertible=true` (governed by issuer permissions). Optional knobs: `MinZkDeposit`, `MaxZkOutputs`, `ZkFeeBps`.
+- `TopUpKagemushaRecursiveV4` transfers the exact public amount into the
+  protocol escrow and appends the proof-authenticated note.
+- `RedeemKagemushaRecursiveV4` consumes the authenticated note and nullifier,
+  allocates exact finalized-anchor drawdown, and transfers the public amount
+  out of that escrow. It never mints against an escrow-backed note.
+- Native anonymous escrow and private Kaigi fees may use the confidential
+  transfer relation only through sealed, purpose-bound Core capabilities. No
+  executor, IVM guest, Torii client, or SDK can construct a generic movement
+  instruction.
 
-Data structures
-- Per‑asset ZkPool: `(pool_id=AssetDefinitionId, root: [u8;32], height: u32, nullifiers: set<[u8;32]>)`.
-- Commitments: `C = Poseidon(asset_id || pk || value || rho)`; leaf = Poseidon(C), included in a fixed‑arity Merkle tree.
-- Nullifier: `N = Poseidon(sk || rho)`; uniqueness enforced chain‑wide for `pool_id`.
+Each registered confidential asset persists its verifier bindings, spent
+nullifier set, append-only commitments, the sole first-release depth-16
+`PoseidonPastaV1` tree profile, a fixed 16-slot frontier, current root, bounded
+root history, and bounded reorg checkpoints. Admission requires a recent root,
+canonical public-input shape, an active asset-bound verifier, bounded proof and
+output counts, and a valid proof before any ledger mutation. Batch append is
+atomic and costs `O(batch * depth)`; snapshot decode and admitted audit rebuild
+the compact projection and compare the root, frontier, history, and
+checkpoints.
 
-Flow (normative)
-- Shield (Deposit)
-  1) Transparent burn: user burns `amount` of `ASSET` via a normal Iroha tx.
-  2) Submit `ZkDeposit { pool_id, outputs: [C_i], proof }`. Halo2 deposit circuit checks that sum(outputs)=amount and commits to outputs; on success, append leaves and update `root`.
-- Private Transfer
-  - Submit `ZkTransfer { pool_id, inputs: [C_in], nullifiers: [N_j], outputs: [C_k], proof }`. Circuit verifies Merkle membership of inputs (against a recent root), nullifier correctness and uniqueness, and value conservation. Chain inserts nullifiers, appends outputs, updates root.
-- Unshield (Withdraw)
-  - Submit `ZkWithdraw { pool_id, inputs: [C_in], nullifiers: [N_j], amount, recipient, proof }`. Circuit checks membership, nullifiers, and reveals `amount`. Chain mints `amount` of `ASSET` to `recipient`, marks nullifiers spent, and updates root.
+The underlying Halo2/IPA-over-Pasta top-up, transfer, full-redemption, and
+change-redemption relations remain implementation components. Their typed
+public-input specifications bind asset/chain domains, roots, commitments,
+nullifiers, amounts, and Kagemusha context. Retaining a circuit does not retain
+a public instruction or a compatibility decoder.
 
-Circuits (Halo2, bn254)
-- Hashes in‑circuit: Poseidon for commitments, Merkle; Blake2b‑32 only for public transcripts (off‑circuit) as needed.
-- Deposit: constrain outputs encode `asset_id`, `value`, `rho`, `pk`; conservation with public `amount` equal to burned.
-- Spend/Transfer: membership via Merkle path, nullifier correctness, conservation: sum(inputs)=sum(outputs) for private transfer; sum(inputs)=amount for withdraw.
-- Parameters: tree arity/height fixed; note encoding fixed; constants and MDS matrices versioned.
-
-Verifier & keys
-- Verifying keys stored on‑chain via `Register<ZkCircuitVk> { pool_id, circuit_id, vk_hash, vk_bytes }`; circuits identified by `circuit_id` and version. Upgrades follow governance path with enactment delay.
-- Host call: `SCALL_HALO2_VERIFY(circuit_id:u16, vk_ptr:u64, proof_ptr:u64, public_inputs_ptr:u64, len:u32) -> ok:u8`.
-
-Invariants & accounting
-- Total supply conserved: `transparent_supply + zk_pool_value == total_supply`.
-- No double spend: all `nullifiers` unique per `pool_id`.
-- Determinism: verification time and memory bounded; max proof size enforced.
-
-DoS budgets
-- Proof size cap (e.g., ≤ 96 KB), verification step/time budgets; per‑tx output count caps; tree growth amortized with periodic checkpoints.
-
-Events
-- `ZkDeposit`, `ZkTransfer`, `ZkWithdraw` (data events) with pool id, new root, and counts. For privacy, amounts only in shield/withdraw; transfers keep amounts confidential.
-
-Transcript & labels (Halo2)
-- Public inputs domain: `"iroha:zkpool:halo2:v1 "`.
-- Public input fields: `pool_id`, `old_root`, `new_root`, `nullifiers[]`, `outputs_commit[]`, and for withdraw `amount`, `recipient`.
+Conservation is enforced twice: circuits constrain note values, while the
+Kagemusha ledger independently caps aggregate public redemption by finalized
+top-up drawdown and pays by escrow transfer. Nullifiers are permanent spent-note
+identities for the asset. `ConfidentialEvent::Transferred` records only the
+authenticated confidential tree transition; Kagemusha anchors, drawdowns, and
+receipts provide the auditable public-settlement record. There is no generic
+deposit/withdrawal event wire in V1.

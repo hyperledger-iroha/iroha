@@ -46,7 +46,7 @@ use iroha_data_model::{
         },
         zk::{
             CancelConfidentialPolicyTransition, RegisterZkAsset,
-            ScheduleConfidentialPolicyTransition, Shield, Unshield, ZkTransfer,
+            ScheduleConfidentialPolicyTransition,
         },
     },
     metadata::Metadata,
@@ -1407,38 +1407,6 @@ fn asset_balance_operation_dataspace_target(
     )
 }
 
-fn zk_asset_operation_dataspace_target(
-    asset_definition_id: &AssetDefinitionId,
-    account_targets: impl IntoIterator<Item = Option<DataSpaceId>>,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    state_view: Option<&StateView<'_>>,
-) -> Option<DataSpaceId> {
-    asset_balance_operation_dataspace_target(
-        asset_balance_definition_route_target(asset_definition_id, dataspace_catalog, state_view),
-        None,
-        account_targets,
-    )
-}
-
-fn zk_asset_operation_dataspace_target_with_world<W: WorldReadOnly>(
-    asset_definition_id: &AssetDefinitionId,
-    account_targets: impl IntoIterator<Item = Option<DataSpaceId>>,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    world: &W,
-    ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
-    asset_balance_operation_dataspace_target(
-        asset_balance_definition_route_target_with_world(
-            asset_definition_id,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        ),
-        None,
-        account_targets,
-    )
-}
-
 fn asset_definition_requires_universal_coordinator(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -2527,7 +2495,9 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
                     .map(|proposal| proposal.instructions),
             ),
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => (None, None),
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => (None, None),
         };
         let mut nested_dataspaces = BTreeSet::new();
         if let Some(instructions) = instructions {
@@ -2676,44 +2646,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             );
             return Ok(());
         }
-    }
-
-    if let Some(shield) = any.downcast_ref::<Shield>() {
-        collect_asset_balance_native_amx_participants(
-            dataspaces,
-            asset_balance_definition_route_target_with_world(
-                &shield.asset,
-                Some(dataspace_catalog),
-                world,
-                ledger_time_ms,
-            ),
-            None,
-            [account_dataspace_target(
-                Some(world),
-                &shield.from,
-                ledger_time_ms,
-            )],
-        );
-        return Ok(());
-    }
-
-    if let Some(unshield) = any.downcast_ref::<Unshield>() {
-        collect_asset_balance_native_amx_participants(
-            dataspaces,
-            asset_balance_definition_route_target_with_world(
-                &unshield.asset,
-                Some(dataspace_catalog),
-                world,
-                ledger_time_ms,
-            ),
-            None,
-            [account_dataspace_target(
-                Some(world),
-                &unshield.to,
-                ledger_time_ms,
-            )],
-        );
-        return Ok(());
     }
 
     insert_native_amx_participant(
@@ -2896,7 +2828,9 @@ fn instruction_transaction_dataspace_target(
                     state_view,
                 )
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
 
@@ -3142,40 +3076,6 @@ fn instruction_transaction_dataspace_target(
         );
     }
 
-    if let Some(shield) = any.downcast_ref::<Shield>() {
-        return zk_asset_operation_dataspace_target(
-            &shield.asset,
-            [account_dataspace_target(
-                state_view.map(StateView::world),
-                &shield.from,
-                state_view.map(state_view_ledger_time_ms),
-            )],
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
-        return asset_balance_definition_dataspace_target(
-            &transfer.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(unshield) = any.downcast_ref::<Unshield>() {
-        return zk_asset_operation_dataspace_target(
-            &unshield.asset,
-            [account_dataspace_target(
-                state_view.map(StateView::world),
-                &unshield.to,
-                state_view.map(state_view_ledger_time_ms),
-            )],
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
     if let Some(target) = musubi_instruction_dataspace_target(any) {
         return Some(target);
     }
@@ -3270,7 +3170,9 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                     ledger_time_ms,
                 )
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
 
@@ -3535,43 +3437,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         );
     }
 
-    if let Some(shield) = any.downcast_ref::<Shield>() {
-        return zk_asset_operation_dataspace_target_with_world(
-            &shield.asset,
-            [account_dataspace_target(
-                Some(world),
-                &shield.from,
-                ledger_time_ms,
-            )],
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
-        return asset_balance_definition_dataspace_target_with_world(
-            &transfer.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(unshield) = any.downcast_ref::<Unshield>() {
-        return zk_asset_operation_dataspace_target_with_world(
-            &unshield.asset,
-            [account_dataspace_target(
-                Some(world),
-                &unshield.to,
-                ledger_time_ms,
-            )],
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
     if let Some(target) = musubi_instruction_dataspace_target(any) {
         return Some(target);
     }
@@ -3805,7 +3670,9 @@ fn deferred_instruction_concrete_dataspace_targets(
                 }
                 Some(targets)
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
 
@@ -3932,7 +3799,9 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
                 multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
                     .map(|proposal| proposal.instructions)
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
 
         return match instructions {
@@ -3953,7 +3822,8 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
                 MultisigInstructionBox::Approve(_) => Some(BTreeSet::new()),
                 MultisigInstructionBox::Propose(_)
                 | MultisigInstructionBox::Register(_)
-                | MultisigInstructionBox::Cancel(_) => None,
+                | MultisigInstructionBox::Cancel(_)
+                | MultisigInstructionBox::InvalidateOutstanding(_) => None,
             },
         };
     }
@@ -4011,7 +3881,8 @@ fn same_transaction_multisig_proposal_targets(
             }
             MultisigInstructionBox::Approve(_)
             | MultisigInstructionBox::Register(_)
-            | MultisigInstructionBox::Cancel(_) => None,
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         })
         .collect()
 }
@@ -4061,7 +3932,8 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
             }
             MultisigInstructionBox::Approve(_)
             | MultisigInstructionBox::Register(_)
-            | MultisigInstructionBox::Cancel(_) => None,
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         })
         .collect()
 }
@@ -4074,7 +3946,8 @@ fn same_transaction_multisig_approve_route_target<'a>(
         MultisigInstructionBox::Approve(approve) => approve,
         MultisigInstructionBox::Propose(_)
         | MultisigInstructionBox::Register(_)
-        | MultisigInstructionBox::Cancel(_) => return None,
+        | MultisigInstructionBox::Cancel(_)
+        | MultisigInstructionBox::InvalidateOutstanding(_) => return None,
     };
     proposals.iter().find(|proposal| {
         proposal.account == approve.account
@@ -4171,15 +4044,6 @@ fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&Asse
     }
     if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
         return Some(&redeem.request.bundle.statement.asset);
-    }
-    if let Some(shield) = any.downcast_ref::<Shield>() {
-        return Some(&shield.asset);
-    }
-    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
-        return Some(&transfer.asset);
-    }
-    if let Some(unshield) = any.downcast_ref::<Unshield>() {
-        return Some(&unshield.asset);
     }
     None
 }
@@ -4338,7 +4202,9 @@ fn instruction_transaction_target_requires_universal_coordinator(
                     )
                 })
                 .map(|proposal| proposal.instructions),
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
         let Some(instructions) = instructions else {
             return false;
@@ -4441,30 +4307,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
         );
     }
 
-    if let Some(shield) = any.downcast_ref::<Shield>() {
-        return asset_definition_requires_universal_coordinator(
-            &shield.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
-        return asset_definition_requires_universal_coordinator(
-            &transfer.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(unshield) = any.downcast_ref::<Unshield>() {
-        return asset_definition_requires_universal_coordinator(
-            &unshield.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
     false
 }
 
@@ -4487,7 +4329,9 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
                 multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
                     .map(|proposal| proposal.instructions)
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
         let Some(instructions) = instructions else {
             return false;
@@ -4593,33 +4437,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
         return asset_definition_requires_universal_coordinator_with_world(
             &cancel_transition.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(shield) = any.downcast_ref::<Shield>() {
-        return asset_definition_requires_universal_coordinator_with_world(
-            &shield.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
-        return asset_definition_requires_universal_coordinator_with_world(
-            &transfer.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(unshield) = any.downcast_ref::<Unshield>() {
-        return asset_definition_requires_universal_coordinator_with_world(
-            &unshield.asset,
             dataspace_catalog,
             world,
             ledger_time_ms,
@@ -4956,7 +4773,9 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     if let Some(multisig) = multisig_instruction(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(_) | MultisigInstructionBox::Approve(_) => true,
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => false,
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => false,
         };
     }
 
@@ -5050,9 +4869,6 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         || any
             .downcast_ref::<CancelConfidentialPolicyTransition>()
             .is_some()
-        || any.downcast_ref::<Shield>().is_some()
-        || any.downcast_ref::<ZkTransfer>().is_some()
-        || any.downcast_ref::<Unshield>().is_some()
     {
         return true;
     }
@@ -7085,18 +6901,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
             || matches_label(matcher, "smart_contract::deploy");
     }
 
-    if any.is::<Shield>() {
-        return matches_zk_instruction_label(matcher, "shield");
-    }
-
-    if any.is::<ZkTransfer>() {
-        return matches_zk_instruction_label(matcher, "zk_transfer");
-    }
-
-    if any.is::<Unshield>() {
-        return matches_zk_instruction_label(matcher, "unshield");
-    }
-
     false
 }
 
@@ -7801,7 +7605,6 @@ mod tests {
         asset::{
             AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
         },
-        confidential::ConfidentialEncryptedPayload,
         isi::{
             alias_setup::CompareAndSetPrimaryAccountAlias,
             prelude::{Mint, Register, Transfer},
@@ -7814,7 +7617,6 @@ mod tests {
                 FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
                 UploadSmartContractCodeChunk,
             },
-            zk::{Shield, Unshield, ZkTransfer},
         },
         merge::{LaneDrainIntentV1, LaneDrainStateV1},
         metadata::Metadata,
@@ -10960,178 +10762,6 @@ mod tests {
     }
 
     #[test]
-    fn matches_native_zk_instruction_rules() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let lane_id = LaneId::new(2);
-        let dataspace_id = DataSpaceId::new(10);
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "is").expect("asset definition domain"),
-            "unit".parse().expect("asset definition name"),
-        );
-
-        let proof = || {
-            ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-                VerifyingKeyId::new("halo2/ipa", "zk-route-test"),
-            )
-        };
-        let encrypted_payload =
-            ConfidentialEncryptedPayload::new([0x11; 32], [0x22; 24], vec![0x33; 16]);
-
-        let cases: Vec<(&str, InstructionBox)> = vec![
-            (
-                "shield",
-                Shield::new(
-                    asset_definition.clone(),
-                    alice_id.clone(),
-                    10_u128,
-                    [0x44; 32],
-                    encrypted_payload,
-                )
-                .into(),
-            ),
-            (
-                "zk::zk_transfer",
-                ZkTransfer::new(
-                    asset_definition.clone(),
-                    vec![[0x55; 32]],
-                    vec![[0x66; 32]],
-                    proof(),
-                    Some([0x77; 32]),
-                )
-                .into(),
-            ),
-            (
-                "unshield",
-                Unshield::new(
-                    asset_definition.clone(),
-                    alice_id.clone(),
-                    5_u128,
-                    vec![[0x88; 32]],
-                    proof(),
-                    Some([0x99; 32]),
-                )
-                .into(),
-            ),
-        ];
-
-        for (matcher, instruction) in cases {
-            let policy = LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![LaneRoutingRule {
-                    lane: lane_id,
-                    dataspace: Some(dataspace_id),
-                    matcher: LaneRoutingMatcher {
-                        account: None,
-                        instruction: Some(matcher.to_string()),
-                        description: None,
-                    },
-                }],
-            };
-            let router = ConfigLaneRouter::new(
-                policy,
-                dataspace_catalog(&[(dataspace_id, "is")]),
-                catalog_with_lane_dataspaces(&[
-                    (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                    (lane_id, dataspace_id),
-                ]),
-            );
-            let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
-
-            assert_eq!(
-                router
-                    .try_route(&tx)
-                    .unwrap_or_else(|err| panic!("{matcher} should route: {err:?}")),
-                RoutingDecision::new(lane_id, dataspace_id),
-                "{matcher} should match the native ZK instruction"
-            );
-        }
-    }
-
-    #[test]
-    fn native_zk_asset_instruction_routes_to_asset_definition_dataspace_without_explicit_rule() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let lane_id = LaneId::new(2);
-        let dataspace_id = DataSpaceId::new(10);
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "is").expect("asset definition domain"),
-            "unit".parse().expect("asset definition name"),
-        );
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog(&[(dataspace_id, "is")]),
-            catalog_with_lane_dataspaces(&[
-                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                (lane_id, dataspace_id),
-            ]),
-        );
-
-        let proof = || {
-            ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-                VerifyingKeyId::new("halo2/ipa", "zk-route-test"),
-            )
-        };
-        let encrypted_payload =
-            || ConfidentialEncryptedPayload::new([0x11; 32], [0x22; 24], vec![0x33; 16]);
-        let cases: Vec<(&str, InstructionBox)> = vec![
-            (
-                "shield",
-                Shield::new(
-                    asset_definition.clone(),
-                    alice_id.clone(),
-                    10_u128,
-                    [0x44; 32],
-                    encrypted_payload(),
-                )
-                .into(),
-            ),
-            (
-                "zk_transfer",
-                ZkTransfer::new(
-                    asset_definition.clone(),
-                    vec![[0x55; 32]],
-                    vec![[0x66; 32]],
-                    proof(),
-                    Some([0x77; 32]),
-                )
-                .into(),
-            ),
-            (
-                "unshield",
-                Unshield::new(
-                    asset_definition.clone(),
-                    alice_id.clone(),
-                    5_u128,
-                    vec![[0x88; 32]],
-                    proof(),
-                    Some([0x99; 32]),
-                )
-                .into(),
-            ),
-        ];
-
-        for (label, instruction) in cases {
-            let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
-
-            assert_eq!(
-                router
-                    .try_route(&tx)
-                    .unwrap_or_else(|err| panic!("{label} should route: {err:?}")),
-                RoutingDecision::new(lane_id, dataspace_id),
-                "{label} should route from its asset definition dataspace"
-            );
-        }
-    }
-
-    #[test]
     fn contract_call_routes_to_contract_address_dataspace_without_explicit_rule() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -14036,80 +13666,8 @@ mod tests {
     }
 
     #[test]
-    fn global_asset_shield_from_private_scoped_authority_routes_to_universal() {
+    fn global_asset_zk_registration_from_private_authority_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let shield = Shield::new(
-            asset_definition.clone(),
-            alice_id.clone(),
-            1_u128,
-            [0x11; 32],
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(shield)],
-        );
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(
-                    asset_definition,
-                    "pkr".to_owned(),
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&alice_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("global shield route should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("global shield must route to the universal coordinator"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-        assert_eq!(
-            router
-                .try_route_plan_with_view(&tx, &state.view())
-                .expect("global shield plan must keep the universal coordinator")
-                .coordinator_route(),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
-    }
-
-    #[test]
-    fn global_asset_zk_operations_from_private_authority_route_to_universal() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
         let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
@@ -14146,59 +13704,30 @@ mod tests {
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
 
-        let cases: Vec<(&str, InstructionBox)> = vec![
-            (
-                "register_zk_asset",
-                InstructionBox::from(RegisterZkAsset::new(
-                    asset_definition.clone(),
-                    iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-                    true,
-                    true,
-                    None,
-                    None,
-                    None,
-                )),
-            ),
-            (
-                "zk_transfer",
-                InstructionBox::from(ZkTransfer::new(
-                    asset_definition.clone(),
-                    vec![[0x21; 32]],
-                    vec![[0x22; 32]],
-                    dummy_zk_proof_attachment(),
-                    Some([0x23; 32]),
-                )),
-            ),
-            (
-                "unshield",
-                InstructionBox::from(Unshield::new(
-                    asset_definition.clone(),
-                    bob_id.clone(),
-                    1_u128,
-                    vec![[0x31; 32]],
-                    dummy_zk_proof_attachment(),
-                    Some([0x32; 32]),
-                )),
-            ),
-        ];
-
-        for (label, instruction) in cases {
-            let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
-            assert_eq!(
-                router
-                    .try_route_without_state(&tx)
-                    .expect("ZK asset route should defer to state"),
-                None,
-                "{label} should not route without the asset policy"
-            );
-            assert_eq!(
-                router
-                    .try_route_with_view(&tx, &state.view())
-                    .expect("global ZK asset route must resolve"),
-                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                "{label} should route to universal"
-            );
-        }
+        let instruction = InstructionBox::from(RegisterZkAsset::new(
+            asset_definition,
+            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+            true,
+            true,
+            None,
+            None,
+            None,
+        ));
+        let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("ZK asset route should defer to state"),
+            None,
+            "registration should not route without the asset policy"
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("global ZK asset route must resolve"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            "registration should route to universal"
+        );
     }
 
     #[test]

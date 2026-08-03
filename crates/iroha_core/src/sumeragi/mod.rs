@@ -1446,6 +1446,53 @@ fn fair_v2_ingress_same_control_slot(
         && left_round.height == right_round.height
 }
 
+/// Whether timeout control can advance past the selected control owner's view.
+///
+/// A direct Vote may deliberately remain in fair ingress until its Proposal
+/// binds the execution commitment. Requiring that blocked Vote to cross before
+/// same-view timeout shares creates a circular dependency: those shares must
+/// assemble the TC which retires the view's proposal and vote work. An already
+/// assembled TC for that view or a later one has the same dependency. Every
+/// candidate still crosses normal downstream authentication and quorum checks;
+/// this helper only allows the verifier to observe it when the immutable
+/// control owner is currently inadmissible.
+fn fair_v2_ingress_timeout_control_advances_owner(
+    owner: &FairV2IngressLeaderWireToken,
+    inbound: &InboundBlockMessage,
+) -> bool {
+    use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+
+    if !matches!(
+        owner.identity.phase,
+        FairV2IngressLeaderWirePhase::Proposal
+            | FairV2IngressLeaderWirePhase::PrepareVote
+            | FairV2IngressLeaderWirePhase::CommitVote
+            | FairV2IngressLeaderWirePhase::PrepareQc
+            | FairV2IngressLeaderWirePhase::CommitQc
+            | FairV2IngressLeaderWirePhase::TimeoutVote
+    ) {
+        return false;
+    }
+    let BlockMessage::V2(message) = inbound.message() else {
+        return false;
+    };
+    let (round, view_advances) = match &message.payload {
+        ConsensusMessageV2Payload::TimeoutVote(vote) => (
+            vote.round,
+            owner.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
+                && v2_core::timeout_vote_view_is_admissible(owner.identity.view, vote.round.view),
+        ),
+        ConsensusMessageV2Payload::TimeoutCertificate(certificate) => (
+            certificate.round,
+            certificate.round.view >= owner.identity.view,
+        ),
+        _ => return false,
+    };
+    round.context_id == owner.identity.context_id
+        && round.height == owner.identity.height
+        && view_advances
+}
+
 fn fair_v2_ingress_subject_hash(
     subject: Option<&iroha_data_model::block::consensus_v2::BlockSubject>,
 ) -> CryptoHash {
@@ -3723,9 +3770,11 @@ enum FairV2IngressPushDisposition {
 /// progress slot, one distinct TimeoutVote slot, and one transport-completion
 /// slot. Every authenticated non-validator hop independently owns two slots:
 /// general work and transport completion. Only messages without an authenticated transport hop share the two-position
-/// anonymous lane. A roster-origin completion forwarded by a non-validator source
-/// stays in that exact authenticated source's lane and cannot spend another
-/// source's reservation.
+/// anonymous lane. A current-roster completion forwarded by a non-validator
+/// source, or a proof-carrying historical-recovery response from a predecessor
+/// signer, stays in that exact authenticated source's lane and cannot spend
+/// another source's reservation. The latter is authorized downstream against
+/// its outstanding request and frozen historical certificate.
 /// Exact wire retransmissions coalesce
 /// only while the same semantic origin still owns an identical queued envelope;
 /// after service, a later retransmission is admitted normally. Distinct
@@ -4604,6 +4653,91 @@ impl FairV2Ingress {
         Ok(())
     }
 
+    /// Retire every closed-height carrier and atomically detach both durable
+    /// ingress gates.
+    ///
+    /// Productive leader-wire records describe physical entries in the same
+    /// lanes that carry certified Serve reservations. Clearing those lanes
+    /// before detaching the leader-wire gate would transiently leave a durable
+    /// `Ingress` record without its unique carrier. Keep the two per-height
+    /// ownership cuts under one ingress transaction instead.
+    ///
+    /// This detach deliberately does not forge a backward `Ingress` to
+    /// `Dormant` refinement in the persistent leader-wire gate. On shutdown or
+    /// abnormal runner exit, same-height restart reconciliation normalizes
+    /// active records to selector-dormant `Dormant`. After durable height
+    /// finality, replay's decision authority instead retires the obsolete
+    /// records. Both paths retain the ordinal high-watermarks.
+    pub(crate) fn unbind_height_ingress_gates(
+        &self,
+        certified_serve_gate: &v2_worker::CertifiedServeIngressGate,
+        leader_wire_gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+    ) -> Result<(), String> {
+        let _service_guard = self.service_lock.lock();
+        let mut state = self.state.lock();
+        if state.open {
+            return Err("height ingress gates cannot unbind from open ingress".to_owned());
+        }
+        let bound_certified_serve = state
+            .certified_serve_gate
+            .as_ref()
+            .ok_or_else(|| "height ingress lost its certified Serve gate".to_owned())?;
+        if !bound_certified_serve.ptr_eq(certified_serve_gate) {
+            return Err("certified Serve gate changed per-height I/O ownership".to_owned());
+        }
+        let bound_leader_wire = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .ok_or_else(|| "height ingress lost its leader-wire lifecycle gate".to_owned())?;
+        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
+            bound_leader_wire,
+            leader_wire_gate,
+        ) {
+            return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
+        }
+
+        // Every queued carrier belongs to the closed height. Replacing the
+        // lanes drops each Serve RAII ticket while the ingress lock is held;
+        // ticket rollback takes only the I/O lock, and no I/O path calls back
+        // into fair ingress.
+        let mut lanes = BTreeMap::new();
+        for peer in &state.roster {
+            lanes.insert(
+                FairV2IngressSource::Validator(peer.clone()),
+                FairV2IngressLane::default(),
+            );
+        }
+        lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
+        state.lanes = lanes;
+        state.pending_wire_owners.clear();
+        state.ready.clear();
+        state.len = 0;
+        state.bytes = 0;
+        state.nonempty_since = None;
+        state.last_service_attempt_at = None;
+
+        let detached_certified_serve = state
+            .certified_serve_gate
+            .take()
+            .expect("validated certified Serve gate remains bound");
+        debug_assert!(detached_certified_serve.ptr_eq(certified_serve_gate));
+        let detached_leader_wire = state
+            .leader_wire_lifecycle_gate
+            .take()
+            .expect("validated leader-wire lifecycle gate remains bound");
+        debug_assert!(
+            serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
+                &detached_leader_wire,
+                leader_wire_gate,
+            )
+        );
+        state.leader_wire_lifecycle_ordinals = None;
+        state.leader_wire_context = None;
+        state.leader_wire_lifecycles.clear();
+        self.debug_assert_consistent(&state);
+        Ok(())
+    }
+
     /// Retire all closed-height occurrences, then detach their exact Serve gate.
     pub(crate) fn unbind_certified_serve_gate(
         &self,
@@ -5010,15 +5144,6 @@ impl FairV2Ingress {
         Ok(())
     }
 
-    /// Return whether one semantic peer belongs to the installed frozen roster.
-    ///
-    /// This is intentionally independent of the authenticated transport hop:
-    /// a roster requester may use an authenticated non-validator relay without
-    /// granting that relay semantic allocation authority.
-    fn frozen_roster_contains(&self, peer: &PeerId) -> bool {
-        self.state.lock().roster.contains(peer)
-    }
-
     fn try_push(
         &self,
         inbound: InboundBlockMessage,
@@ -5247,14 +5372,27 @@ impl FairV2Ingress {
         let lane_timeout_vote_len = lane.timeout_vote_len;
         let lane_transport_completion_len = lane.transport_completion_len;
         let is_validator_source = matches!(source, FairV2IngressSource::Validator(_));
-        let is_validator_origin = inbound
+        let is_current_validator_origin = inbound
             .sender()
             .is_some_and(|peer| state.roster.contains(peer));
-        // Transport completions are protocol-valid only for a frozen-roster
-        // semantic origin. Their finite queue and byte owners belong to the
-        // authenticated hop's lane: a non-validator relay therefore spends
-        // its own reserve and cannot borrow a validator's or another source's.
-        if is_transport_completion && !is_validator_origin {
+        let is_historical_recovery_response =
+            message_kind == FairV2IngressMessageKind::LaneHistoricalRecoveryResponse;
+        // Ordinary transport completions are protocol-valid only for a
+        // current frozen-roster semantic origin. A historical lane-recovery
+        // response is the one narrow exception: its responder authority comes
+        // from the outstanding request's frozen CommitQC or READY certificate,
+        // which the lane adapter verifies before persistence. Keep that proof-
+        // carrying response in the bounded completion partition and require an
+        // authenticated semantic origin, so a validator removed from the
+        // successor roster can finish an old lane without granting arbitrary
+        // old peers current-height completion authority.
+        let authenticated_historical_recovery_response = is_historical_recovery_response
+            && inbound.sender().is_some()
+            && inbound.via().is_some();
+        if is_transport_completion
+            && !is_current_validator_origin
+            && !authenticated_historical_recovery_response
+        {
             return Err(FairV2IngressPushError::Rejected(inbound));
         }
         let (owned_class_bytes, source_class_byte_limit) = if is_validator_source && is_timeout_vote
@@ -6105,10 +6243,19 @@ impl FairV2Ingress {
                                                     )
                                                 },
                                             ));
+                                    let timeout_control_dependency = leader_wire_barrier
+                                        .as_ref()
+                                        .is_some_and(|owner| {
+                                            fair_v2_ingress_timeout_control_advances_owner(
+                                                &owner.token,
+                                                &entry.inbound,
+                                            )
+                                        });
                                     let dependency_bypass = !ingress_barrier_allows
                                         && leader_wire_control_barrier
                                         && (earlier_dependency
-                                            || selected_serve_control_dependency);
+                                            || selected_serve_control_dependency
+                                            || timeout_control_dependency);
                                     (!has_live_control_predecessor
                                         && (ingress_barrier_allows || dependency_bypass))
                                         .then(|| {
@@ -6610,8 +6757,8 @@ impl SumeragiHandle {
         }
         if let LaneRelayMessage::CertifiedMergeSidecar {
             sender,
+            reply_route,
             message: sidecar,
-            ..
         } = &message
         {
             let allocating_requester = match sidecar {
@@ -6621,12 +6768,20 @@ impl SumeragiHandle {
                 | CertifiedMergeSidecarMessage::GenerationHint(_)
                 | CertifiedMergeSidecarMessage::Chunk(_) => None,
             };
+            // The handle can authenticate only the semantic transport
+            // identity and reply capability. A removed validator's exact
+            // Kura/finality authority is verified by the serialized lane
+            // adapter before it may allocate responder state; the sync
+            // channel below remains the bounded handoff corridor.
             if allocating_requester.is_some_and(|requester| {
-                requester != sender || !self.block.frozen_roster_contains(sender)
+                requester != sender
+                    || !reply_route
+                        .as_ref()
+                        .is_some_and(|route| route.is_active() && route.semantic_target() == sender)
             }) {
                 iroha_logger::debug!(
                     %sender,
-                    "rejecting non-roster certified merge-sidecar allocation before lane ingress"
+                    "rejecting unauthenticated certified merge-sidecar allocation before lane ingress"
                 );
                 return SumeragiIngressDisposition::Rejected(message);
             }
@@ -8627,17 +8782,10 @@ mod authoritative_runtime_gate_tests {
         assert!(required_control_frame >= exact_direct_frame);
         assert!(exact_direct_frame > exact_broadcast_frame);
 
-        let minimal_layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 1,
-        };
+        let minimal_layout = minimal_rs16_layout();
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 2_490);
+        assert_eq!(minimal_proposal_bytes, 2_523);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,
@@ -8968,10 +9116,10 @@ mod authoritative_runtime_gate_tests {
     #[test]
     fn fair_v2_ingress_completion_bound_overflow_fails_closed() {
         let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
+            encoding: wire::PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: u32::MAX,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: u64::MAX,
             max_chunk_count: u32::MAX,
         };

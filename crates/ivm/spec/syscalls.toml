@@ -421,27 +421,21 @@ gas = "G_verify_proof + bytes"
 
 [[syscall]]
 number = "0x62"
-args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
-ret = "u64=0/1"
-gas = "G_verify_proof + bytes"
-
-[[syscall]]
-number = "0x63"
-args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
-ret = "u64=0/1"
-gas = "G_verify_proof + bytes"
-
-[[syscall]]
-number = "0x64"
 args = "r10=&NoritoBytes(RootsGetRequest)"
 ret = "ptr (NoritoBytes in INPUT)"
 gas = "G_roots_get + bytes"
 
 [[syscall]]
-number = "0x65"
+number = "0x63"
 args = "r10=&NoritoBytes(VoteGetTallyRequest)"
 ret = "ptr (NoritoBytes in INPUT)"
 gas = "G_vote_get + bytes"
+
+[[syscall]]
+number = "0x64"
+args = "r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)"
+ret = "r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64"
+gas = "250,000 per proof + 5 per encoded byte + bounded per-proof archive/status bytes"
 
 # VRF verification syscalls
 [[syscall]]
@@ -455,12 +449,6 @@ number = "0x67"
 args = "r10=&NoritoBytes(VrfVerifyBatchRequest), 1..=16 items, canonical frame <=65536 bytes"
 ret = "r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64"
 gas = "64 + 250,000 per examined item + 5 per canonical request byte"
-
-[[syscall]]
-number = "0x68"
-args = "r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)"
-ret = "r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64"
-gas = "250,000 per proof + 5 per encoded byte + bounded per-proof archive/status bytes"
 
 [[syscall]]
 number = "0x77"
@@ -527,66 +515,6 @@ number = "0x83"
 args = "r10=&Json(object), r11=&Name(key), r12=&AccountId"
 ret = "r10=&Json"
 gas = "G_json + encoded bytes"
-
-[[syscall]]
-number = "0x85"
-args = "r10=&Json(any validated region), r11=&Name(key)"
-ret = "r10=Option<Json> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x86"
-args = "r10=&Json(any validated region), r11=&Name(key)"
-ret = "r10=Option<Name> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x87"
-args = "r10=&Json(any validated region), r11=&Name(key)"
-ret = "r10=Option<AccountId> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x88"
-args = "r10=&Json(any validated region), r11=&Name(key)"
-ret = "r10=Option<NftId> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x89"
-args = "r10=&Json(any validated region), r11=&Name(key)"
-ret = "r10=Option<bytes> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x8B"
-args = "r10=&Json(any validated region), r11=&Name(key)"
-ret = "r10=Option<AssetDefinitionId> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x8C"
-args = "r10=&Json(any validated region), r11=&Name(key), r12=value:i64"
-ret = "r10=&Json"
-gas = "G_json + encoded bytes"
-
-[[syscall]]
-number = "0x8D"
-args = "r10=&Json(any validated region), r11=&Name(key), r12=&AccountId"
-ret = "r10=&Json"
-gas = "G_json + encoded bytes"
-
-[[syscall]]
-number = "0x8E"
-args = "r10=&Name(base), r11=&NoritoBytes(key)"
-ret = "r10=ptr (&NoritoBytes(StatePath))"
-gas = "G_path + bytes"
-
-[[syscall]]
-number = "0x8F"
-args = "r10=&Name(schema)"
-ret = "ptr (&Json{\"id\":...,\"version\":...})"
-gas = "G_schema + bytes"
 
 [[syscall]]
 number = "0x90"
@@ -656,7 +584,7 @@ gas = "G_hash + bytes"
 
 [[syscall]]
 number = "0xA0"
-args = "r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=Unshield,3=RecordSccpMessage)"
+args = "r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=RecordSccpMessage)"
 ret = "u64=0"
 gas = "G_sci"
 
@@ -887,18 +815,6 @@ number = "0xC9"
 args = "r10=&SoracloudRequest(ReadSecretEnvelope)"
 ret = "r10=&SoracloudResponse(ReadSecretEnvelope) under SoracloudIvmHost; CoreHostImpl returns metered NotImplemented after validation"
 gas = "G_soracloud + request bytes (+ response bytes under SoracloudIvmHost)"
-
-[[syscall]]
-number = "0xD0"
-args = "r10=&Name(schema), r11=&Json"
-ret = "ptr (&NoritoBytes)"
-gas = "G_schema + bytes"
-
-[[syscall]]
-number = "0xD1"
-args = "r10=&Name(schema), r11=&NoritoBytes"
-ret = "ptr (&Json)"
-gas = "G_schema + bytes"
 
 [[syscall]]
 number = "0xF0"
@@ -1448,24 +1364,6 @@ gas = "G_json_get + input bytes + active payload + sum allocation"
 [[syscall]]
 number = "0x010162"
 args = "r10=&Json(object), r11=&Name(key)"
-ret = "r10=Option<&Quantity> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x010163"
-args = "r10=&Json(any validated region), r11=&Name(key)"
-ret = "r10=Option<&Int> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x010164"
-args = "r10=&Json(any validated region), r11=&Name(key)"
-ret = "r10=Option<&Decimal> sum handle"
-gas = "G_json_get + input bytes + active payload + sum allocation"
-
-[[syscall]]
-number = "0x010165"
-args = "r10=&Json(any validated region), r11=&Name(key)"
 ret = "r10=Option<&Quantity> sum handle"
 gas = "G_json_get + input bytes + active payload + sum allocation"
 

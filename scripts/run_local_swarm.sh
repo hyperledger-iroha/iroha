@@ -37,6 +37,20 @@ STREAM_SKS=(
   "8026207B1C78F733EDAFD6AF9BAC3A0D6C5A494557DD031609A4FDD9796EEF471D928C"
   "8026206C7FF4CA09D395C7B7332C654099406E929C6238942E3CE85155CC1A5E2CF519"
 )
+# Dedicated Ed25519 SoraNet transport identities derived from the SHA-256 seeds
+# `iroha-run-local-swarm-soranet-transport-v1-peer-{0,1,2,3}`.
+SORANET_TRANSPORT_PKS=(
+  "ed01208FB5364C3275F840CFF3DA7B2585D0EF5DA34E6EA47D742A9F2AF0ACAE90D51E"
+  "ed012006DA31B9676E61B33B8160415145CC28943ED419402F7412FBF9D7D1E7EDF56E"
+  "ed01208F6F75539C6420238C08C07311C3BF594866B8F867E9FA032C533F9603134DE7"
+  "ed01206CBFE275EB73969EB8A7C5842E1CB89AC6D2DEE9C6AB2E71B7A42D6E5938A3A2"
+)
+SORANET_TRANSPORT_SKS=(
+  "802620A64266B9BC7DFA8DB70EAB99A1C9E7470858A87D850CF48F5A1F81950ADBF36C"
+  "802620A1D97AD9C6106A50E82BED39CF0A4CD1AEF6DAF5AE3299E09D3D9EBB387522D5"
+  "802620FFBF7F577A39A1ADB7E043EE9B7D24C2158F8E4FACEB432A76011B01959C2E01"
+  "8026200177E60BE138D5F97520629FCF270EE9B4C9EB69870B1F67A5DC86C8E8E6FC41"
+)
 BASE_API_PORT="${BASE_API_PORT:-8080}"
 BASE_P2P_PORT="${BASE_P2P_PORT:-1337}"
 APIS=(
@@ -221,6 +235,27 @@ with open(path, "w") as fh:
 PY
 }
 
+validate_transport_identities() {
+  local i j
+  for i in 0 1 2 3; do
+    if [[ "${SORANET_TRANSPORT_PKS[$i]}" == "${PKS[$i]}" ]] \
+      || [[ "${SORANET_TRANSPORT_PKS[$i]}" == "${STREAM_PKS[$i]}" ]] \
+      || [[ "${SORANET_TRANSPORT_SKS[$i]}" == "${SKS[$i]}" ]] \
+      || [[ "${SORANET_TRANSPORT_SKS[$i]}" == "${STREAM_SKS[$i]}" ]]; then
+      echo "Peer $i reuses a node or streaming key for SoraNet transport." >&2
+      exit 1
+    fi
+    for ((j = 0; j < i; j++)); do
+      if [[ "${SORANET_TRANSPORT_PKS[$i]}" == "${SORANET_TRANSPORT_PKS[$j]}" ]] \
+        || [[ "${SORANET_TRANSPORT_SKS[$i]}" == "${SORANET_TRANSPORT_SKS[$j]}" ]]; then
+        echo "Peers $j and $i share a SoraNet transport identity." >&2
+        exit 1
+      fi
+    done
+  done
+}
+
+validate_transport_identities
 mkdir -p "$BASE"
 BASE="$(cd "$BASE" && pwd)"
 write_stop_script
@@ -315,6 +350,8 @@ write_config() {
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "${PKS[$idx]}"
 private_key = "${SKS[$idx]}"
+soranet_transport_public_key = "${SORANET_TRANSPORT_PKS[$idx]}"
+soranet_transport_private_key = "${SORANET_TRANSPORT_SKS[$idx]}"
 trusted_peers = $(trusted_peers_literal)
 [[trusted_peers_pop]]
 public_key = "${PKS[0]}"

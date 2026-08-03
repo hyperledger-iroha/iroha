@@ -834,66 +834,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt
     ) -> Int32
 
-    private typealias EncodeShieldFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeShieldWithAlgFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UInt8,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeUnshieldFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
     private typealias EncodeRegisterZkAssetFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
@@ -941,64 +881,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UInt8>?,
         UInt
     ) -> Int32
-    private typealias EncodeUnshieldWithAlgFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UInt8,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeZkTransferFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeZkTransferWithAlgFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UInt8,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-
     private typealias EncodeMultisigRegisterFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
@@ -1948,12 +1830,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeTransferInstructionBoxFn: EncodeTransferInstructionBoxFn? = nil
     private var encodeMintFn: EncodeMintFn? = nil
     private var encodeMintWithAlgFn: EncodeMintWithAlgFn? = nil
-    private var encodeShieldFn: EncodeShieldFn? = nil
-    private var encodeShieldWithAlgFn: EncodeShieldWithAlgFn? = nil
-    private var encodeUnshieldFn: EncodeUnshieldFn? = nil
-    private var encodeUnshieldWithAlgFn: EncodeUnshieldWithAlgFn? = nil
-    private var encodeZkTransferFn: EncodeZkTransferFn? = nil
-    private var encodeZkTransferWithAlgFn: EncodeZkTransferWithAlgFn? = nil
     private var encodeRegisterZkAssetFn: EncodeRegisterZkAssetFn? = nil
     private var encodeRegisterZkAssetWithAlgFn: EncodeRegisterZkAssetWithAlgFn? = nil
     private var encodeMultisigRegisterFn: EncodeMultisigRegisterFn? = nil
@@ -2088,12 +1964,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeTransferWithAlgFn: Any? = nil
     private let encodeMintFn: Any? = nil
     private let encodeMintWithAlgFn: Any? = nil
-    private let encodeShieldFn: Any? = nil
-    private let encodeShieldWithAlgFn: Any? = nil
-    private let encodeUnshieldFn: Any? = nil
-    private let encodeUnshieldWithAlgFn: Any? = nil
-    private let encodeZkTransferFn: Any? = nil
-    private let encodeZkTransferWithAlgFn: Any? = nil
     private let encodeRegisterZkAssetFn: Any? = nil
     private let encodeRegisterZkAssetWithAlgFn: Any? = nil
     private let encodeMultisigRegisterFn: Any? = nil
@@ -2573,36 +2443,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.encodeMintWithAlgFn = unsafeBitCast(mintAlgSymbol, to: EncodeMintWithAlgFn.self)
             } else {
                 self.encodeMintWithAlgFn = nil
-            }
-            if let shieldSymbol = dlsym(handle, "connect_norito_encode_shield_signed_transaction") {
-                self.encodeShieldFn = unsafeBitCast(shieldSymbol, to: EncodeShieldFn.self)
-            } else {
-                self.encodeShieldFn = nil
-            }
-            if let shieldAlgSymbol = dlsym(handle, "connect_norito_encode_shield_signed_transaction_alg") {
-                self.encodeShieldWithAlgFn = unsafeBitCast(shieldAlgSymbol, to: EncodeShieldWithAlgFn.self)
-            } else {
-                self.encodeShieldWithAlgFn = nil
-            }
-            if let unshieldSymbol = dlsym(handle, "connect_norito_encode_unshield_signed_transaction") {
-                self.encodeUnshieldFn = unsafeBitCast(unshieldSymbol, to: EncodeUnshieldFn.self)
-            } else {
-                self.encodeUnshieldFn = nil
-            }
-            if let unshieldAlgSymbol = dlsym(handle, "connect_norito_encode_unshield_signed_transaction_alg") {
-                self.encodeUnshieldWithAlgFn = unsafeBitCast(unshieldAlgSymbol, to: EncodeUnshieldWithAlgFn.self)
-            } else {
-                self.encodeUnshieldWithAlgFn = nil
-            }
-            if let zkTransferSymbol = dlsym(handle, "connect_norito_encode_zk_transfer_signed_transaction") {
-                self.encodeZkTransferFn = unsafeBitCast(zkTransferSymbol, to: EncodeZkTransferFn.self)
-            } else {
-                self.encodeZkTransferFn = nil
-            }
-            if let zkTransferAlgSymbol = dlsym(handle, "connect_norito_encode_zk_transfer_signed_transaction_alg") {
-                self.encodeZkTransferWithAlgFn = unsafeBitCast(zkTransferAlgSymbol, to: EncodeZkTransferWithAlgFn.self)
-            } else {
-                self.encodeZkTransferWithAlgFn = nil
             }
             if let registerZkSymbol = dlsym(handle, "connect_norito_encode_register_zk_asset_signed_transaction") {
                 self.encodeRegisterZkAssetFn = unsafeBitCast(registerZkSymbol, to: EncodeRegisterZkAssetFn.self)
@@ -3194,12 +3034,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferInstructionBoxFn = nil
             self.encodeMintFn = nil
             self.encodeMintWithAlgFn = nil
-            self.encodeShieldFn = nil
-            self.encodeShieldWithAlgFn = nil
-            self.encodeUnshieldFn = nil
-            self.encodeUnshieldWithAlgFn = nil
-            self.encodeZkTransferFn = nil
-            self.encodeZkTransferWithAlgFn = nil
             self.encodeRegisterZkAssetFn = nil
             self.encodeRegisterZkAssetWithAlgFn = nil
             self.encodeMultisigRegisterFn = nil
@@ -3653,9 +3487,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferWithAlgFn != nil
                 && self.encodeMintWithAlgFn != nil
                 && self.encodeBurnWithAlgFn != nil
-                && self.encodeShieldWithAlgFn != nil
-                && self.encodeUnshieldWithAlgFn != nil
-                && self.encodeZkTransferWithAlgFn != nil
                 && self.encodeRegisterZkAssetWithAlgFn != nil
 
         switch algorithm {
@@ -3663,9 +3494,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return encodeTransferFn != nil
                 && encodeMintFn != nil
                 && encodeBurnFn != nil
-                && encodeShieldFn != nil
-                && encodeUnshieldFn != nil
-                && encodeZkTransferFn != nil
                 && encodeRegisterZkAssetFn != nil
         case .sm2:
             return isSm2Available && hasAlgorithmEncoders && canParseSm2TransactionAuthority()
@@ -4670,394 +4498,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             )
                                         } else {
                                             return -1
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        }
-
-        if status != 0 {
-            if let signedPtr { freeFn(signedPtr) }
-            try throwOnStatus(status)
-            return nil
-        }
-        guard let signedPtr else { return nil }
-
-        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
-        freeFn(signedPtr)
-        let hashData = Data(hashBytes)
-        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
-        #else
-        return nil
-        #endif
-    }
-
-    func encodeShield(
-        chainId: String,
-        authority: String,
-        creationTimeMs: UInt64,
-        ttlMs: UInt64?,
-        assetDefinitionId: String,
-        fromAccountId: String,
-        amount: String,
-        noteCommitment: Data,
-        payloadEphemeral: Data,
-        payloadNonce: Data,
-        payloadCiphertext: Data,
-        feePaymentJSON: Data,
-        privateKey: Data,
-        algorithm: SigningAlgorithm = .ed25519
-    ) throws -> NativeSignedTransaction? {
-        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
-        #if canImport(Darwin)
-        guard let freeFn else { return nil }
-        let feePaymentBytes = feePaymentJSON as NSData
-        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
-        guard noteCommitment.count == 32,
-              payloadEphemeral.count == 32,
-              payloadNonce.count == 24 else {
-            return nil
-        }
-        if payloadCiphertext.count > UInt32.max {
-            return nil
-        }
-        let useAlg = algorithm != .ed25519 && encodeShieldWithAlgFn != nil
-        guard useAlg || encodeShieldFn != nil else { return nil }
-
-        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
-        var signedLen: UInt = 0
-        var hashBytes = [UInt8](repeating: 0, count: 32)
-        let hashLength = UInt(hashBytes.count)
-        let algorithmRaw = algorithm.noritoDiscriminant
-
-        let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
-            authority.withCString { authorityPtr in
-                assetDefinitionId.withCString { assetPtr in
-                    fromAccountId.withCString { fromPtr in
-                        amount.withCString { amountPtr in
-                            noteCommitment.withUnsafeBytes { noteBuffer in
-                                payloadEphemeral.withUnsafeBytes { ephBuffer in
-                                    payloadNonce.withUnsafeBytes { nonceBuffer in
-                                        payloadCiphertext.withUnsafeBytes { cipherBuffer in
-                                            privateKey.withUnsafeBytes { keyBuffer -> Int32 in
-                                                hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-                                                    guard let hashPtr = hashBuffer.baseAddress else {
-                                                        return -1
-                                                    }
-                                                    return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                                        let ttlValue = ttlMs ?? 0
-                                                        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
-                                                        if useAlg, let encodeShieldWithAlgFn {
-                                                            return encodeShieldWithAlgFn(
-                                                                chainPtr, UInt(chainId.utf8.count),
-                                                                authorityPtr, UInt(authority.utf8.count),
-                                                                creationTimeMs,
-                                                                ttlValue,
-                                                                ttlFlag,
-                                                                assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                                fromPtr, UInt(fromAccountId.utf8.count),
-                                                                amountPtr, UInt(amount.utf8.count),
-                                                                noteBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(noteCommitment.count),
-                                                                ephBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadEphemeral.count),
-                                                                nonceBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadNonce.count),
-                                                                cipherBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadCiphertext.count),
-                                                                feePaymentPtr, UInt(feePaymentJSON.count),
-                                                                keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
-                                                                algorithmRaw,
-                                                                signedPtrPtr,
-                                                                signedLenPtr,
-                                                                hashPtr,
-                                                                hashLength
-                                                            )
-                                                        } else if let encodeShieldFn {
-                                                            return encodeShieldFn(
-                                                                chainPtr, UInt(chainId.utf8.count),
-                                                                authorityPtr, UInt(authority.utf8.count),
-                                                                creationTimeMs,
-                                                                ttlValue,
-                                                                ttlFlag,
-                                                                assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                                fromPtr, UInt(fromAccountId.utf8.count),
-                                                                amountPtr, UInt(amount.utf8.count),
-                                                                noteBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(noteCommitment.count),
-                                                                ephBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadEphemeral.count),
-                                                                nonceBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadNonce.count),
-                                                                cipherBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(payloadCiphertext.count),
-                                                                feePaymentPtr, UInt(feePaymentJSON.count),
-                                                                keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
-                                                                signedPtrPtr,
-                                                                signedLenPtr,
-                                                                hashPtr,
-                                                                hashLength
-                                                            )
-                                                        } else {
-                                                            return -1
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        }
-
-        if status != 0 {
-            if let signedPtr { freeFn(signedPtr) }
-            try throwOnStatus(status)
-            return nil
-        }
-        guard let signedPtr else { return nil }
-
-        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
-        freeFn(signedPtr)
-        let hashData = Data(hashBytes)
-        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
-        #else
-        return nil
-        #endif
-    }
-
-    func encodeUnshield(
-        chainId: String,
-        authority: String,
-        creationTimeMs: UInt64,
-        ttlMs: UInt64?,
-        assetDefinitionId: String,
-        destinationAccountId: String,
-        amount: String,
-        inputs: Data,
-        proofJSON: Data,
-        rootHint: Data?,
-        feePaymentJSON: Data,
-        privateKey: Data,
-        algorithm: SigningAlgorithm = .ed25519
-    ) throws -> NativeSignedTransaction? {
-        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
-        #if canImport(Darwin)
-        guard let freeFn else { return nil }
-        let feePaymentBytes = feePaymentJSON as NSData
-        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
-        guard !inputs.isEmpty, !proofJSON.isEmpty else { return nil }
-        let useAlg = algorithm != .ed25519 && encodeUnshieldWithAlgFn != nil
-        guard useAlg || encodeUnshieldFn != nil else { return nil }
-
-        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
-        var signedLen: UInt = 0
-        var hashBytes = [UInt8](repeating: 0, count: 32)
-        let hashLength = UInt(hashBytes.count)
-        let algorithmRaw = algorithm.noritoDiscriminant
-
-        let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
-            authority.withCString { authorityPtr in
-                assetDefinitionId.withCString { assetPtr in
-                    destinationAccountId.withCString { destinationPtr in
-                        amount.withCString { amountPtr in
-                            inputs.withUnsafeBytes { inputBuffer -> Int32 in
-                                guard let inputBase = inputBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                                    return -1
-                                }
-                                return proofJSON.withUnsafeBytes { proofBuffer -> Int32 in
-                                    guard let proofBase = proofBuffer.bindMemory(to: CChar.self).baseAddress else {
-                                        return -1
-                                    }
-                                    return withOptionalBytes(rootHint) { rootPtr, rootLen in
-                                        privateKey.withUnsafeBytes { keyBuffer -> Int32 in
-                                            guard let keyBase = keyBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                                                return -1
-                                            }
-                                            return hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-                                                guard let hashPtr = hashBuffer.baseAddress else {
-                                                    return -1
-                                                }
-                                                return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                                    let ttlValue = ttlMs ?? 0
-                                                    let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
-                                                    if useAlg, let encodeUnshieldWithAlgFn {
-                                                        return encodeUnshieldWithAlgFn(
-                                                            chainPtr, UInt(chainId.utf8.count),
-                                                            authorityPtr, UInt(authority.utf8.count),
-                                                            creationTimeMs,
-                                                            ttlValue,
-                                                            ttlFlag,
-                                                            assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                            destinationPtr, UInt(destinationAccountId.utf8.count),
-                                                            amountPtr, UInt(amount.utf8.count),
-                                                            inputBase, UInt(inputs.count),
-                                                            proofBase, UInt(proofJSON.count),
-                                                            rootPtr, rootLen,
-                                                            feePaymentPtr, UInt(feePaymentJSON.count),
-                                                            keyBase, UInt(privateKey.count),
-                                                            algorithmRaw,
-                                                            signedPtrPtr,
-                                                            signedLenPtr,
-                                                            hashPtr,
-                                                            hashLength
-                                                        )
-                                                    } else if let encodeUnshieldFn {
-                                                        return encodeUnshieldFn(
-                                                            chainPtr, UInt(chainId.utf8.count),
-                                                            authorityPtr, UInt(authority.utf8.count),
-                                                            creationTimeMs,
-                                                            ttlValue,
-                                                            ttlFlag,
-                                                            assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                            destinationPtr, UInt(destinationAccountId.utf8.count),
-                                                            amountPtr, UInt(amount.utf8.count),
-                                                            inputBase, UInt(inputs.count),
-                                                            proofBase, UInt(proofJSON.count),
-                                                            rootPtr, rootLen,
-                                                            feePaymentPtr, UInt(feePaymentJSON.count),
-                                                            keyBase, UInt(privateKey.count),
-                                                            signedPtrPtr,
-                                                            signedLenPtr,
-                                                            hashPtr,
-                                                            hashLength
-                                                        )
-                                                    } else {
-                                                        return -1
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        }
-
-        if status != 0 {
-            if let signedPtr { freeFn(signedPtr) }
-            try throwOnStatus(status)
-            return nil
-        }
-        guard let signedPtr else { return nil }
-
-        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
-        freeFn(signedPtr)
-        let hashData = Data(hashBytes)
-        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
-        #else
-        return nil
-        #endif
-    }
-
-    func encodeZkTransfer(
-        chainId: String,
-        authority: String,
-        creationTimeMs: UInt64,
-        ttlMs: UInt64?,
-        assetDefinitionId: String,
-        inputs: Data,
-        outputs: Data,
-        proofJSON: Data,
-        rootHint: Data?,
-        feePaymentJSON: Data,
-        privateKey: Data,
-        algorithm: SigningAlgorithm = .ed25519
-    ) throws -> NativeSignedTransaction? {
-        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
-        #if canImport(Darwin)
-        guard let freeFn else { return nil }
-        let feePaymentBytes = feePaymentJSON as NSData
-        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
-        guard !inputs.isEmpty, !outputs.isEmpty, !proofJSON.isEmpty else { return nil }
-        let useAlg = algorithm != .ed25519 && encodeZkTransferWithAlgFn != nil
-        guard useAlg || encodeZkTransferFn != nil else { return nil }
-
-        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
-        var signedLen: UInt = 0
-        var hashBytes = [UInt8](repeating: 0, count: 32)
-        let hashLength = UInt(hashBytes.count)
-        let algorithmRaw = algorithm.noritoDiscriminant
-
-        let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
-            authority.withCString { authorityPtr in
-                assetDefinitionId.withCString { assetPtr in
-                    inputs.withUnsafeBytes { inputBuffer -> Int32 in
-                        guard let inputBase = inputBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                            return -1
-                        }
-                        return outputs.withUnsafeBytes { outputBuffer -> Int32 in
-                            guard let outputBase = outputBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                                return -1
-                            }
-                            return proofJSON.withUnsafeBytes { proofBuffer -> Int32 in
-                                guard let proofBase = proofBuffer.bindMemory(to: CChar.self).baseAddress else {
-                                    return -1
-                                }
-                                return withOptionalBytes(rootHint) { rootPtr, rootLen in
-                                    privateKey.withUnsafeBytes { keyBuffer -> Int32 in
-                                        guard let keyBase = keyBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                                            return -1
-                                        }
-                                        return hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-                                            guard let hashPtr = hashBuffer.baseAddress else {
-                                                return -1
-                                            }
-                                            return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                                let ttlValue = ttlMs ?? 0
-                                                let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
-                                                if useAlg, let encodeZkTransferWithAlgFn {
-                                                    return encodeZkTransferWithAlgFn(
-                                                        chainPtr, UInt(chainId.utf8.count),
-                                                        authorityPtr, UInt(authority.utf8.count),
-                                                        creationTimeMs,
-                                                        ttlValue,
-                                                        ttlFlag,
-                                                        assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                        inputBase, UInt(inputs.count),
-                                                        outputBase, UInt(outputs.count),
-                                                        proofBase, UInt(proofJSON.count),
-                                                        rootPtr, rootLen,
-                                                        feePaymentPtr, UInt(feePaymentJSON.count),
-                                                        keyBase, UInt(privateKey.count),
-                                                        algorithmRaw,
-                                                        signedPtrPtr,
-                                                        signedLenPtr,
-                                                        hashPtr,
-                                                        hashLength
-                                                    )
-                                                } else if let encodeZkTransferFn {
-                                                    return encodeZkTransferFn(
-                                                        chainPtr, UInt(chainId.utf8.count),
-                                                        authorityPtr, UInt(authority.utf8.count),
-                                                        creationTimeMs,
-                                                        ttlValue,
-                                                        ttlFlag,
-                                                        assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                        inputBase, UInt(inputs.count),
-                                                        outputBase, UInt(outputs.count),
-                                                        proofBase, UInt(proofJSON.count),
-                                                        rootPtr, rootLen,
-                                                        feePaymentPtr, UInt(feePaymentJSON.count),
-                                                        keyBase, UInt(privateKey.count),
-                                                        signedPtrPtr,
-                                                        signedLenPtr,
-                                                        hashPtr,
-                                                        hashLength
-                                                    )
-                                                } else {
-                                                    return -1
-                                                }
-                                            }
                                         }
                                     }
                                 }

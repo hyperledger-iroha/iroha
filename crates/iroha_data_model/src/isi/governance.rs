@@ -223,7 +223,7 @@ impl crate::seal::Instruction for ProposeValidationFeePayoutLifecycle {}
 /// Cast a ZK ballot (default voting mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct CastZkBallot {
-    /// Election/referendum identifier (opaque)
+    /// Canonical V1 election/referendum selector.
     pub election_id: String,
     /// Base64-encoded proof bytes (envelope routing determines backend)
     pub proof_b64: String,
@@ -278,7 +278,7 @@ pub struct BallotProof {
 /// Cast a non‑ZK quadratic ballot (optional mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct CastPlainBallot {
-    /// Identifier of the referendum this ballot targets.
+    /// Canonical V1 selector of the referendum this ballot targets.
     pub referendum_id: String,
     /// Account submitting the ballot.
     pub owner: AccountId,
@@ -501,7 +501,7 @@ impl crate::seal::Instruction for UnregisterCitizen {}
 /// Slash a governance bond lock for a referendum.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct SlashGovernanceLock {
-    /// Identifier of the referendum whose lock is being slashed.
+    /// Canonical V1 selector of the referendum whose lock is being slashed.
     pub referendum_id: String,
     /// Account whose bond lock will be reduced.
     pub owner: AccountId,
@@ -516,7 +516,7 @@ impl crate::seal::Instruction for SlashGovernanceLock {}
 /// Restitute a previously slashed governance bond lock.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct RestituteGovernanceLock {
-    /// Identifier of the referendum whose lock is being restored.
+    /// Canonical V1 selector of the referendum whose lock is being restored.
     pub referendum_id: String,
     /// Account receiving the restitution.
     pub owner: AccountId,

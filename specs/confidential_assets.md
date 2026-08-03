@@ -1,7 +1,7 @@
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
-# Confidential Assets & ZK Transfer Design
+# Confidential Assets & Protocol-Bound ZK Design
 
 ## Motivation
 - Deliver opt-in shielded asset flows so domains can preserve transactional privacy without altering transparent circulation.
@@ -18,7 +18,7 @@ SPDX-License-Identifier: Apache-2.0
   - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
   - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`, independent of note ordering.
   - Encrypted payload: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
-- Transactions transport Norito-encoded `ConfidentialTransfer` payloads containing:
+- Specialized confidential protocols transport Norito-encoded proof payloads containing:
   - Public inputs: Merkle anchor, nullifiers, new commitments, asset id, circuit version.
   - Encrypted payloads for recipients and optional auditors.
   - Zero-knowledge proof attesting value conservation, ownership, and authorization.
@@ -30,12 +30,13 @@ SPDX-License-Identifier: Apache-2.0
 
 Confidential memo envelopes now ship with a canonical fixture at `fixtures/confidential/encrypted_payload_v1.json`. The dataset captures a positive v1 envelope plus negative malformed samples so SDKs can assert parsing parity. The Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) and Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) both load the fixture directly, guaranteeing that Norito encoding, error surfaces, and regression coverage stay aligned as the codec evolves.
 
-Swift SDKs can now emit shield instructions without bespoke JSON glue: construct a
-`ShieldRequest` with the 32-byte note commitment, encrypted payload, and debit metadata,
-then call `IrohaSDK.submit(shield:keypair:)` (or `submitAndWait`) to sign and relay the
-transaction over `/v1/pipeline/transactions`. The helper validates commitment lengths,
-threads `ConfidentialEncryptedPayload` into the Norito encoder, and mirrors the `zk::Shield`
-layout described below so wallets stay in lock-step with Rust.
+The generic proofless `zk::Shield` instruction is not part of the first-release
+wire surface. Wallets move public value into the confidential tree only with
+`TopUpKagemushaRecursiveV4`, whose payer/device authorization, exact amount,
+note commitment, initial/final roots, leaf index, active verifier, and proof are
+validated together before escrow reservation or tree mutation. The encrypted
+memo-envelope fixture remains a local wallet codec fixture and is not an
+authorization to append a commitment.
 
 ## Consensus Commitments & Capability Gating
 - Block headers expose `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; the digest participates in the consensus hash and must equal the local registry view for block acceptance.
@@ -47,20 +48,30 @@ layout described below so wallets stay in lock-step with Rust.
 ## Asset Policies
 - Each asset definition carries an `AssetConfidentialPolicy` set by the creator or via governance:
   - `TransparentOnly`: default mode; only transparent instructions (`MintAsset`, `TransferAsset`, etc.) are permitted and shielded operations are rejected.
-  - `ShieldedOnly`: all issuance and transfers must use confidential instructions; `RevealConfidential` is forbidden so balances never surface publicly.
+  - `ShieldedOnly`: confidential movement remains available, but the
+    proof-bound Kagemusha public redemption path is forbidden so balances do
+    not surface publicly.
   - `Convertible`: holders may move value between transparent and shielded representations using the on/off-ramp instructions below.
 - Policies follow a constrained FSM to prevent stranding funds:
   - `TransparentOnly → Convertible` (immediate enablement of shielded pool).
   - `TransparentOnly → ShieldedOnly` (requires pending transition and conversion window).
   - `Convertible → ShieldedOnly` (enforced minimum delay).
   - `ShieldedOnly → Convertible` (migration plan required so shielded notes remain spendable).
-  - `ShieldedOnly → TransparentOnly` is disallowed unless the shielded pool is empty or governance encodes a migration that unshields outstanding notes.
+  - `ShieldedOnly → TransparentOnly` is disallowed once the append-only
+    confidential commitment log is non-empty. V1 has no compatibility
+    migration that erases prior commitments.
 - Governance instructions set `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` via the `ScheduleConfidentialPolicyTransition` ISI and may abort scheduled changes with `CancelConfidentialPolicyTransition`. Mempool validation ensures no transaction straddles the transition height and inclusion fails deterministically if a policy check would change mid-block.
 - Pending transitions are applied automatically when a new block opens: once the block height enters the conversion window (for `ShieldedOnly` upgrades) or reaches the programmed `effective_height`, the runtime updates `AssetConfidentialPolicy`, refreshes `zk.policy` metadata, and clears the pending entry. If transparent supply remains when a `ShieldedOnly` transition matures, the runtime aborts the change and logs a warning, leaving the previous mode intact.
 - Config knobs `policy_transition_delay_blocks` and `policy_transition_window_blocks` enforce minimum notice and grace periods to let wallets convert notes around the switch.
 - `pending_transition.transition_id` doubles as an audit handle; governance must quote it when finalising or cancelling transitions so operators can correlate on/off-ramp reports.
 - `policy_transition_window_blocks` defaults to 720 (≈12 hours at 60 s block time). Nodes clamp governance requests that attempt shorter notice.
 - Genesis manifests and CLI flows surface current and pending policies. Admission logic reads the policy at execution time to confirm each confidential instruction is authorised.
+- The policy fields historically named `allow_shield` and `vk_shield` are
+  first-release Kagemusha top-up controls only. `vk_shield` must resolve to the
+  canonical Kagemusha top-up circuit and public-input schema. `allow_unshield`
+  and `vk_unshield` gate Kagemusha redemption, while `vk_transfer` is consumed
+  only by the native anonymous-escrow engine. No generic commitment-ingress,
+  confidential-transfer, or public-withdrawal instruction exists.
 - Migration checklist — see “Migration sequencing” below for the staged upgrade plan that Milestone M0 tracks.
 
 #### Monitoring transitions via Torii
@@ -111,8 +122,8 @@ scheduled the `pending_transition` field is `null`.
 | TransparentOnly    | Convertible      | Governance has activated verifier/parameter registry entries. Submit `ScheduleConfidentialPolicyTransition` with `effective_height ≥ current_height + policy_transition_delay_blocks`. | Transition executes exactly at `effective_height`; shielded pool becomes available immediately.                   | Default path for enabling confidentiality while keeping transparent flows.               |
 | TransparentOnly    | ShieldedOnly     | Same as above, plus `policy_transition_window_blocks ≥ 1`.                                                         | Runtime auto-enters `Convertible` at `effective_height - policy_transition_window_blocks`; flips to `ShieldedOnly` at `effective_height`. | Provides deterministic conversion window before transparent instructions are disabled.   |
 | Convertible        | ShieldedOnly     | Scheduled transition with `effective_height ≥ current_height + policy_transition_delay_blocks`. Governance SHOULD certify (`transparent_supply == 0`) via audit metadata; runtime enforces this at cut-over. | Identical window semantics as above. If the transparent supply is non-zero at `effective_height`, the transition aborts with `PolicyTransitionPrerequisiteFailed`. | Locks the asset into fully confidential circulation.                                     |
-| ShieldedOnly       | Convertible      | Scheduled transition; no active emergency withdrawal (`withdraw_height` unset).                                    | State flips at `effective_height`; reveal ramps reopen while shielded notes remain valid.                           | Used for maintenance windows or auditor reviews.                                          |
-| ShieldedOnly       | TransparentOnly  | Governance must prove `shielded_supply == 0` or stage a signed `EmergencyUnshield` plan (auditor signatures required). | Runtime opens a `Convertible` window ahead of `effective_height`; at the height, confidential instructions hard-fail and the asset returns to transparent-only mode. | Last-resort exit. Transition auto-cancels if any confidential note spends during the window. |
+| ShieldedOnly       | Convertible      | Scheduled transition with the required lead time.                                                                  | State flips at `effective_height`; proof-bound Kagemusha redemption becomes available while existing notes remain valid. | Used for maintenance windows or auditor reviews.                                          |
+| ShieldedOnly       | TransparentOnly  | The persisted confidential commitment log must be empty when the transition is scheduled.                           | State flips at `effective_height`; confidential movement and redemption then reject under `TransparentOnly`.        | No emergency-unshield compatibility path exists in the first release.                     |
 | Any                | Same as current  | `CancelConfidentialPolicyTransition` clears pending change.                                                        | `pending_transition` removed immediately.                                                                          | Maintains status quo; shown for completeness.                                             |
 
 Transitions not listed above are rejected during governance submission. Runtime checks the prerequisites right before applying a scheduled transition; failing preconditions pushes the asset back to its previous mode and emits `PolicyTransitionPrerequisiteFailed` via telemetry and block events.
@@ -164,23 +175,33 @@ New networks that start with confidentiality enabled encode the desired policy d
 - Each registered asset persists `ConfidentialTreeProfile::PoseidonPastaV1` in
   `ZkAssetState`. This fixed-depth Pasta Poseidon profile is the only
   first-release tree construction. `RegisterZkAsset` validates every configured
-  shield, transfer, and unshield verifier against it; key rotation may retain
+  Kagemusha top-up, transfer, and unshield verifier against it; key rotation may retain
   the profile, but no populated asset can switch profiles.
-- All shield, transfer, unshield-change, and Kagemusha append paths use the same
-  profile-aware batch operation. It first validates the retained root suffix and
-  every frontier checkpoint against the ordered commitment prefix, computes the
-  complete next state, and commits only after the whole batch succeeds. Blocks
-  therefore append commitments deterministically in transaction order and in
-  each proof's canonical authenticated output order, without leaving a partial
-  prefix after capacity or commitment validation fails.
+- All Kagemusha top-up, transfer, and unshield-change append paths use the same
+  profile-aware batch operation. `ZkAssetState` persists a fixed 16-slot
+  incremental frontier and the current root. A hot append validates that
+  constant-size metadata and the retained-history tail, validates every new
+  scalar, simulates the complete batch on a copied frontier, reserves storage,
+  and only then extends the ordered commitment and root vectors. It neither
+  clones nor rehashes the prior commitment prefix; work is
+  `O(batch * tree_depth)`. Blocks therefore append commitments deterministically
+  in transaction order and in each proof's canonical authenticated output
+  order, without leaving a partial prefix after capacity, allocation, or
+  commitment validation fails.
+- Snapshot decode/recovery and explicitly admitted audits perform the separate
+  full integrity tier. They build one compact projection from the ordered
+  commitment prefix, compare its root and exact frontier with the persisted
+  metadata, and validate retained roots and checkpoints. Hot consensus writes
+  never substitute that linear rebuild for incremental validation.
 - `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
 - Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
 
 ### V1 public-amount proof scalars
 
-The public economic fields on `Shield` and `Unshield` use the canonical
-non-negative `Quantity` type. The direct
-`SubmitZkAceAuthorizedTransfer` instruction is retired. ZK-ACE callers instead
+The generic `Shield`, `ZkTransfer`, and `Unshield` wires are retired.
+Public-to-confidential and confidential-to-public amounts are carried inside
+the scale-bound, proof-authenticated Kagemusha V4 top-up and redeem requests.
+The direct `SubmitZkAceAuthorizedTransfer` instruction is retired. ZK-ACE callers instead
 select an active governed `PrivacyZkAcePolicyRecordV1`; the canonical native
 builder binds an atomic `u128` amount into
 `ZkAcePqAuthorizationStatementV1`, wraps the statement and proof in exactly one
@@ -194,30 +215,42 @@ balance mutation. Supporting fractional or wider public amounts in a future
 ZK-ACE circuit requires an explicitly versioned statement schema and migration
 plan.
 
-### Proof-authenticated unshield outputs
+### Protocol-private transfer and redemption proofs
 
-`Unshield` has exactly six first-release wire fields: `asset`, `to`,
-`public_amount`, `inputs`, `proof`, and `root_hint`. It has no caller-supplied
-output field. Norito rejects the retired seven-field layout and JSON decoding
-rejects unknown fields.
+The confidential transfer and unshield circuits remain reusable cryptographic
+components, but their proof envelopes are not executable instructions. The
+native anonymous-escrow engine invokes confidential transfer verification
+through a sealed, single-use internal path bound to one escrow operation and
+its exact purpose. Funding cannot consume an active escrow commitment; closing
+must consume exactly the stored custody commitment. Kagemusha redemption owns
+the unshield verifier and couples every successful proof to anchor drawdown and
+an equal debit from the deterministic offline escrow before public credit.
 
-The verifier-profile dispatcher is the sole source of private outputs. A valid
-full-unshield V2 proof returns an empty output set; a valid change-unshield V3
-proof returns either no change output or the single commitment authenticated by
-the proof. Quota accounting, events, and tree insertion consume that returned
-set directly. This prevents an instruction from adding a commitment that is not
-covered by the verified conservation statement.
+This separation is a consensus invariant. A proof that is sound for the note
+tree does not by itself authorize settlement against a particular backing
+pool, so no generic dispatch, InstructionBox discriminant, IVM bridge, relay,
+CLI command, or SDK transaction builder may expose either circuit directly.
 
 ## Ledger Flow
-1. **MintConfidential { asset_id, amount, recipient_hint }**
-   - Requires asset policy `Convertible` or `ShieldedOnly`; admission checks asset authority, retrieves current `params_id`, samples `rho`, emits commitment, updates Merkle tree.
-   - Emits `ConfidentialEvent::Shielded` with the new commitment, Merkle root delta, and transaction call hash for audit trails.
-2. **TransferConfidential { asset_id, proof, circuit_id, version, nullifiers, new_commitments, enc_payloads, anchor_root, memo }**
-   - VM syscall verifies proof using registry entry; host ensures nullifiers unused, commitments appended deterministically, anchor is recent.
-   - Ledger records `NullifierSet` entries, stores encrypted payloads for recipients/auditors, and emits `ConfidentialEvent::Transferred` summarising nullifiers, ordered outputs, proof hash, and Merkle roots.
-3. **RevealConfidential { asset_id, proof, circuit_id, version, nullifier, amount, recipient_account, anchor_root }**
-   - Available only for `Convertible` assets; proof validates note value equals revealed amount, ledger credits transparent balance, and burns the shielded note by marking the nullifier spent.
-   - Emits `ConfidentialEvent::Unshielded` with the public amount, consumed nullifiers, proof identifiers, and transaction call hash.
+1. **TopUpKagemushaRecursiveV4 { request }**
+   - Requires `Convertible` policy and `allow_shield`; the latter means only
+     authenticated Kagemusha top-up admission. Runtime validates the payer and
+     device authorization, active release, exact scale and amount, fresh note,
+     authoritative roots and leaf index, canonical `vk_shield`, and top-up proof.
+   - Public funds move into operation-bound escrow and the proof-bound note is
+     appended atomically. Any failed check leaves both balances and the tree unchanged.
+2. **RedeemKagemushaRecursiveV4 { request }**
+   - Requires the authenticated Kagemusha device/release path and
+     `allow_unshield`. The proof binds the note spend and public amount; Core
+     atomically consumes nullifiers, draws down the originating anchors, debits
+     offline escrow, and credits the designated public account.
+   - A proof failure, stale/replayed request, insufficient backing, or anchor
+     mismatch leaves the nullifier set, tree, escrow, and public balance unchanged.
+3. **Native anonymous-escrow instructions**
+   - Open/release/cancel/resolve requests carry their proof through the typed
+     escrow ISI. Core verifies the exact operation purpose and applies the
+     private transfer internally; callers cannot submit the underlying transfer
+     as a standalone instruction or use it to cross settlement domains.
 
 ## Data Model Additions
 - `ConfidentialConfig` (new config section) with enablement flag, `assume_valid`, gas/limit knobs, anchor window, verifier backend.
@@ -225,13 +258,17 @@ covered by the verified conservation statement.
 - `ConfidentialEncryptedPayload` wraps AEAD memo bytes with `{ version, ephemeral_pubkey, nonce, ciphertext }`, defaulting to `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` for the XChaCha20-Poly1305 layout.
 - Canonical positive key-derivation vectors for nonzero spend keys live in `specs/confidential_key_vectors.json`; both the CLI and Torii endpoint regress against these fixtures. Wallet-facing derivatives and negative all-zero spend-key admission coverage for the spend/nullifier/viewing ladder are published in `fixtures/confidential/keyset_derivation_v1.json` and exercised by the Rust + Swift SDK tests to guarantee cross-language parity.
 - `asset::AssetDefinition` gains `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
-- `ZkAssetState` persists the sole first-release tree profile together with the
-  `(backend, name, commitment)` bindings for shield, transfer, and unshield
-  verifiers. Execution rejects proofs whose referenced verifying key fails to
-  match the registered commitment, whose proof envelope does not bind the
-  expected schema and active verifier metadata, or whose auxiliary bytes are
-  non-empty. Populated state is also rejected if its retained roots or frontier
-  checkpoints do not recompute under the persisted profile.
+- `ZkAssetState` persists the sole first-release tree profile, an exact
+  fixed-size incremental frontier, its current root, and the `(backend, name,
+  commitment)` bindings for Kagemusha top-up/redemption and native
+  anonymous-escrow transfer verifiers.
+  The frontier and root are required first-release snapshot fields; there is no
+  legacy reconstruction fallback. Execution rejects proofs whose referenced
+  verifying key fails to match the registered commitment, whose proof envelope
+  does not bind the expected schema and active verifier metadata, or whose
+  auxiliary bytes are non-empty. Recovery rejects populated state when a full
+  commitment projection disagrees with the persisted frontier/current root or
+  when retained roots and checkpoints do not authenticate under the profile.
 - The ordered commitment prefix and bounded exact root suffix (per asset with
   frontier checkpoints), `NullifierSet` keyed by
   `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, and
@@ -263,12 +300,11 @@ replay governance-driven audits. The default policy, enforced by
   Operators may extend the window via `confidential.retention.nullifier_days`.
   Nullifiers younger than the retention window MUST remain queryable via Torii so
   auditors can prove double-spend absence.
-- **Reveal pruning:** transparent reveals (`RevealConfidential`) prune the
-  associated note commitments immediately after the block finalises, but the
-  consumed nullifier remains subject to the retention rule above. Reveal-related
-  events (`ConfidentialEvent::Unshielded`) record the public amount, recipient,
-  and proof hash so reconstructing historic reveals does not require the pruned
-  ciphertext.
+- **Public redemption:** only Kagemusha V4 redemption may move confidential
+  value back to the public ledger. It consumes the authenticated nullifier,
+  applies exact anchor drawdown, and transfers from the protocol escrow. The
+  commitment log remains append-only; there is no generic reveal instruction
+  or `ConfidentialEvent::Unshielded` compatibility wire.
 - **Frontier checkpoints:** commitment frontiers maintain rolling checkpoints
   covering the larger of `max_anchor_age_blocks` and the retention window. Nodes
   compact older checkpoints only after all nullifiers within the interval expire.
@@ -399,8 +435,10 @@ lockstep.
 - Tree integrity and atomicity: mixed/profile-changing verifier registrations,
   retained-root or checkpoint drift, and over-capacity multi-output batches fail
   without changing commitments, roots, checkpoints, nullifiers, balances,
-  metadata, or events. Restart and reorg tests preserve the exact persisted
-  profile and checkpoint tuple.
+  metadata, or events. Operation-count regressions require exactly one leaf hash
+  and `tree_depth` parent hashes per appended commitment, independently of the
+  prior tree size. Restart and reorg tests preserve the exact persisted profile,
+  fixed frontier, current root, and checkpoint tuple.
 - Negative fuzzing: malformed proofs, oversized payloads, and nullifier collisions reject deterministically.
 
 ## Outstanding Work
@@ -439,90 +477,37 @@ Each phase updates roadmap milestones and associated tests to maintain determini
 
 ### SDK & Fixture Coverage (Phase M1)
 
-Encrypted payload v1 now ships with canonical fixtures so every SDK produces the
-same Norito envelopes and transaction hashes. The golden artefacts live in
-`fixtures/confidential/wallet_flows_v1.json` and are exercised directly by the
-Rust and Swift suites (`crates/iroha_data_model/tests/confidential_wallet_fixtures.rs`,
-`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialWalletFixturesTests.swift`):
+Encrypted payload v1 ships with canonical fixtures so every SDK produces the
+same Norito memo envelope. Transaction parity is exercised by the dedicated
+Kagemusha and native anonymous-escrow suites; there is deliberately no generic
+confidential wallet-flow fixture or encoder:
 
 ```bash
-# Rust parity (verifies the signed hex + hash for every case)
-cargo test -p iroha_data_model confidential_wallet_fixtures
+# Rust memo-envelope parity
+cargo test -p iroha_data_model --test confidential_encrypted_payload_vectors
 
-# Swift parity (builds the same envelopes via TxBuilder/NativeBridge)
-cd IrohaSwift && swift test --filter ConfidentialWalletFixturesTests
+# Swift memo-envelope parity
+cd IrohaSwift && swift test --filter ConfidentialEncryptedPayloadTests
 ```
 
-Every fixture records the case identifier, signed transaction hex, and expected
-hash. When the Swift encoder cannot yet produce the case—`zk-transfer-basic` is
-still gated by the `ZkTransfer` builder—the test suite emits `XCTSkip` so the
-roadmap clearly tracks which flows still require bindings. Updating the fixture
-file without bumping the format version will fail both suites, keeping the SDKs
-and Rust reference implementation in lock-step.
+The release-surface guards reject all three retired type names and their wire
+fingerprints while retaining the specialized Kagemusha and anonymous-escrow
+instructions. Updating the encrypted-payload fixture without bumping its format
+version fails parity suites, keeping the SDKs and Rust codec in lock-step.
 
-#### Swift builders
-`TxBuilder` exposes asynchronous and callback-based helpers for every
-confidential request (`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1183`).
-The builders rely on the `connect_norito_bridge` exports
-(`crates/connect_norito_bridge/src/lib.rs:3337`,
-`IrohaSwift/Sources/IrohaSwift/NativeBridge.swift:1014`) so the generated
-payloads match the Rust host encoders byte-for-byte. Example:
+#### Wallet and SDK builders
 
-```swift
-let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
-let request = RegisterZkAssetRequest(
-    chainId: chainId,
-    authority: account,
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    zkParameters: myZkParams,
-    ttlMs: 60_000
-)
-let envelope = try TxBuilder(client: client)
-    .buildRegisterZkAsset(request: request, keypair: keypair)
-try await TxBuilder(client: client)
-    .submit(registerZkAsset: request, keypair: keypair)
-```
+SDKs expose authenticated Kagemusha V4 top-up/redemption and typed native
+anonymous-escrow workflows. They do not expose generic `Shield`, `ZkTransfer`,
+or `Unshield` requests or native encoders. SDK manifests and generated
+instruction catalogs must omit all three retired data-model types and their
+wire fingerprints.
 
-Shielding/unshielding follow the same pattern (`submit(shield:)`,
-`submit(unshield:)`), and the Swift fixture tests re-run the builders with
-deterministic key material to guarantee the generated transaction hashes remain
-equal to the ones stored in `wallet_flows_v1.json`.
-
-#### JavaScript builders
-The JavaScript SDK mirrors the same flows via the transaction helpers exported
-from `javascript/iroha_js/src/transaction.js`. Builders such as
-`buildRegisterZkAssetTransaction` and `buildRegisterZkAssetInstruction`
-(`javascript/iroha_js/src/instructionBuilders.js:1832`) normalise verifying key
-identifiers and emit Norito payloads that the Rust host can accept without any
-adapters. Example:
-
-```js
-import {
-  buildRegisterZkAssetTransaction,
-  signTransaction,
-  ToriiClient,
-} from "@hyperledger/iroha";
-
-const unsigned = buildRegisterZkAssetTransaction({
-  registration: {
-    authority: "<i105-account-id>",
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    zkParameters: {
-      commit_params: "vk_shield",
-      reveal_params: "vk_unshield",
-    },
-    metadata: { displayName: "Rose (Shielded)" },
-  },
-  chainId: "00000000-0000-0000-0000-000000000000",
-});
-const signed = signTransaction(unsigned, myKeypair);
-await new ToriiClient({ baseUrl: "https://torii" }).submitTransaction(signed);
-```
-
-Shield, transfer, and unshield builders follow the same pattern, giving JS
-callers the same ergonomics as Swift and Rust. Tests under
-`javascript/iroha_js/test/transactionBuilder.test.js` cover the normalisation
-logic while the fixtures above keep the signed transaction bytes consistent.
+`allow_shield`/`vk_shield`, `allow_unshield`/`vk_unshield`, and `vk_transfer`
+remain in asset registration only with their narrow protocol roles described
+above. Wallet implementations must build and sign the complete specialized
+request; a proof envelope, amount, nullifier list, or opaque commitment is never
+sufficient authority on its own.
 
 ### Telemetry & Monitoring (Phase M2)
 

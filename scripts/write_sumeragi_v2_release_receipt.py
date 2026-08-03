@@ -8,6 +8,7 @@ import base64
 import csv
 from dataclasses import dataclass
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -24,16 +25,27 @@ import tempfile
 import time
 from typing import Any
 
+
+_LOCALNET_MANIFEST_MODULE_PATH = Path(__file__).resolve(strict=True).with_name(
+    "sumeragi_v2_localnet_manifest.py"
+)
+_LOCALNET_MANIFEST_SPEC = importlib.util.spec_from_file_location(
+    "_sumeragi_v2_release_localnet_manifest",
+    _LOCALNET_MANIFEST_MODULE_PATH,
+)
+if _LOCALNET_MANIFEST_SPEC is None or _LOCALNET_MANIFEST_SPEC.loader is None:
+    raise RuntimeError("could not load the adjacent localnet manifest validator")
+_LOCALNET_MANIFEST_MODULE = importlib.util.module_from_spec(
+    _LOCALNET_MANIFEST_SPEC
+)
+_PREVIOUS_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 try:
-    from sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
-except ModuleNotFoundError:
-    from scripts.sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
+    _LOCALNET_MANIFEST_SPEC.loader.exec_module(_LOCALNET_MANIFEST_MODULE)
+finally:
+    sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
+LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
+canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
@@ -127,7 +139,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
+    "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -139,6 +151,10 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
     "manifest_helper": ("compute-manifest.py", _SIGNATURE_DATA_MODE),
     "python": ("python3", _SIGNATURE_TOOL_MODE),
     "receipt_validator": ("validate-receipt.py", _SIGNATURE_DATA_MODE),
+    "receipt_validator_support": (
+        "sumeragi_v2_localnet_manifest.py",
+        _SIGNATURE_DATA_MODE,
+    ),
     "revocation": ("bootstrap-revocation", _SIGNATURE_DATA_MODE),
     "runner_tool_manifest": ("runner-tool-manifest.json", _SIGNATURE_DATA_MODE),
     "ssh_keygen": ("ssh-keygen", _SIGNATURE_TOOL_MODE),
@@ -353,7 +369,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 808
+_PRODUCTION_TEST_COUNT = 826
 _G_UNIT_TEST_COUNT = 309
 _G_UNIT_GROUPS = (
     (
@@ -468,13 +484,13 @@ _PRODUCTION_MODULES = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 129),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -1086,7 +1102,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                1730,
+                3676,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "

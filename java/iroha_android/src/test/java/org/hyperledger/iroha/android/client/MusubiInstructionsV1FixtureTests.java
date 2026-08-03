@@ -293,6 +293,73 @@ public final class MusubiInstructionsV1FixtureTests {
   }
 
   @Test
+  public void parentLocalDependencyAliasesAreUniqueAcrossPublishedGraphs() throws Exception {
+    final Publication publication =
+        ((PublishMusubiReleaseV1)
+                instruction(fixtureCase("publish-delegated-domain-release")))
+            .publication();
+    final ReleaseManifest manifest = publication.manifest();
+    final VerificationLock lock = publication.resolution().lock();
+    final DependencyRequirement firstRequirement = manifest.dependencies().get(0);
+    final ExactDependencyEdge firstEdge = lock.rootDependencies().get(0);
+    final VerificationNode firstNode = lock.nodes().get(0);
+    final PackageId secondPackage =
+        new PackageId(
+            firstRequirement.packageId().homeDataspace(),
+            firstRequirement.packageId().scope(),
+            new PackageName("vector-next"));
+    final DependencyRequirement secondRequirement =
+        new DependencyRequirement(
+            firstRequirement.alias(), secondPackage, firstRequirement.requirement());
+    final ReleaseId secondRelease = new ReleaseId(secondPackage, firstEdge.selected().version());
+    final ExactDependencyEdge secondEdge =
+        new ExactDependencyEdge(
+            firstEdge.alias(),
+            firstEdge.kind(),
+            secondPackage,
+            firstEdge.requirement(),
+            secondRelease);
+    final List<DependencyRequirement> requirements =
+        Arrays.asList(firstRequirement, secondRequirement);
+    final List<ExactDependencyEdge> edges = Arrays.asList(firstEdge, secondEdge);
+
+    assertUniqueAliasFailure(
+        () ->
+            new ReleaseManifest(
+                manifest.release(),
+                manifest.abi(),
+                requirements,
+                manifest.exports(),
+                manifest.interfaceDigest(),
+                manifest.metadata(),
+                manifest.archiveId(),
+                manifest.verificationLockDigest()));
+    assertUniqueAliasFailure(
+        () ->
+            new VerificationNode(
+                firstNode.release(),
+                firstNode.releaseDigest(),
+                firstNode.archiveId(),
+                firstNode.sourceDigest(),
+                firstNode.interfaceDigest(),
+                firstNode.abi(),
+                edges));
+    final VerificationNode secondNode =
+        new VerificationNode(
+            secondRelease,
+            firstNode.releaseDigest(),
+            firstNode.archiveId(),
+            firstNode.sourceDigest(),
+            firstNode.interfaceDigest(),
+            firstNode.abi(),
+            Collections.emptyList());
+    assertUniqueAliasFailure(
+        () ->
+            new VerificationLock(
+                lock.root(), edges, Arrays.asList(firstNode, secondNode)));
+  }
+
+  @Test
   public void canonicalRustFixtureMatchesEveryJavaEncodingLayer() throws Exception {
     final Map<String, Object> fixture = fixture();
     assertEquals("iroha-musubi-instructions-v1", fixture.get("format"));
@@ -1648,6 +1715,12 @@ public final class MusubiInstructionsV1FixtureTests {
     final byte[] bytes = new byte[32];
     Arrays.fill(bytes, value);
     return bytes;
+  }
+
+  private static void assertUniqueAliasFailure(final Runnable constructor) {
+    final IllegalArgumentException error =
+        assertThrows(IllegalArgumentException.class, constructor::run);
+    assertTrue(error.getMessage().contains("unique parent-local aliases"));
   }
 
   private static final class Cursor {

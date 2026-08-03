@@ -7,7 +7,26 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { validateDefaultComposeGenesisArtifacts } from "../scripts/run_integration.mjs";
+import {
+  composeUpArgs,
+  validateDefaultComposeGenesisArtifacts,
+} from "../scripts/run_integration.mjs";
+
+test("default Compose startup does not narrow the validator stack", () => {
+  assert.deepEqual(composeUpArgs("defaults/docker-compose.single.yml"), [
+    "-f",
+    "defaults/docker-compose.single.yml",
+    "up",
+    "-d",
+  ]);
+  assert.deepEqual(composeUpArgs("custom.yml", "validator-a"), [
+    "-f",
+    "custom.yml",
+    "up",
+    "-d",
+    "validator-a",
+  ]);
+});
 
 test("default Compose artifact preflight fails closed and accepts exact records", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "iroha-js-compose-custody-"));

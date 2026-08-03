@@ -1809,10 +1809,10 @@ fn validate_semantic_verifier_binding(
     let expected_verifier_key_hash =
         require_hash(&policy.verifier_key_hash_hex, "verifier key hash")?;
     let verifying_key_bytes =
-        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(artifact.request.verifying_key)
+        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&artifact.request.verifying_key)
             .ok_or_else(|| "honest proof verification key is not canonical".to_owned())?;
     if artifact.request.verifier_key_hash != expected_verifier_key_hash
-        || sccp_groth16_bn254_verifying_key_hash_v1(artifact.request.verifying_key)
+        || sccp_groth16_bn254_verifying_key_hash_v1(&artifact.request.verifying_key)
             != Some(expected_verifier_key_hash)
         || sha256(&verifying_key_bytes)
             != require_hash(
@@ -2141,10 +2141,10 @@ fn validate_destination_readback(
         "route runtime code",
     )?);
     let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
-        readback.verifying_key,
+        &readback.verifying_key,
     )
     .ok_or_else(|| "authenticated EVM verifying key is not a canonical subgroup key".to_owned())?;
-    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(readback.verifying_key)
+    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(&readback.verifying_key)
         .ok_or_else(|| "authenticated EVM verifying key cannot be hashed".to_owned())?;
     let expected_semantic_profile_hash = readback
         .deployment
@@ -2258,10 +2258,10 @@ fn validate_tron_destination_readback(
         "TRON route runtime code",
     )?);
     let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
-        state.verifying_key,
+        &state.verifying_key,
     )
     .ok_or_else(|| "authenticated TRON verifying key is not a canonical subgroup key".to_owned())?;
-    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(state.verifying_key)
+    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(&state.verifying_key)
         .ok_or_else(|| "authenticated TRON verifying key cannot be hashed".to_owned())?;
     let expected_semantic_profile_hash =
         deployment
@@ -3862,7 +3862,7 @@ mod tests {
         let anchor = fixture.artifact.request.sora_finality_anchor;
         let SccpPayloadV1::Transfer(transfer) = fixture.bundle.payload;
         let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
-            fixture.artifact.request.verifying_key,
+            &fixture.artifact.request.verifying_key,
         )
         .expect("fixture verifying key must be canonical");
         let filler = |byte: u8| lowercase_hex(&[byte; 32]);

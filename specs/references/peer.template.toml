@@ -12,6 +12,8 @@
 # chain =
 # public_key =
 # private_key =
+# soranet_transport_public_key = "ed0120..." # required dedicated Ed25519 SoraNet transport identity
+# soranet_transport_private_key = "802620..." # required matching transport private key; keep distinct from node and streaming identities
 # chain_discriminant = 0x02F1              # I105 prefix / chain discriminant; override for dev/test networks.
 
 telemetry_enabled = true

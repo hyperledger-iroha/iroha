@@ -255,8 +255,9 @@ height jump or ABA trace.
 grouping.
 `Kura::native_amx_participant_application_evidence_for_block_under_publication_guard`
 joins ordered source/entrypoint/result membership to the participant proposal
-and settlement. `State::native_amx_participant_frontier_marker_payloads`
-publishes the replicated frontier.
+and settlement. `State::native_amx_participant_frontier_markers` derives the
+replicated frontier, which `StateBlock::stage_native_amx_participant_frontiers`
+encodes only after the durable evidence token authenticates the same markers.
 
 **Closure condition.** Require 1–4,096 ordered, unique sources; exact
 transaction count and timestamp; the current source exactly once; zero

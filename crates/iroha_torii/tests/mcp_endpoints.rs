@@ -1074,10 +1074,31 @@ async fn mcp_jsonrpc_rejects_every_unlisted_tool_alias() {
     let names = list_all_tool_names(&app).await;
     assert!(!names.iter().any(|name| name == "torii.post_transaction"));
     assert!(!names.iter().any(|name| name == "torii.healthCheck"));
+    assert!(
+        !names.iter().any(|name| name == "iroha.gov.ballots.zk"),
+        "retired legacy governance ZK-ballot tool must remain absent"
+    );
+    for retired_name in [
+        "iroha.sumeragi.evidence.submit",
+        "iroha.sumeragi.vrf.commit",
+        "iroha.sumeragi.vrf.reveal",
+    ] {
+        assert!(
+            !names.iter().any(|name| name == retired_name),
+            "retired Sumeragi mutation tool must remain absent: {retired_name}"
+        );
+    }
     assert!(names.iter().any(|name| name == "torii.get_health"));
     assert!(names.iter().any(|name| name == "iroha.transactions.submit"));
 
-    for alias in ["torii.post_transaction", "torii.healthCheck"] {
+    for alias in [
+        "torii.post_transaction",
+        "torii.healthCheck",
+        "iroha.gov.ballots.zk",
+        "iroha.sumeragi.evidence.submit",
+        "iroha.sumeragi.vrf.commit",
+        "iroha.sumeragi.vrf.reveal",
+    ] {
         let (status, body) = post_mcp(
             &app,
             norito::json!({
@@ -1495,13 +1516,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
         (1056, "iroha.sumeragi.evidence.count", norito::json!({})),
         (1057, "iroha.sumeragi.evidence.list", norito::json!({})),
         (
-            1065,
-            "iroha.sumeragi.evidence.submit",
-            norito::json!({
-                "evidence_hex": "deadbeef"
-            }),
-        ),
-        (
             1060,
             "iroha.sumeragi.vrf.penalties",
             norito::json!({
@@ -1515,8 +1529,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
                 "epoch": 0
             }),
         ),
-        (1062, "iroha.sumeragi.vrf.commit", norito::json!({})),
-        (1063, "iroha.sumeragi.vrf.reveal", norito::json!({})),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -1987,7 +1999,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             10322,
             "iroha.gov.proposals.get",
             norito::json!({
-                "proposal_id": "proposal-001"
+                "proposal_id": ("11".repeat(32))
             }),
         ),
         (
@@ -2012,31 +2024,24 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             }),
         ),
         (
-            10326,
-            "iroha.gov.ballots.zk",
-            norito::json!({
-                "body": {}
-            }),
-        ),
-        (
             10327,
             "iroha.gov.ballots.zk_v1",
             norito::json!({
-                "body": {}
+                "body": { "election_id": "election-001" }
             }),
         ),
         (
             10328,
             "iroha.gov.ballots.zk_v1.ballot_proof",
             norito::json!({
-                "body": {}
+                "body": { "election_id": "election-001" }
             }),
         ),
         (
             10329,
             "iroha.gov.ballots.plain",
             norito::json!({
-                "body": {}
+                "body": { "referendum_id": "referendum-001" }
             }),
         ),
         (
@@ -2057,14 +2062,17 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             10338,
             "iroha.gov.enact",
             norito::json!({
-                "body": {}
+                "body": { "proposal_id": ("11".repeat(32)) }
             }),
         ),
         (
             10339,
             "iroha.gov.finalize",
             norito::json!({
-                "body": {}
+                "body": {
+                    "referendum_id": ("11".repeat(32)),
+                    "proposal_id": ("11".repeat(32))
+                }
             }),
         ),
     ] {
@@ -2566,12 +2574,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.sumeragi.evidence.submit"),
-        "expected agent-friendly sumeragi evidence-submit MCP tool"
-    );
-    assert!(
-        names
-            .iter()
             .any(|name| name == "iroha.sumeragi.vrf.penalties"),
         "expected agent-friendly sumeragi VRF penalties MCP tool"
     );
@@ -2579,14 +2581,16 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.sumeragi.vrf.epoch"),
         "expected agent-friendly sumeragi VRF epoch MCP tool"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.vrf.commit"),
-        "expected agent-friendly sumeragi VRF commit MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.vrf.reveal"),
-        "expected agent-friendly sumeragi VRF reveal MCP tool"
-    );
+    for retired_name in [
+        "iroha.sumeragi.evidence.submit",
+        "iroha.sumeragi.vrf.commit",
+        "iroha.sumeragi.vrf.reveal",
+    ] {
+        assert!(
+            !names.iter().any(|name| name == retired_name),
+            "retired Sumeragi mutation tool must remain absent: {retired_name}"
+        );
+    }
     assert!(
         !names.iter().any(|name| name == "iroha.ledger.headers"),
         "non-projected ledger headers route must not be an MCP tool"
@@ -2654,8 +2658,8 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly governance tally detail MCP tool"
     );
     assert!(
-        names.iter().any(|name| name == "iroha.gov.ballots.zk"),
-        "expected agent-friendly governance ZK-ballot MCP tool"
+        !names.iter().any(|name| name == "iroha.gov.ballots.zk"),
+        "retired legacy governance ZK-ballot MCP tool must remain absent"
     );
     assert!(
         names.iter().any(|name| name == "iroha.gov.ballots.zk_v1"),
@@ -2836,11 +2840,15 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "iroha.musubi.queries.versions",
         "iroha.musubi.queries.maintainers",
         "iroha.musubi.queries.archive_locations",
+        "iroha.musubi.queries.provider_bundle_attestation",
+        "iroha.musubi.queries.archive_retention",
         "iroha.musubi.queries.alias",
         "iroha.musubi.queries.alias_history",
         "iroha.musubi.queries.ordered_prefix",
+        "iroha.musubi.queries.search",
         "iroha.musubi.instructions.namespace_binding_register",
         "iroha.musubi.instructions.archive_register",
+        "iroha.musubi.instructions.provider_bundle_attestation_register",
         "iroha.musubi.instructions.archive_location_add",
         "iroha.musubi.instructions.archive_location_retire",
         "iroha.musubi.instructions.release_publish",
@@ -2848,6 +2856,7 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "iroha.musubi.instructions.package_metadata_set",
         "iroha.musubi.instructions.package_member_invite",
         "iroha.musubi.instructions.package_member_accept",
+        "iroha.musubi.instructions.package_member_invitation_revoke",
         "iroha.musubi.instructions.package_member_set_role",
         "iroha.musubi.instructions.package_member_remove",
         "iroha.musubi.instructions.alias_register",
@@ -4684,10 +4693,10 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_paylo
         1,
     );
     let body = norito::json!({
-        "release": norito::json::to_value(&instruction.release).expect("release JSON"),
-        "yanked": instruction.yanked,
-        "reason": norito::json::to_value(&instruction.reason).expect("reason JSON"),
-        "expected_yank_revision": instruction.expected_yank_revision,
+        "release": (norito::json::to_value(&instruction.release).expect("release JSON")),
+        "yanked": (instruction.yanked),
+        "reason": (norito::json::to_value(&instruction.reason).expect("reason JSON")),
+        "expected_yank_revision": (instruction.expected_yank_revision),
     });
     let (status, call) = post_mcp(
         &app,
@@ -4712,16 +4721,15 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_paylo
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-    let body = structured
-        .get("body")
-        .and_then(Value::as_object)
-        .expect("instruction response body");
+    let body = structured.get("body").expect("instruction response body");
+    let body_object = body.as_object().expect("instruction response body");
     assert_eq!(
-        body.get("wire_id").and_then(Value::as_str),
+        body_object.get("wire_id").and_then(Value::as_str),
         Some(SetMusubiReleaseYankV1::WIRE_ID)
     );
     assert!(
-        body.get("instruction_base64")
+        body_object
+            .get("instruction_base64")
             .and_then(Value::as_str)
             .is_some_and(|value| !value.is_empty()),
         "instruction base64 should be present"
@@ -4738,7 +4746,7 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_paylo
         Some(1)
     );
     assert!(
-        !body.contains_key("private_key"),
+        !body_object.contains_key("private_key"),
         "instruction builders must not accept or return private keys"
     );
 }
@@ -4754,6 +4762,7 @@ async fn mcp_musubi_instruction_schemas_do_not_publish_private_key_fields() {
     for tool_name in [
         "iroha.musubi.instructions.namespace_binding_register",
         "iroha.musubi.instructions.archive_register",
+        "iroha.musubi.instructions.provider_bundle_attestation_register",
         "iroha.musubi.instructions.archive_location_add",
         "iroha.musubi.instructions.archive_location_retire",
         "iroha.musubi.instructions.release_publish",
@@ -4761,6 +4770,7 @@ async fn mcp_musubi_instruction_schemas_do_not_publish_private_key_fields() {
         "iroha.musubi.instructions.package_metadata_set",
         "iroha.musubi.instructions.package_member_invite",
         "iroha.musubi.instructions.package_member_accept",
+        "iroha.musubi.instructions.package_member_invitation_revoke",
         "iroha.musubi.instructions.package_member_set_role",
         "iroha.musubi.instructions.package_member_remove",
         "iroha.musubi.instructions.alias_register",

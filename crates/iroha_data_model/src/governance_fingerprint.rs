@@ -6,18 +6,16 @@ use iroha_crypto::blake2::{
 };
 use norito::codec::Encode;
 
-pub(super) const DEPLOY_CONTRACT_V1: &[u8] = b"iroha.governance.proposal.deploy_contract.v1";
-pub(super) const RUNTIME_UPGRADE_V1: &[u8] = b"iroha.governance.proposal.runtime_upgrade.v1";
-pub(super) const SCCP_ROUTE_GOVERNANCE_V1: &[u8] =
-    b"iroha.governance.proposal.sccp_route_governance.v1";
-pub(super) const VALIDATION_FEE_POLICY_V1: &[u8] =
-    b"iroha.governance.proposal.validation_fee_policy.v1";
-pub(super) const VALIDATION_FEE_PAYOUT_LIFECYCLE_V1: &[u8] =
+pub const DEPLOY_CONTRACT_V1: &[u8] = b"iroha.governance.proposal.deploy_contract.v1";
+pub const RUNTIME_UPGRADE_V1: &[u8] = b"iroha.governance.proposal.runtime_upgrade.v1";
+pub const SCCP_ROUTE_GOVERNANCE_V1: &[u8] = b"iroha.governance.proposal.sccp_route_governance.v1";
+pub const VALIDATION_FEE_POLICY_V1: &[u8] = b"iroha.governance.proposal.validation_fee_policy.v1";
+pub const VALIDATION_FEE_PAYOUT_LIFECYCLE_V1: &[u8] =
     b"iroha.governance.proposal.validation_fee_payout_lifecycle.v1";
-pub(super) const MUSUBI_REGISTRY_GOVERNANCE_V1: &[u8] =
+pub const MUSUBI_REGISTRY_GOVERNANCE_V1: &[u8] =
     b"iroha.governance.proposal.musubi_registry_governance.v1";
 
-pub(super) fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
+pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
     let encoded = proposal.encode();
     let domain_len = u64::try_from(domain.len())
         .expect("protocol-defined digest domains fit in u64")

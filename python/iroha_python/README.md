@@ -292,10 +292,9 @@ equality of all 17 verifying-key record fields. Register/update fail before the
 request when `local_signing_context` is absent; there is no raw chain-ID,
 per-call, or server-derived fallback.
 
-ZK-capable assets can be registered and moved through the same transaction
-draft helpers, without shelling out to JavaScript tooling. Each
-`*_fee_payment` below is the recommended intent returned by `/v1/fees/quote`
-for that exact unsigned payload:
+Kagemusha-capable assets can be registered without shelling out to JavaScript
+tooling. The `register_fee_payment` below is the recommended intent returned by
+`/v1/fees/quote` for that exact unsigned payload:
 
 ```python
 client.register_zk_asset_and_wait(
@@ -307,57 +306,14 @@ client.register_zk_asset_and_wait(
     vk_transfer="halo2/ipa:vk_transfer",
     vk_unshield="halo2/ipa:vk_unshield",
 )
-
-client.shield_asset_and_wait(
-    chain_id="local",
-    authority="<payer>",
-    fee_payment=shield_fee_payment,
-    private_key_hex="<64-hex-private-key>",
-    asset_definition_id="ds#wonderland.is",
-    from_account_id="<payer>",
-    amount="7",
-    note_commitment="11" * 32,
-    ephemeral_public_key="22" * 32,
-    nonce="33" * 24,
-    ciphertext_b64="Y2lwaGVydGV4dA==",
-)
-
-prepared_proof = {
-    "backend": "halo2/ipa",
-    "proof": {"backend": "halo2/ipa", "bytes": b"..."},
-    "vk_ref": {"backend": "halo2/ipa", "name": "vk_transfer"},
-}
-
-client.zk_transfer_prepared_and_wait(
-    chain_id="local",
-    authority="<payer>",
-    fee_payment=transfer_fee_payment,
-    private_key_hex="<64-hex-private-key>",
-    asset_definition_id="ds#wonderland.is",
-    inputs=["aa" * 32],
-    outputs=["bb" * 32],
-    proof=prepared_proof,
-    root_hint="cc" * 32,
-)
-
-client.unshield_prepared_and_wait(
-    chain_id="local",
-    authority="<payer>",
-    fee_payment=unshield_fee_payment,
-    private_key_hex="<64-hex-private-key>",
-    asset_definition_id="ds#wonderland.is",
-    to_account_id="<recipient>",
-    public_amount="3",
-    inputs=["dd" * 32],
-    proof=prepared_proof,
-    root_hint="ee" * 32,
-)
 ```
 
-The first-release `Unshield` instruction does not accept caller-supplied output
-commitments. Verified proof policy determines every private output. Passing the
-retired `outputs` keyword or decoding an output-bearing pre-release payload
-fails closed; the SDK does not ignore or translate it.
+The first-release SDK exposes no generic confidential transfer or withdrawal
+instruction. Public-to-confidential ingress and public redemption use the
+proof-bound Kagemusha V4 top-up/redemption protocol so escrow provenance and
+drawdown remain inseparable from settlement. `vk_transfer` is retained only for
+the native anonymous-escrow engine, and `vk_unshield` names the Kagemusha
+redemption verifier.
 
 ## Dataspace lifecycle helpers
 
@@ -1841,13 +1797,14 @@ python/iroha_python/scripts/run_integration.sh
 ```
 
 Harness options are available as CLI flags (see `--help`). Common environment
-variables:
+variables follow. The compatibility-named `docker-compose.single.yml` fixture
+starts a four-validator committee by default.
 
 | Variable | Purpose |
 |----------|---------|
 | `START_TORII` | Set to `0` to reuse an existing node instead of starting docker compose. |
 | `COMPOSE_FILE` | Override the compose file (defaults to `defaults/docker-compose.single.yml`). |
-| `COMPOSE_SERVICE` | Service name to start (defaults to `irohad0`). |
+| `COMPOSE_SERVICE` | Optional service name to start instead of the default full four-validator stack. |
 | `IROHA_TORII_URL` | Torii URL used by the tests (defaults to `http://127.0.0.1:8080`). |
 | `IROHA_GENESIS_PUBLIC_KEY_FILE` | Runtime genesis verifier-key file required by the default Compose stack. |
 | `IROHA_GENESIS_SIGNED_FILE` | Host-prepared signed genesis body required by the default Compose stack. |

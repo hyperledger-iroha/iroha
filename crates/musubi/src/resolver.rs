@@ -4,7 +4,7 @@
 //! produces a consumer-owned exact [`LockfileV1`]. The search order is part of
 //! the first-release behavior: reuse a compatible selection already present in
 //! the graph, then a still-valid parent-local lock edge, then fresh releases in
-//! descending SemVer order.
+//! descending `SemVer` order.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -377,6 +377,10 @@ fn resolve_with_policy(
 }
 
 impl Solver {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "solver construction validates and canonicalizes every bounded first-release resolver input in one ordered pass"
+    )]
     fn new(
         mut request: ResolveRequestV1,
         limits: Limits,
@@ -601,6 +605,10 @@ impl Solver {
             .collect()
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the recursive resolver state machine keeps candidate selection, conflict evidence, and deterministic backtracking adjacent"
+    )]
     fn search(
         &self,
         state: SearchState,
@@ -632,7 +640,7 @@ impl Solver {
         let mut best_conflict = None;
         let mut best_solution = None;
         for candidate in candidates {
-            if self.would_cycle(&state, &task.parent, &candidate) {
+            if Self::would_cycle(&state, &task.parent, &candidate) {
                 select_better_conflict(
                     &mut best_conflict,
                     ResolutionConflictV1 {
@@ -909,7 +917,7 @@ impl Solver {
                     continue;
                 }
                 let mut chain = prefix.clone();
-                chain.push(self.precise_terminal_step(current, occurrence, &expected));
+                chain.push(Self::precise_terminal_step(current, occurrence, &expected));
                 select_better_conflict(
                     &mut best,
                     ResolutionConflictV1 {
@@ -923,7 +931,6 @@ impl Solver {
     }
 
     fn precise_terminal_step(
-        &self,
         parent: &ParentKey,
         occurrence: &PreviousEdgeKey,
         expected: &MusubiReleaseIdV1,
@@ -1119,12 +1126,7 @@ impl Solver {
             }
     }
 
-    fn would_cycle(
-        &self,
-        state: &SearchState,
-        parent: &ParentKey,
-        candidate: &MusubiReleaseIdV1,
-    ) -> bool {
+    fn would_cycle(state: &SearchState, parent: &ParentKey, candidate: &MusubiReleaseIdV1) -> bool {
         let ParentKey::Release(parent) = parent else {
             return false;
         };
@@ -2349,6 +2351,201 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture keeps parallel locked occurrences and their preservation assertions together"
+    )]
+    fn version_qualified_update_isolates_parallel_occurrences_and_forced_descendants() {
+        let old_snapshot = snapshot(36);
+        let new_snapshot = snapshot(37);
+        let target = package("target");
+        let child = package("child");
+        let independent = package("independent");
+        let roots = vec![root(vec![
+            root_dependency(
+                "a-target-one",
+                MusubiDependencyKindV1::Normal,
+                &target,
+                ">=1.0.0,<2.0.0",
+            ),
+            root_dependency(
+                "b-target-two",
+                MusubiDependencyKindV1::Normal,
+                &target,
+                "=2.0.0",
+            ),
+            root_dependency(
+                "z-independent",
+                MusubiDependencyKindV1::Normal,
+                &independent,
+                "*",
+            ),
+        ])];
+        let previous = resolve(request(
+            roots.clone(),
+            vec![
+                row(
+                    &target,
+                    "1.0.0",
+                    vec![dependency("child", &child, "=1.0.0")],
+                    old_snapshot,
+                ),
+                row(
+                    &target,
+                    "2.0.0",
+                    vec![dependency("child", &child, "=2.0.0")],
+                    old_snapshot,
+                ),
+                row(&child, "1.0.0", vec![], old_snapshot),
+                row(&child, "2.0.0", vec![], old_snapshot),
+                row(&independent, "1.0.0", vec![], old_snapshot),
+            ],
+            old_snapshot,
+        ))
+        .expect("initial parallel lock")
+        .lockfile;
+
+        let rows = vec![
+            row(
+                &target,
+                "1.5.0",
+                vec![dependency("child", &child, "=1.5.0")],
+                new_snapshot,
+            ),
+            row(
+                &target,
+                "1.0.0",
+                vec![dependency("child", &child, "=1.0.0")],
+                new_snapshot,
+            ),
+            row(
+                &target,
+                "2.0.0",
+                vec![dependency("child", &child, "=2.0.0")],
+                new_snapshot,
+            ),
+            row(&child, "1.5.0", vec![], new_snapshot),
+            row(&child, "1.0.0", vec![], new_snapshot),
+            row(&child, "2.0.0", vec![], new_snapshot),
+            row(&independent, "2.0.0", vec![], new_snapshot),
+            row(&independent, "1.0.0", vec![], new_snapshot),
+        ];
+        let update = TargetedUpdateV1 {
+            package: target.clone(),
+            locked_version: Some(version("1.0.0")),
+            precise: None,
+        };
+        let mut forward = request(roots, rows, new_snapshot);
+        forward.previous = Some(previous.clone());
+        forward.update = Some(update.clone());
+
+        let updated = resolve(forward.clone()).expect("version-qualified update");
+        assert_eq!(
+            root_selection(&updated.lockfile, "a-target-one").version,
+            version("1.5.0")
+        );
+        assert_eq!(
+            root_selection(&updated.lockfile, "b-target-two").version,
+            version("2.0.0")
+        );
+        assert_eq!(
+            root_selection(&updated.lockfile, "z-independent").version,
+            version("1.0.0")
+        );
+        assert!(updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(child.clone(), version("1.5.0"))
+        }));
+        assert!(updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(child.clone(), version("2.0.0"))
+        }));
+        assert!(!updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(child.clone(), version("1.0.0"))
+        }));
+        assert!(!updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(independent.clone(), version("2.0.0"))
+        }));
+        assert!(!updated.lockfile.nodes.iter().any(|node| {
+            node.release == MusubiReleaseIdV1::new(target.clone(), version("1.0.0"))
+        }));
+        for preserved_release in [
+            MusubiReleaseIdV1::new(target.clone(), version("2.0.0")),
+            MusubiReleaseIdV1::new(child.clone(), version("2.0.0")),
+            MusubiReleaseIdV1::new(independent, version("1.0.0")),
+        ] {
+            let before = previous
+                .nodes
+                .iter()
+                .find(|node| node.release == preserved_release)
+                .expect("preserved node in previous lock");
+            let after = updated
+                .lockfile
+                .nodes
+                .iter()
+                .find(|node| node.release == preserved_release)
+                .expect("preserved node in updated lock");
+            assert_eq!(after, before);
+        }
+
+        forward.roots[0].dependencies.reverse();
+        forward.rows.reverse();
+        forward.previous = Some(previous);
+        forward.update = Some(update);
+        let reversed = resolve(forward).expect("reversed version-qualified update");
+        assert_eq!(updated.lockfile, reversed.lockfile);
+    }
+
+    #[test]
+    fn unqualified_update_rejects_a_parallel_locked_package() {
+        let old_snapshot = snapshot(38);
+        let new_snapshot = snapshot(39);
+        let target = package("target");
+        let roots = vec![root(vec![
+            root_dependency(
+                "target-one",
+                MusubiDependencyKindV1::Normal,
+                &target,
+                "=1.0.0",
+            ),
+            root_dependency(
+                "target-two",
+                MusubiDependencyKindV1::Normal,
+                &target,
+                "=2.0.0",
+            ),
+        ])];
+        let previous = resolve(request(
+            roots.clone(),
+            vec![
+                row(&target, "1.0.0", vec![], old_snapshot),
+                row(&target, "2.0.0", vec![], old_snapshot),
+            ],
+            old_snapshot,
+        ))
+        .expect("initial parallel lock")
+        .lockfile;
+        let mut update = request(
+            roots,
+            vec![
+                row(&target, "1.0.0", vec![], new_snapshot),
+                row(&target, "2.0.0", vec![], new_snapshot),
+            ],
+            new_snapshot,
+        );
+        update.previous = Some(previous);
+        update.update = Some(TargetedUpdateV1 {
+            package: target,
+            locked_version: None,
+            precise: None,
+        });
+
+        let ResolverError::InvalidInput(message) = resolve(update).expect_err("ambiguous target")
+        else {
+            panic!("expected invalid targeted update");
+        };
+        assert!(message.contains("has multiple locked versions; specify PACKAGE@VERSION"));
+    }
+
+    #[test]
     fn targeted_precise_update_changes_only_target_and_forced_descendants() {
         let old_snapshot = snapshot(11);
         let new_snapshot = snapshot(12);
@@ -2519,6 +2716,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture enumerates every parallel candidate needed to verify occurrence binding"
+    )]
     fn sibling_parallel_selection_cannot_satisfy_a_precise_target_occurrence() {
         let old_snapshot = snapshot(26);
         let new_snapshot = snapshot(27);
@@ -2721,6 +2922,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture builds the complete previously selected graph needed for replay coverage"
+    )]
     fn precise_replay_propagates_through_an_already_selected_parent() {
         let old_snapshot = snapshot(30);
         let new_snapshot = snapshot(31);

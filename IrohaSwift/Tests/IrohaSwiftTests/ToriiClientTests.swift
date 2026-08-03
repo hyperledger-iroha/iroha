@@ -7996,21 +7996,29 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsTrimsAndEncodesAccountLiteral() async throws {
+    func testGetAssetsRejectsPaddedAccountLiteralBeforeNetwork() async {
         StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","scope":"global","quantity":"10"}]
-            """.data(using: .utf8)!
-            return (response, body)
+            XCTFail("getAssets should reject a padded account literal before dispatch")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
         }
 
-        let balances = try await makeClient().getAssets(
-            accountId: "  sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV  ",
-            asset: nil
-        )
-        XCTAssertEqual(balances.count, 1)
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().getAssets(
+                accountId: "  sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV  ",
+                asset: nil
+            )
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload for padded accountId, got \(error)")
+            }
+            XCTAssertEqual(reason, "accountId must not contain surrounding whitespace.")
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -16423,7 +16431,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "execution_commitment": executionCommitment,
         ]
         let payload = try JSONSerialization.data(withJSONObject: [
-            "protocol_version": 3,
+            "protocol_version": 4,
             "node_fingerprint": nativeAmxTestHash(0xA1),
             "build_fingerprint": nativeAmxTestHash(0xA3),
             "config_fingerprint": nativeAmxTestHash(0xA5),
@@ -17023,7 +17031,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testSumeragiV2StatusRejectsLegacyMissingAndMalformedShapes() throws {
         func payload(_ mutate: (inout [String: Any]) -> Void) throws -> Data {
             var value: [String: Any] = [
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "node_fingerprint": nativeAmxTestHash(0xA1),
                 "build_fingerprint": nativeAmxTestHash(0xA3),
                 "config_fingerprint": nativeAmxTestHash(0xA5),
@@ -19892,20 +19900,24 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testFinalizeGovernanceUsesExactReferendumAndSharedHashGrammar() throws {
-        let proposalId = String(repeating: "6", count: 64)
+    func testFinalizeGovernanceRequiresOneExactProposalFingerprint() throws {
+        let proposalId = String(repeating: "ab", count: 32)
         let request = ToriiGovernanceFinalizeRequest(
-            referendumId: "ref-1",
-            proposalId: "BLAKE2B32:0X\(proposalId.uppercased())"
+            referendumId: proposalId,
+            proposalId: proposalId
         )
         let data = try JSONEncoder().encode(request)
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
-        XCTAssertEqual(json["referendum_id"] as? String, "ref-1")
+        XCTAssertEqual(json["referendum_id"] as? String, proposalId)
         XCTAssertEqual(json["proposal_id"] as? String, proposalId)
 
-        for invalidReferendum in ["", " ref-1", "ref-1 ", "ref 1", "ref\t1", "ref\u{0000}1"] {
+        for invalidReferendum in [
+            "", "ref-1", " ref-1", "ref-1 ", "ref 1", "ref\t1", "ref\u{0000}1",
+            "ref/1", ".hidden", "ref%31", "投票", String(repeating: "a", count: 129),
+            "0x\(proposalId)", proposalId.uppercased()
+        ] {
             XCTAssertThrowsError(
                 try JSONEncoder().encode(
                     ToriiGovernanceFinalizeRequest(
@@ -19917,19 +19929,34 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
         for invalidProposal in [
             ":\(proposalId)",
+            "0x\(proposalId)",
+            proposalId.uppercased(),
             " \(proposalId)",
             "\(proposalId) ",
-            "blake2b32:\(proposalId):ignored",
+            "blake2b32:\(proposalId)",
             "sha256:\(proposalId)"
         ] {
             XCTAssertThrowsError(
                 try JSONEncoder().encode(
                     ToriiGovernanceFinalizeRequest(
-                        referendumId: "ref-1",
+                        referendumId: proposalId,
                         proposalId: invalidProposal
                     )
                 )
             )
+        }
+        XCTAssertThrowsError(
+            try JSONEncoder().encode(
+                ToriiGovernanceFinalizeRequest(
+                    referendumId: proposalId,
+                    proposalId: String(repeating: "7", count: 64)
+                )
+            )
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(reason.contains("referendum_id must equal proposal_id"))
         }
     }
 
@@ -20019,6 +20046,37 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                     authority: owner,
                     chainId: "chain",
                     referendumId: "referendum 1",
+                    owner: owner,
+                    amount: "250",
+                    durationBlocks: 12,
+                    direction: .aye
+                ))
+            },
+            {
+                try JSONEncoder().encode(ToriiGovernanceZkBallotV1Request(
+                    authority: owner,
+                    chainId: "chain",
+                    electionId: "election/1",
+                    backend: "halo2/ipa",
+                    envelopeB64: "AQIDBA=="
+                ))
+            },
+            {
+                try JSONEncoder().encode(ToriiGovernanceZkBallotProofRequest(
+                    authority: owner,
+                    chainId: "chain",
+                    electionId: ".hidden",
+                    ballot: .init(
+                        backend: "halo2/ipa",
+                        envelopeBytesB64: "AQIDBA=="
+                    )
+                ))
+            },
+            {
+                try JSONEncoder().encode(ToriiGovernancePlainBallotRequest(
+                    authority: owner,
+                    chainId: "chain",
+                    referendumId: "投票",
                     owner: owner,
                     amount: "250",
                     durationBlocks: 12,
@@ -20302,7 +20360,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 decision: .approve
             )),
             try JSONEncoder().encode(ToriiGovernanceFinalizeRequest(
-                referendumId: "referendum-1",
+                referendumId: String(repeating: "66", count: 32),
                 proposalId: String(repeating: "66", count: 32)
             )),
         ]
@@ -20360,7 +20418,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGovernanceGetIdentifiersAreExactEncodedPathSegments() async throws {
+    func testGovernanceGetIdentifiersUseCanonicalUnreservedPathSegments() async throws {
         let proposalId = String(repeating: "ab", count: 32)
         var requestedURLs: [String] = []
         StubURLProtocol.handler = { request in
@@ -20370,14 +20428,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             switch url.absoluteString {
             case "https://example.test/v1/gov/proposals/\(proposalId)":
                 body = Data(#"{"found":false,"proposal":null}"#.utf8)
-            case "https://example.test/v1/gov/referenda/ref%2Freferendum":
+            case "https://example.test/v1/gov/referenda/ref.referendum~1":
                 body = Data(#"{"found":false,"referendum":null}"#.utf8)
-            case "https://example.test/v1/gov/tally/ref%2Ftally":
+            case "https://example.test/v1/gov/tally/ref_tally-2":
                 body = Data(
-                    #"{"referendum_id":"ref/tally","approve":"0","reject":"0","abstain":"0"}"#.utf8
+                    #"{"referendum_id":"ref_tally-2","approve":"0","reject":"0","abstain":"0"}"#.utf8
                 )
-            case "https://example.test/v1/gov/locks/ref%2Flocks":
-                body = Data(#"{"found":false,"referendum_id":"ref/locks","locks":null}"#.utf8)
+            case "https://example.test/v1/gov/locks/Ref3":
+                body = Data(#"{"found":false,"referendum_id":"Ref3","locks":null}"#.utf8)
             default:
                 XCTFail("unexpected governance GET URL: \(url.absoluteString)")
                 body = Data()
@@ -20393,19 +20451,19 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
         let client = makeClient()
         let proposal = try await client.getGovernanceProposal(idHex: proposalId)
-        let referendum = try await client.getGovernanceReferendum(id: "ref/referendum")
-        let tally = try await client.getGovernanceTally(id: "ref/tally")
-        let locks = try await client.getGovernanceLocks(referendumId: "ref/locks")
+        let referendum = try await client.getGovernanceReferendum(id: "ref.referendum~1")
+        let tally = try await client.getGovernanceTally(id: "ref_tally-2")
+        let locks = try await client.getGovernanceLocks(referendumId: "Ref3")
 
         XCTAssertFalse(proposal.found)
         XCTAssertFalse(referendum.found)
-        XCTAssertEqual(tally.referendumId, "ref/tally")
-        XCTAssertEqual(locks.referendumId, "ref/locks")
+        XCTAssertEqual(tally.referendumId, "ref_tally-2")
+        XCTAssertEqual(locks.referendumId, "Ref3")
         XCTAssertEqual(requestedURLs, [
             "https://example.test/v1/gov/proposals/\(proposalId)",
-            "https://example.test/v1/gov/referenda/ref%2Freferendum",
-            "https://example.test/v1/gov/tally/ref%2Ftally",
-            "https://example.test/v1/gov/locks/ref%2Flocks",
+            "https://example.test/v1/gov/referenda/ref.referendum~1",
+            "https://example.test/v1/gov/tally/ref_tally-2",
+            "https://example.test/v1/gov/locks/Ref3",
         ])
     }
 
@@ -20432,8 +20490,25 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             ("internal referendum whitespace", {
                 _ = try await client.getGovernanceReferendum(id: "ref 1")
             }),
+            ("slash referendum", {
+                _ = try await client.getGovernanceReferendum(id: "ref/1")
+            }),
+            ("leading-dot referendum", {
+                _ = try await client.getGovernanceReferendum(id: ".hidden")
+            }),
+            ("percent referendum", {
+                _ = try await client.getGovernanceReferendum(id: "ref%31")
+            }),
+            ("unicode referendum", {
+                _ = try await client.getGovernanceReferendum(id: "投票")
+            }),
             ("tally tab", {
                 _ = try await client.getGovernanceTally(id: "ref\t1")
+            }),
+            ("overlong tally", {
+                _ = try await client.getGovernanceTally(
+                    id: String(repeating: "a", count: 129)
+                )
             }),
             ("locks control", {
                 _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1")

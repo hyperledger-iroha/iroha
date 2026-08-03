@@ -412,21 +412,6 @@ impl From<crate::isi::zk::CancelConfidentialPolicyTransition> for InstructionBox
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::zk::Shield> for InstructionBox {
-    fn from(i: crate::isi::zk::Shield) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::ZkTransfer> for InstructionBox {
-    fn from(i: crate::isi::zk::ZkTransfer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::Unshield> for InstructionBox {
-    fn from(i: crate::isi::zk::Unshield) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
 impl From<crate::isi::zk::CreateElection> for InstructionBox {
     fn from(i: crate::isi::zk::CreateElection) -> Self {
         InstructionBox(Box::new(i))

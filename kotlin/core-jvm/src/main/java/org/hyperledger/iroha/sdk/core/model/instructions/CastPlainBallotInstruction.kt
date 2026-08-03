@@ -26,9 +26,10 @@ class CastPlainBallotInstruction private constructor(
         durationBlocks: Long,
         direction: Int,
     ) : this(
-        referendumId = referendumId.also {
-            require(it.isNotBlank()) { "referendumId must not be blank" }
-        },
+        referendumId = GovernanceInstructionUtils.requireGovernanceSelectorV1(
+            referendumId,
+            "referendumId",
+        ),
         ownerAccountId = ownerAccountId.also {
             require(it.isNotBlank()) { "ownerAccountId must not be blank" }
         },
@@ -102,7 +103,10 @@ class CastPlainBallotInstruction private constructor(
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): CastPlainBallotInstruction {
             return CastPlainBallotInstruction(
-                referendumId = require(arguments, "referendum_id"),
+                referendumId = GovernanceInstructionUtils.requireGovernanceSelectorV1(
+                    require(arguments, "referendum_id"),
+                    "referendum_id",
+                ),
                 ownerAccountId = require(arguments, "owner"),
                 amount = validateAmount(require(arguments, "amount")),
                 durationBlocks = parseLong(require(arguments, "duration_blocks"), "duration_blocks"),

@@ -72,8 +72,8 @@ use crate::vega::{
 
 use super::{
     BgvProfile, MKHE_VERSION_V1, PlaintextModulus, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
-    active::ZkAmsMkheGovernedActiveRosterV1, manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
-    wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
+    active::ZkAmsMkheGovernedActiveRosterV1, cpk_relation::VerifiedZkAmsMkheCpkBindingSourceV1,
+    manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
 
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
@@ -499,10 +499,12 @@ impl PersistentWitnessConsumerV1 {
     }
 }
 
-/// Private receipt which may only be produced by the absent exact membership
-/// verifier.  Keeping this receipt private is what prevents a sibling module
-/// from turning attacker-chosen commitment digests into a verified lineage
-/// capability.
+/// Private normalized lineage used by the binding constructor.
+///
+/// Production code obtains these fields only by consuming the sealed complete
+/// CPK relation source.  Tests construct fixtures inside this module so that
+/// every immutable binding axis can be mutation-tested without an eight-million
+/// byte relation proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ExactMembershipVerificationReceiptV1 {
     role: PersistentWitnessRoleV1,
@@ -511,6 +513,7 @@ struct ExactMembershipVerificationReceiptV1 {
     commitment_set_digest: [u8; 32],
     membership_proof_digest: [u8; 32],
     verifier_transcript_digest: [u8; 32],
+    relation_verification_digest: [u8; 32],
 }
 
 /// Opaque proof-verified capability for one persistent witness commitment.
@@ -540,6 +543,7 @@ pub(super) struct VerifiedPersistentWitnessBindingV1 {
     commitment_set_digest: [u8; 32],
     membership_proof_digest: [u8; 32],
     verifier_transcript_digest: [u8; 32],
+    cpk_relation_verification_digest: [u8; 32],
     consumer_mask: u8,
     identity_digest: [u8; 32],
     verification_digest: [u8; 32],
@@ -593,6 +597,7 @@ impl VerifiedPersistentWitnessBindingV1 {
             commitment_set_digest: receipt.commitment_set_digest,
             membership_proof_digest: receipt.membership_proof_digest,
             verifier_transcript_digest: receipt.verifier_transcript_digest,
+            cpk_relation_verification_digest: receipt.relation_verification_digest,
             consumer_mask,
             identity_digest: [0; 32],
             verification_digest: [0; 32],
@@ -661,6 +666,7 @@ impl VerifiedPersistentWitnessBindingV1 {
             || self.record_index != 0
             || self.consumer_mask != SECRET_REQUIRED_CONSUMERS_V1
             || self.consumer_mask & required_consumer.mask() == 0
+            || self.cpk_relation_verification_digest == [0; 32]
             || self.identity_digest == [0; 32]
             || self.identity_digest != verified_binding_identity_digest(self)?
             || self.verification_digest == [0; 32]
@@ -1358,42 +1364,63 @@ impl VerifiedPersistentWitnessDecryptionUseV1 {
     }
 }
 
-/// Sole future production minting boundary for the collective party state.
+/// Sole production minting boundary for a collective party's persistent secret.
 ///
-/// It validates the state-owned coefficient shape before failing closed.  The
-/// T256 commitment/membership backend must replace the final error and produce
-/// the private receipt above; callers never supply commitments, proof digests,
-/// or a lineage identity to this function.
+/// The input is move-only and can only be produced by the complete native CPK
+/// verifier after membership, streamed RNS equations, authentication, direct
+/// object reads, and transcript replay all succeed together.  Raw state-secret
+/// coefficients and caller-supplied digests are not accepted by this API.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn prove_and_mint_collective_secret_binding_v1<R: MaskedRelaxedRandomSourceV1>(
+pub(super) fn mint_collective_secret_binding_from_verified_cpk_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
-    security_certificate_digest: [u8; 32],
     cpk_transcript_digest: [u8; 32],
     party_index: usize,
     cpk_share_digest: [u8; 32],
-    state_secret: &[i64],
-    _random: &mut R,
+    source: VerifiedZkAmsMkheCpkBindingSourceV1,
 ) -> Result<VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1> {
     roster.validate()?;
-    if security_certificate_digest == [0; 32]
-        || cpk_transcript_digest == [0; 32]
+    if cpk_transcript_digest == [0; 32]
         || cpk_share_digest == [0; 32]
         || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
-        || state_secret.len() != RELEASE_RING_DEGREE_V1
-        || state_secret.iter().all(|coefficient| *coefficient == 0)
-        || state_secret
-            .iter()
-            .any(|coefficient| !is_exact_small_member(*coefficient, 1))
+        || source.profile_digest() != roster.profile_digest()
+        || source.security_certificate_digest() == [0; 32]
+        || source.roster_digest() != roster.roster_digest()
+        || source.key_material_digest() != roster.key_material_digest()
+        || source.epoch() != roster.epoch()
+        || source.cpk_transcript_digest() != cpk_transcript_digest
+        || source.party_index() != party_index
+        || source.party() != roster.participants()[party_index].party()
+        || source.party_b_payload_blake3() == [0; 32]
+        || source.relation_verification_digest() == [0; 32]
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
-    Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
+    VerifiedPersistentWitnessBindingV1::from_verified_membership(
+        roster,
+        source.security_certificate_digest(),
+        cpk_transcript_digest,
+        party_index,
+        cpk_share_digest,
+        0,
+        ExactMembershipVerificationReceiptV1 {
+            role: PersistentWitnessRoleV1::SecretEpoch,
+            generator_basis_digest: source.generator_basis_digest(),
+            commitments: *source.commitments(),
+            commitment_set_digest: source.commitment_set_digest(),
+            membership_proof_digest: source.membership_proof_digest(),
+            verifier_transcript_digest: source.verifier_transcript_digest(),
+            relation_verification_digest: source.relation_verification_digest(),
+        },
+    )
 }
 
 fn validate_membership_receipt(
     receipt: &ExactMembershipVerificationReceiptV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    if receipt.membership_proof_digest == [0; 32] || receipt.verifier_transcript_digest == [0; 32] {
+    if receipt.membership_proof_digest == [0; 32]
+        || receipt.verifier_transcript_digest == [0; 32]
+        || receipt.relation_verification_digest == [0; 32]
+    {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     validate_canonical_commitment_set(
@@ -1476,7 +1503,10 @@ fn verified_binding_identity_digest(
 fn verified_binding_verification_digest(
     binding: &VerifiedPersistentWitnessBindingV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    if binding.membership_proof_digest == [0; 32] || binding.verifier_transcript_digest == [0; 32] {
+    if binding.membership_proof_digest == [0; 32]
+        || binding.verifier_transcript_digest == [0; 32]
+        || binding.cpk_relation_verification_digest == [0; 32]
+    {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let mut hash = Keccak256::new();
@@ -1484,6 +1514,7 @@ fn verified_binding_verification_digest(
     hash.update(&verified_binding_identity_digest(binding)?);
     hash.update(&binding.membership_proof_digest);
     hash.update(&binding.verifier_transcript_digest);
+    hash.update(&binding.cpk_relation_verification_digest);
     hash.update(&[binding.consumer_mask]);
     Ok(hash.finalize())
 }
@@ -2205,6 +2236,9 @@ mod tests {
         let mut transcript_frame = label.to_vec();
         transcript_frame.extend_from_slice(b"-verifier-transcript");
         transcript_frame.push(proof_variant);
+        let mut relation_frame = label.to_vec();
+        relation_frame.extend_from_slice(b"-complete-cpk-relation");
+        relation_frame.push(proof_variant);
         ExactMembershipVerificationReceiptV1 {
             role: PersistentWitnessRoleV1::SecretEpoch,
             generator_basis_digest,
@@ -2212,6 +2246,7 @@ mod tests {
             commitment_set_digest,
             membership_proof_digest: keccak256(&proof_frame),
             verifier_transcript_digest: keccak256(&transcript_frame),
+            relation_verification_digest: keccak256(&relation_frame),
         }
     }
 
@@ -2531,7 +2566,7 @@ mod tests {
         assert_eq!(binding.identity_digest(), reproved.identity_digest());
         assert_ne!(binding.verification_digest, reproved.verification_digest);
 
-        for mutation in 0..19 {
+        for mutation in 0..20 {
             let mut forged = binding.clone();
             match mutation {
                 0 => forged.version ^= 1,
@@ -2555,7 +2590,8 @@ mod tests {
                 15 => forged.membership_proof_digest[0] ^= 1,
                 16 => forged.verifier_transcript_digest[0] ^= 1,
                 17 => forged.consumer_mask ^= SECRET_CONSUMER_DECRYPTION_V1,
-                18 => forged.identity_digest[0] ^= 1,
+                18 => forged.cpk_relation_verification_digest[0] ^= 1,
+                19 => forged.identity_digest[0] ^= 1,
                 _ => unreachable!(),
             }
             assert_eq!(
@@ -2958,49 +2994,22 @@ mod tests {
     }
 
     #[test]
-    fn production_persistent_binding_mint_is_state_owned_shape_checked_and_closed() {
+    fn membership_only_receipt_cannot_mint_without_complete_cpk_relation_provenance() {
         let (roster, _secrets) = governed_roster_fixture(b"exact-binding-mint-roster");
-        let mut random = StreamRandom::new(b"exact-binding-mint-random");
         let security = keccak256(b"exact-binding-mint-security");
         let transcript = keccak256(b"exact-binding-mint-transcript");
         let share = keccak256(b"exact-binding-mint-share");
+        let mut membership_only = membership_receipt_fixture(b"membership-only", 1);
+        membership_only.relation_verification_digest = [0; 32];
         assert_eq!(
-            prove_and_mint_collective_secret_binding_v1(
+            VerifiedPersistentWitnessBindingV1::from_verified_membership(
                 &roster,
                 security,
                 transcript,
                 0,
                 share,
-                &[0, 1, -1],
-                &mut random,
-            ),
-            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
-        );
-        let mut release_secret = vec![0_i64; RELEASE_RING_DEGREE_V1];
-        release_secret[0] = 1;
-        release_secret[RELEASE_RING_DEGREE_V1 - 1] = -1;
-        assert_eq!(
-            prove_and_mint_collective_secret_binding_v1(
-                &roster,
-                security,
-                transcript,
                 0,
-                share,
-                &release_secret,
-                &mut random,
-            ),
-            Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
-        );
-        release_secret[31] = 2;
-        assert_eq!(
-            prove_and_mint_collective_secret_binding_v1(
-                &roster,
-                security,
-                transcript,
-                0,
-                share,
-                &release_secret,
-                &mut random,
+                membership_only,
             ),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );

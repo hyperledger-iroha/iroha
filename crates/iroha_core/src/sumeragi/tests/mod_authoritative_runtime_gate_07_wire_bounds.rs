@@ -81,14 +81,7 @@
 
     #[test]
     fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
-        let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 1,
-        };
+        let layout = minimal_rs16_layout();
         let required_block_sync =
             super::fair_v2_ingress_required_block_sync_p2p_frame_bytes(layout);
         let required_sidecar =
@@ -175,4 +168,3 @@
         );
         assert_eq!(outbound_short.open(), Err(outbound_error));
     }
-

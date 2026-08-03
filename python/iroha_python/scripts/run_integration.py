@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run Python SDK integration tests against a live Torii node.
 
-The harness optionally spins up the single-node docker compose topology, waits
+The harness optionally spins up the four-validator docker compose topology, waits
 for Torii to answer `/status`, and then invokes `pytest` with the integration
 marker. Pass `--no-start` to target an already running node.
 """
@@ -24,7 +24,6 @@ from typing import Iterable, List, Sequence
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_COMPOSE_FILE = REPO_ROOT / "defaults" / "docker-compose.single.yml"
 DEFAULT_TORII_URL = "http://127.0.0.1:8080"
-DEFAULT_SERVICE = "irohad0"
 DEFAULT_WAIT_SECONDS = 90
 DEFAULT_PYTEST_PATH = "python/iroha_python/tests/integration"
 GENESIS_ARTIFACT_FILE_ENV = (
@@ -87,7 +86,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     else:
         compose_file_default = DEFAULT_COMPOSE_FILE
 
-    service_default = os.environ.get("COMPOSE_SERVICE", DEFAULT_SERVICE)
+    service_default = os.environ.get("COMPOSE_SERVICE")
     wait_env = os.environ.get("WAIT_SECONDS")
     if wait_env is not None:
         try:
@@ -115,7 +114,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--service",
         default=service_default,
-        help=f"Compose service name to start (default: {DEFAULT_SERVICE}).",
+        help="Optional Compose service name to start instead of the full validator stack.",
     )
     parser.add_argument(
         "--wait-seconds",
@@ -242,7 +241,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.start:
         _validate_default_compose_genesis_artifacts(compose_file)
         compose_cmd = _find_compose_binary(args.compose_bin)
-        compose_args = ["-f", str(compose_file), "up", "-d", args.service]
+        compose_args = ["-f", str(compose_file), "up", "-d"]
+        if args.service:
+            compose_args.append(args.service)
         _run_compose(compose_cmd, compose_args)
 
         def _cleanup() -> None:

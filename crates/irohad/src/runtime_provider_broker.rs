@@ -1019,9 +1019,9 @@ mod protocol {
                             .soracloud_runtime_signer_binding()
                             .map(NativeTransactionSignerBindingWireV1::from_soracloud_binding)
                     }),
-                governance_request_auth_public_key: binding.governance_request_auth_public_key(),
-                governance_request_auth_max_body_bytes: binding
-                    .governance_request_auth_max_body_bytes(),
+                governance_request_ingress_binding: binding
+                    .governance_request_ingress_binding()
+                    .map(governance_request_ingress_binding_to_wire),
                 provider_ingest_signer_binding: binding
                     .provider_ingest_signer_binding()
                     .map(ProviderIngestSignerBindingWireV1::try_from_binding)
@@ -1183,8 +1183,7 @@ mod protocol {
                 || binding.por_replay_archive_proof_limits.is_some()
                 || binding.potr_runtime_binding.is_some()
                 || binding.native_signer_binding.is_some()
-                || binding.governance_request_auth_public_key.is_some()
-                || binding.governance_request_auth_max_body_bytes.is_some()
+                || binding.governance_request_ingress_binding.is_some()
                 || binding.provider_ingest_signer_binding.is_some()
                 || binding.provider_ingest_source_limits.is_some()
                 || binding.provider_ingest_checkpoint_max_bytes.is_some()
@@ -1484,8 +1483,7 @@ mod protocol {
             || potr_signer
         {
             if binding.native_signer_binding.is_some()
-                || binding.governance_request_auth_public_key.is_some()
-                || binding.governance_request_auth_max_body_bytes.is_some()
+                || binding.governance_request_ingress_binding.is_some()
                 || has_provider_ingest_metadata
                 || has_evidence_metadata
             {
@@ -1505,8 +1503,7 @@ mod protocol {
             || soracloud_hf_credential
         {
             if binding.native_signer_binding.is_some()
-                || binding.governance_request_auth_public_key.is_some()
-                || binding.governance_request_auth_max_body_bytes.is_some()
+                || binding.governance_request_ingress_binding.is_some()
                 || has_provider_ingest_metadata
                 || has_evidence_metadata
             {
@@ -1516,8 +1513,7 @@ mod protocol {
         }
         if soracloud_runtime_signer {
             soracloud_runtime_signer_binding_from_wire(binding)?;
-            if binding.governance_request_auth_public_key.is_some()
-                || binding.governance_request_auth_max_body_bytes.is_some()
+            if binding.governance_request_ingress_binding.is_some()
                 || has_provider_ingest_metadata
                 || has_evidence_metadata
             {
@@ -1525,8 +1521,7 @@ mod protocol {
             }
         } else if native_transaction_signer {
             native_transaction_signer_binding_from_wire(binding)?;
-            if binding.governance_request_auth_public_key.is_some()
-                || binding.governance_request_auth_max_body_bytes.is_some()
+            if binding.governance_request_ingress_binding.is_some()
                 || has_provider_ingest_metadata
                 || has_evidence_metadata
             {
@@ -1536,21 +1531,8 @@ mod protocol {
             return Err(BrokerError::BindingMismatch);
         }
         if governance_request_auth {
-            let public_key = binding
-                .governance_request_auth_public_key
-                .ok_or(BrokerError::BindingMismatch)?;
-            let max_body_bytes = binding
-                .governance_request_auth_max_body_bytes
-                .ok_or(BrokerError::BindingMismatch)?;
-            if public_key == [0; 32]
-                || max_body_bytes == 0
-                || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
-            {
-                return Err(BrokerError::BindingMismatch);
-            }
-        } else if binding.governance_request_auth_public_key.is_some()
-            || binding.governance_request_auth_max_body_bytes.is_some()
-        {
+            governance_request_ingress_binding_from_provider_binding(binding)?;
+        } else if binding.governance_request_ingress_binding.is_some() {
             return Err(BrokerError::BindingMismatch);
         }
         if !(evidence_webauthn
@@ -1860,6 +1842,8 @@ mod protocol {
     struct ProviderObservationWireV1 {
         binding: ProviderBindingWireV1,
         signer_metadata: Option<SignerMetadataWireV1>,
+        governance_request_ingress_qualification:
+            Option<GovernanceRequestIngressQualificationWireV1>,
         moderation_quarantine_active_key_id: Option<String>,
         provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>,
         provider_ingest_source_provider_ids: Vec<[u8; 32]>,
@@ -2005,6 +1989,15 @@ mod protocol {
     struct QualificationResultWireV1 {
         revision: u64,
         policy_digest: [u8; 32],
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+    struct GovernanceRequestIngressQualificationWireV1 {
+        provider: QualificationResultWireV1,
+        binding: GovernanceRequestIngressBindingWireV1,
+        receiver_policy_digest: [u8; 32],
+        replay_namespace_digest: [u8; 32],
+        replica_set_digest: [u8; 32],
     }
 
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
@@ -6163,6 +6156,9 @@ mod protocol {
 
     fn provider_metadata_digest(
         signer_metadata: &Option<SignerMetadataWireV1>,
+        governance_request_ingress_qualification: &Option<
+            GovernanceRequestIngressQualificationWireV1,
+        >,
         moderation_quarantine_active_key_id: &Option<String>,
         provider_ingest_signer_binding: &Option<ProviderIngestSignerBindingWireV1>,
         provider_ingest_source_provider_ids: &[[u8; 32]],
@@ -6174,6 +6170,7 @@ mod protocol {
         let bytes = encode_canonical(
             &(
                 signer_metadata.clone(),
+                *governance_request_ingress_qualification,
                 moderation_quarantine_active_key_id.clone(),
                 provider_ingest_signer_binding.clone(),
                 provider_ingest_source_provider_ids.to_vec(),
@@ -6303,6 +6300,7 @@ mod protocol {
         }
         if provider_metadata_digest(
             &observed.signer_metadata,
+            &observed.governance_request_ingress_qualification,
             &observed.moderation_quarantine_active_key_id,
             &observed.provider_ingest_signer_binding,
             &observed.provider_ingest_source_provider_ids,
@@ -6329,6 +6327,17 @@ mod protocol {
             && (observed.evidence_viewer_receipt_signer_public_key.is_some()
                 || observed.evidence_viewer_archive_id.is_some()
                 || observed.evidence_viewer_archive_public_key.is_some())
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
+        let governance_request_auth_slot = matches!(
+            requested.slot,
+            slot if slot == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator.wire_id()
+                || slot
+                    == IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator.wire_id()
+        );
+        if governance_request_auth_slot
+            != observed.governance_request_ingress_qualification.is_some()
         {
             return Err(BrokerError::BindingMismatch);
         }
@@ -6459,14 +6468,21 @@ mod protocol {
                 == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator.wire_id() =>
             {
-                let public_key = requested
-                    .governance_request_auth_public_key
+                let expected_binding =
+                    governance_request_ingress_binding_from_provider_binding(requested)?;
+                let qualification = governance_request_ingress_qualification_from_wire(
+                    observed
+                        .governance_request_ingress_qualification
+                        .ok_or(BrokerError::BindingMismatch)?,
+                )
+                .map_err(|_| BrokerError::BindingMismatch)?;
+                let expected_revision = requested.revision.ok_or(BrokerError::BindingMismatch)?;
+                let expected_policy_digest = requested
+                    .policy_digest
                     .ok_or(BrokerError::BindingMismatch)?;
-                let max_body_bytes = requested
-                    .governance_request_auth_max_body_bytes
-                    .ok_or(BrokerError::BindingMismatch)?;
-                if max_body_bytes == 0
-                    || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
+                if qualification.provider().revision != expected_revision
+                    || qualification.provider().policy_digest != expected_policy_digest
+                    || qualification.binding() != expected_binding
                     || observed.signer_metadata.is_some()
                     || observed.moderation_quarantine_active_key_id.is_some()
                     || observed.provider_ingest_signer_binding.is_some()
@@ -9231,6 +9247,93 @@ mod protocol {
         }
     }
 
+    fn governance_request_ingress_binding_to_wire(
+        binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
+    ) -> GovernanceRequestIngressBindingWireV1 {
+        GovernanceRequestIngressBindingWireV1 {
+            scope: governance_request_auth_scope_to_wire(binding.scope()),
+            endpoint_binding: binding.endpoint_binding(),
+            public_key: binding.public_key(),
+            max_body_bytes: binding.max_body_bytes(),
+            max_envelope_lifetime_secs: binding.max_envelope_lifetime_secs(),
+            max_future_skew_secs: binding.max_future_skew_secs(),
+        }
+    }
+
+    fn governance_request_ingress_binding_from_wire(
+        binding: GovernanceRequestIngressBindingWireV1,
+    ) -> Result<sorafs_node::GovernanceDagRequestIngressBindingV1, BrokerError> {
+        sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+            governance_request_auth_scope_from_wire(binding.scope)
+                .map_err(|_| BrokerError::BindingMismatch)?,
+            binding.endpoint_binding,
+            binding.public_key,
+            binding.max_body_bytes,
+            binding.max_envelope_lifetime_secs,
+            binding.max_future_skew_secs,
+        )
+        .map_err(|_| BrokerError::BindingMismatch)
+    }
+
+    fn governance_request_ingress_binding_from_provider_binding(
+        binding: &ProviderBindingWireV1,
+    ) -> Result<sorafs_node::GovernanceDagRequestIngressBindingV1, BrokerError> {
+        let ingress = governance_request_ingress_binding_from_wire(
+            binding
+                .governance_request_ingress_binding
+                .ok_or(BrokerError::BindingMismatch)?,
+        )?;
+        let expected_scope = if binding.slot
+            == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator.wire_id()
+        {
+            sorafs_node::GovernanceDagAuthenticationScope::Ipfs
+        } else if binding.slot
+            == IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator.wire_id()
+        {
+            sorafs_node::GovernanceDagAuthenticationScope::SignedHead
+        } else {
+            return Err(BrokerError::BindingMismatch);
+        };
+        if ingress.scope() != expected_scope {
+            return Err(BrokerError::BindingMismatch);
+        }
+        Ok(ingress)
+    }
+
+    fn governance_request_ingress_qualification_to_wire(
+        qualification: sorafs_node::GovernanceDagRequestIngressQualificationV1,
+    ) -> GovernanceRequestIngressQualificationWireV1 {
+        let provider = qualification.provider();
+        GovernanceRequestIngressQualificationWireV1 {
+            provider: QualificationResultWireV1 {
+                revision: provider.revision,
+                policy_digest: provider.policy_digest,
+            },
+            binding: governance_request_ingress_binding_to_wire(qualification.binding()),
+            receiver_policy_digest: qualification.receiver_policy_digest(),
+            replay_namespace_digest: qualification.replay_namespace_digest(),
+            replica_set_digest: qualification.replica_set_digest(),
+        }
+    }
+
+    fn governance_request_ingress_qualification_from_wire(
+        qualification: GovernanceRequestIngressQualificationWireV1,
+    ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, BrokerError> {
+        let binding = governance_request_ingress_binding_from_wire(qualification.binding)
+            .map_err(|_| BrokerError::Protocol)?;
+        sorafs_node::GovernanceDagRequestIngressQualificationV1::try_new(
+            sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                qualification.provider.revision,
+                qualification.provider.policy_digest,
+            ),
+            binding,
+            qualification.receiver_policy_digest,
+            qualification.replay_namespace_digest,
+            qualification.replica_set_digest,
+        )
+        .map_err(|_| BrokerError::Protocol)
+    }
+
     fn governance_request_auth_to_wire(
         request: &sorafs_node::GovernanceDagCanonicalRequestV1,
     ) -> GovernanceRequestAuthRequestWireV1 {
@@ -10218,17 +10321,16 @@ mod protocol {
                     &request.payload,
                     MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1,
                 )?;
-                let max_body_bytes = request
-                    .binding
-                    .governance_request_auth_max_body_bytes
-                    .ok_or(BrokerError::BindingMismatch)?;
-                let descriptor = governance_request_auth_from_wire(&wire, max_body_bytes)?;
+                let ingress =
+                    governance_request_ingress_binding_from_provider_binding(&request.binding)?;
+                let descriptor =
+                    governance_request_auth_from_wire(&wire, ingress.max_body_bytes())?;
                 let expected_scope = if slot == ipfs_auth_slot {
                     sorafs_node::GovernanceDagAuthenticationScope::Ipfs
                 } else {
                     sorafs_node::GovernanceDagAuthenticationScope::SignedHead
                 };
-                if descriptor.scope() != expected_scope {
+                if descriptor.scope() != expected_scope || descriptor.scope() != ingress.scope() {
                     return Err(BrokerError::BindingMismatch);
                 }
             }
@@ -10776,6 +10878,34 @@ mod protocol {
                     )?;
                     if Some(qualification.revision) != request.binding.revision
                         || Some(qualification.policy_digest) != request.binding.policy_digest
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_QUALIFY_V1
+                    if matches!(
+                        request.binding.slot,
+                        slot if slot
+                            == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator.wire_id()
+                            || slot
+                                == IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator
+                                    .wire_id()
+                    ) =>
+                {
+                    let qualification =
+                        governance_request_ingress_qualification_from_wire(decode_canonical::<
+                            GovernanceRequestIngressQualificationWireV1,
+                        >(
+                            result,
+                            MAX_OPERATION_FRAME_BYTES_V1,
+                        )?)?;
+                    let expected_binding =
+                        governance_request_ingress_binding_from_provider_binding(&request.binding)
+                            .map_err(|_| BrokerError::Protocol)?;
+                    if Some(qualification.provider().revision) != request.binding.revision
+                        || Some(qualification.provider().policy_digest)
+                            != request.binding.policy_digest
+                        || qualification.binding() != expected_binding
                     {
                         return Err(BrokerError::Protocol);
                     }
@@ -12424,6 +12554,7 @@ mod protocol {
             backends: &RuntimeProviderBrokerBackendsV1,
         ) -> Result<ProviderObservationWireV1, RuntimeProviderBrokerServerErrorV1> {
             let mut signer_metadata = None;
+            let mut governance_request_ingress_qualification = None;
             let mut moderation_quarantine_active_key_id = None;
             let mut provider_ingest_signer_binding = None;
             let mut provider_ingest_source_provider_ids = Vec::new();
@@ -13140,29 +13271,35 @@ mod protocol {
                         backends.governance_dag_head_authenticator.as_ref()
                     }
                     .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let expected_binding =
+                        governance_request_ingress_binding_from_provider_binding(binding)
+                            .map_err(server_error)?;
                     let qualification = authenticator
-                        .qualification()
+                        .ingress_qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-                    let public_key = authenticator.public_key();
                     if authenticator.handle() != binding.handle
+                        || !iroha_config::parameters::is_production_runtime_handle(
+                            authenticator.handle(),
+                        )
                         || !qualification_matches(
                             binding,
-                            qualification.revision,
-                            qualification.policy_digest,
+                            qualification.provider().revision,
+                            qualification.provider().policy_digest,
                         )
-                        || Some(public_key) != binding.governance_request_auth_public_key
+                        || qualification.binding() != expected_binding
                     {
                         return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
                     }
                     let requalification = authenticator
-                        .qualification()
+                        .ingress_qualification()
                         .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-                    if authenticator.handle() != binding.handle
-                        || authenticator.public_key() != public_key
-                        || requalification != qualification
+                    if authenticator.handle() != binding.handle || requalification != qualification
                     {
                         return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
                     }
+                    governance_request_ingress_qualification = Some(
+                        governance_request_ingress_qualification_to_wire(qualification),
+                    );
                 }
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore.wire_id() =>
@@ -13609,6 +13746,7 @@ mod protocol {
             }
             let metadata_digest = provider_metadata_digest(
                 &signer_metadata,
+                &governance_request_ingress_qualification,
                 &moderation_quarantine_active_key_id,
                 &provider_ingest_signer_binding,
                 &provider_ingest_source_provider_ids,
@@ -13621,6 +13759,7 @@ mod protocol {
             let observation = ProviderObservationWireV1 {
                 binding: binding.clone(),
                 signer_metadata,
+                governance_request_ingress_qualification,
                 moderation_quarantine_active_key_id,
                 provider_ingest_signer_binding,
                 provider_ingest_source_provider_ids,
@@ -14935,14 +15074,41 @@ mod protocol {
                     )
                 }
                 (slot, OPERATION_QUALIFY_V1)
+                    if slot == governance_ipfs_auth_slot || slot == governance_head_auth_slot =>
+                {
+                    let authenticator = if slot == governance_ipfs_auth_slot {
+                        state.backends.governance_dag_ipfs_authenticator.as_ref()
+                    } else {
+                        state.backends.governance_dag_head_authenticator.as_ref()
+                    }
+                    .ok_or(BrokerError::BindingMismatch)?;
+                    let qualification = authenticator
+                        .ingress_qualification()
+                        .map_err(|_| BrokerError::StaleOrRevoked)?;
+                    let expected_binding =
+                        governance_request_ingress_binding_from_provider_binding(&request.binding)?;
+                    if authenticator.handle() != request.binding.handle
+                        || !qualification_matches(
+                            &request.binding,
+                            qualification.provider().revision,
+                            qualification.provider().policy_digest,
+                        )
+                        || qualification.binding() != expected_binding
+                    {
+                        return Err(BrokerError::BindingMismatch);
+                    }
+                    encode_canonical(
+                        &governance_request_ingress_qualification_to_wire(qualification),
+                        MAX_OPERATION_FRAME_BYTES_V1,
+                    )
+                }
+                (slot, OPERATION_QUALIFY_V1)
                     if slot == governance_signer_slot
                         || slot == privacy_cycle_prf_slot
                         || slot == privacy_release_anchor_slot
                         || slot == transparency_leader_lease_slot
                         || slot == fenced_privacy_publisher_slot
                         || slot == fenced_privacy_head_reader_slot
-                        || slot == governance_ipfs_auth_slot
-                        || slot == governance_head_auth_slot
                         || slot == governance_checkpoint_slot
                         || slot == appeal_signer_slot
                         || slot == appeal_checkpoint_slot
@@ -17534,11 +17700,10 @@ mod protocol {
                         &request.payload,
                         MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1,
                     )?;
-                    let max_body_bytes = request
-                        .binding
-                        .governance_request_auth_max_body_bytes
-                        .ok_or(BrokerError::BindingMismatch)?;
-                    let descriptor = governance_request_auth_from_wire(&wire, max_body_bytes)?;
+                    let ingress =
+                        governance_request_ingress_binding_from_provider_binding(&request.binding)?;
+                    let descriptor =
+                        governance_request_auth_from_wire(&wire, ingress.max_body_bytes())?;
                     let (authenticator, expected_scope) = if slot == governance_ipfs_auth_slot {
                         (
                             state.backends.governance_dag_ipfs_authenticator.as_ref(),
@@ -17550,21 +17715,18 @@ mod protocol {
                             sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
                         )
                     };
-                    if descriptor.scope() != expected_scope {
+                    if descriptor.scope() != expected_scope || descriptor.scope() != ingress.scope()
+                    {
                         return Err(BrokerError::BindingMismatch);
                     }
                     let authenticator = authenticator.ok_or(BrokerError::BindingMismatch)?;
                     let envelope = authenticator
                         .authenticate(&descriptor)
                         .map_err(|_| BrokerError::Unavailable)?;
-                    let expected_public_key = request
-                        .binding
-                        .governance_request_auth_public_key
-                        .ok_or(BrokerError::BindingMismatch)?;
                     let envelope = validate_governance_request_auth_envelope(
                         &descriptor,
                         governance_request_auth_result_to_wire(&envelope),
-                        expected_public_key,
+                        ingress.public_key(),
                     )?;
                     qualify_server_binding(
                         state,
@@ -25165,7 +25327,8 @@ mod protocol {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
-            public_key: [u8; 32],
+            ingress_binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
+            ingress_qualification: sorafs_node::GovernanceDagRequestIngressQualificationV1,
         }
 
         impl fmt::Debug for GovernanceDagBrokerRequestAuthenticator {
@@ -25173,15 +25336,18 @@ mod protocol {
                 formatter
                     .debug_struct("GovernanceDagBrokerRequestAuthenticator")
                     .field("slot", &self.binding.slot)
-                    .field("public_key", &hex::encode(self.public_key))
+                    .field(
+                        "endpoint_binding",
+                        &hex::encode(self.ingress_binding.endpoint_binding()),
+                    )
                     .finish_non_exhaustive()
             }
         }
 
         impl GovernanceDagBrokerRequestAuthenticator {
-            fn live_qualification(
+            fn live_ingress_qualification(
                 &self,
-            ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, BrokerError>
+            ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, BrokerError>
             {
                 let payload = encode_canonical(&(), MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1)?;
                 let result = self.session.call(
@@ -25191,18 +25357,17 @@ mod protocol {
                     payload,
                     false,
                 )?;
-                let qualification = self
-                    .session
-                    .decode_result::<QualificationResultWireV1>(&result)?;
-                let expected = qualification_from_binding(&self.binding)?;
-                if qualification.revision != expected.revision
-                    || qualification.policy_digest != expected.policy_digest
-                    || self.binding.governance_request_auth_public_key != Some(self.public_key)
+                let qualification = governance_request_ingress_qualification_from_wire(
+                    self.session
+                        .decode_result::<GovernanceRequestIngressQualificationWireV1>(&result)?,
+                )?;
+                if qualification != self.ingress_qualification
+                    || qualification.binding() != self.ingress_binding
                 {
                     self.session.poison();
                     return Err(BrokerError::StaleOrRevoked);
                 }
-                Ok(expected)
+                Ok(qualification)
             }
 
             fn expected_scope(
@@ -25227,15 +25392,12 @@ mod protocol {
                 &self.binding.handle
             }
 
-            fn qualification(
+            fn ingress_qualification(
                 &self,
-            ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
+            ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, String>
             {
-                self.live_qualification().map_err(redacted_provider_error)
-            }
-
-            fn public_key(&self) -> [u8; 32] {
-                self.public_key
+                self.live_ingress_qualification()
+                    .map_err(redacted_provider_error)
             }
 
             fn authenticate(
@@ -25243,17 +25405,17 @@ mod protocol {
                 request: &sorafs_node::GovernanceDagCanonicalRequestV1,
             ) -> Result<sorafs_node::GovernanceDagRequestAuthenticationEnvelopeV1, String>
             {
-                if self.expected_scope().map_err(redacted_provider_error)? != request.scope() {
+                if self.expected_scope().map_err(redacted_provider_error)? != request.scope()
+                    || self.ingress_binding.scope() != request.scope()
+                {
                     return Err(ERROR_REJECTED.to_owned());
                 }
-                let max_body_bytes = self
-                    .binding
-                    .governance_request_auth_max_body_bytes
-                    .ok_or_else(|| ERROR_UNAVAILABLE.to_owned())?;
-                if request.body_length() > max_body_bytes {
+                if request.body_length() > self.ingress_binding.max_body_bytes() {
                     return Err(ERROR_REJECTED.to_owned());
                 }
-                self.live_qualification().map_err(redacted_provider_error)?;
+                let qualification = self
+                    .live_ingress_qualification()
+                    .map_err(redacted_provider_error)?;
                 let payload = encode_canonical(
                     &governance_request_auth_to_wire(request),
                     MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1,
@@ -25273,13 +25435,22 @@ mod protocol {
                     .session
                     .decode_result::<GovernanceRequestAuthResultWireV1>(&result)
                     .map_err(redacted_provider_error)?;
-                let envelope =
-                    validate_governance_request_auth_envelope(request, result, self.public_key)
-                        .map_err(|error| {
-                            self.session.poison();
-                            redacted_provider_error(error)
-                        })?;
-                self.live_qualification().map_err(redacted_provider_error)?;
+                let envelope = validate_governance_request_auth_envelope(
+                    request,
+                    result,
+                    self.ingress_binding.public_key(),
+                )
+                .map_err(|error| {
+                    self.session.poison();
+                    redacted_provider_error(error)
+                })?;
+                let requalification = self
+                    .live_ingress_qualification()
+                    .map_err(redacted_provider_error)?;
+                if requalification != qualification {
+                    self.session.poison();
+                    return Err(ERROR_UNAVAILABLE.to_owned());
+                }
                 Ok(envelope)
             }
         }
@@ -29909,16 +30080,32 @@ mod protocol {
                             == IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator
                                 .wire_id() =>
                     {
-                        let public_key = binding
-                            .governance_request_auth_public_key
-                            .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+                        let ingress_binding =
+                            governance_request_ingress_binding_from_provider_binding(binding)
+                                .map_err(registry_error)?;
+                        let observed_qualification =
+                            governance_request_ingress_qualification_from_wire(
+                                observation
+                                    .governance_request_ingress_qualification
+                                    .ok_or(
+                                        IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+                                    )?,
+                            )
+                            .map_err(registry_error)?;
                         let authenticator = Arc::new(GovernanceDagBrokerRequestAuthenticator {
                             session: Arc::clone(&session),
                             binding: binding.clone(),
                             metadata_digest: observation.metadata_digest,
-                            public_key,
+                            ingress_binding,
+                            ingress_qualification: observed_qualification,
                         });
-                        authenticator.live_qualification().map_err(registry_error)?;
+                        if authenticator
+                            .live_ingress_qualification()
+                            .map_err(registry_error)?
+                            != observed_qualification
+                        {
+                            return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+                        }
                         dependencies = if slot
                             == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator.wire_id()
                         {
@@ -32279,6 +32466,43 @@ mod protocol {
                 bytes
             }
 
+            fn server_test_request_ingress_binding(
+                public_key: [u8; 32],
+            ) -> sorafs_node::GovernanceDagRequestIngressBindingV1 {
+                let scope = sorafs_node::GovernanceDagAuthenticationScope::Ipfs;
+                let endpoint_binding =
+                    sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(
+                        scope,
+                        "https://governance-ingress.invalid/ipfs/",
+                    )
+                    .expect("request-auth test endpoint must be canonical");
+                sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+                    scope,
+                    endpoint_binding,
+                    public_key,
+                    1_024,
+                    30,
+                    5,
+                )
+                .expect("request-auth test ingress binding must be valid")
+            }
+
+            fn server_test_request_ingress_qualification(
+                public_key: [u8; 32],
+            ) -> sorafs_node::GovernanceDagRequestIngressQualificationV1 {
+                sorafs_node::GovernanceDagRequestIngressQualificationV1::try_new(
+                    sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                        7,
+                        TEST_POLICY_DIGEST,
+                    ),
+                    server_test_request_ingress_binding(public_key),
+                    [0x91; 32],
+                    [0x92; 32],
+                    [0x93; 32],
+                )
+                .expect("request-auth test ingress qualification must be valid")
+            }
+
             #[derive(Debug)]
             struct ServerTestGovernanceRequestAuthenticator {
                 public_key_override: Option<[u8; 32]>,
@@ -32299,6 +32523,11 @@ mod protocol {
                         nonce: AtomicU64::new(1),
                     }
                 }
+
+                fn request_auth_public_key(&self) -> [u8; 32] {
+                    self.public_key_override
+                        .unwrap_or_else(server_test_request_auth_public_key)
+                }
             }
 
             impl sorafs_node::GovernanceDagRequestAuthenticator for ServerTestGovernanceRequestAuthenticator {
@@ -32306,21 +32535,13 @@ mod protocol {
                     SERVER_TEST_IPFS_AUTH_HANDLE
                 }
 
-                fn qualification(
+                fn ingress_qualification(
                     &self,
-                ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
+                ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, String>
                 {
-                    Ok(
-                        sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
-                            7,
-                            TEST_POLICY_DIGEST,
-                        ),
-                    )
-                }
-
-                fn public_key(&self) -> [u8; 32] {
-                    self.public_key_override
-                        .unwrap_or_else(server_test_request_auth_public_key)
+                    Ok(server_test_request_ingress_qualification(
+                        self.request_auth_public_key(),
+                    ))
                 }
 
                 fn authenticate(
@@ -32341,7 +32562,7 @@ mod protocol {
                     let sequence = self.nonce.fetch_add(1, Ordering::Relaxed);
                     let mut nonce = request.request_digest();
                     nonce[..8].copy_from_slice(&sequence.to_be_bytes());
-                    let public_key = self.public_key();
+                    let public_key = self.request_auth_public_key();
                     let payload =
                         sorafs_node::GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
                             request,
@@ -35271,8 +35492,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: None,
                     provider_ingest_checkpoint_max_bytes: None,
@@ -35887,8 +36107,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: None,
                     provider_ingest_checkpoint_max_bytes: None,
@@ -35920,8 +36139,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: None,
                     provider_ingest_checkpoint_max_bytes: None,
@@ -35953,8 +36171,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: None,
                     provider_ingest_checkpoint_max_bytes: None,
@@ -36012,6 +36229,27 @@ mod protocol {
                     } else {
                         None
                     };
+                let governance_request_ingress_qualification = matches!(
+                    binding.slot,
+                    slot if slot
+                        == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator.wire_id()
+                        || slot
+                            == IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator.wire_id()
+                )
+                .then(|| {
+                    let qualification =
+                        sorafs_node::GovernanceDagRequestIngressQualificationV1::try_new(
+                            qualification_from_binding(binding)
+                                .expect("test request-auth provider qualification"),
+                            governance_request_ingress_binding_from_provider_binding(binding)
+                                .expect("test request-auth ingress binding"),
+                            [0x91; 32],
+                            [0x92; 32],
+                            [0x93; 32],
+                        )
+                        .expect("test request-auth ingress qualification");
+                    governance_request_ingress_qualification_to_wire(qualification)
+                });
                 let moderation_quarantine_active_key_id = (binding.slot
                     == IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id())
                 .then(|| SERVER_TEST_MODERATION_KEY_ID.to_owned());
@@ -36040,6 +36278,7 @@ mod protocol {
                     binding: binding.clone(),
                     metadata_digest: provider_metadata_digest(
                         &signer_metadata,
+                        &governance_request_ingress_qualification,
                         &moderation_quarantine_active_key_id,
                         &None,
                         &[],
@@ -36050,6 +36289,7 @@ mod protocol {
                     )
                     .expect("encode test provider metadata"),
                     signer_metadata,
+                    governance_request_ingress_qualification,
                     moderation_quarantine_active_key_id,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_provider_ids: Vec::new(),
@@ -36063,6 +36303,7 @@ mod protocol {
             fn refresh_metadata_digest(observed: &mut ProviderObservationWireV1) {
                 observed.metadata_digest = provider_metadata_digest(
                     &observed.signer_metadata,
+                    &observed.governance_request_ingress_qualification,
                     &observed.moderation_quarantine_active_key_id,
                     &observed.provider_ingest_signer_binding,
                     &observed.provider_ingest_source_provider_ids,
@@ -36424,8 +36665,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: None,
                     provider_ingest_checkpoint_max_bytes: None,
@@ -37886,8 +38126,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: Some(ProviderIngestSourceLimitsWireV1 {
                         operation_timeout_ms: 1_000,
@@ -38309,22 +38548,48 @@ mod protocol {
 
                 let state = request_auth_server_test_state();
                 let binding = &state.catalog[0];
+                let ingress_wire = binding
+                    .governance_request_ingress_binding
+                    .expect("request-auth ingress binding");
                 assert_eq!(
-                    binding.governance_request_auth_public_key,
-                    Some(server_test_request_auth_public_key())
+                    governance_request_ingress_binding_from_wire(ingress_wire),
+                    Ok(server_test_request_ingress_binding(
+                        server_test_request_auth_public_key()
+                    ))
                 );
-                assert_eq!(binding.governance_request_auth_max_body_bytes, Some(1024));
                 let mut missing_key = binding.clone();
-                missing_key.governance_request_auth_public_key = None;
+                missing_key.governance_request_ingress_binding = None;
                 assert_eq!(
                     validate_wire_binding(&missing_key),
                     Err(BrokerError::BindingMismatch)
                 );
                 let mut zero_bound = binding.clone();
-                zero_bound.governance_request_auth_max_body_bytes = Some(0);
+                zero_bound
+                    .governance_request_ingress_binding
+                    .as_mut()
+                    .expect("request-auth ingress binding")
+                    .max_body_bytes = 0;
                 assert_eq!(
                     validate_wire_binding(&zero_bound),
                     Err(BrokerError::BindingMismatch)
+                );
+
+                let qualification =
+                    sorafs_node::GovernanceDagRequestAuthenticator::ingress_qualification(
+                        &ServerTestGovernanceRequestAuthenticator::exact(),
+                    )
+                    .expect("qualify exact request ingress");
+                let qualification_wire =
+                    governance_request_ingress_qualification_to_wire(qualification);
+                assert_eq!(
+                    governance_request_ingress_qualification_from_wire(qualification_wire),
+                    Ok(qualification)
+                );
+                let mut zero_replay = qualification_wire;
+                zero_replay.replay_namespace_digest = [0; 32];
+                assert_eq!(
+                    governance_request_ingress_qualification_from_wire(zero_replay),
+                    Err(BrokerError::Protocol)
                 );
 
                 let request = canonical_request_auth_test_request(
@@ -38425,9 +38690,16 @@ mod protocol {
                     .sorafs_governance_dag_ipfs_authenticator
                     .as_ref()
                     .expect("resolved IPFS request authenticator");
+                let ingress_qualification = authenticator
+                    .ingress_qualification()
+                    .expect("qualify resolved IPFS request ingress");
                 assert_eq!(
-                    authenticator.public_key(),
+                    ingress_qualification.binding().public_key(),
                     server_test_request_auth_public_key()
+                );
+                assert_eq!(
+                    ingress_qualification,
+                    server_test_request_ingress_qualification(server_test_request_auth_public_key())
                 );
                 let request = canonical_request_auth_test_request(
                     sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
@@ -41251,8 +41523,10 @@ mod protocol {
                 );
 
                 let mut confused = binding.clone();
-                confused.governance_request_auth_public_key = Some(TEST_SIGNER_KEY);
-                confused.governance_request_auth_max_body_bytes = Some(1024);
+                confused.governance_request_ingress_binding =
+                    Some(governance_request_ingress_binding_to_wire(
+                        server_test_request_ingress_binding(TEST_SIGNER_KEY),
+                    ));
                 assert_eq!(
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
@@ -41395,8 +41669,10 @@ mod protocol {
                 );
 
                 let mut confused = binding.clone();
-                confused.governance_request_auth_public_key = Some(TEST_SIGNER_KEY);
-                confused.governance_request_auth_max_body_bytes = Some(1024);
+                confused.governance_request_ingress_binding =
+                    Some(governance_request_ingress_binding_to_wire(
+                        server_test_request_ingress_binding(TEST_SIGNER_KEY),
+                    ));
                 assert_eq!(
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
@@ -41634,8 +41910,10 @@ mod protocol {
                 );
 
                 let mut confused = binding.clone();
-                confused.governance_request_auth_public_key = Some(TEST_SIGNER_KEY);
-                confused.governance_request_auth_max_body_bytes = Some(1024);
+                confused.governance_request_ingress_binding =
+                    Some(governance_request_ingress_binding_to_wire(
+                        server_test_request_ingress_binding(TEST_SIGNER_KEY),
+                    ));
                 assert_eq!(
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
@@ -41878,8 +42156,10 @@ mod protocol {
                 );
 
                 let mut confused = binding.clone();
-                confused.governance_request_auth_public_key = Some(TEST_SIGNER_KEY);
-                confused.governance_request_auth_max_body_bytes = Some(1_024);
+                confused.governance_request_ingress_binding =
+                    Some(governance_request_ingress_binding_to_wire(
+                        server_test_request_ingress_binding(TEST_SIGNER_KEY),
+                    ));
                 assert_eq!(
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
@@ -42210,8 +42490,10 @@ mod protocol {
                 );
 
                 let mut confused = binding.clone();
-                confused.governance_request_auth_public_key = Some(TEST_SIGNER_KEY);
-                confused.governance_request_auth_max_body_bytes = Some(1_024);
+                confused.governance_request_ingress_binding =
+                    Some(governance_request_ingress_binding_to_wire(
+                        server_test_request_ingress_binding(TEST_SIGNER_KEY),
+                    ));
                 assert_eq!(
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
@@ -43965,8 +44247,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: Some(ProviderIngestSourceLimitsWireV1 {
                         operation_timeout_ms: 30_000,
@@ -43989,6 +44270,7 @@ mod protocol {
                 let mut source_observation = ProviderObservationWireV1 {
                     binding: source.clone(),
                     signer_metadata: None,
+                    governance_request_ingress_qualification: None,
                     moderation_quarantine_active_key_id: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
@@ -44035,8 +44317,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: Some(exact_signer.clone()),
                     provider_ingest_source_limits: None,
                     provider_ingest_checkpoint_max_bytes: None,
@@ -44096,8 +44377,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: None,
                     provider_ingest_checkpoint_max_bytes: Some(64 * 1024 * 1024),
@@ -44201,8 +44481,7 @@ mod protocol {
                     por_replay_archive_proof_limits: None,
                     potr_runtime_binding: None,
                     native_signer_binding: None,
-                    governance_request_auth_public_key: None,
-                    governance_request_auth_max_body_bytes: None,
+                    governance_request_ingress_binding: None,
                     provider_ingest_signer_binding: None,
                     provider_ingest_source_limits: None,
                     provider_ingest_checkpoint_max_bytes: None,

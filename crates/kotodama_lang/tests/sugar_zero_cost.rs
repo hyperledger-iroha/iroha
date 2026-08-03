@@ -235,6 +235,65 @@ fn named_call_matches_explicit_source_order_and_positional_abi_order() {
 }
 
 #[test]
+fn named_struct_matches_explicit_source_order_and_declaration_layout() {
+    let named = r#"
+        seiyaku NamedStruct {
+            struct Pair { int first, int second }
+            state int trace;
+
+            hajimari() { trace = 0; }
+
+            fn record(int value) -> int {
+                trace = trace * 10 + value;
+                value
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                let pair = Pair {
+                    second: record(2),
+                    first: record(1),
+                };
+                trace * 100 + pair.first * 10 + pair.second
+            }
+        }
+    "#;
+    let explicit = r#"
+        seiyaku NamedStruct {
+            struct Pair { int first, int second }
+            state int trace;
+
+            hajimari() { trace = 0; }
+
+            fn record(int value) -> int {
+                trace = trace * 10 + value;
+                value
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                let int second_value = record(2);
+                let int first_value = record(1);
+                let pair = Pair {
+                    first: first_value,
+                    second: second_value,
+                };
+                trace * 100 + pair.first * 10 + pair.second
+            }
+        }
+    "#;
+
+    assert_ir_equivalent(
+        named,
+        explicit,
+        "out-of-order named struct with observable field evaluation",
+    );
+    assert_executable_equivalent(
+        named,
+        explicit,
+        "out-of-order named struct with observable field evaluation",
+    );
+}
+
+#[test]
 fn exhaustive_option_match_matches_eager_unwrap_or() {
     let matched = r#"
         seiyaku MatchExpression {

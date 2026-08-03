@@ -335,7 +335,6 @@ pub enum Builtin {
     RecordSccpMessage,
     ExecuteQuery,
     ScExecuteSubmitBallot,
-    ScExecuteUnshield,
     ResolveAccountAlias,
     SubscriptionBill,
     SubscriptionRecordUsage,
@@ -379,9 +378,7 @@ pub enum Builtin {
     UnregisterAsset,
     RegisterPeer,
     UnregisterPeer,
-    CreateTrigger,
     RegisterTrigger,
-    RemoveTrigger,
     UnregisterTrigger,
     SetTriggerEnabled,
     CreateRole,
@@ -426,13 +423,10 @@ pub enum Builtin {
     ActivateContractInstance,
     ZkRootsGet,
     ZkVoteGetTally,
-    ZkVerifyTransfer,
-    ZkVerifyUnshield,
     ZkVerifyBatch,
     ZkVoteVerifyBallot,
     ZkVoteVerifyTally,
     BuildSubmitBallotInline,
-    BuildUnshieldInline,
     VrfEpochSeed,
     VrfVerify,
     VrfVerifyBatch,
@@ -481,24 +475,9 @@ pub enum Builtin {
     DecodeInt,
     EncodeJson,
     DecodeJson,
-    JsonSetIntDirect,
-    JsonSetAccountIdDirect,
-    JsonGetIntDirect,
-    JsonGetDecimalDirect,
-    JsonGetQuantityDirect,
-    JsonGetJsonDirect,
-    JsonGetNameDirect,
-    JsonGetAccountIdDirect,
-    JsonGetAssetDefinitionIdDirect,
-    JsonGetNftIdDirect,
-    JsonGetBlobHexDirect,
-    BuildPathKeyNoritoDirect,
     SchemaEncode,
     SchemaDecode,
     SchemaInfo,
-    SchemaEncodeDirect,
-    SchemaDecodeDirect,
-    SchemaInfoDirect,
     NumericToInt,
     NumericNeg,
     NumericAdd,
@@ -630,7 +609,6 @@ impl Builtin {
             "record_sccp_message" => Self::RecordSccpMessage,
             "execute_query" => Self::ExecuteQuery,
             "sc_execute_submit_ballot" => Self::ScExecuteSubmitBallot,
-            "sc_execute_unshield" => Self::ScExecuteUnshield,
             "resolve_account_alias" => Self::ResolveAccountAlias,
             "subscription_bill" => Self::SubscriptionBill,
             "subscription_record_usage" => Self::SubscriptionRecordUsage,
@@ -674,9 +652,7 @@ impl Builtin {
             "unregister_asset" => Self::UnregisterAsset,
             "register_peer" => Self::RegisterPeer,
             "unregister_peer" => Self::UnregisterPeer,
-            "create_trigger" => Self::CreateTrigger,
             "register_trigger" => Self::RegisterTrigger,
-            "remove_trigger" => Self::RemoveTrigger,
             "unregister_trigger" => Self::UnregisterTrigger,
             "set_trigger_enabled" => Self::SetTriggerEnabled,
             "create_role" => Self::CreateRole,
@@ -721,13 +697,10 @@ impl Builtin {
             "activate_contract_instance" => Self::ActivateContractInstance,
             "zk_roots_get" => Self::ZkRootsGet,
             "zk_vote_get_tally" => Self::ZkVoteGetTally,
-            "zk_verify_transfer" => Self::ZkVerifyTransfer,
-            "zk_verify_unshield" => Self::ZkVerifyUnshield,
             "zk_verify_batch" => Self::ZkVerifyBatch,
             "zk_vote_verify_ballot" => Self::ZkVoteVerifyBallot,
             "zk_vote_verify_tally" => Self::ZkVoteVerifyTally,
             "build_submit_ballot_inline" => Self::BuildSubmitBallotInline,
-            "build_unshield_inline" => Self::BuildUnshieldInline,
             "vrf_epoch_seed" => Self::VrfEpochSeed,
             "vrf_verify" => Self::VrfVerify,
             "vrf_verify_batch" => Self::VrfVerifyBatch,
@@ -776,24 +749,9 @@ impl Builtin {
             "decode_int" => Self::DecodeInt,
             "encode_json" => Self::EncodeJson,
             "decode_json" => Self::DecodeJson,
-            "json_set_int_direct" => Self::JsonSetIntDirect,
-            "json_set_account_id_direct" => Self::JsonSetAccountIdDirect,
-            "json_get_int_direct" => Self::JsonGetIntDirect,
-            "json_get_decimal_direct" => Self::JsonGetDecimalDirect,
-            "json_get_quantity_direct" => Self::JsonGetQuantityDirect,
-            "json_get_json_direct" => Self::JsonGetJsonDirect,
-            "json_get_name_direct" => Self::JsonGetNameDirect,
-            "json_get_account_id_direct" => Self::JsonGetAccountIdDirect,
-            "json_get_asset_definition_id_direct" => Self::JsonGetAssetDefinitionIdDirect,
-            "json_get_nft_id_direct" => Self::JsonGetNftIdDirect,
-            "json_get_blob_hex_direct" => Self::JsonGetBlobHexDirect,
-            "build_path_key_norito_direct" => Self::BuildPathKeyNoritoDirect,
             "encode_schema" => Self::SchemaEncode,
             "decode_schema" => Self::SchemaDecode,
             "schema_info" => Self::SchemaInfo,
-            "schema_encode_direct" => Self::SchemaEncodeDirect,
-            "schema_decode_direct" => Self::SchemaDecodeDirect,
-            "schema_info_direct" => Self::SchemaInfoDirect,
             "numeric_to_int" => Self::NumericToInt,
             "numeric_neg" => Self::NumericNeg,
             "numeric_add" => Self::NumericAdd,
@@ -895,7 +853,6 @@ impl Builtin {
             Self::RecordSccpMessage => "record_sccp_message",
             Self::ExecuteQuery => "execute_query",
             Self::ScExecuteSubmitBallot => "sc_execute_submit_ballot",
-            Self::ScExecuteUnshield => "sc_execute_unshield",
             Self::ResolveAccountAlias => "resolve_account_alias",
             Self::SubscriptionBill => "subscription_bill",
             Self::SubscriptionRecordUsage => "subscription_record_usage",
@@ -939,9 +896,7 @@ impl Builtin {
             Self::UnregisterAsset => "unregister_asset",
             Self::RegisterPeer => "register_peer",
             Self::UnregisterPeer => "unregister_peer",
-            Self::CreateTrigger => "create_trigger",
             Self::RegisterTrigger => "register_trigger",
-            Self::RemoveTrigger => "remove_trigger",
             Self::UnregisterTrigger => "unregister_trigger",
             Self::SetTriggerEnabled => "set_trigger_enabled",
             Self::CreateRole => "create_role",
@@ -986,13 +941,10 @@ impl Builtin {
             Self::ActivateContractInstance => "activate_contract_instance",
             Self::ZkRootsGet => "zk_roots_get",
             Self::ZkVoteGetTally => "zk_vote_get_tally",
-            Self::ZkVerifyTransfer => "zk_verify_transfer",
-            Self::ZkVerifyUnshield => "zk_verify_unshield",
             Self::ZkVerifyBatch => "zk_verify_batch",
             Self::ZkVoteVerifyBallot => "zk_vote_verify_ballot",
             Self::ZkVoteVerifyTally => "zk_vote_verify_tally",
             Self::BuildSubmitBallotInline => "build_submit_ballot_inline",
-            Self::BuildUnshieldInline => "build_unshield_inline",
             Self::VrfEpochSeed => "vrf_epoch_seed",
             Self::VrfVerify => "vrf_verify",
             Self::VrfVerifyBatch => "vrf_verify_batch",
@@ -1041,24 +993,9 @@ impl Builtin {
             Self::DecodeInt => "decode_int",
             Self::EncodeJson => "encode_json",
             Self::DecodeJson => "decode_json",
-            Self::JsonSetIntDirect => "json_set_int_direct",
-            Self::JsonSetAccountIdDirect => "json_set_account_id_direct",
-            Self::JsonGetIntDirect => "json_get_int_direct",
-            Self::JsonGetDecimalDirect => "json_get_decimal_direct",
-            Self::JsonGetQuantityDirect => "json_get_quantity_direct",
-            Self::JsonGetJsonDirect => "json_get_json_direct",
-            Self::JsonGetNameDirect => "json_get_name_direct",
-            Self::JsonGetAccountIdDirect => "json_get_account_id_direct",
-            Self::JsonGetAssetDefinitionIdDirect => "json_get_asset_definition_id_direct",
-            Self::JsonGetNftIdDirect => "json_get_nft_id_direct",
-            Self::JsonGetBlobHexDirect => "json_get_blob_hex_direct",
-            Self::BuildPathKeyNoritoDirect => "build_path_key_norito_direct",
             Self::SchemaEncode => "encode_schema",
             Self::SchemaDecode => "decode_schema",
             Self::SchemaInfo => "schema_info",
-            Self::SchemaEncodeDirect => "schema_encode_direct",
-            Self::SchemaDecodeDirect => "schema_decode_direct",
-            Self::SchemaInfoDirect => "schema_info_direct",
             Self::NumericToInt => "numeric_to_int",
             Self::NumericNeg => "numeric_neg",
             Self::NumericAdd => "numeric_add",
@@ -1232,9 +1169,7 @@ impl Builtin {
             Self::TransferDomain => "ledger::domain::transfer",
             Self::RegisterPeer => "ledger::peer::register",
             Self::UnregisterPeer => "ledger::peer::unregister",
-            Self::CreateTrigger => "ledger::trigger::create",
             Self::RegisterTrigger => "ledger::trigger::register",
-            Self::RemoveTrigger => "ledger::trigger::remove",
             Self::UnregisterTrigger => "ledger::trigger::unregister",
             Self::SetTriggerEnabled => "ledger::trigger::set_enabled",
             Self::CreateRole => "ledger::role::create",
@@ -1275,16 +1210,12 @@ impl Builtin {
             Self::RegisterSmartContractBytes => "seiyaku::register_bytes",
             Self::ActivateContractInstance => "seiyaku::activate_instance",
             Self::ScExecuteSubmitBallot => "ledger::governance::submit_ballot",
-            Self::ScExecuteUnshield => "crypto::zk::submit_unshield",
             Self::ZkRootsGet => "crypto::zk::roots",
             Self::ZkVoteGetTally => "ledger::governance::tally",
-            Self::ZkVerifyTransfer => "crypto::zk::verify_transfer",
-            Self::ZkVerifyUnshield => "crypto::zk::verify_unshield",
             Self::ZkVerifyBatch => "crypto::zk::verify_batch",
             Self::ZkVoteVerifyBallot => "ledger::governance::verify_ballot",
             Self::ZkVoteVerifyTally => "ledger::governance::verify_tally",
             Self::BuildSubmitBallotInline => "ledger::governance::build_submit_ballot",
-            Self::BuildUnshieldInline => "crypto::zk::build_unshield",
             Self::VrfEpochSeed => "crypto::vrf::epoch_seed",
             Self::VrfVerify => "crypto::vrf::verify",
             Self::VrfVerifyBatch => "crypto::vrf::verify_batch",
@@ -1384,21 +1315,6 @@ impl Builtin {
             | Self::GetMerklePath
             | Self::GetMerkleCompact
             | Self::GetRegisterMerkleCompact
-            | Self::JsonSetIntDirect
-            | Self::JsonSetAccountIdDirect
-            | Self::JsonGetIntDirect
-            | Self::JsonGetDecimalDirect
-            | Self::JsonGetQuantityDirect
-            | Self::JsonGetJsonDirect
-            | Self::JsonGetNameDirect
-            | Self::JsonGetAccountIdDirect
-            | Self::JsonGetAssetDefinitionIdDirect
-            | Self::JsonGetNftIdDirect
-            | Self::JsonGetBlobHexDirect
-            | Self::BuildPathKeyNoritoDirect
-            | Self::SchemaEncodeDirect
-            | Self::SchemaDecodeDirect
-            | Self::SchemaInfoDirect
             | Self::NumericToIntDirect
             | Self::NumericAddDirect
             | Self::NumericSubDirect
@@ -1454,9 +1370,7 @@ impl Builtin {
     /// Return the canonical effect classification for this builtin.
     pub const fn effects(self) -> BuiltinEffects {
         match self {
-            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot | Self::ScExecuteUnshield => {
-                BuiltinEffects::INSTRUCTION
-            }
+            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot => BuiltinEffects::INSTRUCTION,
             Self::Ensure | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinEffects::DURABLE_STATE
             }
@@ -1497,9 +1411,7 @@ impl Builtin {
             | Self::UnregisterAsset
             | Self::RegisterPeer
             | Self::UnregisterPeer
-            | Self::CreateTrigger
             | Self::RegisterTrigger
-            | Self::RemoveTrigger
             | Self::UnregisterTrigger
             | Self::SetTriggerEnabled
             | Self::CreateRole
@@ -1541,8 +1453,6 @@ impl Builtin {
             | Self::RegisterSmartContractCode
             | Self::RegisterSmartContractBytes
             | Self::ActivateContractInstance
-            | Self::ZkVerifyTransfer
-            | Self::ZkVerifyUnshield
             | Self::ZkVerifyBatch
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally
@@ -1597,8 +1507,6 @@ impl Builtin {
             | Self::GetAccountBalance
             | Self::ZkRootsGet
             | Self::ZkVoteGetTally
-            | Self::ZkVerifyTransfer
-            | Self::ZkVerifyUnshield
             | Self::ZkVerifyBatch
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally
@@ -1696,21 +1604,6 @@ impl Builtin {
             | Self::SchemaEncode
             | Self::SchemaDecode
             | Self::SchemaInfo
-            | Self::JsonSetIntDirect
-            | Self::JsonSetAccountIdDirect
-            | Self::JsonGetIntDirect
-            | Self::JsonGetDecimalDirect
-            | Self::JsonGetQuantityDirect
-            | Self::JsonGetJsonDirect
-            | Self::JsonGetNameDirect
-            | Self::JsonGetAccountIdDirect
-            | Self::JsonGetAssetDefinitionIdDirect
-            | Self::JsonGetNftIdDirect
-            | Self::JsonGetBlobHexDirect
-            | Self::BuildPathKeyNoritoDirect
-            | Self::SchemaEncodeDirect
-            | Self::SchemaDecodeDirect
-            | Self::SchemaInfoDirect
             | Self::NumericToInt
             | Self::NumericNeg
             | Self::NumericAdd
@@ -1832,7 +1725,7 @@ impl Builtin {
             Self::QueryGetParameter => &[s::SYSCALL_QUERY_GET_PARAMETER],
             Self::QueryGetContractManifest => &[s::SYSCALL_QUERY_GET_CONTRACT_MANIFEST],
             Self::QueryGetContractInstance => &[s::SYSCALL_QUERY_GET_CONTRACT_INSTANCE],
-            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot | Self::ScExecuteUnshield => {
+            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot => {
                 &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
             }
             Self::ExecuteQuery => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY],
@@ -1881,8 +1774,8 @@ impl Builtin {
             Self::UnregisterAsset => &[s::SYSCALL_UNREGISTER_ASSET],
             Self::RegisterPeer => &[s::SYSCALL_REGISTER_PEER],
             Self::UnregisterPeer => &[s::SYSCALL_UNREGISTER_PEER],
-            Self::CreateTrigger | Self::RegisterTrigger => &[s::SYSCALL_CREATE_TRIGGER],
-            Self::RemoveTrigger | Self::UnregisterTrigger => &[s::SYSCALL_REMOVE_TRIGGER],
+            Self::RegisterTrigger => &[s::SYSCALL_CREATE_TRIGGER],
+            Self::UnregisterTrigger => &[s::SYSCALL_REMOVE_TRIGGER],
             Self::SetTriggerEnabled => &[s::SYSCALL_SET_TRIGGER_ENABLED],
             Self::CreateRole => &[s::SYSCALL_CREATE_ROLE],
             Self::DeleteRole => &[s::SYSCALL_DELETE_ROLE],
@@ -1932,12 +1825,10 @@ impl Builtin {
             Self::ActivateContractInstance => &[s::SYSCALL_ACTIVATE_CONTRACT_INSTANCE],
             Self::ZkRootsGet => &[s::SYSCALL_ZK_ROOTS_GET],
             Self::ZkVoteGetTally => &[s::SYSCALL_ZK_VOTE_GET_TALLY],
-            Self::ZkVerifyTransfer => &[s::SYSCALL_ZK_VERIFY_TRANSFER],
-            Self::ZkVerifyUnshield => &[s::SYSCALL_ZK_VERIFY_UNSHIELD],
             Self::ZkVerifyBatch => &[s::SYSCALL_ZK_VERIFY_BATCH],
             Self::ZkVoteVerifyBallot => &[s::SYSCALL_ZK_VOTE_VERIFY_BALLOT],
             Self::ZkVoteVerifyTally => &[s::SYSCALL_ZK_VOTE_VERIFY_TALLY],
-            Self::BuildSubmitBallotInline | Self::BuildUnshieldInline => &[],
+            Self::BuildSubmitBallotInline => &[],
             Self::VrfEpochSeed => &[s::SYSCALL_VRF_EPOCH_SEED],
             Self::VrfVerify => &[s::SYSCALL_VRF_VERIFY],
             Self::VrfVerifyBatch => &[s::SYSCALL_VRF_VERIFY_BATCH],
@@ -1985,26 +1876,9 @@ impl Builtin {
             Self::DecodeInt => &[s::SYSCALL_DECODE_INT],
             Self::EncodeJson => &[s::SYSCALL_JSON_ENCODE],
             Self::DecodeJson => &[s::SYSCALL_JSON_DECODE],
-            Self::JsonSetIntDirect => &[s::SYSCALL_JSON_SET_I64_DIRECT],
-            Self::JsonSetAccountIdDirect => &[s::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT],
-            Self::JsonGetIntDirect => &[s::SYSCALL_JSON_GET_INT_DIRECT],
-            Self::JsonGetDecimalDirect => &[s::SYSCALL_JSON_GET_DECIMAL_DIRECT],
-            Self::JsonGetQuantityDirect => &[s::SYSCALL_JSON_GET_QUANTITY_DIRECT],
-            Self::JsonGetJsonDirect => &[s::SYSCALL_JSON_GET_JSON_DIRECT],
-            Self::JsonGetNameDirect => &[s::SYSCALL_JSON_GET_NAME_DIRECT],
-            Self::JsonGetAccountIdDirect => &[s::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT],
-            Self::JsonGetAssetDefinitionIdDirect => {
-                &[s::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT]
-            }
-            Self::JsonGetNftIdDirect => &[s::SYSCALL_JSON_GET_NFT_ID_DIRECT],
-            Self::JsonGetBlobHexDirect => &[s::SYSCALL_JSON_GET_BLOB_HEX_DIRECT],
-            Self::BuildPathKeyNoritoDirect => &[s::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT],
             Self::SchemaEncode => &[s::SYSCALL_SCHEMA_ENCODE],
             Self::SchemaDecode => &[s::SYSCALL_SCHEMA_DECODE],
             Self::SchemaInfo => &[s::SYSCALL_SCHEMA_INFO],
-            Self::SchemaEncodeDirect => &[s::SYSCALL_SCHEMA_ENCODE_DIRECT],
-            Self::SchemaDecodeDirect => &[s::SYSCALL_SCHEMA_DECODE_DIRECT],
-            Self::SchemaInfoDirect => &[s::SYSCALL_SCHEMA_INFO_DIRECT],
             Self::NumericToInt => &[s::SYSCALL_DECIMAL_TRY_TO_INT_EXACT],
             Self::NumericNeg => &[s::SYSCALL_INT_NEG, s::SYSCALL_DECIMAL_NEG],
             Self::NumericAdd => &[
@@ -2211,21 +2085,7 @@ impl Builtin {
                 &["string", "bytes", "bytes", "string", "bytes", "bytes"],
                 "bytes",
             ),
-            Self::BuildUnshieldInline => S::new(
-                &[
-                    "AssetDefinitionId",
-                    "AccountId",
-                    "quantity",
-                    "bytes",
-                    "string",
-                    "bytes",
-                    "bytes",
-                ],
-                "bytes",
-            ),
-            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot | Self::ScExecuteUnshield => {
-                S::new(&["bytes"], "()")
-            }
+            Self::RecordSccpMessage | Self::ScExecuteSubmitBallot => S::new(&["bytes"], "()"),
             Self::ExecuteQuery => S::new(&["bytes"], "bytes"),
             Self::ResolveAccountAlias => S::new(&["string|bytes"], "AccountId"),
             Self::SubscriptionBill | Self::SubscriptionRecordUsage => S::new(&[], "()"),
@@ -2298,8 +2158,8 @@ impl Builtin {
             ),
             Self::UnregisterAsset => S::new(&["AssetDefinitionId"], "()"),
             Self::RegisterPeer | Self::UnregisterPeer => S::new(&["Json"], "()"),
-            Self::CreateTrigger | Self::RegisterTrigger => S::new(&["Json"], "()"),
-            Self::RemoveTrigger | Self::UnregisterTrigger => S::new(&["Name"], "()"),
+            Self::RegisterTrigger => S::new(&["Json"], "()"),
+            Self::UnregisterTrigger => S::new(&["Name"], "()"),
             Self::SetTriggerEnabled => S::new(&["Name", "int"], "()"),
             Self::CreateRole => S::new(&["Name", "Json"], "()"),
             Self::DeleteRole => S::new(&["Name"], "()"),
@@ -2346,11 +2206,9 @@ impl Builtin {
             | Self::RegisterSmartContractCode
             | Self::RegisterSmartContractBytes
             | Self::ActivateContractInstance => S::new(&["bytes"], "()"),
-            Self::ZkVerifyTransfer
-            | Self::ZkVerifyUnshield
-            | Self::ZkVerifyBatch
-            | Self::ZkVoteVerifyBallot
-            | Self::ZkVoteVerifyTally => S::new(&["bytes"], "()"),
+            Self::ZkVerifyBatch | Self::ZkVoteVerifyBallot | Self::ZkVoteVerifyTally => {
+                S::new(&["bytes"], "()")
+            }
             Self::VrfVerify => S::new(&["bytes"], "bytes"),
             Self::VrfVerifyBatch => S::new(&["bytes"], "bytes"),
             Self::Sm3Hash
@@ -2395,37 +2253,24 @@ impl Builtin {
             Self::BytesLen => S::new(&["bytes"], "int"),
             Self::PointerToNorito => S::new(&["pointer-ABI"], "bytes"),
             Self::JsonObject => S::new(&[], "Json"),
-            Self::JsonSetInt | Self::JsonSetIntDirect => S::new(&["Json", "Name", "int"], "Json"),
-            Self::JsonSetAccountId | Self::JsonSetAccountIdDirect => {
-                S::new(&["Json", "Name", "AccountId"], "Json")
-            }
+            Self::JsonSetInt => S::new(&["Json", "Name", "int"], "Json"),
+            Self::JsonSetAccountId => S::new(&["Json", "Name", "AccountId"], "Json"),
             Self::EncodeInt => S::new(&["int"], "bytes"),
             Self::DecodeInt => S::new(&["bytes"], "int"),
             Self::EncodeJson => S::new(&["Json"], "bytes"),
             Self::DecodeJson => S::new(&["bytes"], "Json"),
-            Self::JsonGetIntDirect | Self::GetInt => S::new(&["Json", "Name"], "Option<int>"),
-            Self::JsonGetDecimalDirect | Self::GetDecimal => {
-                S::new(&["Json", "Name"], "Option<decimal>")
-            }
-            Self::JsonGetQuantityDirect | Self::GetQuantity => {
-                S::new(&["Json", "Name"], "Option<quantity>")
-            }
-            Self::JsonGetJsonDirect | Self::GetJson => S::new(&["Json", "Name"], "Option<Json>"),
-            Self::JsonGetNameDirect | Self::GetName => S::new(&["Json", "Name"], "Option<Name>"),
-            Self::JsonGetAccountIdDirect | Self::GetAccountId => {
-                S::new(&["Json", "Name"], "Option<AccountId>")
-            }
-            Self::JsonGetAssetDefinitionIdDirect | Self::GetAssetDefinitionId => {
-                S::new(&["Json", "Name"], "Option<AssetDefinitionId>")
-            }
-            Self::JsonGetNftIdDirect | Self::GetNftId => S::new(&["Json", "Name"], "Option<NftId>"),
-            Self::JsonGetBlobHexDirect | Self::GetBlobHex => {
-                S::new(&["Json", "Name"], "Option<bytes>")
-            }
-            Self::BuildPathKeyNoritoDirect => S::new(&["Name", "bytes"], "bytes"),
-            Self::SchemaEncode | Self::SchemaEncodeDirect => S::new(&["Name", "Json"], "bytes"),
-            Self::SchemaDecode | Self::SchemaDecodeDirect => S::new(&["Name", "bytes"], "Json"),
-            Self::SchemaInfo | Self::SchemaInfoDirect => S::new(&["Name"], "Json"),
+            Self::GetInt => S::new(&["Json", "Name"], "Option<int>"),
+            Self::GetDecimal => S::new(&["Json", "Name"], "Option<decimal>"),
+            Self::GetQuantity => S::new(&["Json", "Name"], "Option<quantity>"),
+            Self::GetJson => S::new(&["Json", "Name"], "Option<Json>"),
+            Self::GetName => S::new(&["Json", "Name"], "Option<Name>"),
+            Self::GetAccountId => S::new(&["Json", "Name"], "Option<AccountId>"),
+            Self::GetAssetDefinitionId => S::new(&["Json", "Name"], "Option<AssetDefinitionId>"),
+            Self::GetNftId => S::new(&["Json", "Name"], "Option<NftId>"),
+            Self::GetBlobHex => S::new(&["Json", "Name"], "Option<bytes>"),
+            Self::SchemaEncode => S::new(&["Name", "Json"], "bytes"),
+            Self::SchemaDecode => S::new(&["Name", "bytes"], "Json"),
+            Self::SchemaInfo => S::new(&["Name"], "Json"),
             Self::NumericToInt | Self::NumericToIntDirect => S::new(&["wide-numeric"], "int"),
             Self::NumericNeg | Self::NumericNegDirect => S::new(&["int|decimal"], "same-as-arg0"),
             Self::NumericAdd
@@ -2512,15 +2357,6 @@ impl Builtin {
                 "election_id",
                 "ciphertext",
                 "nullifier",
-                "backend",
-                "proof",
-                "verification_key",
-            ]),
-            Self::BuildUnshieldInline => signature.with_names(&[
-                "asset_definition",
-                "destination",
-                "amount",
-                "inputs",
                 "backend",
                 "proof",
                 "verification_key",
@@ -2623,29 +2459,17 @@ impl Builtin {
                 signature.with_names(&["address_or_register", "output", "max_depth", "root_output"])
             }
             Self::TlvEq => signature.with_names(&["left", "right"]),
-            Self::JsonSetInt | Self::JsonSetIntDirect => {
+            Self::JsonSetInt | Self::JsonSetAccountId => {
                 signature.with_names(&["object", "key", "value"])
             }
-            Self::JsonSetAccountId | Self::JsonSetAccountIdDirect => {
-                signature.with_names(&["object", "key", "value"])
-            }
-            Self::JsonGetIntDirect
-            | Self::GetInt
-            | Self::JsonGetDecimalDirect
+            Self::GetInt
             | Self::GetDecimal
-            | Self::JsonGetQuantityDirect
             | Self::GetQuantity
-            | Self::JsonGetJsonDirect
             | Self::GetJson
-            | Self::JsonGetNameDirect
             | Self::GetName
-            | Self::JsonGetAccountIdDirect
             | Self::GetAccountId
-            | Self::JsonGetAssetDefinitionIdDirect
             | Self::GetAssetDefinitionId
-            | Self::JsonGetNftIdDirect
             | Self::GetNftId
-            | Self::JsonGetBlobHexDirect
             | Self::GetBlobHex => signature.with_names(&["object", "key"]),
             Self::NumericAdd
             | Self::NumericSub
@@ -2736,15 +2560,6 @@ impl Builtin {
                 | Self::GetNftId
                 | Self::GetBlobHex
                 | Self::TriggerEvent
-                | Self::JsonGetIntDirect
-                | Self::JsonGetDecimalDirect
-                | Self::JsonGetQuantityDirect
-                | Self::JsonGetJsonDirect
-                | Self::JsonGetNameDirect
-                | Self::JsonGetAccountIdDirect
-                | Self::JsonGetAssetDefinitionIdDirect
-                | Self::JsonGetNftIdDirect
-                | Self::JsonGetBlobHexDirect
         )
     }
 }
@@ -3202,32 +3017,43 @@ mod tests {
     }
 
     #[test]
+    fn trigger_registry_exposes_only_canonical_lifecycle_operations() {
+        assert_eq!(
+            Builtin::from_source_name("ledger::trigger::register"),
+            Some(Builtin::RegisterTrigger)
+        );
+        assert_eq!(
+            Builtin::from_source_name("ledger::trigger::unregister"),
+            Some(Builtin::UnregisterTrigger)
+        );
+        assert_eq!(Builtin::from_source_name("ledger::trigger::create"), None);
+        assert_eq!(Builtin::from_source_name("ledger::trigger::remove"), None);
+        assert_eq!(Builtin::from_name("create_trigger"), None);
+        assert_eq!(Builtin::from_name("remove_trigger"), None);
+        assert_eq!(
+            Builtin::RegisterTrigger.operation_syscalls(),
+            &[ivm_abi::syscalls::SYSCALL_CREATE_TRIGGER]
+        );
+        assert_eq!(
+            Builtin::UnregisterTrigger.operation_syscalls(),
+            &[ivm_abi::syscalls::SYSCALL_REMOVE_TRIGGER]
+        );
+    }
+
+    #[test]
     fn typed_json_getter_registry_returns_active_only_options() {
-        for (getter, direct, payload) in [
-            (Builtin::GetInt, Builtin::JsonGetIntDirect, "int"),
-            (
-                Builtin::GetQuantity,
-                Builtin::JsonGetQuantityDirect,
-                "quantity",
-            ),
-            (Builtin::GetJson, Builtin::JsonGetJsonDirect, "Json"),
-            (Builtin::GetName, Builtin::JsonGetNameDirect, "Name"),
-            (
-                Builtin::GetAccountId,
-                Builtin::JsonGetAccountIdDirect,
-                "AccountId",
-            ),
-            (
-                Builtin::GetAssetDefinitionId,
-                Builtin::JsonGetAssetDefinitionIdDirect,
-                "AssetDefinitionId",
-            ),
-            (Builtin::GetNftId, Builtin::JsonGetNftIdDirect, "NftId"),
-            (Builtin::GetBlobHex, Builtin::JsonGetBlobHexDirect, "bytes"),
+        for (getter, payload) in [
+            (Builtin::GetInt, "int"),
+            (Builtin::GetQuantity, "quantity"),
+            (Builtin::GetJson, "Json"),
+            (Builtin::GetName, "Name"),
+            (Builtin::GetAccountId, "AccountId"),
+            (Builtin::GetAssetDefinitionId, "AssetDefinitionId"),
+            (Builtin::GetNftId, "NftId"),
+            (Builtin::GetBlobHex, "bytes"),
         ] {
             let expected = format!("Option<{payload}>");
             assert_eq!(getter.signature().return_type, expected);
-            assert_eq!(direct.signature().return_type, expected);
         }
         assert_eq!(Builtin::GetQuantity.source_name(), "json::get_quantity");
     }
@@ -3334,40 +3160,6 @@ mod tests {
         assert_eq!(
             Builtin::GetPublicInput.source_name(),
             "context::public_input"
-        );
-    }
-
-    #[test]
-    fn unshield_builder_registry_exposes_exact_output_free_signature() {
-        let signature = Builtin::BuildUnshieldInline.signature();
-        assert_eq!(
-            signature.parameters,
-            &[
-                "AssetDefinitionId",
-                "AccountId",
-                "quantity",
-                "bytes",
-                "string",
-                "bytes",
-                "bytes",
-            ]
-        );
-        assert_eq!(
-            signature.parameter_names,
-            &[
-                "asset_definition",
-                "destination",
-                "amount",
-                "inputs",
-                "backend",
-                "proof",
-                "verification_key",
-            ]
-        );
-        assert_eq!(signature.return_type, "bytes");
-        assert_eq!(
-            Builtin::BuildUnshieldInline.source_name(),
-            "crypto::zk::build_unshield"
         );
     }
 

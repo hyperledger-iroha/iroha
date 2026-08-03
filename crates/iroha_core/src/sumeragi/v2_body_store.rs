@@ -308,6 +308,37 @@ pub(crate) struct V2BodyStore {
     validated: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
 }
 
+/// Immutable post-finality deletion authority for one exact body directory.
+///
+/// Construction consumes the height-local store only after a matching Kura
+/// receipt is available. Executing the plan may block on the filesystem and
+/// therefore belongs exclusively to the runner's bounded cleanup worker.
+pub(crate) struct V2BodyRetirementJob {
+    directory: PathBuf,
+    parent: Option<PathBuf>,
+}
+
+impl V2BodyRetirementJob {
+    /// Delete the finalized height's durable candidate bodies and fsync the
+    /// containing directory.
+    pub(crate) fn execute(self) -> Result<(), V2BodyStoreError> {
+        match fs::remove_dir_all(&self.directory) {
+            Ok(()) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(V2BodyStoreError::Io {
+                    path: self.directory,
+                    source,
+                });
+            }
+        }
+        if let Some(parent) = self.parent {
+            sync_directory(&parent)?;
+        }
+        Ok(())
+    }
+}
+
 impl V2BodyStore {
     /// Return whether this already-open store belongs to the exact context.
     ///
@@ -752,24 +783,19 @@ impl V2BodyStore {
     /// that height can be voted on again. Context/height matching is therefore
     /// the authorization boundary for deleting the complete directory; only
     /// the decided candidate additionally matches the receipt's block hash.
-    pub(crate) fn retire_height(
+    pub(crate) fn into_retirement_job(
         self,
         kura_receipt: &KuraV2CommitReceipt,
-    ) -> Result<(), V2BodyStoreError> {
+    ) -> Result<V2BodyRetirementJob, V2BodyStoreError> {
         if kura_receipt.context_id() != self.context.id()
             || kura_receipt.height() != self.context.height
         {
             return Err(V2BodyStoreError::KuraReceiptMismatch);
         }
-        let parent = self.directory.parent().map(Path::to_path_buf);
-        fs::remove_dir_all(&self.directory).map_err(|source| V2BodyStoreError::Io {
-            path: self.directory.clone(),
-            source,
-        })?;
-        if let Some(parent) = parent {
-            sync_directory(&parent)?;
-        }
-        Ok(())
+        Ok(V2BodyRetirementJob {
+            parent: self.directory.parent().map(Path::to_path_buf),
+            directory: self.directory,
+        })
     }
 
     fn load_envelope(
@@ -1221,7 +1247,7 @@ mod tests {
         write_validated_marker,
     };
 
-    use crate::sumeragi::v2_effects::BodyValidationTask;
+    use crate::sumeragi::{v2_chunks::encode_payload, v2_effects::BodyValidationTask};
 
     #[derive(Debug)]
     enum FixtureValidationError {
@@ -1279,12 +1305,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"test nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1_048_576,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 1_048_576,
-                max_chunk_count: 1,
+                max_chunk_count: 2,
             },
             leader_seed: [0x42; 32],
         };
@@ -1386,14 +1412,10 @@ mod tests {
             block_hash: block.hash(),
             payload_hash: Hash::new(&canonical_wire),
         };
-        let manifest = wire::PayloadManifest::derive(
-            context,
-            round,
-            subject,
-            u64::try_from(canonical_wire.len()).expect("fixture body length"),
-            std::slice::from_ref(&canonical_wire),
-        )
-        .expect("fixture manifest");
+        let manifest = encode_payload(context, round, subject, &canonical_wire)
+            .expect("encode canonical fixture payload")
+            .manifest()
+            .clone();
         (canonical_wire, manifest)
     }
 
@@ -1518,14 +1540,10 @@ mod tests {
             height: context.height,
             view: 7,
         };
-        let later_manifest = wire::PayloadManifest::derive(
-            &context,
-            later_round,
-            origin_manifest.subject,
-            u64::try_from(body.len()).expect("fixture body length"),
-            std::slice::from_ref(&body),
-        )
-        .expect("derive the later-view manifest for the exact body");
+        let later_manifest = encode_payload(&context, later_round, origin_manifest.subject, &body)
+            .expect("encode the exact body for its later view")
+            .manifest()
+            .clone();
         let later_receipt = store
             .store(later_manifest, body)
             .expect("the original leader signature authenticates an unchanged reproposal body");
@@ -1588,14 +1606,10 @@ mod tests {
             height: context.height,
             view: 7,
         };
-        let later_manifest = wire::PayloadManifest::derive(
-            &context,
-            later_round,
-            origin_manifest.subject,
-            u64::try_from(body.len()).expect("fixture body length"),
-            std::slice::from_ref(&body),
-        )
-        .expect("derive the later-view manifest for the exact body");
+        let later_manifest = encode_payload(&context, later_round, origin_manifest.subject, &body)
+            .expect("encode the exact body for its later view")
+            .manifest()
+            .clone();
         let later_receipt = store
             .store(later_manifest, body)
             .expect("durably bind the exact body to the later round");
@@ -1667,14 +1681,11 @@ mod tests {
             block_hash: result_bearing.hash(),
             payload_hash: Hash::new(&result_bearing_wire),
         };
-        let result_bearing_manifest = wire::PayloadManifest::derive(
-            &context,
-            manifest.round,
-            subject,
-            u64::try_from(result_bearing_wire.len()).expect("fixture body length"),
-            std::slice::from_ref(&result_bearing_wire),
-        )
-        .expect("derive result-bearing manifest");
+        let result_bearing_manifest =
+            encode_payload(&context, manifest.round, subject, &result_bearing_wire)
+                .expect("encode result-bearing fixture payload")
+                .manifest()
+                .clone();
         let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
         assert!(matches!(
             store.store(result_bearing_manifest, result_bearing_wire),

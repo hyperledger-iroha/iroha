@@ -261,11 +261,11 @@ final class SigningKeyTests: XCTestCase {
         XCTAssertFalse(try keypair.verify(message: message, signature: allZeroSignature))
     }
 
-    func testMultihashPrivateKeyMatchesFixtureAuthority() throws {
+    func testMultihashPrivateKeyMatchesKnownAuthority() throws {
         guard #available(macOS 10.15, iOS 13.0, *) else {
             throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
         }
-        let authorityId = try loadWalletFixtureAuthority()
+        let authorityId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         guard let privateKeyBytes = Data(hexString: "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53") else {
             return XCTFail("invalid multihash private key hex")
         }
@@ -281,24 +281,4 @@ final class SigningKeyTests: XCTestCase {
         XCTAssertEqual(controller.publicKey, publicKey)
     }
 
-    private func loadWalletFixtureAuthority() throws -> String {
-        struct WalletFixtureAuthority: Decodable {
-            let authorityId: String
-
-            enum CodingKeys: String, CodingKey {
-                case authorityId = "authority_id"
-            }
-        }
-
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // SigningKeyTests.swift
-            .deletingLastPathComponent() // IrohaSwiftTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // IrohaSwift
-            .appendingPathComponent("fixtures/confidential/wallet_flows_v1.json")
-        let data = try Data(contentsOf: url)
-        let decoder = JSONDecoder()
-        let fixture = try decoder.decode(WalletFixtureAuthority.self, from: data)
-        return fixture.authorityId
-    }
 }

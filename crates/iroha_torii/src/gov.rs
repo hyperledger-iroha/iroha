@@ -469,6 +469,16 @@ fn validate_exact_nonempty_token(field: &str, value: &str) -> Result<(), String>
     Ok(())
 }
 
+fn validate_governance_selector_v1(field: &str, value: &str) -> Result<(), String> {
+    if !iroha_data_model::governance::is_valid_governance_selector_v1(value) {
+        return Err(format!(
+            "{field} must match {}",
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
+        ));
+    }
+    Ok(())
+}
+
 fn parse_exact_lower_hex32_path(field: &str, value: &str) -> Result<[u8; 32], crate::Error> {
     if value.len() != 64
         || !value
@@ -487,7 +497,7 @@ fn parse_exact_lower_hex32_path(field: &str, value: &str) -> Result<[u8; 32], cr
 }
 
 fn require_exact_governance_path_token(field: &str, value: &str) -> Result<(), crate::Error> {
-    validate_exact_nonempty_token(field, value)
+    validate_governance_selector_v1(field, value)
         .map_err(|message| crate::routing::conversion_error(message.into()))
 }
 
@@ -568,7 +578,7 @@ pub async fn handle_gov_ballot_zk_v1(
     if let Err(reason) = validate_exact_nonempty_token("backend", &body.backend) {
         return Ok(ballot_rejection(&reason));
     }
-    if let Err(reason) = validate_exact_nonempty_token("election_id", &body.election_id) {
+    if let Err(reason) = validate_governance_selector_v1("election_id", &body.election_id) {
         return Ok(ballot_rejection(&reason));
     }
     // Minimal size check for b64
@@ -679,7 +689,7 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     if let Err(reason) = validate_exact_nonempty_token("backend", &body.ballot.backend) {
         return Ok(ballot_rejection(&reason));
     }
-    if let Err(reason) = validate_exact_nonempty_token("election_id", &body.election_id) {
+    if let Err(reason) = validate_governance_selector_v1("election_id", &body.election_id) {
         return Ok(ballot_rejection(&reason));
     }
     if body.ballot.envelope_bytes.is_empty() {
@@ -1657,38 +1667,20 @@ pub struct FinalizeResponse {
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when `proposal_id` is not 32-byte hex.
+/// Returns `crate::Error::Query` when the identifiers are noncanonical or do not match.
 pub async fn handle_gov_finalize(
     NoritoJson(body): NoritoJson<FinalizeDto>,
 ) -> Result<JsonBody<FinalizeResponse>, crate::Error> {
-    validate_exact_nonempty_token("referendum_id", &body.referendum_id)
-        .map_err(|message| crate::routing::conversion_error(message.into()))?;
-    let proposal_id = canonicalize_hex32_value(&body.proposal_id).ok_or_else(|| {
-        crate::routing::conversion_error(
-            "proposal_id must be a supported 32-byte governance hash literal".into(),
-        )
-    })?;
-    let bytes = hex::decode(proposal_id).map_err(|_| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "invalid proposal_id".into(),
-            ),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid proposal_id length".into(),
-                ),
-            ),
+    parse_exact_lower_hex32_path("referendum_id", &body.referendum_id)?;
+    let proposal_id = parse_exact_lower_hex32_path("proposal_id", &body.proposal_id)?;
+    if body.referendum_id != body.proposal_id {
+        return Err(crate::routing::conversion_error(
+            "referendum_id must equal proposal_id".into(),
         ));
     }
-    let mut id_arr = [0u8; 32];
-    id_arr.copy_from_slice(&bytes);
     let instr = iroha_data_model::isi::governance::FinalizeReferendum {
         referendum_id: body.referendum_id,
-        proposal_id: id_arr,
+        proposal_id,
     };
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
     let tx_instructions = vec![tx_instr_from_box(boxed)];
@@ -2412,7 +2404,7 @@ pub async fn handle_gov_ballot_plain_with_policy(
     telemetry: MaybeTelemetry,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
-    validate_exact_nonempty_token("referendum_id", &body.referendum_id)
+    validate_governance_selector_v1("referendum_id", &body.referendum_id)
         .map_err(|message| crate::routing::conversion_error(message.into()))?;
     // Basic shape validations
     if !(body.direction == "Aye" || body.direction == "Nay" || body.direction == "Abstain") {
@@ -3365,9 +3357,10 @@ seiyaku GovernedReadFixture {
     #[tokio::test]
     async fn finalize_builds_instruction_skeleton() {
         let (_state, _queue, _chain_id) = mk_basic_context();
+        let proposal_id = "aa".repeat(32);
         let dto = FinalizeDto {
-            referendum_id: "ref-xyz".to_string(),
-            proposal_id: format!("BLAKE2B32:0X{}", "AA".repeat(32)),
+            referendum_id: proposal_id.clone(),
+            proposal_id,
         };
         let res = handle_gov_finalize(NoritoJson(dto))
             .await
@@ -3380,10 +3373,16 @@ seiyaku GovernedReadFixture {
     }
 
     #[tokio::test]
-    async fn finalize_rejects_non_token_referendum_and_undeclared_hash_forms() {
-        for referendum_id in ["", " ref-xyz", "ref xyz", "ref-xyz\n"] {
+    async fn finalize_rejects_noncanonical_or_mismatched_identifiers() {
+        for referendum_id in [
+            String::new(),
+            "ref-xyz".to_owned(),
+            "AA".repeat(32),
+            format!("0x{}", "aa".repeat(32)),
+            format!("{} ", "aa".repeat(32)),
+        ] {
             let error = handle_gov_finalize(NoritoJson(FinalizeDto {
-                referendum_id: referendum_id.to_owned(),
+                referendum_id,
                 proposal_id: "aa".repeat(32),
             }))
             .await
@@ -3393,17 +3392,31 @@ seiyaku GovernedReadFixture {
         for proposal_id in [
             format!(":{}", "aa".repeat(32)),
             format!("sha256:{}", "aa".repeat(32)),
+            format!("0x{}", "aa".repeat(32)),
+            "AA".repeat(32),
             format!(" {}", "aa".repeat(32)),
             format!("{} ", "aa".repeat(32)),
         ] {
             let error = handle_gov_finalize(NoritoJson(FinalizeDto {
-                referendum_id: "ref-xyz".to_owned(),
+                referendum_id: "aa".repeat(32),
                 proposal_id,
             }))
             .await
             .expect_err("undeclared proposal hash form must fail before drafting");
             assert!(error.to_string().contains("proposal_id"));
         }
+
+        let error = handle_gov_finalize(NoritoJson(FinalizeDto {
+            referendum_id: "aa".repeat(32),
+            proposal_id: "bb".repeat(32),
+        }))
+        .await
+        .expect_err("referendum and proposal ids must identify the same proposal");
+        assert!(
+            error
+                .to_string()
+                .contains("referendum_id must equal proposal_id")
+        );
     }
 
     #[tokio::test]
@@ -4136,7 +4149,10 @@ seiyaku GovernedReadFixture {
         .expect("invalid election is a typed ballot rejection");
         assert_eq!(
             response.0.reason.as_deref(),
-            Some("election_id must be a non-empty token without whitespace or control characters")
+            Some(concat!(
+                "election_id must match ",
+                "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$"
+            ))
         );
         assert!(response.0.tx_instructions.is_empty());
 
@@ -4169,27 +4185,40 @@ seiyaku GovernedReadFixture {
         .expect("invalid election is a typed ballot rejection");
         assert_eq!(
             response.0.reason.as_deref(),
-            Some("election_id must be a non-empty token without whitespace or control characters")
+            Some(concat!(
+                "election_id must match ",
+                "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$"
+            ))
         );
         assert!(response.0.tx_instructions.is_empty());
     }
 
     #[test]
     fn exact_governance_path_token_grammar_rejects_aliasing_characters() {
-        for valid in ["referendum-1", "a/b", "投票"] {
-            validate_exact_nonempty_token("referendum id", valid)
-                .expect("an exact nonempty token without whitespace/control is valid");
+        for valid in ["referendum-1", "A9_selector~with.dots"] {
+            validate_governance_selector_v1("referendum id", valid)
+                .expect("a bounded RFC 3986 unreserved selector is valid");
         }
         for invalid in [
             "",
+            ".",
+            "..",
+            ".hidden",
+            "a/b",
+            "a%2Fb",
+            "投票",
             " referendum",
             "referendum ",
             "refer\nendum",
             "refer\u{7f}endum",
         ] {
-            validate_exact_nonempty_token("referendum id", invalid)
-                .expect_err("whitespace/control aliases must fail closed");
+            validate_governance_selector_v1("referendum id", invalid)
+                .expect_err("noncanonical path selectors must fail closed");
         }
+        validate_governance_selector_v1("referendum id", &"a".repeat(128))
+            .expect("the exact length boundary is valid");
+        validate_governance_selector_v1("referendum id", &"a".repeat(129))
+            .expect_err("overlong selectors must fail closed");
     }
 
     #[tokio::test]
@@ -4222,6 +4251,21 @@ seiyaku GovernedReadFixture {
             .await
             .expect("an exact lowercase proposal id reaches lookup");
         assert!(!missing.0.found);
+
+        for invalid in [
+            "a/b".to_owned(),
+            ".".to_owned(),
+            ".hidden".to_owned(),
+            "a%2Fb".to_owned(),
+            "投票".to_owned(),
+            "a".repeat(129),
+        ] {
+            let error =
+                handle_gov_get_referendum(state.clone(), axum::extract::Path(invalid.clone()))
+                    .await
+                    .expect_err("noncanonical selectors must fail before referendum lookup");
+            assert_conversion(&error);
+        }
 
         let error =
             handle_gov_get_locks(state.clone(), axum::extract::Path(" referendum".to_owned()))

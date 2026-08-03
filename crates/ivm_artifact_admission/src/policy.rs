@@ -1239,6 +1239,10 @@ fn is_supported_state_map_key(ty: &EmbeddedStateType) -> bool {
     )
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the iterative validator keeps every EmbeddedStateType rule in one exhaustive match"
+)]
 fn validate_state_type(
     ty: &EmbeddedStateType,
     allow_state_map: bool,

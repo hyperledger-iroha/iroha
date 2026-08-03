@@ -486,7 +486,7 @@ fn validate_structured_source_request(
 ) -> Result<(), KotoTestRunErrorV1> {
     validate_structured_source(root)
         .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Request, error))?;
-    if request.target != PathBuf::from(&root.source_name) {
+    if request.target.as_path() != Path::new(&root.source_name) {
         return Err(KotoTestRunErrorV1::new(
             KotoTestRunPhaseV1::Request,
             "Kotodama test request target must equal the supplied source name",
@@ -2581,18 +2581,6 @@ fn parse_permission_token_name(raw: &str) -> Result<PermissionToken, String> {
                 .map_err(|_| format!("invalid asset definition id `{rest}`"))?,
         ));
     }
-    if let Some(rest) = raw.strip_prefix("shield:") {
-        return Ok(PermissionToken::Shield(
-            AssetDefinitionId::parse_address_literal(rest)
-                .map_err(|_| format!("invalid asset definition id `{rest}`"))?,
-        ));
-    }
-    if let Some(rest) = raw.strip_prefix("unshield:") {
-        return Ok(PermissionToken::Unshield(
-            AssetDefinitionId::parse_address_literal(rest)
-                .map_err(|_| format!("invalid asset definition id `{rest}`"))?,
-        ));
-    }
     if let Some(rest) = raw.strip_prefix("mint_asset:") {
         return Ok(PermissionToken::MintAsset(
             AssetDefinitionId::parse_address_literal(rest)
@@ -2718,14 +2706,6 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
         "set_account_detail" => Ok(PermissionToken::SetAccountDetail(parse_account_literal(
             target("target")?,
         )?)),
-        "shield" => Ok(PermissionToken::Shield(
-            AssetDefinitionId::parse_address_literal(target("target")?)
-                .map_err(|_| "invalid `target` asset definition id".to_string())?,
-        )),
-        "unshield" => Ok(PermissionToken::Unshield(
-            AssetDefinitionId::parse_address_literal(target("target")?)
-                .map_err(|_| "invalid `target` asset definition id".to_string())?,
-        )),
         "mint_asset" => Ok(PermissionToken::MintAsset(
             AssetDefinitionId::parse_address_literal(target("target")?)
                 .map_err(|_| "invalid `target` asset definition id".to_string())?,

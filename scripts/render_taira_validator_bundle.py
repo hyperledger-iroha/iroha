@@ -26,22 +26,18 @@ DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
 DEFAULT_INSTALL_ROOT = Path("/etc/iroha/taira-validator")
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
-MAX_VALIDATORS = 128
+MAX_VALIDATORS = 31
 GENESIS_EXPECTED_HASH_PLACEHOLDER = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 GENESIS_EXPECTED_HASH_RE = re.compile(r"[0-9a-f]{64}")
 TAIRA_CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 MIB = 1024 * 1024
 # First-release privacy admission permits one 9 MiB action per 10 MiB
-# transaction and two such actions per block. The body retains another 1 MiB
-# for canonical block framing and context attachments.
+# transaction. Revision 4 caps the complete canonical consensus payload at
+# 16 MiB, leaving 6 MiB for canonical block framing and context attachments
+# when one maximum transaction is present.
 TAIRA_PRIVACY_MAX_ACTION_BYTES = 9 * MIB
 TAIRA_TRANSACTION_MAX_BYTES = 10 * MIB
-TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK = 2
-TAIRA_BLOCK_BODY_FRAME_HEADROOM_BYTES = MIB
-TAIRA_BLOCK_MAX_PAYLOAD_BYTES = (
-    TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK * TAIRA_TRANSACTION_MAX_BYTES
-    + TAIRA_BLOCK_BODY_FRAME_HEADROOM_BYTES
-)
+TAIRA_BLOCK_MAX_PAYLOAD_BYTES = 16 * MIB
 TAIRA_PRIVACY_ISSUER_DESIGNATED_VALIDATOR = "taira-validator-1"
 TAIRA_PRIVACY_ISSUER_SECTION = "[torii.privacy_bootle_lantern_issuer]"
 TAIRA_PRIVACY_ISSUER_BASE_FIELDS = {
@@ -145,6 +141,8 @@ class ValidatorEntry:
     account_id: str
     public_key: str
     private_key: str
+    soranet_transport_public_key: str
+    soranet_transport_private_key: str
     pop_hex: str
     public_address: str
     network_address: str
@@ -187,10 +185,19 @@ class SharedSecrets:
 
 
 @dataclass(frozen=True)
+class ValidatorSecrets:
+    """Runtime-only, validator-local signing material."""
+
+    private_key: str
+    soranet_transport_public_key: str
+    soranet_transport_private_key: str
+
+
+@dataclass(frozen=True)
 class SecretMaterial:
     """User-local validator and shared secrets used during rendering."""
 
-    validators: dict[str, str]
+    validators: dict[str, ValidatorSecrets]
     shared: SharedSecrets
 
 
@@ -320,11 +327,10 @@ def _scaled_sumeragi_body_bytes(template: dict[str, Any], validator_count: int) 
     max_payload_bytes = _require_positive_integer(
         block, "max_payload_bytes", block_context
     )
-    if max_payload_bytes < TAIRA_BLOCK_MAX_PAYLOAD_BYTES:
+    if max_payload_bytes != TAIRA_BLOCK_MAX_PAYLOAD_BYTES:
         raise ValueError(
-            f"{block_context} field `max_payload_bytes` must be at least "
-            f"{TAIRA_BLOCK_MAX_PAYLOAD_BYTES} bytes to carry two maximum "
-            "first-release privacy transactions and canonical block framing"
+            f"{block_context} field `max_payload_bytes` must equal the "
+            f"revision-4 protocol ceiling of {TAIRA_BLOCK_MAX_PAYLOAD_BYTES} bytes"
         )
     queues = sumeragi.get("queues")
     if not isinstance(queues, dict):
@@ -1072,15 +1078,39 @@ def load_secret_material(path: Path) -> SecretMaterial:
 
     payload = _load_toml(path)
     validators_raw = _load_optional_validator_tables(payload, f"secrets file {path}")
-    secrets: dict[str, str] = {}
+    secrets: dict[str, ValidatorSecrets] = {}
     for raw in validators_raw:
         slug = _require_string(raw, "slug", f"secrets file `{path}`")
         private_key = _require_string(raw, "private_key", f"secrets file `{slug}`")
+        soranet_transport_public_key = _require_string(
+            raw,
+            "soranet_transport_public_key",
+            f"secrets file `{slug}`",
+        )
+        soranet_transport_private_key = _require_string(
+            raw,
+            "soranet_transport_private_key",
+            f"secrets file `{slug}`",
+        )
         if slug in secrets:
             raise ValueError(
                 f"secrets file `{path}` duplicates validator slug `{slug}`"
             )
-        secrets[slug] = private_key
+        if soranet_transport_public_key == private_key:
+            raise ValueError(
+                f"secrets file `{slug}` must not reuse the BLS validator private key "
+                "as its SoraNet transport public key"
+            )
+        if soranet_transport_private_key == private_key:
+            raise ValueError(
+                f"secrets file `{slug}` must not reuse the BLS validator private key "
+                "as its SoraNet transport private key"
+            )
+        secrets[slug] = ValidatorSecrets(
+            private_key=private_key,
+            soranet_transport_public_key=soranet_transport_public_key,
+            soranet_transport_private_key=soranet_transport_private_key,
+        )
     shared_raw = payload.get("shared", {})
     if not isinstance(shared_raw, dict):
         raise ValueError(f"secrets file `{path}` field `shared` must be a TOML table")
@@ -1321,12 +1351,12 @@ def render_genesis_template(
     if (
         isinstance(max_payload_size_bytes, bool)
         or not isinstance(max_payload_size_bytes, int)
-        or max_payload_size_bytes < TAIRA_BLOCK_MAX_PAYLOAD_BYTES
+        or max_payload_size_bytes != TAIRA_BLOCK_MAX_PAYLOAD_BYTES
     ):
         raise ValueError(
             f"base genesis {base_genesis_path} sumeragi_v2.da_layout."
-            f"max_payload_size_bytes must be at least "
-            f"{TAIRA_BLOCK_MAX_PAYLOAD_BYTES}"
+            f"max_payload_size_bytes must equal the revision-4 protocol "
+            f"ceiling of {TAIRA_BLOCK_MAX_PAYLOAD_BYTES}"
         )
     transaction_parameter_tables = [
         transaction["parameters"]["transaction"]
@@ -1457,6 +1487,11 @@ def load_roster(
             f"roster must define at most {MAX_VALIDATORS} validators for the "
             "Sumeragi v2 protocol"
         )
+    if (len(validators_raw) - 1) % 3 != 0:
+        raise ValueError(
+            "roster must define an exact 3f + 1 validator committee "
+            "(4, 7, 10, ..., 31)"
+        )
     if secrets is None and secrets_path is not None:
         secrets = load_secret_material(secrets_path)
     secrets_by_slug = secrets.validators if secrets is not None else {}
@@ -1465,6 +1500,7 @@ def load_roster(
     seen_slugs: set[str] = set()
     seen_account_ids: set[str] = set()
     seen_public_keys: set[str] = set()
+    seen_soranet_transport_public_keys: set[str] = set()
     seen_public_addresses: set[str] = set()
     seen_torii_public_addresses: set[str] = set()
     for index, raw in enumerate(validators_raw, start=1):
@@ -1477,12 +1513,46 @@ def load_roster(
                 f"validator entry #{index} slug must be exactly `{expected_slug}`"
             )
         public_key = _require_string(raw, "public_key", f"validator `{slug}`")
-        private_key_value = raw.get("private_key", secrets_by_slug.get(slug))
+        validator_secrets = secrets_by_slug.get(slug)
+        private_key_value = raw.get(
+            "private_key",
+            validator_secrets.private_key if validator_secrets is not None else None,
+        )
         if not isinstance(private_key_value, str) or not private_key_value.strip():
             raise ValueError(
                 f"validator `{slug}` is missing `private_key`; provide it inline or via --secrets"
             )
         private_key = private_key_value.strip()
+        soranet_transport_public_key_value = raw.get(
+            "soranet_transport_public_key",
+            validator_secrets.soranet_transport_public_key
+            if validator_secrets is not None
+            else None,
+        )
+        if (
+            not isinstance(soranet_transport_public_key_value, str)
+            or not soranet_transport_public_key_value.strip()
+        ):
+            raise ValueError(
+                f"validator `{slug}` is missing `soranet_transport_public_key`; "
+                "provide it inline or via --secrets"
+            )
+        soranet_transport_public_key = soranet_transport_public_key_value.strip()
+        soranet_transport_private_key_value = raw.get(
+            "soranet_transport_private_key",
+            validator_secrets.soranet_transport_private_key
+            if validator_secrets is not None
+            else None,
+        )
+        if (
+            not isinstance(soranet_transport_private_key_value, str)
+            or not soranet_transport_private_key_value.strip()
+        ):
+            raise ValueError(
+                f"validator `{slug}` is missing `soranet_transport_private_key`; "
+                "provide it inline or via --secrets"
+            )
+        soranet_transport_private_key = soranet_transport_private_key_value.strip()
         pop_hex = _require_string(raw, "pop_hex", f"validator `{slug}`")
         public_address = _canonical_socket_address(
             _require_string(raw, "public_address", f"validator `{slug}`"),
@@ -1512,6 +1582,15 @@ def load_roster(
             raise ValueError(f"validator account_id `{account_id}` is duplicated")
         if public_key in seen_public_keys:
             raise ValueError(f"validator public_key `{public_key}` is duplicated")
+        if soranet_transport_public_key == public_key:
+            raise ValueError(
+                f"validator `{slug}` must use distinct node and SoraNet transport public keys"
+            )
+        if soranet_transport_public_key in seen_soranet_transport_public_keys:
+            raise ValueError(
+                "validator soranet_transport_public_key "
+                f"`{soranet_transport_public_key}` is duplicated"
+            )
         if public_address in seen_public_addresses:
             raise ValueError(
                 f"validator public_address `{public_address}` is duplicated"
@@ -1524,6 +1603,7 @@ def load_roster(
         seen_slugs.add(slug)
         seen_account_ids.add(account_id)
         seen_public_keys.add(public_key)
+        seen_soranet_transport_public_keys.add(soranet_transport_public_key)
         seen_public_addresses.add(public_address)
         seen_torii_public_addresses.add(torii_public_address.strip())
         validators.append(
@@ -1532,6 +1612,8 @@ def load_roster(
                 account_id=account_id,
                 public_key=public_key,
                 private_key=private_key,
+                soranet_transport_public_key=soranet_transport_public_key,
+                soranet_transport_private_key=soranet_transport_private_key,
                 pop_hex=pop_hex,
                 public_address=public_address,
                 network_address=_canonical_socket_address(
@@ -1552,6 +1634,19 @@ def load_roster(
             "secrets file contains validators not present in the public roster: "
             + ", ".join(unknown_secret_slugs)
         )
+
+    if secrets is not None and secrets.shared.streaming_identity_public_key is not None:
+        reused_streaming = sorted(
+            validator.slug
+            for validator in validators
+            if validator.soranet_transport_public_key
+            == secrets.shared.streaming_identity_public_key
+        )
+        if reused_streaming:
+            raise ValueError(
+                "SoraNet transport identities must not reuse the shared streaming identity; "
+                "conflicting validators: " + ", ".join(reused_streaming)
+            )
 
     return validators
 
@@ -1605,6 +1700,22 @@ def render_validator_config(
             continue
         if current_section is None and stripped.startswith("private_key = "):
             rendered.append(f"private_key = {_quote_toml(validator.private_key)}")
+            continue
+        if current_section is None and stripped.startswith(
+            "soranet_transport_public_key = "
+        ):
+            rendered.append(
+                "soranet_transport_public_key = "
+                + _quote_toml(validator.soranet_transport_public_key)
+            )
+            continue
+        if current_section is None and stripped.startswith(
+            "soranet_transport_private_key = "
+        ):
+            rendered.append(
+                "soranet_transport_private_key = "
+                + _quote_toml(validator.soranet_transport_private_key)
+            )
             continue
         if current_section is None and stripped == "trusted_peers = [":
             rendered.extend(trusted_peers_lines)

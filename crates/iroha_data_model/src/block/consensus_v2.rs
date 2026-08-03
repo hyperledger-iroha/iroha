@@ -9,6 +9,7 @@ use core::fmt;
 use std::{collections::BTreeSet, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
 
@@ -28,13 +29,41 @@ pub mod finality;
 pub mod fingerprint;
 
 /// Sumeragi v2 wire protocol version.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
+/// Consensus-wide lower bound for one voting roster.
+///
+/// Every production committee has the exact `3f + 1` shape and tolerates at
+/// least one Byzantine validator.
+pub const MIN_VALIDATORS_PER_HEIGHT: usize = 4;
+/// Maximum Byzantine validators tolerated by one frozen height context.
+pub const MAX_FAULTS_PER_HEIGHT: usize = 10;
 /// Consensus-wide upper bound for one voting roster.
 ///
 /// This is a protocol admission limit, not a local resource-tuning knob.  It
 /// must stay aligned with the production reducer and the formal Sumeragi v2
 /// model so every admitted wire value has a representable verified state.
-pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;
+pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;
+/// Returns whether `validator_count` has the production `3f + 1` geometry.
+#[must_use]
+pub const fn is_valid_committee_size(validator_count: usize) -> bool {
+    validator_count >= MIN_VALIDATORS_PER_HEIGHT
+        && validator_count <= MAX_VALIDATORS_PER_HEIGHT
+        && (validator_count - 1).is_multiple_of(3)
+}
+/// Protocol-wide upper bound for one authenticated RS16 chunk.
+pub const MAX_DA_CHUNK_SIZE_BYTES: u32 = 256 * 1024;
+/// Protocol-wide upper bound for data shards in one RS16 stripe.
+pub const MAX_DA_DATA_SHARDS: u16 = 16;
+/// Protocol-wide upper bound for parity shards in one RS16 stripe.
+pub const MAX_DA_PARITY_SHARDS: u16 = 16;
+/// Protocol-wide upper bound for total shards in one RS16 stripe.
+pub const MAX_DA_STRIPE_WIDTH: u16 = MAX_DA_DATA_SHARDS + MAX_DA_PARITY_SHARDS;
+/// Protocol-wide upper bound for one canonical consensus payload.
+pub const MAX_DA_PAYLOAD_SIZE_BYTES: u64 = 16 * 1024 * 1024;
+/// Protocol-wide upper bound for all encoded shards of one maximum payload.
+pub const MAX_DA_ENCODED_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
+/// Protocol-wide upper bound for encoded chunks committed by one manifest.
+pub const MAX_DA_CHUNK_COUNT: u32 = 1024;
 /// Maximum exact Commit vote groups exposed by one active-height liveness snapshot.
 ///
 /// A reducer may retain one historical exact-lock group while the current
@@ -96,7 +125,7 @@ pub type View = u64;
 /// Index into the ordered voting roster frozen in a [`HeightContext`].
 pub type ValidatorIndex = u32;
 
-/// Consensus mode used to construct the frozen voting-power snapshot.
+/// Consensus mode used to select the frozen equal-vote committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -111,7 +140,7 @@ pub type ValidatorIndex = u32;
 pub enum ConsensusMode {
     /// Every validator has voting power one.
     Permissioned,
-    /// Voting powers come from the finalized epoch stake snapshot.
+    /// Stake selects the finalized epoch committee; every member has one vote.
     Npos,
 }
 
@@ -159,7 +188,7 @@ impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
     }
 }
 
-/// A validator and its voting power at one height.
+/// A validator and its consensus vote at one height.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -169,15 +198,15 @@ impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
 pub struct ValidatorPower {
     /// Validator identity and consensus public key.
     pub validator: PeerId,
-    /// Positive voting power frozen for this height.
+    /// Consensus vote count. Protocol v4 requires this to be exactly one.
     pub power: u64,
 }
 
-/// Count-and-power quorum parameters frozen in a height context.
+/// Equal-vote quorum parameters frozen in a height context.
 ///
-/// A certificate must satisfy both thresholds.  The count threshold is the
-/// smallest integer strictly greater than two thirds of the voting roster;
-/// signed power must be strictly greater than two thirds of total power.
+/// The roster has exact `n = 3f + 1` geometry and a certificate requires
+/// `2f + 1` distinct signers. `total_power` is a redundant integrity
+/// projection equal to the validator count because every member has one vote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -187,7 +216,7 @@ pub struct ValidatorPower {
 pub struct DualQuorum {
     /// Required number of distinct validator signatures.
     pub min_signers: u32,
-    /// Total voting power represented by the ordered roster.
+    /// Redundant total vote count represented by the ordered roster.
     pub total_power: u64,
 }
 
@@ -200,7 +229,7 @@ impl DualQuorum {
             .and_then(|threshold| u32::try_from(threshold).ok())
     }
 
-    /// Construct the canonical dual quorum for an ordered voting roster.
+    /// Construct the canonical quorum projection for an ordered voting roster.
     ///
     /// # Errors
     ///
@@ -243,19 +272,12 @@ impl DualQuorum {
             return Err(ValidationError::InsufficientSignerCount);
         }
 
-        let mut signed_power = 0_u64;
         for signer in signers {
             let index = usize::try_from(*signer).map_err(|_| ValidationError::SignerOutOfRange)?;
             let entry = roster.get(index).ok_or(ValidationError::SignerOutOfRange)?;
-            signed_power = signed_power
-                .checked_add(entry.power)
-                .ok_or(ValidationError::VotingPowerOverflow)?;
-        }
-
-        let signed_scaled = u128::from(signed_power) * 3;
-        let total_scaled = u128::from(self.total_power) * 2;
-        if signed_scaled <= total_scaled {
-            return Err(ValidationError::InsufficientVotingPower);
+            if entry.power != 1 {
+                return Err(ValidationError::VotingPowerNotOne);
+            }
         }
         Ok(())
     }
@@ -273,9 +295,9 @@ pub struct DataAvailabilityLayout {
     pub encoding: PayloadEncoding,
     /// Maximum encoded chunk size in bytes.
     pub chunk_size_bytes: u32,
-    /// Data shards per stripe; zero for plain chunking.
+    /// Data shards per RS16 stripe.
     pub data_shards: u16,
-    /// Parity shards per stripe; zero for plain chunking.
+    /// Parity shards per RS16 stripe.
     pub parity_shards: u16,
     /// Maximum canonical body size accepted at this height.
     pub max_payload_size_bytes: u64,
@@ -296,8 +318,6 @@ pub struct DataAvailabilityLayout {
     deny_unknown_fields
 )]
 pub enum PayloadEncoding {
-    /// Split the canonical payload into unencoded chunks.
-    Plain,
     /// Encode payload stripes with the deterministic RS16 layout.
     ReedSolomon16,
 }
@@ -337,11 +357,11 @@ impl SumeragiV2GenesisContextParameters {
         Self {
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 256 * 1024,
+                chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES,
                 data_shards: 4,
                 parity_shards: 2,
-                max_payload_size_bytes: 16 * 1024 * 1024,
-                max_chunk_count: 1024,
+                max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES,
+                max_chunk_count: MAX_DA_CHUNK_COUNT,
             },
             nexus_amx_context_hash: RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
@@ -362,24 +382,7 @@ impl SumeragiV2GenesisContextParameters {
         if self.execution_policy_hash == [0; 32] {
             return Err(ValidationError::InvalidExecutionPolicyHash);
         }
-        let layout = self.da_layout;
-        if layout.chunk_size_bytes == 0
-            || layout.max_payload_size_bytes == 0
-            || layout.max_chunk_count == 0
-        {
-            return Err(ValidationError::InvalidDataAvailabilityLayout);
-        }
-        match layout.encoding {
-            PayloadEncoding::Plain if layout.data_shards != 0 || layout.parity_shards != 0 => {
-                Err(ValidationError::InvalidDataAvailabilityLayout)
-            }
-            PayloadEncoding::ReedSolomon16
-                if layout.data_shards == 0 || layout.parity_shards == 0 =>
-            {
-                Err(ValidationError::InvalidDataAvailabilityLayout)
-            }
-            PayloadEncoding::Plain | PayloadEncoding::ReedSolomon16 => Ok(()),
-        }
+        validate_data_availability_layout(self.da_layout)
     }
 }
 
@@ -484,7 +487,7 @@ pub struct HeightContext {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
-    /// Consensus mode that produced the voting-power snapshot.
+    /// Consensus mode that selected the equal-vote committee.
     pub mode: ConsensusMode,
     /// Commit certificate for the parent block, absent only at genesis or an audited snapshot
     /// bootstrap boundary.
@@ -498,7 +501,7 @@ pub struct HeightContext {
     pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
     /// Deterministically ordered voting roster; observers are excluded.
     pub roster: Vec<ValidatorPower>,
-    /// Canonical dual quorum derived from `roster`.
+    /// Canonical equal-vote quorum derived from `roster`.
     pub quorum: DualQuorum,
     /// Hash of all frozen Nexus/AMX inputs that proposal assembly and
     /// deterministic validation must bind.
@@ -585,10 +588,8 @@ impl HeightContext {
             (false, None) => {}
         }
         self.quorum.validate_roster(&self.roster)?;
-        if self.mode == ConsensusMode::Permissioned
-            && self.roster.iter().any(|validator| validator.power != 1)
-        {
-            return Err(ValidationError::PermissionedPowerNotOne);
+        if self.roster.iter().any(|validator| validator.power != 1) {
+            return Err(ValidationError::VotingPowerNotOne);
         }
         match (
             self.height,
@@ -623,29 +624,10 @@ impl HeightContext {
             }
             require_aggregate_signature(&parent.aggregate_signature)?;
         }
-        if self.da_layout.chunk_size_bytes == 0
-            || self.da_layout.max_payload_size_bytes == 0
-            || self.da_layout.max_chunk_count == 0
-        {
-            return Err(ValidationError::InvalidDataAvailabilityLayout);
-        }
-        match self.da_layout.encoding {
-            PayloadEncoding::Plain
-                if self.da_layout.data_shards != 0 || self.da_layout.parity_shards != 0 =>
-            {
-                return Err(ValidationError::InvalidDataAvailabilityLayout);
-            }
-            PayloadEncoding::ReedSolomon16
-                if self.da_layout.data_shards == 0 || self.da_layout.parity_shards == 0 =>
-            {
-                return Err(ValidationError::InvalidDataAvailabilityLayout);
-            }
-            PayloadEncoding::Plain | PayloadEncoding::ReedSolomon16 => {}
-        }
-        Ok(())
+        validate_data_availability_layout(self.da_layout)
     }
 
-    /// Validate that a canonical signer list satisfies both quorum thresholds.
+    /// Validate that a canonical signer list satisfies the equal-vote quorum.
     ///
     /// # Errors
     ///
@@ -1285,7 +1267,7 @@ impl QuorumCertificate {
         }
     }
 
-    /// Validate the certificate's context binding and dual quorum.
+    /// Validate the certificate's context binding and equal-vote quorum.
     ///
     /// Cryptographic aggregate-signature verification remains the caller's
     /// responsibility.
@@ -1474,7 +1456,7 @@ impl TimeoutCertificate {
             })
     }
 
-    /// Validate grouping, disjoint signers, context binding, and dual quorum.
+    /// Validate grouping, disjoint signers, context binding, and equal-vote quorum.
     ///
     /// Cryptographic aggregate-signature verification remains the caller's
     /// responsibility.
@@ -1636,6 +1618,83 @@ pub struct PayloadManifest {
     pub chunk_root: Hash,
 }
 
+/// Encode a canonical payload into the complete ordered RS16 chunk sequence
+/// committed by [`PayloadManifest`].
+///
+/// This is the single owner of layout-driven striping, zero padding, and
+/// parity ordering. Callers must never substitute raw payload slices for the
+/// encoded chunk sequence accepted by [`PayloadManifest::derive`].
+///
+/// # Errors
+///
+/// Returns an error when the layout is invalid, the payload is empty or over
+/// the frozen size bound, or the complete encoded sequence cannot be formed.
+pub fn encode_payload_chunks(
+    layout: DataAvailabilityLayout,
+    payload: &[u8],
+) -> Result<Vec<Vec<u8>>, ValidationError> {
+    validate_data_availability_layout(layout)?;
+    let payload_size =
+        u64::try_from(payload.len()).map_err(|_| ValidationError::PayloadTooLarge)?;
+    if payload.is_empty() {
+        return Err(ValidationError::PayloadSizeMismatch);
+    }
+    if payload_size > layout.max_payload_size_bytes {
+        return Err(ValidationError::PayloadTooLarge);
+    }
+
+    let chunk_size = usize::try_from(layout.chunk_size_bytes)
+        .map_err(|_| ValidationError::InvalidChunkLength)?;
+    let data_shards = usize::from(layout.data_shards);
+    let parity_shards = usize::from(layout.parity_shards);
+    let data_chunk_count = payload.len().div_ceil(chunk_size);
+    let stripe_count = data_chunk_count.div_ceil(data_shards);
+    let stripe_width = data_shards
+        .checked_add(parity_shards)
+        .ok_or(ValidationError::ChunkCountTooLarge)?;
+    let encoded_chunk_count = stripe_count
+        .checked_mul(stripe_width)
+        .ok_or(ValidationError::ChunkCountTooLarge)?;
+    let expected_chunk_count = usize::try_from(expected_encoded_chunk_count(payload_size, layout)?)
+        .map_err(|_| ValidationError::ChunkCountTooLarge)?;
+    if encoded_chunk_count != expected_chunk_count {
+        return Err(ValidationError::PayloadSizeMismatch);
+    }
+
+    let mut encoded = Vec::with_capacity(encoded_chunk_count);
+    let symbol_count = chunk_size / 2;
+    for stripe in 0..stripe_count {
+        let mut data = Vec::with_capacity(data_shards);
+        let mut symbols = Vec::with_capacity(data_shards);
+        for within in 0..data_shards {
+            let data_index = stripe
+                .checked_mul(data_shards)
+                .and_then(|base| base.checked_add(within))
+                .ok_or(ValidationError::ChunkCountTooLarge)?;
+            let offset = data_index
+                .checked_mul(chunk_size)
+                .ok_or(ValidationError::PayloadTooLarge)?;
+            let mut chunk = vec![0_u8; chunk_size];
+            if offset < payload.len() {
+                let end = offset.saturating_add(chunk_size).min(payload.len());
+                chunk[..end - offset].copy_from_slice(&payload[offset..end]);
+            }
+            symbols.push(rs16::symbols_from_chunk(symbol_count, &chunk));
+            data.push(chunk);
+        }
+        let parity = rs16::encode_parity(&symbols, parity_shards)
+            .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)?;
+        encoded.extend(data);
+        for shard in parity {
+            encoded.push(
+                rs16::chunk_from_symbols(&shard, chunk_size)
+                    .map_err(|_| ValidationError::InvalidChunkLength)?,
+            );
+        }
+    }
+    Ok(encoded)
+}
+
 impl PayloadManifest {
     /// Derive the only canonical manifest for an encoded chunk sequence.
     ///
@@ -1662,8 +1721,8 @@ impl PayloadManifest {
             chunk_root,
         };
         manifest.validate(context)?;
-        for (index, chunk) in encoded_chunks.iter().enumerate() {
-            validate_encoded_chunk_len(&manifest, index, chunk.len())?;
+        for chunk in encoded_chunks {
+            validate_encoded_chunk_len(&manifest, chunk.len())?;
         }
         Ok(manifest)
     }
@@ -1776,7 +1835,7 @@ impl PayloadChunk {
             .chunk_hashes
             .get(index)
             .ok_or(ValidationError::ChunkIndexOutOfRange)?;
-        validate_encoded_chunk_len(manifest, index, self.bytes.len())?;
+        validate_encoded_chunk_len(manifest, self.bytes.len())?;
         let chunk_hash = Hash::new(&self.bytes);
         if &chunk_hash != expected_hash {
             return Err(ValidationError::ChunkHashMismatch);
@@ -2564,7 +2623,7 @@ pub enum SumeragiV2BodyState {
     Applied,
 }
 
-/// Frozen election and dual-quorum inputs governing the active status height.
+/// Frozen election and equal-vote quorum inputs governing the active status height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2576,17 +2635,17 @@ pub struct SumeragiV2HeightContextStatus {
     pub epoch: u64,
     /// Last height governed by this epoch's frozen election snapshot.
     pub epoch_end_height: Height,
-    /// Consensus mode which produced the voting-power snapshot.
+    /// Consensus mode which selected the equal-vote committee.
     pub mode: ConsensusMode,
     /// Finalized seed used to select the view-zero leader.
     pub epoch_seed: [u8; 32],
     /// Number of voting validators in the frozen roster.
     pub validator_count: u32,
-    /// Canonical count-and-power quorum derived from the frozen roster.
+    /// Canonical `2f + 1` quorum derived from the frozen `3f + 1` roster.
     pub quorum: DualQuorum,
 }
 
-/// Power-aware summary of the latest authenticated durable `CommitQC`.
+/// Equal-vote summary of the latest authenticated durable `CommitQC`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2602,9 +2661,9 @@ pub struct SumeragiV2CommitQcStatus {
     pub signer_count: u32,
     /// Canonical strict-supermajority signer threshold.
     pub min_signers: u32,
-    /// Voting power represented by the certificate signers.
+    /// Redundant vote total; equal to `signer_count` in protocol v4.
     pub signed_power: u64,
-    /// Total voting power in the certificate's frozen roster.
+    /// Redundant roster vote total; equal to `validator_count` in protocol v4.
     pub total_power: u64,
 }
 
@@ -2614,7 +2673,7 @@ pub struct SumeragiV2CommitQcStatus {
 /// installation, replaces vote pools or asynchronous completion ownership.
 pub type SumeragiV2Generation = u64;
 
-/// Partial dual-quorum state for one exact voting round and proposal.
+/// Partial equal-vote quorum state for one exact voting round and proposal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2632,11 +2691,11 @@ pub struct SumeragiV2VoteQuorumStatus {
     pub execution_commitment: ExecutionCommitment,
     /// Number of distinct authenticated voting validators in the pool.
     pub signer_count: u32,
-    /// Voting power represented by those validators.
+    /// Redundant unit-vote projection equal to `signer_count`.
     pub signed_power: u64,
     /// Required number of distinct voting validators.
     pub min_signers: u32,
-    /// Total voting power in the frozen height roster.
+    /// Redundant unit-vote projection equal to the frozen roster length.
     pub total_power: u64,
 }
 
@@ -2652,11 +2711,11 @@ pub struct SumeragiV2TimeoutQuorumStatus {
     pub round: ConsensusRound,
     /// Number of distinct authenticated voting validators in the pool.
     pub signer_count: u32,
-    /// Voting power represented by those validators.
+    /// Redundant unit-vote projection equal to `signer_count`.
     pub signed_power: u64,
     /// Required number of distinct voting validators.
     pub min_signers: u32,
-    /// Total voting power in the frozen height roster.
+    /// Redundant unit-vote projection equal to the frozen roster length.
     pub total_power: u64,
     /// Whether the partial pool has produced a verified timeout certificate.
     pub certificate_formed: bool,
@@ -2883,11 +2942,11 @@ pub enum SumeragiV2ProgressTransition {
     CommitVoteAdmitted,
     /// An authenticated timeout vote increased an exact partial pool.
     TimeoutVoteAdmitted,
-    /// A Prepare dual quorum formed or arrived.
+    /// A Prepare equal-vote quorum formed or arrived.
     PrepareQuorum,
     /// A `PrepareQC` lock became durable.
     LockInstalled,
-    /// A Commit dual quorum formed or arrived.
+    /// A Commit equal-vote quorum formed or arrived.
     CommitQuorum,
     /// A timeout certificate installed a successor view.
     TimeoutCertificateInstalled,
@@ -2937,9 +2996,9 @@ pub enum SumeragiV2LivenessBlocker {
     MissingProposal,
     /// A certified or locked proposal body is unavailable locally.
     BodyUnavailable,
-    /// The exact Prepare pool lacks count or voting-power quorum.
+    /// The exact Prepare pool lacks the required `2f + 1` distinct votes.
     PrepareQuorumMissing,
-    /// The exact Commit pool lacks count or voting-power quorum.
+    /// The exact Commit pool lacks the required `2f + 1` distinct votes.
     CommitQuorumMissing,
     /// Timeout votes have not produced the required timeout certificate.
     TimeoutCertificateMissing,
@@ -2947,6 +3006,8 @@ pub enum SumeragiV2LivenessBlocker {
     SchedulerStarvation,
     /// A durable decision is waiting for terminating local application work.
     ApplicationPending,
+    /// Durable application completed but successor activation has not advanced.
+    SuccessorActivationPending,
     /// The reducer is waiting for safety-WAL persistence or consensus signing.
     LocalControlPending,
 }
@@ -3143,9 +3204,7 @@ impl SumeragiV2Status {
         if self.height_context.epoch_end_height < self.height {
             return Err(Error::EpochEndsBeforeHeight);
         }
-        if self.height_context.validator_count == 0
-            || u64::from(self.height_context.validator_count)
-                > u64::try_from(MAX_VALIDATORS_PER_HEIGHT).unwrap_or(u64::MAX)
+        if !usize::try_from(self.height_context.validator_count).is_ok_and(is_valid_committee_size)
         {
             return Err(Error::InvalidValidatorCount);
         }
@@ -3158,10 +3217,7 @@ impl SumeragiV2Status {
             return Err(Error::InvalidHeightContextQuorum);
         }
         let validator_count = u64::from(self.height_context.validator_count);
-        if self.height_context.quorum.total_power < validator_count
-            || (self.height_context.mode == ConsensusMode::Permissioned
-                && self.height_context.quorum.total_power != validator_count)
-        {
+        if self.height_context.quorum.total_power != validator_count {
             return Err(Error::InvalidHeightContextQuorum);
         }
 
@@ -3235,16 +3291,12 @@ impl SumeragiV2Status {
                 return Err(Error::CommitSummaryCertificateMismatch);
             }
             let canonical_min_signers = DualQuorum::count_threshold(summary.validator_count);
-            if summary.validator_count == 0
-                || u64::from(summary.validator_count)
-                    > u64::try_from(MAX_VALIDATORS_PER_HEIGHT).unwrap_or(u64::MAX)
+            if !usize::try_from(summary.validator_count).is_ok_and(is_valid_committee_size)
                 || canonical_min_signers != Some(summary.min_signers)
                 || summary.signer_count < summary.min_signers
                 || summary.signer_count > summary.validator_count
-                || summary.total_power < u64::from(summary.validator_count)
-                || summary.signed_power < u64::from(summary.signer_count)
-                || summary.signed_power > summary.total_power
-                || u128::from(summary.signed_power) * 3 <= u128::from(summary.total_power) * 2
+                || summary.total_power != u64::from(summary.validator_count)
+                || summary.signed_power != u64::from(summary.signer_count)
             {
                 return Err(Error::InvalidCommitSummaryQuorum);
             }
@@ -3342,10 +3394,7 @@ impl SumeragiV2Status {
                 if min_signers != self.height_context.quorum.min_signers
                     || total_power != self.height_context.quorum.total_power
                     || signer_count > self.height_context.validator_count
-                    || signed_power < u64::from(signer_count)
-                    || signed_power > total_power
-                    || (self.height_context.mode == ConsensusMode::Permissioned
-                        && signed_power != u64::from(signer_count))
+                    || signed_power != u64::from(signer_count)
                 {
                     return Err(Error::InvalidLivenessQuorum);
                 }
@@ -3382,10 +3431,7 @@ impl SumeragiV2Status {
                 quorum.min_signers,
                 quorum.total_power,
             )?;
-            if quorum.certificate_formed
-                && (quorum.signer_count < quorum.min_signers
-                    || u128::from(quorum.signed_power) * 3 <= u128::from(quorum.total_power) * 2)
-            {
+            if quorum.certificate_formed && quorum.signer_count < quorum.min_signers {
                 return Err(Error::InvalidLivenessQuorum);
             }
         }
@@ -3494,11 +3540,11 @@ pub enum SumeragiV2StatusValidationError {
     ZeroPersistenceId,
     /// The compact height context's epoch does not cover the active height.
     EpochEndsBeforeHeight,
-    /// The compact height context declared an empty or oversized validator roster.
+    /// The compact height context declared a non-`3f + 1` validator roster.
     InvalidValidatorCount,
     /// The expected leader does not index the frozen validator roster.
     LeaderOutOfRange,
-    /// The compact height context's dual quorum is not structurally canonical.
+    /// The compact height context's equal-vote quorum is not structurally canonical.
     InvalidHeightContextQuorum,
     /// The reducer phase cannot emit the reported body state.
     PhaseBodyMismatch,
@@ -3516,7 +3562,7 @@ pub enum SumeragiV2StatusValidationError {
     CommitFrontierAuthenticationMismatch,
     /// The `CommitQC` summary did not certify the reported committed subject and height.
     CommitSummaryCertificateMismatch,
-    /// The `CommitQC` summary did not satisfy its frozen dual quorum.
+    /// The `CommitQC` summary did not satisfy its frozen equal-vote quorum.
     InvalidCommitSummaryQuorum,
     /// A `CommitQC` for the active context reported different frozen quorum inputs.
     CommitSummaryContextMismatch,
@@ -3579,9 +3625,9 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             Error::EpochEndsBeforeHeight => {
                 f.write_str("Sumeragi status epoch end must cover the active height")
             }
-            Error::InvalidValidatorCount => f.write_str(
-                "Sumeragi status validator count is empty or exceeds the protocol bound",
-            ),
+            Error::InvalidValidatorCount => {
+                f.write_str("Sumeragi status validator count does not have bounded 3f + 1 geometry")
+            }
             Error::LeaderOutOfRange => {
                 f.write_str("Sumeragi status leader does not index the frozen validator roster")
             }
@@ -3734,8 +3780,8 @@ pub enum ValidationError {
     TotalPowerMismatch,
     /// Encoded count threshold is not the canonical strict supermajority.
     CountThresholdMismatch,
-    /// Permissioned contexts must assign unit power to every validator.
-    PermissionedPowerNotOne,
+    /// Every committee member must have exactly one consensus vote.
+    VotingPowerNotOne,
     /// The frozen epoch end precedes the height governed by this context.
     EpochEndsBeforeHeight,
     /// An epoch-ending context omitted its old-roster-authenticated transition.
@@ -3756,8 +3802,12 @@ pub enum ValidationError {
     MissingNextEpochProofOfPossession,
     /// A next-epoch proof of possession exceeds the protocol bound.
     NextEpochProofOfPossessionTooLarge,
-    /// A permissioned next-epoch snapshot assigned non-unit voting power.
-    NextEpochPermissionedPowerNotOne,
+    /// A next-epoch snapshot assigned non-unit consensus voting power.
+    NextEpochVotingPowerNotOne,
+    /// The voting roster cannot tolerate at least one Byzantine validator.
+    RosterTooSmall,
+    /// The voting roster does not have the exact `3f + 1` shape.
+    InvalidCommitteeGeometry,
     /// The parent certificate is not a `CommitQC` for the previous height.
     InvalidParentCommit,
     /// The audited snapshot bootstrap record or its height/anchor relationship is malformed.
@@ -3802,7 +3852,7 @@ pub enum ValidationError {
     SignatureTooLarge,
     /// Too few distinct validators signed.
     InsufficientSignerCount,
-    /// Signed voting power is not strictly greater than two thirds.
+    /// The redundant signed-vote projection is not a strict supermajority.
     InsufficientVotingPower,
     /// A timeout certificate contains no groups.
     EmptyTimeoutCertificate,
@@ -3884,8 +3934,8 @@ impl fmt::Display for ValidationError {
             Self::CountThresholdMismatch => {
                 f.write_str("count threshold is not the canonical strict supermajority")
             }
-            Self::PermissionedPowerNotOne => {
-                f.write_str("permissioned validators must each have voting power one")
+            Self::VotingPowerNotOne => {
+                f.write_str("every consensus validator must have voting power one")
             }
             Self::EpochEndsBeforeHeight => {
                 f.write_str("height context epoch ends before its governed height")
@@ -3917,8 +3967,14 @@ impl fmt::Display for ValidationError {
             Self::NextEpochProofOfPossessionTooLarge => {
                 f.write_str("next-epoch snapshot contains an oversized PoP")
             }
-            Self::NextEpochPermissionedPowerNotOne => {
-                f.write_str("permissioned next-epoch validators must each have voting power one")
+            Self::NextEpochVotingPowerNotOne => {
+                f.write_str("every next-epoch consensus validator must have voting power one")
+            }
+            Self::RosterTooSmall => {
+                f.write_str("voting roster must contain at least four validators")
+            }
+            Self::InvalidCommitteeGeometry => {
+                f.write_str("voting roster must contain exactly 3f + 1 validators")
             }
             Self::InvalidParentCommit => {
                 f.write_str("height context parent is not the previous height CommitQC")
@@ -3974,7 +4030,9 @@ impl fmt::Display for ValidationError {
             Self::InsufficientSignerCount => {
                 f.write_str("insufficient distinct validator signatures")
             }
-            Self::InsufficientVotingPower => f.write_str("insufficient signed voting power"),
+            Self::InsufficientVotingPower => {
+                f.write_str("inconsistent redundant signed-vote projection")
+            }
             Self::EmptyTimeoutCertificate => f.write_str("timeout certificate has no groups"),
             Self::EmptyTimeoutGroup => f.write_str("timeout vote group has no signers"),
             Self::TimeoutGroupsNotStrictlySorted => {
@@ -4060,7 +4118,6 @@ fn expected_encoded_chunk_count(
     let payload = u128::from(payload_size_bytes);
     let chunk_size = u128::from(layout.chunk_size_bytes);
     let count = match layout.encoding {
-        PayloadEncoding::Plain => payload.div_ceil(chunk_size),
         PayloadEncoding::ReedSolomon16 => {
             let data_shards = u128::from(layout.data_shards);
             let stripe_payload = chunk_size
@@ -4075,38 +4132,62 @@ fn expected_encoded_chunk_count(
     u32::try_from(count).map_err(|_| ValidationError::ChunkCountTooLarge)
 }
 
+fn validate_data_availability_layout(
+    layout: DataAvailabilityLayout,
+) -> Result<(), ValidationError> {
+    if layout.chunk_size_bytes == 0
+        || layout.chunk_size_bytes > MAX_DA_CHUNK_SIZE_BYTES
+        || !layout.chunk_size_bytes.is_multiple_of(2)
+        || layout.data_shards == 0
+        || layout.data_shards > MAX_DA_DATA_SHARDS
+        || layout.parity_shards == 0
+        || layout.parity_shards > MAX_DA_PARITY_SHARDS
+        || layout.data_shards.saturating_add(layout.parity_shards) > MAX_DA_STRIPE_WIDTH
+        || layout.max_payload_size_bytes == 0
+        || layout.max_payload_size_bytes > MAX_DA_PAYLOAD_SIZE_BYTES
+        || layout.max_chunk_count == 0
+        || layout.max_chunk_count > MAX_DA_CHUNK_COUNT
+    {
+        return Err(ValidationError::InvalidDataAvailabilityLayout);
+    }
+    let required_chunk_capacity =
+        expected_encoded_chunk_count(layout.max_payload_size_bytes, layout)
+            .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)?;
+    let required_encoded_bytes = u64::from(required_chunk_capacity)
+        .checked_mul(u64::from(layout.chunk_size_bytes))
+        .ok_or(ValidationError::InvalidDataAvailabilityLayout)?;
+    if required_chunk_capacity > layout.max_chunk_count
+        || required_encoded_bytes > MAX_DA_ENCODED_PAYLOAD_BYTES
+    {
+        return Err(ValidationError::InvalidDataAvailabilityLayout);
+    }
+    Ok(())
+}
+
 fn validate_encoded_chunk_len(
     manifest: &PayloadManifest,
-    index: usize,
     actual: usize,
 ) -> Result<(), ValidationError> {
     let chunk_size = usize::try_from(manifest.layout.chunk_size_bytes)
         .map_err(|_| ValidationError::InvalidChunkLength)?;
-    if actual == 0 || actual > chunk_size {
-        return Err(ValidationError::InvalidChunkLength);
+    match manifest.layout.encoding {
+        PayloadEncoding::ReedSolomon16 if actual == chunk_size => Ok(()),
+        PayloadEncoding::ReedSolomon16 => Err(ValidationError::InvalidChunkLength),
     }
-    if manifest.layout.encoding == PayloadEncoding::Plain {
-        let offset = index
-            .checked_mul(chunk_size)
-            .ok_or(ValidationError::InvalidChunkLength)?;
-        let payload_size = usize::try_from(manifest.payload_size_bytes)
-            .map_err(|_| ValidationError::InvalidChunkLength)?;
-        let expected = payload_size.saturating_sub(offset).min(chunk_size);
-        if actual != expected {
-            return Err(ValidationError::InvalidChunkLength);
-        }
-    } else if actual != chunk_size {
-        return Err(ValidationError::InvalidChunkLength);
-    }
-    Ok(())
 }
 
 fn validated_total_power(roster: &[ValidatorPower]) -> Result<u64, ValidationError> {
     if roster.is_empty() {
         return Err(ValidationError::EmptyRoster);
     }
+    if roster.len() < MIN_VALIDATORS_PER_HEIGHT {
+        return Err(ValidationError::RosterTooSmall);
+    }
     if roster.len() > MAX_VALIDATORS_PER_HEIGHT {
         return Err(ValidationError::RosterTooLarge);
+    }
+    if !is_valid_committee_size(roster.len()) {
+        return Err(ValidationError::InvalidCommitteeGeometry);
     }
     let mut seen = BTreeSet::new();
     let mut total = 0_u64;
@@ -4237,6 +4318,48 @@ mod tests {
         let legacy_implicit_zero_bytes = 0_u32.to_le_bytes();
         let mut legacy_implicit_zero = legacy_implicit_zero_bytes.as_slice();
         assert!(GlobalPhase::decode_all(&mut legacy_implicit_zero).is_err());
+    }
+
+    #[test]
+    fn payload_encoding_uses_natural_zero_tag_and_rejects_retired_tag_one() {
+        let canonical = PayloadEncoding::ReedSolomon16.encode();
+        assert_eq!(canonical, 0_u32.to_le_bytes());
+        assert_eq!(
+            PayloadEncoding::decode_all(&mut canonical.as_slice())
+                .expect("decode canonical RS16 payload encoding"),
+            PayloadEncoding::ReedSolomon16
+        );
+
+        let retired_tag = 1_u32.to_le_bytes();
+        assert!(
+            PayloadEncoding::decode_all(&mut retired_tag.as_slice()).is_err(),
+            "retired payload-encoding tag 1 must fail closed"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn payload_encoding_json_rejects_retired_plain_variant() {
+        let canonical = norito::json::to_value(&PayloadEncoding::ReedSolomon16)
+            .expect("serialize canonical RS16 payload encoding");
+        assert_eq!(
+            norito::json::from_value::<PayloadEncoding>(canonical.clone())
+                .expect("decode canonical RS16 payload encoding"),
+            PayloadEncoding::ReedSolomon16
+        );
+
+        let mut retired = canonical;
+        let encoding = retired
+            .as_object_mut()
+            .expect("adjacently tagged payload encoding")
+            .get_mut("encoding")
+            .expect("payload encoding tag");
+        assert_eq!(encoding.as_str(), Some("reed_solomon16"));
+        *encoding = norito::json::Value::String("plain".to_owned());
+        assert!(
+            norito::json::from_value::<PayloadEncoding>(retired).is_err(),
+            "retired Plain payload encoding must fail closed"
+        );
     }
 
     #[test]
@@ -4510,12 +4633,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 4,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 1024,
-                max_chunk_count: 256,
+                max_chunk_count: 512,
             },
             leader_seed: [0xA5; 32],
         }
@@ -4535,6 +4658,11 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new([seed, 1])),
             payload_hash: Hash::new([seed, 2]),
         }
+    }
+
+    fn rs16_fixture_chunks(context: &HeightContext, payload: &[u8]) -> Vec<Vec<u8>> {
+        encode_payload_chunks(context.da_layout, payload)
+            .expect("fixture payload encoding succeeds")
     }
 
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
@@ -4571,7 +4699,8 @@ mod tests {
 
     fn manifest(context: &HeightContext) -> PayloadManifest {
         let subject = subject(9);
-        PayloadManifest::derive(context, round(context, 1), subject, 4, &[b"body".to_vec()])
+        let encoded_chunks = rs16_fixture_chunks(context, b"body");
+        PayloadManifest::derive(context, round(context, 1), subject, 4, &encoded_chunks)
             .expect("valid canonical manifest")
     }
 
@@ -4703,15 +4832,12 @@ mod tests {
     }
 
     #[test]
-    fn dual_quorum_requires_count_and_power() {
-        let context = context(&[70, 10, 10, 10]);
+    fn equal_vote_quorum_requires_two_f_plus_one_distinct_signers() {
+        let context = context(&[1, 1, 1, 1]);
 
         assert_eq!(context.quorum.min_signers, 3);
         assert_eq!(context.validate_signers(&[0, 1, 2]), Ok(()));
-        assert_eq!(
-            context.validate_signers(&[1, 2, 3]),
-            Err(ValidationError::InsufficientVotingPower)
-        );
+        assert_eq!(context.validate_signers(&[1, 2, 3]), Ok(()));
         assert_eq!(
             context.validate_signers(&[0, 1]),
             Err(ValidationError::InsufficientSignerCount)
@@ -4720,6 +4846,18 @@ mod tests {
             context.validate_signers(&[0, 1, 1]),
             Err(ValidationError::SignersNotStrictlySorted)
         );
+    }
+
+    #[test]
+    fn height_context_rejects_weighted_consensus_votes_in_all_modes() {
+        for mode in [ConsensusMode::Permissioned, ConsensusMode::Npos] {
+            let mut invalid = context(&[1, 1, 1, 1]);
+            invalid.mode = mode;
+            invalid.roster[0].power = 2;
+            invalid.quorum =
+                DualQuorum::from_roster(&invalid.roster).expect("structural weighted quorum");
+            assert_eq!(invalid.validate(), Err(ValidationError::VotingPowerNotOne));
+        }
     }
 
     #[test]
@@ -4734,11 +4872,108 @@ mod tests {
     }
 
     #[test]
+    fn data_availability_layout_enforces_protocol_resource_caps() {
+        let maximum = DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES,
+            data_shards: MAX_DA_DATA_SHARDS,
+            parity_shards: MAX_DA_PARITY_SHARDS,
+            max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES,
+            max_chunk_count: MAX_DA_CHUNK_COUNT,
+        };
+        assert_eq!(validate_data_availability_layout(maximum), Ok(()));
+
+        let mut invalid_layouts = Vec::new();
+        invalid_layouts.push(DataAvailabilityLayout {
+            chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES + 2,
+            ..maximum
+        });
+        invalid_layouts.push(DataAvailabilityLayout {
+            data_shards: MAX_DA_DATA_SHARDS + 1,
+            ..maximum
+        });
+        invalid_layouts.push(DataAvailabilityLayout {
+            parity_shards: MAX_DA_PARITY_SHARDS + 1,
+            ..maximum
+        });
+        invalid_layouts.push(DataAvailabilityLayout {
+            max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES + 1,
+            ..maximum
+        });
+        invalid_layouts.push(DataAvailabilityLayout {
+            max_chunk_count: MAX_DA_CHUNK_COUNT + 1,
+            ..maximum
+        });
+        invalid_layouts.push(DataAvailabilityLayout {
+            data_shards: 1,
+            parity_shards: 15,
+            ..maximum
+        });
+        invalid_layouts.push(DataAvailabilityLayout {
+            data_shards: 1_024,
+            parity_shards: 1_024,
+            max_chunk_count: u32::MAX,
+            ..maximum
+        });
+
+        for invalid in invalid_layouts {
+            assert_eq!(
+                validate_data_availability_layout(invalid),
+                Err(ValidationError::InvalidDataAvailabilityLayout)
+            );
+        }
+    }
+
+    #[test]
+    fn payload_chunk_encoding_is_complete_padded_and_deterministic() {
+        let context = context(&[1, 1, 1, 1]);
+        let payload = b"abcdef";
+        let chunks = encode_payload_chunks(context.da_layout, payload)
+            .expect("canonical payload encoding succeeds");
+        assert_eq!(chunks.len(), 4);
+        assert!(chunks.iter().all(|chunk| chunk.len() == 4));
+        assert_eq!(chunks[0], b"abcd");
+        assert_eq!(chunks[1], chunks[0]);
+        assert_eq!(chunks[2], [b'e', b'f', 0, 0]);
+        assert_eq!(chunks[3], chunks[2]);
+        assert_eq!(
+            chunks,
+            encode_payload_chunks(context.da_layout, payload)
+                .expect("repeated canonical encoding succeeds")
+        );
+
+        let manifest = PayloadManifest::derive(
+            &context,
+            round(&context, 1),
+            subject(9),
+            u64::try_from(payload.len()).expect("fixture payload length fits u64"),
+            &chunks,
+        )
+        .expect("complete encoded chunks derive a valid manifest");
+        assert_eq!(manifest.validate(&context), Ok(()));
+    }
+
+    #[test]
     fn height_context_rejects_noncanonical_rosters_and_quorums() {
         let mut empty = context(&[1, 1, 1, 1]);
         empty.roster.clear();
         assert_eq!(empty.leader(u64::MAX), 0);
         assert_eq!(empty.validate(), Err(ValidationError::EmptyRoster));
+
+        let mut too_small = context(&[1, 1, 1, 1]);
+        too_small.roster.truncate(MIN_VALIDATORS_PER_HEIGHT - 1);
+        assert_eq!(too_small.validate(), Err(ValidationError::RosterTooSmall));
+
+        let mut invalid_geometry = context(&[1, 1, 1, 1]);
+        invalid_geometry.roster.push(ValidatorPower {
+            validator: peer(0xFE),
+            power: 1,
+        });
+        invalid_geometry.roster.sort();
+        assert_eq!(
+            invalid_geometry.validate(),
+            Err(ValidationError::InvalidCommitteeGeometry)
+        );
 
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.roster[1].validator = invalid.roster[0].validator.clone();
@@ -4757,6 +4992,23 @@ mod tests {
             .roster
             .resize(MAX_VALIDATORS_PER_HEIGHT + 1, repeated);
         assert_eq!(oversized.validate(), Err(ValidationError::RosterTooLarge));
+
+        let largest = context(&vec![1; MAX_VALIDATORS_PER_HEIGHT]);
+        assert_eq!(largest.validate(), Ok(()));
+
+        let mut odd_rs16_symbols = context(&[1, 1, 1, 1]);
+        odd_rs16_symbols.da_layout.chunk_size_bytes = 3;
+        assert_eq!(
+            odd_rs16_symbols.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
+        );
+
+        let mut insufficient_chunk_capacity = context(&[1, 1, 1, 1]);
+        insufficient_chunk_capacity.da_layout.max_chunk_count -= 1;
+        assert_eq!(
+            insufficient_chunk_capacity.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
+        );
 
         let mut invalid_parent_execution = context(&[1, 1, 1, 1]);
         invalid_parent_execution.height = 2;
@@ -4841,14 +5093,14 @@ mod tests {
 
     #[test]
     fn non_boundary_height_context_id_is_pinned() {
-        let context = context(&[7, 5, 3, 1]);
+        let context = context(&[1, 1, 1, 1]);
         context.validate().expect("valid non-boundary context");
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x13, 0x00, 0xcf, 0x26, 0xd2, 0x40, 0x58, 0x12, 0x45, 0x68, 0xee, 0x55, 0xde, 0xa8,
-                0xee, 0xce, 0x18, 0xda, 0xf5, 0xed, 0x0d, 0xaf, 0x9b, 0xf0, 0x45, 0x63, 0x70, 0xac,
-                0x50, 0xfa, 0x41, 0x4d,
+                0x06, 0xfd, 0x74, 0x10, 0x75, 0x8d, 0x71, 0xbb, 0x75, 0xff, 0xf8, 0x45, 0xd6, 0x8f,
+                0x38, 0xdc, 0xda, 0x6f, 0x7b, 0x52, 0xd1, 0x79, 0x91, 0xdb, 0x1c, 0xe9, 0x9e, 0xe0,
+                0x29, 0xb4, 0x7c, 0x37,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -4856,9 +5108,9 @@ mod tests {
 
     #[test]
     fn boundary_height_context_id_pins_the_complete_transition() {
-        let mut context = context(&[7, 5, 3, 1]);
+        let mut context = context(&[1, 1, 1, 1]);
         context.epoch_end_height = context.height;
-        let next_roster = roster(&[11, 9, 7, 5]);
+        let next_roster = roster(&[1, 1, 1, 1]);
         context.next_epoch_snapshot = Some(finality::FinalizedNextEpochSnapshot {
             epoch: context.epoch + 1,
             epoch_end_height: 41,
@@ -4872,9 +5124,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x2d, 0xcb, 0xf6, 0x22, 0xa5, 0x46, 0x47, 0x3b, 0xf2, 0x5c, 0xf7, 0x88, 0x06, 0x22,
-                0xe2, 0x6e, 0x69, 0x28, 0xd5, 0x2b, 0x52, 0x1b, 0x6c, 0x3a, 0x47, 0xf4, 0xba, 0xe8,
-                0xf8, 0xb9, 0xb8, 0xa5,
+                0x63, 0xe4, 0x91, 0xf6, 0x3a, 0x8e, 0x16, 0xc8, 0x2b, 0x73, 0x30, 0xf7, 0x0e, 0x30,
+                0x4e, 0x09, 0x32, 0x22, 0xe1, 0xdf, 0xb7, 0xf2, 0x53, 0x95, 0x9a, 0x87, 0xbc, 0x48,
+                0xaa, 0x46, 0xd1, 0x5f,
             ],
             "intentional transition-identity changes require updating this golden"
         );
@@ -5429,17 +5681,14 @@ mod tests {
     }
 
     #[test]
-    fn leader_rotation_is_power_independent_and_wraps_roster() {
-        let equal = context(&[1, 1, 1, 1]);
-        let weighted = context(&[70, 10, 10, 10]);
-        let start = equal.leader(0);
+    fn leader_rotation_is_cyclic_and_wraps_roster() {
+        let context = context(&[1, 1, 1, 1]);
+        let start = context.leader(0);
 
-        assert_eq!(weighted.leader(0), start);
-        assert_eq!(equal.leader(4), start);
-        assert_eq!(weighted.leader(17), equal.leader(17));
+        assert_eq!(context.leader(4), start);
         assert_eq!(
             (0..4)
-                .map(|view| equal.leader(view))
+                .map(|view| context.leader(view))
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([0, 1, 2, 3])
         );
@@ -5712,7 +5961,7 @@ mod tests {
         let round = round(&context, 1);
         let mut response_subject = subject(9);
         response_subject.payload_hash = Hash::new(&body);
-        let chunks = body.chunks(4).map(<[u8]>::to_vec).collect::<Vec<_>>();
+        let chunks = rs16_fixture_chunks(&context, &body);
         let manifest = PayloadManifest::derive(
             &context,
             round,
@@ -6068,7 +6317,7 @@ mod tests {
         assert_eq!(
             impossible_signer_power.validate(),
             Err(Error::InvalidCommitSummaryQuorum),
-            "each authenticated signer must contribute at least one unit of voting power"
+            "the redundant signed-vote projection must equal the authenticated signer count"
         );
 
         let mut one_sided_commit = status(&context);

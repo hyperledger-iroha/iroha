@@ -36,9 +36,12 @@ MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
 its manifest dirty bit and exact dependency-closure fingerprint match.
 MOBILE_SDK_APPLE_ARTIFACT_DIR may point Apple validation at a staged artifact
 directory; it defaults to <root>/dist.
-MOBILE_SDK_APPLE_CARGO_LOCK_PATH may select the absolute canonical Cargo.lock
-whose digest and dependency closure the Apple artifact records; it defaults to
-<root>/Cargo.lock when that file is present.
+Apple source authentication always binds <root>/Cargo.lock. Alternate lockfiles
+are not part of the first-release artifact contract.
+Source authentication requires Python 3.12, exact Rust 1.93.1 RUSTC/RUSTDOC,
+and an explicit canonical writable CARGO_TARGET_DIR outside the Iroha source
+tree. The reviewed envelope uses CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
+CARGO_NET_OFFLINE=true, and RUSTC_BOOTSTRAP=1.
 The builder alone may set MOBILE_SDK_STAGED_BUILD_VALIDATION=1 together with a
 private prospective-loader path. Final certification always checks the tracked
 Swift loader.
@@ -50,6 +53,11 @@ REQUIRE_ANDROID_OUTPUTS="${MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS:-0}"
 ALLOW_DIRTY_SOURCE="${MOBILE_SDK_ALLOW_DIRTY_SOURCE:-0}"
 CHECK_APPLE=1
 CHECK_ANDROID=1
+
+if [[ -n "${MOBILE_SDK_SKIP_BINARY_INSPECTION+x}" ]]; then
+  echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_SKIP_BINARY_INSPECTION is retired; binary inspection is mandatory" >&2
+  exit 64
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -109,11 +117,11 @@ APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-$ROOT_DIR/dist}"
 if [[ "$APPLE_ARTIFACT_DIR" != /* ]]; then
   APPLE_ARTIFACT_DIR="$ROOT_DIR/$APPLE_ARTIFACT_DIR"
 fi
-APPLE_CARGO_LOCKFILE="${MOBILE_SDK_APPLE_CARGO_LOCK_PATH:-}"
-if [[ -z "$APPLE_CARGO_LOCKFILE" \
-  && ( -e "$ROOT_DIR/Cargo.lock" || -L "$ROOT_DIR/Cargo.lock" ) ]]; then
-  APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+if [[ -n "${MOBILE_SDK_APPLE_CARGO_LOCK_PATH+x}" ]]; then
+  echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_APPLE_CARGO_LOCK_PATH is not part of the first-release artifact contract" >&2
+  exit 64
 fi
+APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
 
 resolve_trusted_python312() {
   local candidate canonical
@@ -146,7 +154,7 @@ resolve_trusted_python312() {
         TMPDIR=/tmp \
         LANG=C.UTF-8 \
         LC_ALL=C.UTF-8 \
-        "$candidate" -I -S -c '
+        "$candidate" -I -S -B -c '
 import os
 import pathlib
 import stat
@@ -185,11 +193,11 @@ print(resolved)
 }
 
 CHECK_PYTHON_BINARY="$(resolve_trusted_python312)" || exit 69
-CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -S -c \
+CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -S -B -c \
   'import os,pathlib,pwd; print(pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True))' \
   2>/dev/null || true)"
 if [[ -z "$CHECK_USER_HOME_DIR" ]]; then
-  CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -S -c \
+  CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -S -B -c \
     'import pathlib; print(pathlib.Path.home().resolve(strict=True))')"
 fi
 CHECK_TMPDIR="/tmp"
@@ -213,7 +221,7 @@ run_isolated_checker_python() {
     TMPDIR="$CHECK_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    "$CHECK_PYTHON_BINARY" -I -S "$@"
+    "$CHECK_PYTHON_BINARY" -I -S -B "$@"
 }
 
 ANDROID_KOTLIN_BUILD_ROOT="$ROOT_DIR/kotlin"
@@ -260,9 +268,11 @@ fi
 SOURCE_SEAL_TOOLS_INITIALIZED=0
 SOURCE_SEAL_CARGO_BINARY=""
 SOURCE_SEAL_RUSTC_BINARY=""
+SOURCE_SEAL_RUSTDOC_BINARY=""
 SOURCE_SEAL_RUSTUP_BINARY=""
 SOURCE_SEAL_CARGO_HOME="$CHECK_USER_HOME_DIR/.cargo"
 SOURCE_SEAL_RUSTUP_HOME="$CHECK_USER_HOME_DIR/.rustup"
+SOURCE_SEAL_CARGO_TARGET_DIR=""
 
 initialize_source_seal_tools() {
   local actual_toolchain
@@ -282,6 +292,41 @@ initialize_source_seal_tools() {
   )"
   if [[ "$actual_toolchain" != "1.93.1" ]]; then
     echo "[mobile-sdk-artifacts] ERROR: source authentication requires exact Rust 1.93.1" >&2
+    exit 69
+  fi
+  if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: source authentication requires an explicit CARGO_TARGET_DIR" >&2
+    exit 69
+  fi
+  if ! SOURCE_SEAL_CARGO_TARGET_DIR="$(run_isolated_checker_python - \
+      "$CARGO_TARGET_DIR" "$ROOT_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+source_root = Path(sys.argv[2])
+if not candidate.is_absolute() or candidate != Path(os.path.abspath(candidate)):
+    raise SystemExit(1)
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit(1) from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or not os.access(candidate, os.R_OK | os.W_OK | os.X_OK)
+    or candidate == source_root
+    or source_root in candidate.parents
+):
+    raise SystemExit(1)
+print(candidate)
+PY
+  )"; then
+    echo "[mobile-sdk-artifacts] ERROR: CARGO_TARGET_DIR must be a writable, non-symbolic canonical directory outside the Iroha source tree" >&2
     exit 69
   fi
   SOURCE_SEAL_CARGO_BINARY="$(
@@ -306,14 +351,29 @@ initialize_source_seal_tools() {
       LC_ALL=C.UTF-8 \
       "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.93.1 rustc
   )"
+  SOURCE_SEAL_RUSTDOC_BINARY="$(
+    env -i \
+      HOME="$CHECK_USER_HOME_DIR" \
+      PATH="${SOURCE_SEAL_RUSTUP_BINARY%/*}:/usr/bin:/bin" \
+      CARGO_HOME="$SOURCE_SEAL_CARGO_HOME" \
+      RUSTUP_HOME="$SOURCE_SEAL_RUSTUP_HOME" \
+      TMPDIR="$CHECK_TMPDIR" \
+      LANG=C.UTF-8 \
+      LC_ALL=C.UTF-8 \
+      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc
+  )"
   SOURCE_SEAL_CARGO_BINARY="$(run_isolated_checker_python -c \
     'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
     "$SOURCE_SEAL_CARGO_BINARY")"
   SOURCE_SEAL_RUSTC_BINARY="$(run_isolated_checker_python -c \
     'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
     "$SOURCE_SEAL_RUSTC_BINARY")"
-  if [[ ! -x "$SOURCE_SEAL_CARGO_BINARY" || ! -x "$SOURCE_SEAL_RUSTC_BINARY" ]]; then
-    echo "[mobile-sdk-artifacts] ERROR: exact Rust 1.93.1 Cargo/rustc are unavailable" >&2
+  SOURCE_SEAL_RUSTDOC_BINARY="$(run_isolated_checker_python -c \
+    'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+    "$SOURCE_SEAL_RUSTDOC_BINARY")"
+  if [[ ! -x "$SOURCE_SEAL_CARGO_BINARY" || ! -x "$SOURCE_SEAL_RUSTC_BINARY" \
+    || ! -x "$SOURCE_SEAL_RUSTDOC_BINARY" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: exact Rust 1.93.1 Cargo/rustc/rustdoc are unavailable" >&2
     exit 69
   fi
   SOURCE_SEAL_TOOLS_INITIALIZED=1
@@ -323,7 +383,7 @@ run_bridge_source_seal() {
   initialize_source_seal_tools
   env -i \
     HOME="$CHECK_USER_HOME_DIR" \
-    PATH="${CHECK_PYTHON_BINARY%/*}:${SOURCE_SEAL_CARGO_BINARY%/*}:${SOURCE_SEAL_RUSTC_BINARY%/*}:/usr/bin:/bin" \
+    PATH="${CHECK_PYTHON_BINARY%/*}:${SOURCE_SEAL_CARGO_BINARY%/*}:${SOURCE_SEAL_RUSTC_BINARY%/*}:${SOURCE_SEAL_RUSTDOC_BINARY%/*}:/usr/bin:/bin" \
     TMPDIR="$CHECK_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -331,9 +391,11 @@ run_bridge_source_seal() {
     NORITO_BRIDGE_SEAL_CARGO_HOME="$SOURCE_SEAL_CARGO_HOME" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$SOURCE_SEAL_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$CHECK_TMPDIR" \
+    NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$SOURCE_SEAL_CARGO_TARGET_DIR" \
     NORITO_BRIDGE_SEAL_CARGO="$SOURCE_SEAL_CARGO_BINARY" \
     NORITO_BRIDGE_SEAL_RUSTC="$SOURCE_SEAL_RUSTC_BINARY" \
-    "$CHECK_PYTHON_BINARY" -I -S "$ROOT_DIR/scripts/norito_bridge_source_seal.py" "$@"
+    NORITO_BRIDGE_SEAL_RUSTDOC="$SOURCE_SEAL_RUSTDOC_BINARY" \
+    "$CHECK_PYTHON_BINARY" -I -S -B "$ROOT_DIR/scripts/norito_bridge_source_seal.py" "$@"
 }
 
 run_bridge_source_git() {
@@ -845,13 +907,15 @@ bridge_source_status() {
 check_bridge_source_contract() {
   local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
   local bridge_header="$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+  local privacy_protocol="$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs"
   local bridge_cargo="$ROOT_DIR/crates/connect_norito_bridge/Cargo.toml"
 
   # Packaged artifacts can be checked outside a source checkout. When source is
   # present, however, refuse to certify a build whose callable Kagemusha ABI is
   # broader or narrower than the exact first-release allow-list.
   if [[ -f "$bridge_source" ]]; then
-    if ! run_isolated_checker_python - "$bridge_source" "$bridge_cargo" \
+    if ! run_isolated_checker_python - \
+        "$bridge_source" "$bridge_cargo" "$bridge_header" "$privacy_protocol" \
         "$CANDIDATE_LAB_FEATURE" "$CANDIDATE_LAB_MARKER" \
         "$CANDIDATE_LAB_HEADER_MARKER" \
         --shipping "${KAGEMUSHA_C_SYMBOLS[@]}" \
@@ -863,9 +927,11 @@ import tomllib
 
 path = sys.argv[1]
 cargo_path = sys.argv[2]
-feature = sys.argv[3]
-marker = sys.argv[4]
-marker_symbol = sys.argv[5]
+header_path = sys.argv[3]
+protocol_path = sys.argv[4]
+feature = sys.argv[5]
+marker = sys.argv[6]
+marker_symbol = sys.argv[7]
 shipping_separator = sys.argv.index("--shipping")
 lab_separator = sys.argv.index("--lab")
 expected = set(sys.argv[shipping_separator + 1:lab_separator])
@@ -962,9 +1028,20 @@ def code_matches(pattern):
 
 
 errors = []
-abi_matches = code_matches(re.compile(
-    r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*(\d+)\s*;",
+abi_aliases = code_matches(re.compile(
+    r"(?m)^const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = "
+    r"(PRIVACY_BRIDGE_ABI_VERSION_V1);$",
 ))
+header_abis = re.findall(
+    r"^#define[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION[ \t]+([0-9]+)[ \t]*$",
+    open(header_path, "r", encoding="utf-8").read(),
+    re.MULTILINE,
+)
+protocol_abis = re.findall(
+    r"^pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = ([0-9]+);$",
+    open(protocol_path, "r", encoding="utf-8").read(),
+    re.MULTILINE,
+)
 export_pattern = re.compile(
     r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+'
     r'(connect_norito_kagemusha_[A-Za-z0-9_]+)\s*\(',
@@ -1120,8 +1197,16 @@ if lab_present:
 # Candidate-evidence exports are excluded from the shipping ABI only after all
 # checks above authenticate the complete lab-only source contract.
 actual = set(all_export_counts) - set(lab_export_counts)
-if len(abi_matches) != 1 or abi_matches[0].group(1) != "21":
-    errors.append("bridge source does not declare exact ABI 21")
+if (
+    len(abi_aliases) != 1
+    or abi_aliases[0].group(1) != "PRIVACY_BRIDGE_ABI_VERSION_V1"
+    or header_abis != ["21"]
+    or protocol_abis != header_abis
+):
+    errors.append(
+        "bridge ABI must be exact public-header 21 with the canonical Rust alias "
+        "and privacy protocol constant"
+    )
 missing = sorted(expected - actual)
 retired_or_extra = sorted(actual - expected)
 if missing:
@@ -1594,8 +1679,13 @@ require_plist_slice() {
 
 check_swift_package() {
   local package="$ROOT_DIR/IrohaSwift/Package.swift"
+  local resolved="$ROOT_DIR/IrohaSwift/Package.resolved"
 
   require_file "$package" "Swift package manifest"
+  require_file "$resolved" "Swift package resolution lock"
+  if [[ -L "$resolved" ]]; then
+    fail "Swift package resolution lock must be a non-symbolic regular file: $(relpath "$resolved")"
+  fi
   require_dir "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift" "IrohaSwift sources"
   require_literal "$package" 'name: "IrohaSwift"' "IrohaSwift package name"
   require_literal "$package" '.binaryTarget(' "NoritoBridge binary target declaration"
@@ -1673,6 +1763,16 @@ check_xcframework() {
         fi
       fi
     fi
+    if ! run_isolated_checker_python \
+      "$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py" \
+      --root "$ROOT_DIR" \
+      --xcframework "$xcframework" \
+      --manifest "$embedded_manifest" \
+      --manifest-link "$manifest" \
+      --expected-link-target "NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
+      --swift-loader "$swift_loader"; then
+      fail "NoritoBridge published artifact inventory is not exact"
+    fi
     if ! run_isolated_checker_python - "$manifest" "$ROOT_DIR/scripts/run_mobile_hermetic_command.py" <<'PY'
 from pathlib import Path
 import hashlib
@@ -1700,6 +1800,7 @@ expected_fields = {
     "hermetic_runner_schema",
     "hermetic_runner_sha256",
     "environment_profiles",
+    "cargo_build_jobs",
     "rust_toolchain_channel",
     "cargo_release",
     "cargo_commit_hash",
@@ -1707,6 +1808,9 @@ expected_fields = {
     "rustc_release",
     "rustc_commit_hash",
     "rustc_binary_sha256",
+    "rustdoc_release",
+    "rustdoc_commit_hash",
+    "rustdoc_binary_sha256",
     "python_version",
     "python_binary_sha256",
     "git_version",
@@ -1718,11 +1822,15 @@ expected_fields = {
     "iphoneos_sdk_version",
     "iphonesimulator_sdk_version",
     "macosx_sdk_version",
+    "iphoneos_deployment_target",
+    "iphonesimulator_deployment_target",
+    "macosx_deployment_target",
 }
 if not isinstance(environment, dict) or set(environment) != expected_fields:
     raise SystemExit(1)
 common = {
     "CARGO",
+    "CARGO_BUILD_JOBS",
     "CARGO_HOME",
     "CARGO_INCREMENTAL",
     "CARGO_NET_OFFLINE",
@@ -1734,6 +1842,7 @@ common = {
     "PATH",
     "RUSTC",
     "RUSTC_BOOTSTRAP",
+    "RUSTDOC",
     "RUSTUP_HOME",
     "TMPDIR",
 }
@@ -1762,6 +1871,12 @@ if (
     or environment["rust_toolchain_channel"] != "1.93.1"
     or environment["cargo_release"] != "1.93.1"
     or environment["rustc_release"] != "1.93.1"
+    or environment["rustdoc_release"] != "1.93.1"
+    or environment["cargo_build_jobs"] != 1
+    or environment["rustdoc_commit_hash"] != environment["rustc_commit_hash"]
+    or environment["iphoneos_deployment_target"] != "15.0"
+    or environment["iphonesimulator_deployment_target"] != "15.0"
+    or environment["macosx_deployment_target"] != "12.0"
 ):
     raise SystemExit(1)
 sha256 = re.compile(r"^[0-9a-f]{64}$")
@@ -1771,20 +1886,23 @@ for field in (
     "hermetic_runner_sha256",
     "cargo_binary_sha256",
     "rustc_binary_sha256",
+    "rustdoc_binary_sha256",
     "python_binary_sha256",
     "git_binary_sha256",
     "rustup_binary_sha256",
 ):
     if not isinstance(environment[field], str) or not sha256.fullmatch(environment[field]):
         raise SystemExit(1)
-for field in ("cargo_commit_hash", "rustc_commit_hash"):
+for field in ("cargo_commit_hash", "rustc_commit_hash", "rustdoc_commit_hash"):
     if not isinstance(environment[field], str) or not commit.fullmatch(environment[field]):
         raise SystemExit(1)
+if re.fullmatch(r"3\.12\.[0-9]+", environment["python_version"]) is None:
+    raise SystemExit(1)
 for field in (
-    "python_version",
     "git_version",
     "rustup_version",
     "xcode_version",
+    "rustdoc_release",
     "iphoneos_sdk_version",
     "iphonesimulator_sdk_version",
     "macosx_sdk_version",
@@ -1978,10 +2096,43 @@ PY
     local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
     if [[ -f "$bridge_source" && -d "$ROOT_DIR/.git" ]]; then
       local source_abi manifest_abi manifest_commit source_relationship source_dirty source_fingerprint manifest_fingerprint
-      source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
+      source_abi="$(run_isolated_checker_python - \
+        "$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h" \
+        "$bridge_source" \
+        "$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+header, bridge, protocol = (Path(value) for value in sys.argv[1:])
+header_abis = re.findall(
+    r"^#define[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION[ \t]+([0-9]+)[ \t]*$",
+    header.read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+bridge_aliases = re.findall(
+    r"^const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = "
+    r"(PRIVACY_BRIDGE_ABI_VERSION_V1);$",
+    bridge.read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+protocol_abis = re.findall(
+    r"^pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = ([0-9]+);$",
+    protocol.read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+if (
+    header_abis != ["21"]
+    or bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]
+    or protocol_abis != header_abis
+):
+    raise SystemExit(1)
+print(header_abis[0])
+PY
+)" || source_abi=""
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
       if [[ "$source_abi" != "21" || "$manifest_abi" != "21" ]]; then
-        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 21"
+        fail "NoritoBridge artifact ABI must match exact public-header 21, canonical Rust alias, and privacy protocol constant"
       fi
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
       source_relationship="$(
@@ -2014,55 +2165,54 @@ PY
       fi
     fi
 
-    if [[ "${MOBILE_SDK_SKIP_BINARY_INSPECTION:-0}" != "1" ]]; then
-      local index symbol actual_arches
-      for index in "${!slices[@]}"; do
-        slice="${slices[$index]}"
-        local binary="$xcframework/$slice/libNoritoBridge.a"
-        [[ -f "$binary" ]] || continue
-        if ! command -v lipo >/dev/null 2>&1; then
-          fail "lipo is required for strict Apple artifact validation"
-          break
-        fi
-        actual_arches="$(lipo -archs "$binary" 2>/dev/null || true)"
-        case "$slice" in
-          ios-arm64|macos-arm64)
-            if [[ "$actual_arches" != "arm64" ]]; then
-              fail "NoritoBridge $slice architectures must be arm64 (found ${actual_arches:-unreadable})"
-            fi
-            ;;
-          ios-arm64_x86_64-simulator)
-            if [[ " $actual_arches " != *" arm64 "* \
-              || " $actual_arches " != *" x86_64 "* \
-              || "$(wc -w <<<"$actual_arches" | tr -d '[:space:]')" != "2" ]]; then
-              fail "NoritoBridge $slice architectures must be arm64 and x86_64 (found ${actual_arches:-unreadable})"
-            fi
-            ;;
-        esac
-        if ! command -v nm >/dev/null 2>&1; then
-          fail "nm is required for strict Apple artifact validation"
-          break
-        fi
-        local symbols
-        symbols="$(nm -gj "$binary" 2>/dev/null || true)"
-        for symbol in "${REQUIRED_BRIDGE_SYMBOLS[@]}"; do
-          if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
-            fail "NoritoBridge $slice is missing required symbol $symbol"
+    local index symbol actual_arches
+    for index in "${!slices[@]}"; do
+      slice="${slices[$index]}"
+      local binary="$xcframework/$slice/libNoritoBridge.a"
+      [[ -f "$binary" ]] || continue
+      if ! command -v lipo >/dev/null 2>&1; then
+        fail "lipo is required for strict Apple artifact validation"
+        break
+      fi
+      actual_arches="$(lipo -archs "$binary" 2>/dev/null || true)"
+      case "$slice" in
+        ios-arm64|macos-arm64)
+          if [[ "$actual_arches" != "arm64" ]]; then
+            fail "NoritoBridge $slice architectures must be arm64 (found ${actual_arches:-unreadable})"
           fi
-        done
-        for symbol in "${FORBIDDEN_MOBILE_BRIDGE_SYMBOLS[@]}"; do
-          if grep -Eq "^_?${symbol}$" <<<"$symbols"; then
-            fail "NoritoBridge $slice exports forbidden first-release symbol $symbol"
+          ;;
+        ios-arm64_x86_64-simulator)
+          if [[ " $actual_arches " != *" arm64 "* \
+            || " $actual_arches " != *" x86_64 "* \
+            || "$(wc -w <<<"$actual_arches" | tr -d '[:space:]')" != "2" ]]; then
+            fail "NoritoBridge $slice architectures must be arm64 and x86_64 (found ${actual_arches:-unreadable})"
           fi
-        done
-        if ! run_isolated_checker_python - "$binary" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
+          ;;
+      esac
+      if ! command -v nm >/dev/null 2>&1; then
+        fail "nm is required for strict Apple artifact validation"
+        break
+      fi
+      local symbols
+      symbols="$(nm -gUj "$binary" 2>/dev/null || true)"
+      for symbol in "${REQUIRED_BRIDGE_SYMBOLS[@]}"; do
+        if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
+          fail "NoritoBridge $slice is missing required symbol $symbol"
+        fi
+      done
+      for symbol in "${FORBIDDEN_MOBILE_BRIDGE_SYMBOLS[@]}"; do
+        if grep -Eq "^_?${symbol}$" <<<"$symbols"; then
+          fail "NoritoBridge $slice exports forbidden first-release symbol $symbol"
+        fi
+      done
+      if ! run_isolated_checker_python - "$binary" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
 import subprocess
 import sys
 
 binary = sys.argv[1]
 expected = set(sys.argv[2:])
 result = subprocess.run(
-    ["nm", "-gj", binary],
+    ["nm", "-gUj", binary],
     check=False,
     stdout=subprocess.PIPE,
     stderr=subprocess.DEVNULL,
@@ -2075,11 +2225,10 @@ actual = {
 }
 raise SystemExit(0 if result.returncode == 0 and actual == expected else 1)
 PY
-        then
-          fail "NoritoBridge $slice Kagemusha export inventory is not exact"
-        fi
-      done
-    fi
+      then
+        fail "NoritoBridge $slice Kagemusha export inventory is not exact"
+      fi
+    done
   fi
 }
 
@@ -2257,6 +2406,8 @@ check_android_native_provenance() {
   local source_seal_tmpdir=""
   local source_seal_cargo=""
   local source_seal_rustc=""
+  local source_seal_rustdoc=""
+  local source_seal_cargo_target_dir=""
 
   if [[ -d "$ROOT_DIR/.git" ]]; then
     initialize_source_seal_tools
@@ -2267,6 +2418,8 @@ check_android_native_provenance() {
     source_seal_tmpdir="$CHECK_TMPDIR"
     source_seal_cargo="$SOURCE_SEAL_CARGO_BINARY"
     source_seal_rustc="$SOURCE_SEAL_RUSTC_BINARY"
+    source_seal_rustdoc="$SOURCE_SEAL_RUSTDOC_BINARY"
+    source_seal_cargo_target_dir="$SOURCE_SEAL_CARGO_TARGET_DIR"
   fi
 
   run_isolated_checker_python - \
@@ -2274,7 +2427,8 @@ check_android_native_provenance() {
     "$ANDROID_CLIENT_BUILD_DIR" "$ALLOW_DIRTY_SOURCE" \
     "$source_seal_python" "$source_seal_home" \
     "$source_seal_cargo_home" "$source_seal_rustup_home" \
-    "$source_seal_tmpdir" "$source_seal_cargo" "$source_seal_rustc" <<'PY'
+    "$source_seal_tmpdir" "$source_seal_cargo" "$source_seal_rustc" \
+    "$source_seal_rustdoc" "$source_seal_cargo_target_dir" <<'PY'
 import hashlib
 import json
 import os
@@ -2297,6 +2451,8 @@ source_seal_rustup_home = sys.argv[9]
 source_seal_tmpdir = sys.argv[10]
 source_seal_cargo = sys.argv[11]
 source_seal_rustc = sys.argv[12]
+source_seal_rustdoc = sys.argv[13]
+source_seal_cargo_target_dir = sys.argv[14]
 abis = ("arm64-v8a", "x86_64")
 library_name = "libconnect_norito_bridge.so"
 sha256_pattern = re.compile(r"^[0-9a-f]{64}$")
@@ -2330,6 +2486,8 @@ def source_seal_snapshot():
             source_seal_tmpdir,
             source_seal_cargo,
             source_seal_rustc,
+            source_seal_rustdoc,
+            source_seal_cargo_target_dir,
         )
     ):
         fail("source-seal tool identity is unavailable")
@@ -2341,6 +2499,7 @@ def source_seal_snapshot():
                     str(Path(source_seal_python).parent),
                     str(Path(source_seal_cargo).parent),
                     str(Path(source_seal_rustc).parent),
+                    str(Path(source_seal_rustdoc).parent),
                     "/usr/bin",
                     "/bin",
                 )
@@ -2353,13 +2512,17 @@ def source_seal_snapshot():
         "NORITO_BRIDGE_SEAL_CARGO_HOME": source_seal_cargo_home,
         "NORITO_BRIDGE_SEAL_RUSTUP_HOME": source_seal_rustup_home,
         "NORITO_BRIDGE_SEAL_TMPDIR": source_seal_tmpdir,
+        "NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR": source_seal_cargo_target_dir,
         "NORITO_BRIDGE_SEAL_CARGO": source_seal_cargo,
         "NORITO_BRIDGE_SEAL_RUSTC": source_seal_rustc,
+        "NORITO_BRIDGE_SEAL_RUSTDOC": source_seal_rustdoc,
     }
     return subprocess.run(
         [
             source_seal_python,
             "-I",
+            "-S",
+            "-B",
             str(root / "scripts/norito_bridge_source_seal.py"),
             "snapshot",
             "--root",
@@ -2486,6 +2649,7 @@ with archive:
         "hermetic_runner_sha256",
         "environment_profile",
         "environment_allowlist",
+        "cargo_build_jobs",
         "rust_toolchain_channel",
         "cargo_release",
         "cargo_commit_hash",
@@ -2493,6 +2657,9 @@ with archive:
         "rustc_release",
         "rustc_commit_hash",
         "rustc_binary_sha256",
+        "rustdoc_release",
+        "rustdoc_commit_hash",
+        "rustdoc_binary_sha256",
         "cargo_ndk_version",
         "cargo_ndk_binary_sha256",
         "python_version",
@@ -2513,6 +2680,7 @@ with archive:
         "ANDROID_NDK_HOME",
         "ANDROID_NDK_ROOT",
         "CARGO",
+        "CARGO_BUILD_JOBS",
         "CARGO_HOME",
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
@@ -2523,6 +2691,8 @@ with archive:
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
         "RUSTC",
+        "RUSTC_BOOTSTRAP",
+        "RUSTDOC",
         "RUSTUP_HOME",
         "TMPDIR",
     ]
@@ -2532,9 +2702,13 @@ with archive:
         != "iroha.mobile-hermetic-command.v1"
         or build_environment["environment_profile"] != "android-cargo"
         or build_environment["environment_allowlist"] != expected_environment_allowlist
+        or build_environment["cargo_build_jobs"] != 1
         or build_environment["rust_toolchain_channel"] != "1.93.1"
         or build_environment["cargo_release"] != "1.93.1"
         or build_environment["rustc_release"] != "1.93.1"
+        or build_environment["rustdoc_release"] != "1.93.1"
+        or build_environment["rustdoc_commit_hash"]
+        != build_environment["rustc_commit_hash"]
         or build_environment["cargo_ndk_version"] != "4.1.2"
     ):
         fail("client-android native provenance build_environment is not canonical")
@@ -2542,6 +2716,7 @@ with archive:
         "hermetic_runner_sha256",
         "cargo_binary_sha256",
         "rustc_binary_sha256",
+        "rustdoc_binary_sha256",
         "cargo_ndk_binary_sha256",
         "python_binary_sha256",
         "git_binary_sha256",
@@ -2552,12 +2727,16 @@ with archive:
             build_environment[field]
         ):
             fail(f"client-android native provenance build_environment {field} is malformed")
-    for field in ("cargo_commit_hash", "rustc_commit_hash"):
+    for field in ("cargo_commit_hash", "rustc_commit_hash", "rustdoc_commit_hash"):
         if not isinstance(build_environment[field], str) or not re.fullmatch(
             r"[0-9a-f]{40}", build_environment[field]
         ):
             fail(f"client-android native provenance build_environment {field} is malformed")
-    for field in ("python_version", "git_version", "rustup_version"):
+    if not isinstance(build_environment["python_version"], str) or not re.fullmatch(
+        r"3\.12\.[0-9]+", build_environment["python_version"]
+    ):
+        fail("client-android native provenance build_environment python_version must be exact Python 3.12")
+    for field in ("git_version", "rustup_version"):
         if not isinstance(build_environment[field], str) or not re.fullmatch(
             r"[0-9]+(?:\.[0-9]+){1,2}", build_environment[field]
         ):
@@ -2830,10 +3009,8 @@ check_android_package() {
         if [[ "$(hash_file "$source_native")" != "$(hash_zip_entry "$client_aar" "$aar_entry")" ]]; then
           fail "client-android $abi native bridge differs between generated output and release aar"
         fi
-        if [[ "${MOBILE_SDK_SKIP_BINARY_INSPECTION:-0}" != "1" ]]; then
-          check_android_native_stripped "$source_native" "$abi"
-          check_android_native_symbols "$source_native" "$abi"
-        fi
+        check_android_native_stripped "$source_native" "$abi"
+        check_android_native_symbols "$source_native" "$abi"
       fi
     done
   fi

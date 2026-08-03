@@ -74,7 +74,7 @@ mod tests {
             builder.profile(),
             &NetworkProfile {
                 preset: Some(ProfilePreset::SinglePeer),
-                topology: NetworkTopology::single_peer(),
+                topology: NetworkTopology::four_peer_bft(),
                 consensus_mode:
                     iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
             }

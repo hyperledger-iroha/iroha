@@ -926,8 +926,11 @@ QUANTITATIVE_FIXED_CORRIDOR_PROOF_DEPENDENCIES = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
     ): (
+        # This theorem intentionally has no GST premise.  Its frozen-set
+        # monotonicity follows from immutable cuts and ordinal high-watermarks;
+        # the GST-only lifecycle-retirement theorem belongs to the temporal
+        # episode layer that carries the full service-lifecycle invariant.
         "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
-        "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
         "AsyncSharedSchedulerHighWatermarkIsMonotone",
         "AsyncCausalEpisodeLifecycleCutOwned",
         "AsyncCausalEpisodeFrozenPredecessorOrigins",
@@ -949,9 +952,11 @@ QUANTITATIVE_FIXED_CORRIDOR_PROOF_DEPENDENCIES = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
     ): (
+        # This is a one-step exact-successor multiset argument.  Candidate
+        # resurrection is excluded by the GST/lifecycle temporal layer, not by
+        # importing its stronger theorem into this assumption-light leaf.
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
         "AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget",
-        "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
         "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
         "AsyncCausalEpisodeLifecycleCutOwned",
         "AsyncCausalEpisodeExactCandidateOccurrenceBudget",

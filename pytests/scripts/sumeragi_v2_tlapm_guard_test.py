@@ -1305,6 +1305,39 @@ def test_runner_self_wraps_and_defaults_to_one_thread() -> None:
     assert "readonly TLAPM_THREADS=1" in source
     assert '"${SUMERAGI_TLAPS_THREADS:-1}" != 1' in source
     assert "SUMERAGI_TLAPS_THREADS must equal 1" in source
+    assert (
+        "readonly TLAPM_COMPLETION_PATTERN="
+        "'^\\[INFO\\]: All [1-9][0-9]* obligation(s)? proved\\.$'"
+    ) in source
+    assert source.count('if [[ "$completion_count" != 1 ]]') == 2
+    assert (
+        "s/^\\[INFO\\]: All ([1-9][0-9]*) obligation(s)? proved\\.$/\\1/"
+    ) in source
+    assert (
+        'if [[ "$current_source_manifest_sha256" != '
+        '"$source_manifest_sha256" ]]; then'
+    ) in source
+    assert (
+        'if [[ "$current_ledger_sha256" != "$ledger_sha256" ]]; then'
+    ) in source
+    checkpoint_calls = (
+        'require_frozen_formal_inputs "the TLAPM frontend preflight"',
+        'require_frozen_formal_inputs "the TLAPM module proof run"',
+        'require_frozen_formal_inputs "the TLAPM target proof run"',
+        'require_frozen_formal_inputs "the complete TLAPM proof run"',
+    )
+    assert all(source.count(call) == 1 for call in checkpoint_calls)
+    target_marker = (
+        '"${TLAPM_TARGET_MARKER_PREFIX} obligation_id=${target_id} '
+        'provider_module=${target_provider} theorem=${target_theorem} '
+        'start_line=${target_start_line} end_line=${target_end_line} '
+        'obligations_proved=${proved_count} commit=${TLAPM_COMMIT} '
+        'source_manifest_sha256=${source_manifest_sha256} '
+        'ledger_sha256=${ledger_sha256} source_sha256=${target_source_sha256} '
+        'proof_span_sha256=${target_span_sha256} '
+        'invocation_sha256=${target_invocation_sha256}"'
+    )
+    assert source.count(target_marker) == 1
 
 
 @pytest.mark.parametrize(
@@ -1353,18 +1386,128 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
         textwrap.dedent(
             """\
             from pathlib import Path
+            import json
+            import os
             import sys
 
+            TLAPM_COMMIT = "3ab43c7ff31db4ced850619d4746fa4c841a7681"
+            SOURCE_MANIFEST_SHA256 = "a" * 64
+            LEDGER_SHA256 = "b" * 64
+            TARGET_SOURCE_SHA256 = "c" * 64
+            TARGET_SPAN_SHA256 = "d" * 64
+            TARGET_INVOCATION_SHA256 = "e" * 64
+            PROVIDERS = (
+                "FixtureFirstProof",
+                "FixtureMiddleProof",
+                "FixtureFinalProof",
+            )
+
+            def targets():
+                return tuple(
+                    {
+                        "id": f"fixture-target-{index:02d}",
+                        "kind": "tlaps" if index < 9 else "cross_tool",
+                        "provider": PROVIDERS[index % len(PROVIDERS)],
+                        "theorem": f"FixtureTargetTheorem{index:02d}",
+                    }
+                    for index in range(12)
+                )
+
+            def validate_target_logs(output):
+                target_dir = output.parent / "tlaps" / "targets"
+                expected_names = [f"{target['id']}.log" for target in targets()]
+                observed_names = sorted(path.name for path in target_dir.glob("*.log"))
+                if observed_names != sorted(expected_names):
+                    raise SystemExit("target log inventory mismatch")
+                for target in targets():
+                    marker = (
+                        "SUMERAGI_TLAPS_TARGET_COMPLETE "
+                        f"obligation_id={target['id']} "
+                        f"provider_module={target['provider']} "
+                        f"theorem={target['theorem']} start_line=1 end_line=2 "
+                        "obligations_proved=1 "
+                        f"commit={TLAPM_COMMIT} "
+                        f"source_manifest_sha256={SOURCE_MANIFEST_SHA256} "
+                        f"ledger_sha256={LEDGER_SHA256} "
+                        f"source_sha256={TARGET_SOURCE_SHA256} "
+                        f"proof_span_sha256={TARGET_SPAN_SHA256} "
+                        f"invocation_sha256={TARGET_INVOCATION_SHA256}"
+                    )
+                    lines = (target_dir / f"{target['id']}.log").read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    if lines != ["[INFO]: All 1 obligation proved.", marker]:
+                        raise SystemExit(f"target log mismatch: {target['id']}")
+
             args = sys.argv[1:]
+            event_log = os.environ.get("FIXTURE_EVENT_LOG")
+            if event_log:
+                with Path(event_log).open("a", encoding="utf-8") as events:
+                    events.write(
+                        "checker\\t"
+                        + json.dumps(args, separators=(",", ":"))
+                        + "\\n"
+                    )
             if args == ["--print-source-manifest-sha256"]:
-                print("a" * 64)
+                print(SOURCE_MANIFEST_SHA256)
+            elif args == ["--print-proof-ledger-sha256"]:
+                print(LEDGER_SHA256)
             elif args == ["--print-proof-modules"]:
-                print("FixtureFirstProof")
-                print("FixtureMiddleProof")
-                print("FixtureFinalProof")
+                print("\\n".join(PROVIDERS))
+            elif args == ["--print-promotion-targets-tsv"]:
+                for target in targets():
+                    fields = (
+                        target["id"],
+                        target["kind"],
+                        target["provider"],
+                        target["provider"],
+                        target["theorem"],
+                        "1",
+                        "2",
+                        f"formal/sumeragi_v2/{target['provider']}.tla",
+                        TARGET_SOURCE_SHA256,
+                        TARGET_SPAN_SHA256,
+                        TARGET_INVOCATION_SHA256,
+                        "-",
+                    )
+                    print("\\t".join(fields))
             elif "--write-evidence" in args:
                 output = Path(args[args.index("--write-evidence") + 1])
-                output.write_text('{"backend_verification":true}\\n', encoding="utf-8")
+                validate_target_logs(output)
+                output.write_text(
+                    json.dumps(
+                        {
+                            "backend_verification": True,
+                            "promotion_targets": [
+                                {
+                                    "obligation_id": target["id"],
+                                    "obligations_proved": 1,
+                                }
+                                for target in targets()
+                            ],
+                        }
+                    )
+                    + "\\n",
+                    encoding="utf-8",
+                )
+            elif "--print-promotion-target-counts" in args:
+                evidence_path = Path(args[args.index("--evidence") + 1])
+                evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                entries = evidence.get("promotion_targets")
+                expected_ids = [target["id"] for target in targets()]
+                if not isinstance(entries, list) or [
+                    entry.get("obligation_id") for entry in entries
+                ] != expected_ids:
+                    raise SystemExit("promotion target order mismatch")
+                for entry in entries:
+                    count = entry.get("obligations_proved")
+                    if (
+                        not isinstance(count, int)
+                        or isinstance(count, bool)
+                        or count <= 0
+                    ):
+                        raise SystemExit("promotion target count is not positive")
+                    print(f"{entry['obligation_id']}\\t{count}")
             elif args:
                 raise SystemExit(64)
             """
@@ -1372,6 +1515,7 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
         encoding="utf-8",
     )
     tlapm_args = tmp_path / "tlapm-args"
+    event_log = tmp_path / "runner-events"
     tlapm = tmp_path / "tlapm"
     tlapm.write_text(
         textwrap.dedent(
@@ -1386,7 +1530,17 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
               exit 0
             fi
             printf '%s\\n' "$*" >> {tlapm_args}
-            printf '%s\\n' '[INFO]: All 1 obligation proved.'
+            printf 'tlapm\\t%s\\n' "$*" >> "${{FIXTURE_EVENT_LOG:?}}"
+            if [[ "$*" == --toolbox* ]]; then
+              fixture_count="${{FIXTURE_TARGET_COUNT:-1}}"
+            else
+              fixture_count=1
+            fi
+            if [[ "$fixture_count" == 1 ]]; then
+              printf '%s\\n' '[INFO]: All 1 obligation proved.'
+            else
+              printf '[INFO]: All %s obligations proved.\\n' "$fixture_count"
+            fi
             """
         ),
         encoding="utf-8",
@@ -1395,6 +1549,7 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
 
     environment = os.environ.copy()
     environment["TLAPM_BIN"] = str(tlapm)
+    environment["FIXTURE_EVENT_LOG"] = str(event_log)
     environment.pop("SUMERAGI_TLAPS_THREADS", None)
     # The retired PID marker exactly matches the direct shell's parent, but it
     # is no longer accepted as authorization and therefore cannot skip wrapping.
@@ -1411,27 +1566,110 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stderr
-    invocations = tlapm_args.read_text(encoding="utf-8").splitlines()
-    assert len(invocations) == 6
-    assert all(
-        "--summary -N --strict --threads 1" in invocation
-        for invocation in invocations[:3]
-    )
-    assert all(
-        "--strict --nofp --threads 1" in invocation
-        for invocation in invocations[3:]
-    )
-    assert all("--cache-dir" in invocation for invocation in invocations)
-    assert "FixtureFirstProof.tla" in invocations[0]
-    assert "FixtureMiddleProof.tla" in invocations[1]
-    assert "FixtureFinalProof.tla" in invocations[2]
-    assert "FixtureFirstProof.tla" in invocations[3]
-    assert "FixtureMiddleProof.tla" in invocations[4]
-    assert "FixtureFinalProof.tla" in invocations[5]
     evidence = repo / "target" / "formal" / "sumeragi_v2"
+    proof_modules = (
+        "FixtureFirstProof",
+        "FixtureMiddleProof",
+        "FixtureFinalProof",
+    )
+    target_ids = tuple(f"fixture-target-{index:02d}" for index in range(12))
+    target_providers = tuple(
+        proof_modules[index % len(proof_modules)] for index in range(12)
+    )
+    cache_root = evidence / "tlaps-cache"
+    expected_invocations = [
+        (
+            "--summary -N --strict --threads 1 "
+            f"--cache-dir {cache_root / module} {module}.tla"
+        )
+        for module in proof_modules
+    ]
+    expected_invocations.extend(
+        (
+            "--strict --nofp --threads 1 "
+            f"--cache-dir {cache_root / module} {module}.tla"
+        )
+        for module in proof_modules
+    )
+    expected_invocations.extend(
+        (
+            "--toolbox 1 2 --strict --nofp --threads 1 "
+            "--cache-dir ../../target/formal/sumeragi_v2/"
+            f"tlaps-cache/targets/{target_id} {provider}.tla"
+        )
+        for target_id, provider in zip(target_ids, target_providers)
+    )
+    invocations = tlapm_args.read_text(encoding="utf-8").splitlines()
+    assert invocations == expected_invocations
+
+    def checker_event(arguments: list[str]) -> str:
+        return "checker\t" + json.dumps(arguments, separators=(",", ":"))
+
+    expected_events = [
+        checker_event([]),
+        checker_event(["--print-source-manifest-sha256"]),
+        checker_event(["--print-proof-ledger-sha256"]),
+        checker_event(["--print-proof-modules"]),
+        checker_event(["--print-promotion-targets-tsv"]),
+    ]
+    for invocation in expected_invocations:
+        expected_events.extend(
+            (
+                f"tlapm\t{invocation}",
+                checker_event(["--print-source-manifest-sha256"]),
+                checker_event(["--print-proof-ledger-sha256"]),
+            )
+        )
+    expected_events.extend(
+        (
+            checker_event(["--print-source-manifest-sha256"]),
+            checker_event(["--print-proof-ledger-sha256"]),
+            checker_event(
+                [
+                    "--write-evidence",
+                    str(evidence / "proof_evidence.json"),
+                    "--tlapm-version",
+                    "3ab43c7",
+                    "--tlaps-log-dir",
+                    str(evidence / "tlaps"),
+                ]
+            ),
+            checker_event(
+                [
+                    "--print-promotion-target-counts",
+                    "--evidence",
+                    str(evidence / "proof_evidence.json"),
+                ]
+            ),
+        )
+    )
+    assert event_log.read_text(encoding="utf-8").splitlines() == expected_events
+
     assert (evidence / "tlaps" / "FixtureFirstProof.preflight.log").is_file()
     assert (evidence / "tlaps" / "FixtureMiddleProof.preflight.log").is_file()
     assert (evidence / "tlaps" / "FixtureFinalProof.preflight.log").is_file()
+    target_logs = sorted(
+        (evidence / "tlaps" / "targets").glob("*.log"),
+        key=lambda path: path.name,
+    )
+    assert [path.stem for path in target_logs] == list(target_ids)
+    for index, (target_id, provider, log_path) in enumerate(
+        zip(target_ids, target_providers, target_logs)
+    ):
+        expected_marker = (
+            "SUMERAGI_TLAPS_TARGET_COMPLETE "
+            f"obligation_id={target_id} provider_module={provider} "
+            f"theorem=FixtureTargetTheorem{index:02d} "
+            "start_line=1 end_line=2 obligations_proved=1 "
+            "commit=3ab43c7ff31db4ced850619d4746fa4c841a7681 "
+            f"source_manifest_sha256={'a' * 64} ledger_sha256={'b' * 64} "
+            f"source_sha256={'c' * 64} proof_span_sha256={'d' * 64} "
+            f"invocation_sha256={'e' * 64}"
+        )
+        assert log_path.read_text(encoding="utf-8").splitlines() == [
+            "[INFO]: All 1 obligation proved.",
+            expected_marker,
+        ]
     assert not (evidence / "tlaps-cache").exists()
     summary = json.loads(
         (evidence / "tlaps_resource_summary.json").read_text(encoding="utf-8")
@@ -1442,3 +1680,26 @@ def test_runner_executes_its_body_through_guard_with_one_thread(tmp_path: Path) 
         event["event"] == "sample"
         for event in _events(evidence / "tlaps_resource.jsonl")
     )
+
+    zero_repo = tmp_path / "zero-repo"
+    zero_scripts = zero_repo / "scripts" / "formal"
+    (zero_repo / "formal" / "sumeragi_v2").mkdir(parents=True)
+    zero_scripts.mkdir(parents=True)
+    shutil.copy2(RUNNER_PATH, zero_scripts / RUNNER_PATH.name)
+    shutil.copy2(GUARD_PATH, zero_scripts / GUARD_PATH.name)
+    shutil.copy2(checker, zero_scripts / checker.name)
+    zero_environment = environment.copy()
+    zero_environment["FIXTURE_EVENT_LOG"] = str(tmp_path / "zero-runner-events")
+    zero_environment["FIXTURE_TARGET_COUNT"] = "0"
+    zero_result = subprocess.run(
+        ["/bin/bash", str(zero_scripts / RUNNER_PATH.name)],
+        cwd=zero_repo,
+        env=zero_environment,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=20,
+    )
+    assert zero_result.returncode != 0
+    assert "did not report exact strict target completion" in zero_result.stderr

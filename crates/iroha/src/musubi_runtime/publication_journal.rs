@@ -43,6 +43,10 @@ const JOURNAL_DECODE_FIXED_ALLOCATION_BYTES_V1: usize = 64 * 1024;
 
 /// Immutable capacities bound into one durable publication journal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the stable max_* names distinguish immutable upper bounds from live journal counts"
+)]
 pub struct DurableMusubiPublicationServiceJournalLimitsV1 {
     max_operations: u32,
     max_authorizations: u32,
@@ -426,10 +430,16 @@ impl DurableMusubiPublicationServiceJournalV1 {
             return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::Uninitialized);
         }
 
-        let (journal, revision, state_version) = match loaded {
-            Some((mut journal, revision, state_version)) => {
-                let changed = recover_interrupted_results(&mut journal);
-                if changed {
+        let (journal, revision, state_version) = loaded.map_or_else(
+            || {
+                debug_assert!(initialize);
+                let bytes = initial_bytes.expect("initial bytes exist for initialization");
+                let state_version =
+                    write_state(storage, None, &bytes, limits.max_snapshot_usize())?;
+                Ok((empty_journal, 1, state_version))
+            },
+            |(mut journal, revision, state_version)| {
+                if recover_interrupted_results(&mut journal) {
                     let revision = revision
                         .checked_add(1)
                         .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState)?;
@@ -441,20 +451,13 @@ impl DurableMusubiPublicationServiceJournalV1 {
                         &bytes,
                         limits.max_snapshot_usize(),
                     )?;
-                    (journal, revision, state_version)
+                    Ok((journal, revision, state_version))
                 } else {
                     validate_live_state(storage, state_version, limits.max_snapshot_usize())?;
-                    (journal, revision, state_version)
+                    Ok((journal, revision, state_version))
                 }
-            }
-            None => {
-                debug_assert!(initialize);
-                let bytes = initial_bytes.expect("initial bytes exist for initialization");
-                let state_version =
-                    write_state(storage, None, &bytes, limits.max_snapshot_usize())?;
-                (empty_journal, 1, state_version)
-            }
-        };
+            },
+        )?;
 
         Ok(Self {
             binding,
@@ -532,17 +535,14 @@ impl DurableMusubiPublicationServiceJournalV1 {
                 return Err(MusubiPublicationServiceJournalErrorV1::Unavailable);
             }
         };
-        let state_version = match write_state(
+        let Ok(state_version) = write_state(
             self.storage_context(),
             Some(self.state_version),
             &bytes,
             self.limits.max_snapshot_usize(),
-        ) {
-            Ok(version) => version,
-            Err(_) => {
-                self.poisoned = true;
-                return Err(MusubiPublicationServiceJournalErrorV1::Unavailable);
-            }
+        ) else {
+            self.poisoned = true;
+            return Err(MusubiPublicationServiceJournalErrorV1::Unavailable);
         };
         self.journal = next;
         self.revision = revision;
@@ -911,13 +911,8 @@ fn terminal_projection(
     let mut projected = state.clone();
     for record in &mut projected.results {
         match &record.state {
-            DurablePublicationResultStateV1::Pending { request_digest, .. } => {
-                record.state = DurablePublicationResultStateV1::Complete {
-                    request_digest: *request_digest,
-                    response: vec![0_u8; MAX_CONTROL_RESPONSE_BYTES],
-                };
-            }
-            DurablePublicationResultStateV1::Refreshing { request_digest, .. } => {
+            DurablePublicationResultStateV1::Pending { request_digest, .. }
+            | DurablePublicationResultStateV1::Refreshing { request_digest, .. } => {
                 record.state = DurablePublicationResultStateV1::Complete {
                     request_digest: *request_digest,
                     response: vec![0_u8; MAX_CONTROL_RESPONSE_BYTES],
@@ -935,6 +930,10 @@ fn terminal_projection(
     Ok(projected)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "durable snapshot admission keeps every ordering, capacity, replay, and accounting invariant in one validator"
+)]
 fn journal_from_state(
     state: &DurablePublicationJournalStateV1,
     expected_binding: &MusubiPublicationServiceJournalBindingV1,
@@ -1184,7 +1183,7 @@ fn read_journal_state(
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
     }
     let expected_length = usize::try_from(opened_before.len())
-        .unwrap_or(limits.max_snapshot_usize())
+        .unwrap_or_else(|_| limits.max_snapshot_usize())
         .min(limits.max_snapshot_usize());
     let mut bytes = Vec::new();
     bytes
@@ -1342,13 +1341,13 @@ fn validate_persisted_state(
     root_owner: u32,
     maximum_bytes: usize,
 ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    match expected {
-        None => match fs::symlink_metadata(path) {
+    expected.map_or_else(
+        || match fs::symlink_metadata(path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             _ => Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable),
         },
-        Some(expected) => validate_exact_state_file(path, expected, root_owner, maximum_bytes),
-    }
+        |expected| validate_exact_state_file(path, expected, root_owner, maximum_bytes),
+    )
 }
 
 fn validate_exact_state_file(
@@ -1380,7 +1379,7 @@ fn validate_exact_state_file(
     }
     let mut hasher = blake3::Hasher::new_derive_key("iroha:musubi:publication-journal-file:v1");
     let mut total = 0_usize;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     loop {
         let read = file
             .read(&mut buffer)

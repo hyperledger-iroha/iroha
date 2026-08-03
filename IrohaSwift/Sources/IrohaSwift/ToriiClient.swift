@@ -214,19 +214,16 @@ fileprivate func exactCanonicalToriiAccountAddress(
 }
 
 fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String) throws -> String {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    let exact = try requireToriiExactNonEmptyQueryValue(raw, field: field)
+    if exact.contains("@") {
+        return try normalizeToriiAccountAliasLiteral(exact, field: field)
     }
-    if trimmed.contains("@") {
-        return try normalizeToriiAccountAliasLiteral(trimmed, field: field)
-    }
-    if trimmed.contains("%") || trimmed.contains("/") || trimmed.contains("?") || trimmed.contains("#") {
+    if exact.contains("%") || exact.contains("/") || exact.contains("?") || exact.contains("#") {
         throw ToriiClientError.invalidPayload(
             "\(field) must be an encoded account id (i105)."
         )
     }
-    if let canonical = try? exactCanonicalToriiAccountAddress(trimmed) {
+    if let canonical = try? exactCanonicalToriiAccountAddress(exact) {
         return try canonical.address.toI105(
             networkPrefix: canonical.chainDiscriminant
         )
@@ -13295,6 +13292,15 @@ fileprivate enum ToriiRequestValidation {
         return value
     }
 
+    static func governanceSelector(_ value: String, field: String) throws -> String {
+        guard GovernanceSelectorV1.isValid(value) else {
+            throw ToriiClientError.invalidPayload(
+                "\(field) must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot."
+            )
+        }
+        return value
+    }
+
     static func normalizedOptionalNonEmpty(_ value: String?, field: String) throws -> String? {
         guard let value else { return nil }
         return try normalizedNonEmpty(value, field: field)
@@ -20445,7 +20451,7 @@ public struct ToriiGovernancePlainBallotRequest: Encodable, Sendable {
             forKey: .chainId
         )
         try container.encode(
-            ToriiRequestValidation.exactToken(referendumId, field: "referendum_id"),
+            ToriiRequestValidation.governanceSelector(referendumId, field: "referendum_id"),
             forKey: .referendumId
         )
         try container.encode(
@@ -20508,7 +20514,7 @@ public struct ToriiGovernanceZkBallotV1Request: Encodable, Sendable {
             forKey: .chainId
         )
         try container.encode(
-            ToriiRequestValidation.exactToken(electionId, field: "election_id"),
+            ToriiRequestValidation.governanceSelector(electionId, field: "election_id"),
             forKey: .electionId
         )
         try container.encode(
@@ -20611,7 +20617,7 @@ public struct ToriiGovernanceZkBallotProofRequest: Encodable, Sendable {
             forKey: .chainId
         )
         try container.encode(
-            ToriiRequestValidation.exactToken(electionId, field: "election_id"),
+            ToriiRequestValidation.governanceSelector(electionId, field: "election_id"),
             forKey: .electionId
         )
         try container.encode(ballot, forKey: .ballot)
@@ -20680,6 +20686,7 @@ public struct ToriiGovernanceParliamentBallotRequest: Encodable, Sendable {
     }
 }
 
+/// Finalizes the referendum identified by the proposal's exact lowercase 32-byte digest.
 public struct ToriiGovernanceFinalizeRequest: Encodable, Sendable {
     public var referendumId: String
     public var proposalId: String
@@ -20695,17 +20702,22 @@ public struct ToriiGovernanceFinalizeRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let exactReferendumId = try ToriiRequestValidation.exactToken(
+        let exactReferendumId = try ToriiRequestValidation.exactLowercase32ByteHex(
             referendumId,
             field: "referendum_id"
         )
-        let normalizedProposalId = try canonicalizeGovernanceHex32(
+        let exactProposalId = try ToriiRequestValidation.exactLowercase32ByteHex(
             proposalId,
             field: "proposal_id"
         )
+        guard exactReferendumId == exactProposalId else {
+            throw ToriiClientError.invalidPayload(
+                "referendum_id must equal proposal_id"
+            )
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(exactReferendumId, forKey: .referendumId)
-        try container.encode(normalizedProposalId, forKey: .proposalId)
+        try container.encode(exactProposalId, forKey: .proposalId)
     }
 }
 
@@ -24448,7 +24460,8 @@ private enum ToriiSumeragiV2LivenessBlockerSchema:
     static let values: Set<String> = [
         "missing_proposal", "body_unavailable", "prepare_quorum_missing",
         "commit_quorum_missing", "timeout_certificate_missing",
-        "scheduler_starvation", "application_pending", "local_control_pending",
+        "scheduler_starvation", "application_pending",
+        "successor_activation_pending", "local_control_pending",
     ]
 }
 
@@ -24527,11 +24540,11 @@ public struct ToriiSumeragiV2HeightContextStatus: Decodable, Sendable, Equatable
             : validatorCount - (validatorCount - 1) / 3
         guard epochEndHeight > 0,
               epochSeed.count == 32,
-              validatorCount > 0,
-              validatorCount <= 128,
+              validatorCount >= 4,
+              validatorCount <= 31,
+              (validatorCount - 1) % 3 == 0,
               minSigners == expectedMinSigners,
-              totalPower >= UInt64(validatorCount),
-              mode != "permissioned" || totalPower == UInt64(validatorCount)
+              totalPower == UInt64(validatorCount)
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .quorum,
@@ -24579,18 +24592,14 @@ public struct ToriiSumeragiV2CommitQcStatus: Decodable, Sendable, Equatable {
         minSigners = try container.decode(UInt32.self, forKey: .minSigners)
         signedPower = try container.decode(UInt64.self, forKey: .signedPower)
         totalPower = try container.decode(UInt64.self, forKey: .totalPower)
-        let minimumSignedPower =
-            totalPower / 3 * 2
-            + (totalPower % 3) * 2 / 3
-            + 1
-        guard validatorCount > 0,
+        guard validatorCount >= 4,
+              validatorCount <= 31,
+              (validatorCount - 1) % 3 == 0,
               signerCount <= validatorCount,
               minSigners == validatorCount - (validatorCount - 1) / 3,
               signerCount >= minSigners,
-              totalPower >= UInt64(validatorCount),
-              signedPower >= UInt64(signerCount),
-              signedPower <= totalPower,
-              signedPower >= minimumSignedPower
+              totalPower == UInt64(validatorCount),
+              signedPower == UInt64(signerCount)
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .signerCount,
@@ -24647,14 +24656,13 @@ public struct ToriiSumeragiV2VoteQuorumStatus: Decodable, Sendable, Equatable {
         signedPower = try container.decode(UInt64.self, forKey: .signedPower)
         minSigners = try container.decode(UInt32.self, forKey: .minSigners)
         totalPower = try container.decode(UInt64.self, forKey: .totalPower)
-        guard signerCount <= 128,
-              minSigners > 0,
-              minSigners <= 128,
-              signedPower >= UInt64(signerCount),
-              signedPower <= totalPower,
-              proposalRound.contextID == round.contextID,
-              proposalRound.height == round.height,
-              proposalRound.view <= round.view else {
+        guard totalPower >= 4,
+              totalPower <= 31,
+              (totalPower - 1) % 3 == 0,
+              signerCount <= UInt32(totalPower),
+              minSigners == UInt32(totalPower) - (UInt32(totalPower) - 1) / 3,
+              signedPower == UInt64(signerCount),
+              proposalRound == round else {
             throw DecodingError.dataCorruptedError(
                 forKey: .signerCount,
                 in: container,
@@ -24698,16 +24706,14 @@ public struct ToriiSumeragiV2TimeoutQuorumStatus: Decodable, Sendable, Equatable
         minSigners = try container.decode(UInt32.self, forKey: .minSigners)
         totalPower = try container.decode(UInt64.self, forKey: .totalPower)
         certificateFormed = try container.decode(Bool.self, forKey: .certificateFormed)
-        let minimumSignedPower =
-            totalPower / 3 * 2
-            + (totalPower % 3) * 2 / 3
-            + 1
-        guard signerCount <= 128,
-              minSigners > 0,
-              signedPower >= UInt64(signerCount),
-              signedPower <= totalPower,
+        guard totalPower >= 4,
+              totalPower <= 31,
+              (totalPower - 1) % 3 == 0,
+              signerCount <= UInt32(totalPower),
+              minSigners == UInt32(totalPower) - (UInt32(totalPower) - 1) / 3,
+              signedPower == UInt64(signerCount),
               !certificateFormed
-                || (signerCount >= minSigners && signedPower >= minimumSignedPower) else {
+                || signerCount >= minSigners else {
             throw DecodingError.dataCorruptedError(
                 forKey: .signerCount,
                 in: container,
@@ -24988,9 +24994,9 @@ public struct ToriiSumeragiV2LivenessStatus: Decodable, Sendable, Equatable {
             [ToriiSumeragiV2IgnoreCount].self,
             forKey: .ignoreCounts
         )
-        guard prepareQuorums.count <= 128,
-              commitQuorums.count <= 129,
-              timeoutQuorums.count <= 128,
+        guard prepareQuorums.count <= 31,
+              commitQuorums.count <= 32,
+              timeoutQuorums.count <= 31,
               outboundIntents.count <= 7,
               queues.count <= 10,
               ignoreCounts.count <= 12,
@@ -29391,21 +29397,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getGovernanceLocks(referendumId: String) async throws -> ToriiGovernanceLocksResponse {
-        let exact = try ToriiRequestValidation.exactToken(referendumId, field: "referendumId")
+        let exact = try ToriiRequestValidation.governanceSelector(
+            referendumId,
+            field: "referendumId"
+        )
         let encoded = encodePathComponent(exact)
         return try await getGovernanceJSON(path: "/v1/gov/locks/\(encoded)",
                                            responseType: ToriiGovernanceLocksResponse.self)
     }
 
     public func getGovernanceReferendum(id: String) async throws -> ToriiGovernanceReferendumResponse {
-        let exact = try ToriiRequestValidation.exactToken(id, field: "id")
+        let exact = try ToriiRequestValidation.governanceSelector(id, field: "id")
         let encoded = encodePathComponent(exact)
         return try await getGovernanceJSON(path: "/v1/gov/referenda/\(encoded)",
                                            responseType: ToriiGovernanceReferendumResponse.self)
     }
 
     public func getGovernanceTally(id: String) async throws -> ToriiGovernanceTallyResponse {
-        let exact = try ToriiRequestValidation.exactToken(id, field: "id")
+        let exact = try ToriiRequestValidation.governanceSelector(id, field: "id")
         let encoded = encodePathComponent(exact)
         return try await getGovernanceJSON(path: "/v1/gov/tally/\(encoded)",
                                            responseType: ToriiGovernanceTallyResponse.self)

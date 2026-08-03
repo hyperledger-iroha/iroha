@@ -3630,6 +3630,11 @@ mod tests {
             .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
             .expect("entrypoint hashes should match payload");
 
+        assert_eq!(
+            block.entrypoint_hashes().collect::<Vec<_>>(),
+            entry_hashes,
+            "entrypoint iteration must preserve external-then-trigger execution order"
+        );
         assert_eq!(block.header().merkle_root(), expected_consensus_root);
         assert_eq!(
             block.full_entry_merkle_root(),

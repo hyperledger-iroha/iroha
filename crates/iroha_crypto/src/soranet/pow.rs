@@ -996,6 +996,10 @@ pub enum MintError {
     /// System clock unavailable.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
+    /// The system clock moved backwards while a proof candidate was being
+    /// evaluated, so the resulting expiry window cannot be trusted.
+    #[error("system clock moved backwards while minting pow ticket")]
+    ClockMovedBackwards,
 }
 
 fn fill_random<R: TryCryptoRng>(
@@ -1211,13 +1215,43 @@ pub fn record_revocation(
 ///
 /// # Errors
 /// Returns [`MintError`] when the requested TTL violates the policy constraints,
-/// random bytes cannot be generated, or the system clock cannot be queried.
+/// random bytes cannot be generated, or the system clock is unavailable or regresses.
 pub fn mint_ticket<R: TryCryptoRng>(
     params: &Parameters,
     binding: &ChallengeBinding<'_>,
     ttl: Duration,
     rng: &mut R,
 ) -> Result<Ticket, MintError> {
+    mint_ticket_with_clock(params, binding, ttl, rng, SystemTime::now)
+}
+
+fn mint_ticket_with_clock<R, F>(
+    params: &Parameters,
+    binding: &ChallengeBinding<'_>,
+    ttl: Duration,
+    rng: &mut R,
+    now: F,
+) -> Result<Ticket, MintError>
+where
+    R: TryCryptoRng,
+    F: FnMut() -> SystemTime,
+{
+    mint_ticket_with_clock_and_digest(params, binding, ttl, rng, now, derive_solution_digest)
+}
+
+fn mint_ticket_with_clock_and_digest<R, F, D>(
+    params: &Parameters,
+    binding: &ChallengeBinding<'_>,
+    ttl: Duration,
+    rng: &mut R,
+    mut now: F,
+    mut derive_digest: D,
+) -> Result<Ticket, MintError>
+where
+    R: TryCryptoRng,
+    F: FnMut() -> SystemTime,
+    D: FnMut(&blake3::Hash, &[u8; 32]) -> blake3::Hash,
+{
     validate_binding(binding).map_err(MintError::MalformedBinding)?;
     if ttl < params.min_ttl {
         return Err(MintError::TtlTooShort {
@@ -1231,19 +1265,33 @@ pub fn mint_ticket<R: TryCryptoRng>(
             max_skew: params.max_future_skew,
         });
     }
-    let now = SystemTime::now();
-    let expires_at = now
-        .checked_add(ttl)
-        .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
-    let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
-    let mut client_nonce = [0u8; 32];
-    fill_random(rng, "minting PoW client nonce", &mut client_nonce)?;
-    let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
-
     loop {
+        let minted_at = now();
+        let expires_at = minted_at
+            .checked_add(ttl)
+            .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
+        let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
+        let wire_expires_at =
+            unix_time_from_secs(expires_at_secs).ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
+        let mut client_nonce = [0u8; 32];
+        fill_random(rng, "minting PoW client nonce", &mut client_nonce)?;
+        let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
         let mut solution = [0u8; 32];
         fill_random(rng, "minting PoW solution nonce", &mut solution)?;
-        let digest = derive_solution_digest(&challenge, &solution);
+        let digest = derive_digest(&challenge, &solution);
+
+        let solved_at = now();
+        if solved_at < minted_at {
+            return Err(MintError::ClockMovedBackwards);
+        }
+        let Ok(remaining) = wire_expires_at.duration_since(solved_at) else {
+            continue;
+        };
+        if params.min_ttl.saturating_sub(remaining) > TTL_GRACE {
+            // Expiry is challenge-bound. Re-anchor the next candidate instead
+            // of returning proof bytes that current verifier policy rejects.
+            continue;
+        }
         if leading_zero_bits_at_least(digest.as_bytes(), params.difficulty) {
             return Ok(Ticket {
                 version: 1,
@@ -1704,6 +1752,66 @@ mod tests {
         let parsed = Ticket::parse(&bytes).expect("parse");
         assert_eq!(ticket, parsed);
         verify(&parsed, &binding, &params).expect("verify");
+    }
+
+    #[test]
+    fn mint_reanchors_each_pow_candidate_across_long_search() {
+        let mut rng = rand::rngs::StdRng::from_seed([0x91; 32]);
+        let params = Parameters::new(1, Duration::from_secs(600), Duration::from_secs(30));
+        let descriptor = [0xA7; 32];
+        let binding = binding(&descriptor);
+        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut clock_reads = 0_u64;
+        let mut digest_trials = 0_u64;
+
+        let ticket = mint_ticket_with_clock_and_digest(
+            &params,
+            &binding,
+            Duration::from_secs(60),
+            &mut rng,
+            || {
+                let read = clock_reads;
+                clock_reads += 1;
+                let candidate = read / 2;
+                let offset = candidate * 10 + u64::from(read % 2 == 1);
+                base + Duration::from_secs(offset)
+            },
+            |challenge, solution| {
+                digest_trials += 1;
+                if digest_trials <= 7 {
+                    blake3::Hash::from_bytes([0xFF; 32])
+                } else {
+                    derive_solution_digest(challenge, solution)
+                }
+            },
+        )
+        .expect("failed search history must not consume the successful candidate's ttl");
+
+        assert!(digest_trials >= 8, "seven forced failures must be retried");
+        let successful_candidate = clock_reads / 2 - 1;
+        let solved_at = base + Duration::from_secs(successful_candidate * 10 + 1);
+        assert!(solved_at.duration_since(base).expect("ordered clock") >= Duration::from_secs(71));
+        assert_eq!(ticket.expires_at, 1_700_000_060 + successful_candidate * 10);
+        verify_at(&ticket, &binding, &params, solved_at)
+            .expect("fresh successful PoW candidate must satisfy remaining-ttl policy");
+    }
+
+    #[test]
+    fn mint_rejects_clock_regression_during_candidate_evaluation() {
+        let mut rng = rand::rngs::StdRng::from_seed([0x92; 32]);
+        let params = params();
+        let descriptor = [0xA8; 32];
+        let binding = binding(&descriptor);
+        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut clock = [base + Duration::from_secs(2), base + Duration::from_secs(1)].into_iter();
+
+        let error =
+            mint_ticket_with_clock(&params, &binding, Duration::from_secs(60), &mut rng, || {
+                clock.next().expect("two clock reads are sufficient")
+            })
+            .expect_err("clock regression must fail closed");
+
+        assert!(matches!(error, MintError::ClockMovedBackwards));
     }
 
     #[test]

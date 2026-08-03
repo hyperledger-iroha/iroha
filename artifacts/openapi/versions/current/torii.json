@@ -9580,7 +9580,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -16190,7 +16190,8 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              3,
+              4
             ],
             "type": "integer"
           },
@@ -19660,8 +19661,8 @@
             "$ref": "#/components/schemas/SumeragiV2StatusPhase"
           },
           "protocol_version": {
-            "maximum": 3,
-            "minimum": 3,
+            "maximum": 4,
+            "minimum": 4,
             "type": "integer"
           },
           "restart_required": {
@@ -20174,7 +20175,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -20340,7 +20341,7 @@
           },
           "protocol_version": {
             "enum": [
-              3
+              4
             ],
             "format": "uint16",
             "type": "integer"
@@ -20488,6 +20489,7 @@
               "timeout_certificate_missing",
               "scheduler_starvation",
               "application_pending",
+              "successor_activation_pending",
               "local_control_pending"
             ],
             "type": "string"
@@ -23579,9 +23581,10 @@
         "additionalProperties": false,
         "properties": {
           "election_id": {
-            "description": "Exact on-chain election identifier.",
-            "maxLength": 256,
+            "description": "Canonical governance selector V1: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+            "maxLength": 128,
             "minLength": 1,
+            "pattern": "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$",
             "type": "string"
           }
         },
@@ -27141,7 +27144,7 @@
     },
     "/v1/content/{bundle}/{path}": {
       "get": {
-        "description": "Fetch content bundle bytes (path captures the remaining path segments). Canonical request-authentication headers are optional for public bundles. Role- and sponsor-gated bundles require either the complete account/signature/timestamp/nonce proof set or a canonical witness. Public responses may use the manifest's configured public cache policy; role- and sponsor-gated responses always return `Cache-Control: private, no-store` and vary over all canonical authentication headers. Existing protected bundles authenticate and authorize before file lookup: absent or invalid proof returns 401, authorization mismatch returns 403, and a missing file returns 404 only after successful authorization. Unknown or expired bundles also return 404.",
+        "description": "Fetch content bundle bytes (path captures the remaining path segments). Canonical request-authentication headers are optional for public bundles. Role- and sponsor-gated bundles require either the complete account/signature/timestamp/nonce proof set or a canonical witness. Public responses may use the manifest's configured public cache policy; role- and sponsor-gated responses always return `Cache-Control: private, no-store` and vary over all canonical authentication headers. Existing protected bundles authenticate and authorize before file lookup: absent or invalid proof returns 401, authorization mismatch returns 403, and a missing file returns 404 only after successful authorization. Unknown or expired bundles also return 404. The Torii origin is a byte-delivery boundary, not a web-hosting origin: safe inert media retain their type, while active, unknown, or invalid media types are returned as `application/octet-stream` attachments. Every successful response sends `X-Content-Type-Options: nosniff` and a restrictive sandbox Content Security Policy without changing byte or range semantics.",
         "parameters": [
           {
             "description": "Content bundle identifier.",
@@ -27217,7 +27220,7 @@
                 }
               }
             },
-            "description": "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable.",
+            "description": "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable. Active, unknown, and invalid media types are delivered as non-sniffable `application/octet-stream` attachments from the Torii origin; byte and range semantics are unchanged.",
             "headers": {
               "Cache-Control": {
                 "description": "Manifest-conditional cache policy. Public bundles use the manifest's configured public policy; role- and sponsor-gated bundles always return `private, no-store`.",
@@ -27225,10 +27228,31 @@
                   "type": "string"
                 }
               },
+              "Content-Disposition": {
+                "description": "Present as `attachment` when a requested media type is active, unknown, or invalid; absent for the inert inline allow-list.",
+                "schema": {
+                  "const": "attachment",
+                  "type": "string"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "A restrictive sandbox fallback for every response served from the Torii origin.",
+                "schema": {
+                  "const": "sandbox; default-src 'none'",
+                  "type": "string"
+                }
+              },
               "Vary": {
                 "description": "Present for role- and sponsor-gated bundles and absent for public bundles. The value covers every canonical authentication input.",
                 "schema": {
                   "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "Always `nosniff` so content bytes cannot override the selected inert representation type.",
+                "schema": {
+                  "const": "nosniff",
                   "type": "string"
                 }
               }
@@ -54316,6 +54340,12 @@
               "schema": {
                 "$ref": "#/components/schemas/ZkMerklePathGetRequest"
               }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
             }
           },
           "required": true
@@ -54327,9 +54357,46 @@
                 "schema": {
                   "$ref": "#/components/schemas/ZkMerklePathGetResponse"
                 }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful response"
+            "description": "Typed result from one immutable committed state snapshot."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The typed request is invalid."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested asset or commitment does not exist in the committed state snapshot."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
           }
         },
         "summary": "Fetch ZK Merkle paths.",
@@ -54476,6 +54543,12 @@
               "schema": {
                 "$ref": "#/components/schemas/ZkRootsGetRequest"
               }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
             }
           },
           "required": true
@@ -54487,9 +54560,46 @@
                 "schema": {
                   "$ref": "#/components/schemas/ZkRootsGetResponse"
                 }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful response"
+            "description": "Typed result from one immutable committed state snapshot."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The typed request is invalid."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The requested asset or commitment does not exist in the committed state snapshot."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
           }
         },
         "summary": "Fetch ZK roots.",
@@ -54637,6 +54747,16 @@
               }
             },
             "description": "Tally and committed-state evaluation anchor for the requested election."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The election identifier is not a canonical governance selector V1."
           },
           "404": {
             "content": {

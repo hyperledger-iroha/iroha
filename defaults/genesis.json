@@ -63,6 +63,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "balance_scope_policy": "Global",
+              "owning_domain": null,
               "confidential_policy": {
                 "mode": "TransparentOnly",
                 "pedersen_params_id": null,
@@ -103,6 +105,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "balance_scope_policy": "Global",
+              "owning_domain": null,
               "confidential_policy": {
                 "mode": "TransparentOnly",
                 "pedersen_params_id": null,
@@ -142,7 +146,7 @@
               "finality_margin_blocks": 8,
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
-              "max_validators": 128,
+              "max_validators": 31,
               "min_nomination_bond": "1",
               "min_self_bond": "1000",
               "seat_band_pct": 5,
@@ -257,5 +261,5 @@
       "topology": []
     }
   ],
-  "wire_protocol_version": 3
+  "wire_protocol_version": 4
 }

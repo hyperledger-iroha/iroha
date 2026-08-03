@@ -632,11 +632,11 @@ fn append_boolean_witness(
     a_r.push(bit);
 }
 
-fn membership_witness<S>(
+fn membership_commitment_for_suite<S>(
     coefficients: &[i8],
     bound: ZkAmsT256MembershipBoundV1,
     blinding: &Scalar,
-) -> Result<(Point, ArithmeticCircuitWitness<S>), ZkAmsT256MembershipErrorV1>
+) -> Result<(Point, ZeroizingT256ScalarVecV1, usize), ZkAmsT256MembershipErrorV1>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
 {
@@ -669,6 +669,20 @@ where
     if commitment.is_identity() {
         return Err(ZkAmsT256MembershipErrorV1::CommitmentIdentity);
     }
+    Ok((commitment, values, actual_gates))
+}
+
+fn membership_witness<S>(
+    coefficients: &[i8],
+    bound: ZkAmsT256MembershipBoundV1,
+    blinding: &Scalar,
+) -> Result<(Point, ArithmeticCircuitWitness<S>), ZkAmsT256MembershipErrorV1>
+where
+    S: ProofSuite<Scalar = Scalar, Point = Point>,
+{
+    let blinding = ZeroizingT256ScalarCopyV1::new(*blinding);
+    let (commitment, mut values, actual_gates) =
+        membership_commitment_for_suite::<S>(coefficients, bound, blinding.as_ref())?;
 
     let mut a_l = ZeroizingT256ScalarVecV1::with_capacity(actual_gates);
     let mut a_r = ZeroizingT256ScalarVecV1::with_capacity(actual_gates);
@@ -819,6 +833,28 @@ pub(super) fn prove_zk_ams_t256_membership_chunk_v1<R: ProofRandomSource>(
         blinding.as_ref(),
         rng,
     )
+}
+
+/// Commit one exact release-shape membership chunk under the canonical T256 basis.
+///
+/// This is the shared commitment primitive for state-owned opening checks and
+/// membership proof construction. It emits no proof and accepts neither a
+/// partial chunk nor an unchecked coefficient or blinding.
+pub(super) fn commit_zk_ams_t256_membership_chunk_v1(
+    bound: ZkAmsT256MembershipBoundV1,
+    coefficients: &[i8],
+    blinding: &Scalar,
+) -> Result<Point, ZkAmsT256MembershipErrorV1> {
+    let blinding = ZeroizingT256ScalarCopyV1::new(*blinding);
+    if coefficients.len() != ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1 {
+        return Err(ZkAmsT256MembershipErrorV1::CoefficientCount);
+    }
+    membership_commitment_for_suite::<ZkAmsT256BulletproofSuiteV1>(
+        coefficients,
+        bound,
+        blinding.as_ref(),
+    )
+    .map(|(commitment, _values, _actual_gates)| commitment)
 }
 
 /// Verify exact membership for one release-shape 16,384-coefficient chunk.
@@ -1111,6 +1147,29 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct CancellationT256Suite;
+
+    impl ProofSuite for CancellationT256Suite {
+        type Scalar = Scalar;
+        type Point = Point;
+
+        fn generators() -> &'static ProofGenerators<Self> {
+            static GENERATORS: OnceLock<ProofGenerators<CancellationT256Suite>> = OnceLock::new();
+            GENERATORS.get_or_init(|| {
+                let source = TinyT256Suite::generators();
+                let commitment_generator = source.g_bold[0];
+                ProofGenerators::new(
+                    source.g,
+                    commitment_generator,
+                    source.g_bold.clone(),
+                    source.h_bold.clone(),
+                )
+                .expect("deliberately dependent test basis has a valid public shape")
+            })
+        }
+    }
+
     struct KatRandom {
         seed: [u8; 32],
         counter: u64,
@@ -1386,6 +1445,95 @@ mod tests {
         assert_eq!(signed_scalar(0), Scalar::ZERO);
         assert_eq!(signed_scalar(1), Scalar::ONE);
         assert_eq!(signed_scalar(2), Scalar::from_u64(2));
+    }
+
+    #[test]
+    fn factored_membership_commitment_matches_embedded_proof_commitment() {
+        let context = keccak256(b"t256-factored-membership-commitment-context");
+        let basis = keccak256(b"t256-factored-membership-commitment-basis");
+        let coefficients = [-1, 0, 1];
+        let blinding = Scalar::from_u64(17);
+        let (direct, _opening, _actual_gates) = membership_commitment_for_suite::<TinyT256Suite>(
+            &coefficients,
+            ZkAmsT256MembershipBoundV1::One,
+            &blinding,
+        )
+        .expect("valid direct tiny commitment");
+        let (evidence, _) = prove_membership_chunk_for_suite::<TinyT256Suite, _>(
+            context,
+            basis,
+            3,
+            ZkAmsT256MembershipBoundV1::One,
+            &coefficients,
+            &blinding,
+            &mut KatRandom::new(b"t256-factored-membership-commitment-rng"),
+        )
+        .expect("valid tiny membership proof");
+
+        assert_eq!(direct, evidence.commitment());
+    }
+
+    #[test]
+    fn release_membership_commitment_is_exact_and_binds_every_opening_input() {
+        let bound = ZkAmsT256MembershipBoundV1::One;
+        let blinding = Scalar::from_u64(29);
+        let mut coefficients = vec![0_i8; ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1];
+
+        assert_eq!(
+            commit_zk_ams_t256_membership_chunk_v1(
+                bound,
+                &coefficients[..coefficients.len() - 1],
+                &blinding,
+            ),
+            Err(ZkAmsT256MembershipErrorV1::CoefficientCount)
+        );
+        let excessive_coefficients = vec![0_i8; ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1 + 1];
+        assert_eq!(
+            commit_zk_ams_t256_membership_chunk_v1(bound, &excessive_coefficients, &blinding),
+            Err(ZkAmsT256MembershipErrorV1::CoefficientCount)
+        );
+        let changed_index = coefficients.len() / 2;
+        coefficients[changed_index] = 2;
+        assert_eq!(
+            commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &blinding),
+            Err(ZkAmsT256MembershipErrorV1::CoefficientOutOfRange {
+                index: changed_index,
+            })
+        );
+        coefficients[changed_index] = 0;
+        assert_eq!(
+            commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &Scalar::ZERO),
+            Err(ZkAmsT256MembershipErrorV1::Blinding)
+        );
+
+        let commitment = commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &blinding)
+            .expect("valid exact release commitment");
+        assert!(!commitment.is_identity());
+
+        coefficients[changed_index] = 1;
+        let changed_coefficient =
+            commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &blinding)
+                .expect("mutated coefficient remains in range");
+        assert_ne!(commitment, changed_coefficient);
+
+        coefficients[changed_index] = 0;
+        let changed_blinding =
+            commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &Scalar::from_u64(31))
+                .expect("mutated blinding remains nonzero");
+        assert_ne!(commitment, changed_blinding);
+    }
+
+    #[test]
+    fn membership_commitment_rejects_constructible_identity() {
+        let result = membership_commitment_for_suite::<CancellationT256Suite>(
+            &[1],
+            ZkAmsT256MembershipBoundV1::One,
+            &-Scalar::ONE,
+        );
+        assert!(matches!(
+            result,
+            Err(ZkAmsT256MembershipErrorV1::CommitmentIdentity)
+        ));
     }
 
     #[test]

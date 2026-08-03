@@ -351,9 +351,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<zk::RegisterZkAsset>,
     InstructionRegistry::register_slice::<zk::ScheduleConfidentialPolicyTransition>,
     InstructionRegistry::register_slice::<zk::CancelConfidentialPolicyTransition>,
-    InstructionRegistry::register_slice::<zk::Shield>,
-    InstructionRegistry::register_slice::<zk::ZkTransfer>,
-    InstructionRegistry::register_slice::<zk::Unshield>,
     InstructionRegistry::register_slice::<zk::CreateElection>,
     InstructionRegistry::register_slice::<zk::SubmitBallot>,
     InstructionRegistry::register_slice::<zk::FinalizeElection>,
@@ -1149,9 +1146,9 @@ mod tests {
 
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "44cf338645bc0c3fe285724e5766e0f8aefe66ea4f8c6337a9660477354fd13e";
+            "68123bb16922f819106520b25bc0e3df75196a2e271f99f37edc7171bf736839";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "53f14268898a1d48283cf01d219a8f3b9e10b102f790ed459318a8bc63efda0e";
+            "8420134d76274e6ed35c8d0960d2da7f20738fb83fbdf24f86bebd6a5d93e5a9";
 
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
@@ -2141,6 +2138,52 @@ mod tests {
                 registry.decode(retired, &[]).is_none(),
                 "retired ZK-ACE instruction wire unexpectedly remains decodable: {retired}"
             );
+        }
+    }
+
+    #[test]
+    fn default_registry_excludes_generic_confidential_instructions() {
+        const RETIRED_GENERIC: &[&str] = &[
+            "iroha_data_model::isi::zk::Shield",
+            "iroha_data_model::isi::zk::ZkTransfer",
+            "iroha_data_model::isi::zk::Unshield",
+        ];
+        let registry = default();
+
+        for retired in RETIRED_GENERIC {
+            assert!(
+                !registry.contains(retired),
+                "retired generic confidential wire must not be registered: {retired}"
+            );
+            assert!(
+                registry.decode(retired, &[]).is_none(),
+                "retired generic confidential wire must not be dispatchable: {retired}"
+            );
+        }
+
+        for specialized in [
+            std::any::type_name::<offline::TopUpKagemushaRecursiveV4>(),
+            std::any::type_name::<offline::RedeemKagemushaRecursiveV4>(),
+            std::any::type_name::<escrow::OpenAnonymousAssetEscrow>(),
+            std::any::type_name::<escrow::ReleaseAnonymousAssetEscrow>(),
+            std::any::type_name::<escrow::CancelAnonymousAssetEscrow>(),
+            std::any::type_name::<escrow::ResolveAnonymousEscrowDispute>(),
+        ] {
+            assert!(
+                registry.contains(specialized),
+                "protocol-bound confidential instruction must remain registered: {specialized}"
+            );
+            assert_eq!(registry.wire_id(specialized), Some(specialized));
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn structured_json_rejects_generic_confidential_dispatch() {
+        for name in ["Shield", "ZkTransfer", "Unshield"] {
+            let retired = format!(r#"{{"name":"{name}","params":{{}}}}"#);
+            norito::json::from_str::<InstructionBox>(&retired)
+                .expect_err("retired generic confidential JSON must not dispatch");
         }
     }
 

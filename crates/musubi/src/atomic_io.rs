@@ -24,6 +24,13 @@ const POST_LINK_CLEANUP_ATTEMPTS: usize = 2;
 const TEMP_FILE_PREFIX: &str = ".musubi-tmp-";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(all(test, unix))]
+std::thread_local! {
+    static TEST_DIRECTORY_SYNC_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// Result of installing immutable bytes at a previously absent path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AtomicInstallOutcome {
@@ -108,7 +115,7 @@ impl AtomicWriteError {
         }
     }
 
-    fn with_recovery_failure(mut self, recovery: Self) -> Self {
+    fn with_recovery_failure(mut self, recovery: &Self) -> Self {
         let recovery = recovery.to_string();
         self.recovery = Some(match self.recovery.take() {
             Some(mut existing) => {
@@ -331,9 +338,10 @@ impl AtomicWriteRoot {
     ///
     /// The destination parent must already exist. The method rejects absolute
     /// paths, traversal, symlink parents and targets, non-regular targets, and
-    /// hard-linked targets. It opens the destination without following links,
-    /// binds the open file to the inspected single-link inode, reads at most one
-    /// byte beyond `max_bytes`, and revalidates the file, parent chain, and root.
+    /// hard-linked targets. It opens the destination without following links and
+    /// in nonblocking mode, binds the open file to the inspected single-link inode,
+    /// reads at most one byte beyond `max_bytes`, and revalidates the file, parent
+    /// chain, and root.
     /// A destination that remains absent throughout validation returns `None`.
     ///
     /// # Errors
@@ -346,7 +354,7 @@ impl AtomicWriteRoot {
         max_bytes: usize,
     ) -> Result<Option<Vec<u8>>, AtomicWriteError> {
         validate_relative_path(relative)?;
-        if platform_no_follow_flag().is_none() {
+        if PLATFORM_SECURE_OPEN_FLAGS.is_none() {
             return Err(AtomicWriteError::new(
                 AtomicWriteErrorCode::UnsupportedPlatform,
                 relative,
@@ -426,7 +434,7 @@ impl AtomicWriteRoot {
     /// the destination directory. Unix `link(2)` semantics then install that inode at
     /// the destination only if the name is still absent. The temporary name is removed
     /// only while it still identifies the inode created by this call, and the parent is
-    /// synchronized before a bounded no-follow readback verifies the exact bytes.
+    /// synchronized before a bounded nonblocking no-follow readback verifies the exact bytes.
     ///
     /// An existing single-link regular file with identical bytes is idempotent. Any
     /// different regular-file contents return
@@ -452,13 +460,17 @@ impl AtomicWriteRoot {
     /// cleanup, synchronization, or exact readback could not be proven. Retrying never
     /// overwrites the destination, but an unrecovered two-link residue can continue to
     /// fail closed as [`AtomicWriteErrorCode::UnsafeTarget`].
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the immutable-install state machine keeps identity validation, no-clobber publication, cleanup, durability, and readback in one auditable sequence"
+    )]
     pub fn install_immutable(
         &self,
         relative: &Path,
         contents: &[u8],
     ) -> Result<AtomicInstallOutcome, AtomicWriteError> {
         validate_relative_path(relative)?;
-        if platform_no_follow_flag().is_none() {
+        if PLATFORM_SECURE_OPEN_FLAGS.is_none() {
             return Err(AtomicWriteError::new(
                 AtomicWriteErrorCode::UnsupportedPlatform,
                 relative,
@@ -478,7 +490,20 @@ impl AtomicWriteRoot {
         let parent_chain = self.validate_parent_chain(parent)?;
         match fs::symlink_metadata(&target) {
             Ok(_) => {
-                let result = existing_immutable_outcome(&target, contents);
+                let binding = bind_existing_immutable_target(&target, contents);
+                let result = match binding {
+                    Ok(identity) => {
+                        let durability = sync_directory_bounded(
+                            parent,
+                            parent_chain.last().expect("parent chain is non-empty"),
+                        );
+                        let readback =
+                            revalidate_existing_immutable_target(&target, contents, identity);
+                        preserve_primary_result(durability, readback)
+                            .map(|()| AtomicInstallOutcome::AlreadyPresent)
+                    }
+                    Err(error) => Err(error),
+                };
                 let revalidation = (|| {
                     self.validate_root()?;
                     validate_directory_snapshots(&parent_chain)
@@ -559,14 +584,22 @@ impl AtomicWriteRoot {
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                let result = existing_immutable_outcome(&target, contents);
+                let binding = bind_existing_immutable_target(&target, contents);
                 let cleanup = cleanup_pending_and_sync(
                     pending,
                     1,
                     parent,
                     parent_chain.last().expect("parent chain is non-empty"),
                 );
-                let result = preserve_primary_result(result, cleanup);
+                let result = match binding {
+                    Ok(identity) => {
+                        let readback =
+                            revalidate_existing_immutable_target(&target, contents, identity);
+                        preserve_primary_result(cleanup, readback)
+                            .map(|()| AtomicInstallOutcome::AlreadyPresent)
+                    }
+                    Err(error) => preserve_primary_result(Err(error), cleanup),
+                };
                 let revalidation = (|| {
                     self.validate_root()?;
                     validate_directory_snapshots(&parent_chain)
@@ -684,6 +717,10 @@ impl AtomicWriteRoot {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "private-root creation keeps each ancestor identity and durability check adjacent to the filesystem operation it protects"
+)]
 fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError> {
     if !root.is_absolute()
         || root
@@ -696,7 +733,7 @@ fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError>
             "validate an absolute private write-root path",
         ));
     }
-    if platform_no_follow_flag().is_none() {
+    if PLATFORM_SECURE_OPEN_FLAGS.is_none() {
         return Err(AtomicWriteError::new(
             AtomicWriteErrorCode::UnsupportedPlatform,
             root,
@@ -836,7 +873,8 @@ fn open_private_directory_no_follow(
 ) -> Result<File, AtomicWriteError> {
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(
-        platform_no_follow_flag().expect("Unix private-root creation requires no-follow support"),
+        PLATFORM_SECURE_OPEN_FLAGS
+            .expect("Unix private-root creation requires no-follow/nonblocking support"),
     );
     let directory = options.open(path).map_err(|error| {
         AtomicWriteError::io(path, "open a private write-root directory", error)
@@ -997,10 +1035,10 @@ fn validate_target_snapshot(
     }
 }
 
-fn existing_immutable_outcome(
+fn bind_existing_immutable_target(
     target: &Path,
     contents: &[u8],
-) -> Result<AtomicInstallOutcome, AtomicWriteError> {
+) -> Result<FileIdentity, AtomicWriteError> {
     let metadata = match fs::symlink_metadata(target) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -1032,13 +1070,30 @@ fn existing_immutable_outcome(
             "reject a hard-linked immutable destination",
         ));
     }
-    if readback_immutable_target(target, contents, None)? {
-        Ok(AtomicInstallOutcome::AlreadyPresent)
+    let identity = FileIdentity::from_metadata(&metadata);
+    if readback_immutable_target(target, contents, Some(identity))? {
+        Ok(identity)
     } else {
         Err(AtomicWriteError::new(
             AtomicWriteErrorCode::ImmutableConflict,
             target,
             "preserve existing immutable bytes",
+        ))
+    }
+}
+
+fn revalidate_existing_immutable_target(
+    target: &Path,
+    contents: &[u8],
+    expected_identity: FileIdentity,
+) -> Result<(), AtomicWriteError> {
+    if readback_immutable_target(target, contents, Some(expected_identity))? {
+        Ok(())
+    } else {
+        Err(AtomicWriteError::new(
+            AtomicWriteErrorCode::ConcurrentModification,
+            target,
+            "revalidate exact immutable bytes after directory synchronization",
         ))
     }
 }
@@ -1107,6 +1162,10 @@ enum ImmutableReadOutcome {
     Exceeded,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "bounded immutable readback keeps the pre-open, open-handle, and post-read identity checks together as one fail-closed state machine"
+)]
 fn read_immutable_target_bounded(
     target: &Path,
     max_bytes: usize,
@@ -1121,19 +1180,21 @@ fn read_immutable_target_bounded(
         ));
     }
 
-    let no_follow = platform_no_follow_flag().ok_or_else(|| {
+    let secure_open_flags = PLATFORM_SECURE_OPEN_FLAGS.ok_or_else(|| {
         AtomicWriteError::new(
             AtomicWriteErrorCode::UnsupportedPlatform,
             target,
-            "open the immutable destination without following links",
+            "open the immutable destination without following links or blocking",
         )
     })?;
+    #[cfg(all(test, unix))]
+    substitute_immutable_read_target_with_fifo_for_test(target)?;
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
-    options.custom_flags(no_follow);
+    options.custom_flags(secure_open_flags);
     #[cfg(not(unix))]
-    let _ = no_follow;
+    let _ = secure_open_flags;
     let mut file = match options.open(target) {
         Ok(file) => file,
         Err(error) => {
@@ -1252,9 +1313,7 @@ fn validate_single_link_immutable_metadata(
     target: &Path,
     metadata: &fs::Metadata,
 ) -> Result<(), AtomicWriteError> {
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || has_multiple_hard_links(&metadata)
+    if metadata.file_type().is_symlink() || !metadata.is_file() || has_multiple_hard_links(metadata)
     {
         return Err(AtomicWriteError::new(
             AtomicWriteErrorCode::UnsafeTarget,
@@ -1346,7 +1405,7 @@ fn preserve_primary_result<T>(
         (Ok(value), Ok(())) => Ok(value),
         (Err(primary), Ok(())) => Err(primary),
         (Ok(_), Err(recovery)) => Err(recovery),
-        (Err(primary), Err(recovery)) => Err(primary.with_recovery_failure(recovery)),
+        (Err(primary), Err(recovery)) => Err(primary.with_recovery_failure(&recovery)),
     }
 }
 
@@ -1514,7 +1573,37 @@ impl Drop for PendingTemp {
 }
 
 fn sync_directory(path: &Path, snapshot: &DirectorySnapshot) -> Result<(), AtomicWriteError> {
-    let directory = File::open(path)
+    #[cfg(all(test, unix))]
+    if TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| {
+        let count = remaining.get();
+        if count == 0 {
+            false
+        } else {
+            remaining.set(count - 1);
+            true
+        }
+    }) {
+        return Err(AtomicWriteError::io(
+            path,
+            "synchronize the destination directory",
+            io::Error::other("injected directory synchronization failure"),
+        ));
+    }
+    let secure_open_flags = PLATFORM_SECURE_OPEN_FLAGS.ok_or_else(|| {
+        AtomicWriteError::new(
+            AtomicWriteErrorCode::UnsupportedPlatform,
+            path,
+            "open the destination directory without following links or blocking",
+        )
+    })?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(secure_open_flags);
+    #[cfg(not(unix))]
+    let _ = secure_open_flags;
+    let directory = options
+        .open(path)
         .map_err(|error| AtomicWriteError::io(path, "open the destination directory", error))?;
     let metadata = directory.metadata().map_err(|error| {
         AtomicWriteError::io(path, "inspect the open destination directory", error)
@@ -1529,6 +1618,49 @@ fn sync_directory(path: &Path, snapshot: &DirectorySnapshot) -> Result<(), Atomi
     directory
         .sync_all()
         .map_err(|error| AtomicWriteError::io(path, "synchronize the destination directory", error))
+}
+
+#[cfg(all(test, unix))]
+fn substitute_immutable_read_target_with_fifo_for_test(
+    path: &Path,
+) -> Result<(), AtomicWriteError> {
+    let substitute = TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS.with(|remaining| {
+        let count = remaining.get();
+        remaining.set(count.saturating_sub(1));
+        count != 0
+    });
+    if !substitute {
+        return Ok(());
+    }
+    fs::remove_file(path).map_err(|error| {
+        AtomicWriteError::io(
+            path,
+            "remove the immutable FIFO substitution fixture",
+            error,
+        )
+    })?;
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|error| {
+            AtomicWriteError::io(
+                path,
+                "create the immutable FIFO substitution fixture",
+                error,
+            )
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(AtomicWriteError::io(
+            path,
+            "create the immutable FIFO substitution fixture",
+            io::Error::other("mkfifo returned an unsuccessful status"),
+        ))
+    }
 }
 
 #[cfg(unix)]
@@ -1609,25 +1741,52 @@ fn hard_link_count(_metadata: &fs::Metadata) -> u64 {
     1
 }
 
+#[cfg(all(
+    target_os = "android",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))
+))]
+compile_error!("Musubi atomic file reads are not qualified for this Android architecture");
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("Musubi atomic file reads are not qualified for this Unix target");
+
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
-const fn platform_no_follow_flag() -> Option<i32> {
-    Some(0x400000)
+const fn platform_no_follow_flag() -> i32 {
+    0x400000
 }
 
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
 ))]
-const fn platform_no_follow_flag() -> Option<i32> {
-    Some(0x8000)
+const fn platform_no_follow_flag() -> i32 {
+    0x8000
 }
 
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
 ))]
-const fn platform_no_follow_flag() -> Option<i32> {
-    Some(0x20000)
+const fn platform_no_follow_flag() -> i32 {
+    0x20000
 }
 
 #[cfg(all(
@@ -1640,8 +1799,8 @@ const fn platform_no_follow_flag() -> Option<i32> {
         target_arch = "powerpc64"
     )
 ))]
-const fn platform_no_follow_flag() -> Option<i32> {
-    Some(0x8000)
+const fn platform_no_follow_flag() -> i32 {
+    0x8000
 }
 
 #[cfg(all(
@@ -1654,8 +1813,8 @@ const fn platform_no_follow_flag() -> Option<i32> {
         target_arch = "powerpc64"
     ))
 ))]
-const fn platform_no_follow_flag() -> Option<i32> {
-    Some(0x20000)
+const fn platform_no_follow_flag() -> i32 {
+    0x20000
 }
 
 #[cfg(all(
@@ -1670,42 +1829,91 @@ const fn platform_no_follow_flag() -> Option<i32> {
         target_os = "dragonfly"
     )
 ))]
-const fn platform_no_follow_flag() -> Option<i32> {
-    Some(0x100)
+const fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "mips",
+        target_arch = "mips32r6",
+        target_arch = "mips64",
+        target_arch = "mips64r6"
+    )
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x80
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "sparc", target_arch = "sparc64")
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x4000
 }
 
 #[cfg(any(
-    not(unix),
+    target_os = "android",
     all(
-        target_os = "android",
+        target_os = "linux",
         not(any(
-            target_arch = "riscv64",
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "x86",
-            target_arch = "x86_64"
-        ))
-    ),
-    all(
-        unix,
-        not(any(target_os = "linux", target_os = "android")),
-        not(any(
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "freebsd",
-            target_os = "openbsd",
-            target_os = "netbsd",
-            target_os = "dragonfly"
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6",
+            target_arch = "sparc",
+            target_arch = "sparc64"
         ))
     )
 ))]
-const fn platform_no_follow_flag() -> Option<i32> {
-    None
+const fn platform_nonblocking_flag() -> i32 {
+    0x800
 }
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x4
+}
+
+#[cfg(unix)]
+const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> =
+    Some(platform_no_follow_flag() | platform_nonblocking_flag());
+
+#[cfg(not(unix))]
+const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = None;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    struct DirectorySyncFailureReset;
+
+    #[cfg(unix)]
+    impl Drop for DirectorySyncFailureReset {
+        fn drop(&mut self) {
+            TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(0));
+        }
+    }
+
+    #[cfg(unix)]
+    fn inject_directory_sync_failures(count: usize) -> DirectorySyncFailureReset {
+        TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(count));
+        DirectorySyncFailureReset
+    }
 
     #[cfg(unix)]
     #[test]
@@ -1846,6 +2054,50 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn immutable_retry_resynchronizes_an_exact_destination_after_interrupted_install() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
+        let relative = Path::new("checkpoints/release.norito");
+        fs::create_dir(root.path().join("checkpoints")).expect("checkpoint directory");
+        let _reset = inject_directory_sync_failures(POST_LINK_CLEANUP_ATTEMPTS + 1);
+
+        let first_error = writer
+            .install_immutable(relative, b"exact-release-checkpoint")
+            .expect_err("post-link directory synchronization failure must be reported");
+        assert_eq!(first_error.code(), AtomicWriteErrorCode::Io);
+        assert!(
+            first_error
+                .to_string()
+                .contains("cleanup or parent-directory durability was not proven")
+        );
+        TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| assert_eq!(remaining.get(), 0));
+        let target = root.path().join(relative);
+        assert_eq!(
+            fs::read(&target).expect("read installed target after reported failure"),
+            b"exact-release-checkpoint"
+        );
+        assert_eq!(
+            hard_link_count(&fs::metadata(&target).expect("single-link target metadata")),
+            1
+        );
+
+        TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(POST_LINK_CLEANUP_ATTEMPTS));
+        writer
+            .install_immutable(relative, b"exact-release-checkpoint")
+            .expect_err("exact-existing retry must prove parent-directory durability");
+        TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| assert_eq!(remaining.get(), 0));
+
+        TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(0));
+        assert_eq!(
+            writer
+                .install_immutable(relative, b"exact-release-checkpoint")
+                .expect("durable exact-existing retry"),
+            AtomicInstallOutcome::AlreadyPresent
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn loads_an_installed_immutable_file_within_the_bound() {
         let root = tempfile::tempdir().expect("temporary root");
         let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
@@ -1862,6 +2114,34 @@ mod tests {
                 .expect("load immutable checkpoint"),
             Some(contents.to_vec())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn immutable_load_rejects_a_fifo_substitution_without_blocking() {
+        use std::os::unix::fs::FileTypeExt as _;
+
+        let root = tempfile::tempdir().expect("temporary root");
+        let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
+        let relative = Path::new("checkpoints/release.norito");
+        let contents = b"exact-release-checkpoint";
+        fs::create_dir(root.path().join("checkpoints")).expect("checkpoint directory");
+        writer
+            .install_immutable(relative, contents)
+            .expect("install immutable checkpoint");
+
+        TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS.with(|remaining| remaining.set(1));
+        let error = writer
+            .load_immutable(relative, contents.len())
+            .expect_err("a FIFO substituted after inspection must fail without blocking");
+        assert_eq!(error.code(), AtomicWriteErrorCode::ConcurrentModification);
+        assert!(
+            fs::symlink_metadata(root.path().join(relative))
+                .expect("substituted FIFO metadata")
+                .file_type()
+                .is_fifo()
+        );
+        TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS.with(|remaining| assert_eq!(remaining.get(), 0));
     }
 
     #[cfg(unix)]
@@ -1967,18 +2247,17 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary root");
         let writer = Arc::new(AtomicWriteRoot::new(root.path()).expect("bind root"));
         let barrier = Arc::new(Barrier::new(8));
-        let handles = (0..8)
-            .map(|_| {
-                let writer = Arc::clone(&writer);
-                let barrier = Arc::clone(&barrier);
-                thread::spawn(move || {
-                    barrier.wait();
-                    writer
-                        .install_immutable(Path::new("concurrent"), b"identical")
-                        .map_err(|error| error.code())
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut handles = Vec::with_capacity(8);
+        for _ in 0..8 {
+            let writer = Arc::clone(&writer);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                writer
+                    .install_immutable(Path::new("concurrent"), b"identical")
+                    .map_err(|error| error.code())
+            }));
+        }
         let results = handles
             .into_iter()
             .map(|handle| handle.join().expect("immutable installer thread"))
@@ -2029,19 +2308,17 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary root");
         let writer = Arc::new(AtomicWriteRoot::new(root.path()).expect("bind root"));
         let barrier = Arc::new(Barrier::new(2));
-        let handles = [b"first".to_vec(), b"second".to_vec()]
-            .into_iter()
-            .map(|contents| {
-                let writer = Arc::clone(&writer);
-                let barrier = Arc::clone(&barrier);
-                thread::spawn(move || {
-                    barrier.wait();
-                    writer
-                        .install_immutable(Path::new("different"), &contents)
-                        .map_err(|error| error.code())
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut handles = Vec::with_capacity(2);
+        for contents in [b"first".to_vec(), b"second".to_vec()] {
+            let writer = Arc::clone(&writer);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                writer
+                    .install_immutable(Path::new("different"), &contents)
+                    .map_err(|error| error.code())
+            }));
+        }
         let results = handles
             .into_iter()
             .map(|handle| handle.join().expect("immutable installer thread"))

@@ -2976,7 +2976,7 @@ def validate_peer_health(
 
     sumeragi = getter(f"{root}/v1/sumeragi/status", 2.0)
     if (
-        sumeragi.get("protocol_version") != 3
+        sumeragi.get("protocol_version") != 4
         or sumeragi.get("restart_required") is not False
     ):
         fail(f"{peer.label} is not running one restart-clean Sumeragi v2 reducer")

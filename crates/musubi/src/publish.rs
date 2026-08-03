@@ -34,6 +34,10 @@ use std::{
     str::FromStr,
 };
 
+use iroha::musubi_runtime::{
+    MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
+    MusubiSeedIngressCarPlanV1,
+};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -48,14 +52,13 @@ use iroha_data_model::{
         MusubiArchiveLocationPageV1, MusubiArchiveLocationStateV1, MusubiArchiveLocationV1,
         MusubiArchiveRecordV1, MusubiArchiveRetentionDecisionV1,
         MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionPageV1,
-        MusubiArchiveRetentionQueryV1, MusubiContentDigestV1, MusubiNamespaceDelegationV1,
-        MusubiNamespaceV1, MusubiPackageScopeV1, MusubiProviderBundleAttestationDigestV1,
-        MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleAttestationSetDigestV1,
-        MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseDigestV1,
-        MusubiReleaseRecordV1, MusubiResolverIndexPageV1, MusubiResolverReleaseRowV1,
-        MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
-        MusubiSemanticReleaseDigestV1, MusubiStorageAvailabilityV1, MusubiVerificationLockDigestV1,
-        MusubiVersionReqV1,
+        MusubiArchiveRetentionQueryV1, MusubiContentDigestV1, MusubiExactReleaseSnapshotV1,
+        MusubiNamespaceDelegationV1, MusubiNamespaceV1, MusubiPackageScopeV1,
+        MusubiProviderBundleAttestationDigestV1, MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationSetDigestV1, MusubiPublicationV1, MusubiRegistrySnapshotV1,
+        MusubiReleaseDigestV1, MusubiReleaseIdV1, MusubiReleaseRecordV1, MusubiResolverIndexPageV1,
+        MusubiResolverReleaseRowV1, MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
+        MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1, MusubiVersionReqV1,
     },
     sorafs::{
         capacity::ProviderId,
@@ -70,6 +73,7 @@ use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
 };
+use sorafs_car::{CarBuildPlan, CarVerifier, ChunkStore};
 
 use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
 
@@ -84,6 +88,23 @@ const JOURNAL_DIRECTORY: &str = "publication-v1";
 const JOURNAL_EXTENSION: &str = "norito";
 const JOURNAL_LOCK_EXTENSION: &str = "lock";
 const STAGED_CAR_EXTENSION: &str = "car";
+const STAGED_PLAN_EXTENSION: &str = "plan.norito";
+const STAGED_PLAN_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
+    16_384,
+    MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1,
+    2_097_152,
+    128 * 1024 * 1024,
+    128,
+);
+const STAGED_CAR_PLAN_HEAP_LIMIT_BYTES_V1: usize =
+    sorafs_car::DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES;
+
+#[cfg(all(test, unix))]
+std::thread_local! {
+    static TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// Maximum number of exact archive-registration transaction generations in one V1 operation.
 pub const MUSUBI_MAX_ARCHIVE_REGISTRATION_ATTEMPTS_V1: usize = 8;
 /// Maximum number of append-only archive-location transaction generations in one V1 operation.
@@ -97,30 +118,26 @@ pub const MUSUBI_MAX_RELEASE_SIGNATURES_V1: usize = 16;
 const MAX_JOURNAL_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_JOURNAL_BYTES_USIZE: usize = 16 * 1024 * 1024;
 // The persisted frame reserves half of its payload budget for immutable request/archive evidence
-// and half for all eight release attempts. Standalone canonical component frames overcount their
-// nested representation, while the remaining 1/64 covers the outer frame and terminal fields.
+// and half for eight release attempts plus compact completion state. Standalone canonical
+// component frames overcount their nested representation, while the remaining 1/64 covers outer
+// framing and terminal fields.
 const JOURNAL_CANONICAL_OVERHEAD_RESERVE_BYTES: usize = MAX_JOURNAL_BYTES_USIZE / 64;
 const JOURNAL_COMPONENT_BUDGET_BYTES: usize =
     MAX_JOURNAL_BYTES_USIZE - JOURNAL_CANONICAL_OVERHEAD_RESERVE_BYTES;
 const JOURNAL_NON_RELEASE_BUDGET_BYTES: usize = JOURNAL_COMPONENT_BUDGET_BYTES / 2;
 const JOURNAL_RELEASE_HISTORY_BUDGET_BYTES: usize =
     JOURNAL_COMPONENT_BUDGET_BYTES - JOURNAL_NON_RELEASE_BUDGET_BYTES;
-// Half of the release-side budget remains unavailable to attempts so an applied outcome can
-// always retain the top-level submission and exact home/universal final evidence.
-const JOURNAL_RELEASE_FINAL_STATE_BUDGET_BYTES: usize = JOURNAL_RELEASE_HISTORY_BUDGET_BYTES / 2;
+const MAX_RELEASE_SUBMISSION_CANONICAL_BYTES: usize = JOURNAL_CANONICAL_OVERHEAD_RESERVE_BYTES / 4;
+const MAX_RELEASE_FINAL_CHECKPOINT_CANONICAL_BYTES: usize =
+    JOURNAL_CANONICAL_OVERHEAD_RESERVE_BYTES / 4;
+const JOURNAL_RELEASE_FINAL_STATE_BUDGET_BYTES: usize =
+    MAX_RELEASE_SUBMISSION_CANONICAL_BYTES + MAX_RELEASE_FINAL_CHECKPOINT_CANONICAL_BYTES;
 const JOURNAL_RELEASE_ATTEMPTS_BUDGET_BYTES: usize =
     JOURNAL_RELEASE_HISTORY_BUDGET_BYTES - JOURNAL_RELEASE_FINAL_STATE_BUDGET_BYTES;
-const MAX_RELEASE_SUBMISSION_CANONICAL_BYTES: usize = JOURNAL_CANONICAL_OVERHEAD_RESERVE_BYTES / 4;
-const MAX_RELEASE_FINAL_EVIDENCE_CANONICAL_BYTES: usize =
-    JOURNAL_RELEASE_FINAL_STATE_BUDGET_BYTES - MAX_RELEASE_SUBMISSION_CANONICAL_BYTES;
-// Two complete manifest frames overestimate the home manifest plus the universal row's repeated
-// dependency list; three publisher frames cover home `published_by` plus both yank projections.
-// The remainder is a derived 64 KiB allowance for snapshots, digests, selection, and framing.
-const RELEASE_FINAL_EVIDENCE_FIXED_ALLOWANCE_BYTES: usize =
-    JOURNAL_CANONICAL_OVERHEAD_RESERVE_BYTES / 4;
-// TODO: Move final registry evidence to a compact digest-addressed checkpoint before accepting
-// later concurrent yank/governance projections whose actor controllers can be larger than the
-// initial publisher; the V1 journal currently verifies the initial revision-one projection only.
+// The exact paired query is bounded independently from the compact journal checkpoint. It may
+// include consensus-legal post-publication controller projections that must not inflate the
+// durable operation frame.
+const MAX_RELEASE_FINAL_QUERY_EVIDENCE_CANONICAL_BYTES: usize = MAX_JOURNAL_BYTES_USIZE;
 const MAX_RELEASE_ATTEMPT_CANONICAL_BYTES: usize =
     JOURNAL_RELEASE_ATTEMPTS_BUDGET_BYTES / MUSUBI_MAX_RELEASE_SUBMISSION_ATTEMPTS_V1;
 // Every retained attempt receives equal canonical budgets for its persist-before-send intent and
@@ -145,6 +162,9 @@ const ARCHIVE_REGISTRATION_INSTRUCTION_DOMAIN: &[u8] =
 const ARCHIVE_LOCATION_INSTRUCTION_DOMAIN: &[u8] = b"iroha.musubi.archive-location-instruction.v1";
 const PUBLISH_INSTRUCTION_DOMAIN: &[u8] = b"iroha.musubi.publish-instruction.v1";
 const RELEASE_SIGNED_TRANSACTION_DOMAIN: &[u8] = b"iroha.musubi.release-signed-transaction.v1";
+const FINAL_HOME_RELEASE_DOMAIN: &[u8] = b"iroha.musubi.final-home-release.v1";
+const FINAL_UNIVERSAL_RELEASE_DOMAIN: &[u8] = b"iroha.musubi.final-universal-release.v1";
+const FINAL_CHECKPOINT_DOMAIN: &[u8] = b"iroha.musubi.final-checkpoint.v1";
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 #[cfg(windows)]
@@ -244,6 +264,11 @@ pub struct PublicationRequestV1 {
 
 impl PublicationRequestV1 {
     /// Validate all immutable publication, archive, deployment, and revision bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-evidence error when any request field, namespace binding, archive
+    /// commitment, or policy revision is malformed or inconsistent.
     pub fn validate(&self) -> Result<(), PublicationError> {
         self.publication
             .validate()
@@ -350,7 +375,7 @@ impl PublicationRequestV1 {
 pub enum PublicationPhaseV1 {
     /// Validate and compiler-check the clean package and exact proof.
     Validation,
-    /// Stage the exact CAR through authenticated SoraFS seed ingress.
+    /// Stage the exact CAR through authenticated `SoraFS` seed ingress.
     SeedIngress,
     /// Persist exact registration intent and finality before creating its permanent pin/order.
     ArchiveRegistration,
@@ -683,6 +708,10 @@ impl PublicationArchiveRegistrationAttemptV1 {
 
 /// Result of inspecting or submitting one exact archive-registration generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the fixed advance protocol returns complete finalized evidence without heap-indirecting its stable API"
+)]
 pub enum PublicationArchiveRegistrationAdvanceV1 {
     /// The exact transaction remains absent/unknown or pending and must not be replaced.
     Pending,
@@ -719,7 +748,9 @@ impl PublicationRegisteredArchiveV1 {
         self.snapshot
             .validate()
             .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
-        if self.finalized_transaction_hash != intent.transaction_hash
+        let observed_finalized_transaction_hash = self.finalized_transaction_hash;
+        let expected_intent_transaction_hash = intent.transaction_hash;
+        if observed_finalized_transaction_hash != expected_intent_transaction_hash
             || self.chain_id != request.chain_id
             || self.genesis_block_hash != request.genesis_block_hash
             || self.archive.registered_at_height > self.snapshot.finalized_height
@@ -882,6 +913,10 @@ pub struct PublicationArchiveLocationIntentV1 {
 impl PublicationArchiveLocationIntentV1 {
     /// Bind one exact signed transaction to its finalized preparation snapshot.
     #[must_use]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the fixed intent constructor consumes the prepared instruction and signed transaction as one immutable protocol step"
+    )]
     pub fn new(
         operation_id: PublicationOperationIdV1,
         generation: u8,
@@ -1045,8 +1080,10 @@ impl PublicationArchiveRegistrationV1 {
                 Ok(PublicationLocationProgressV1::Current)
             )
         });
+        let observed_genesis_hash = page.genesis_hash;
+        let expected_genesis_hash = request.genesis_block_hash;
         if page.chain_id != request.chain_id
-            || page.genesis_hash != request.genesis_block_hash
+            || observed_genesis_hash != expected_genesis_hash
             || page.archive.registration_projection()
                 != self.finalized_page.archive.registration_projection()
             || page.snapshot.finalized_height < self.finalized_page.snapshot.finalized_height
@@ -1159,6 +1196,10 @@ pub enum PublicationArchiveLocationTerminalReasonV1 {
 
 /// Durable finalized floor against which one archive-location terminal was accepted.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the stable journal enum retains exact finalized replication evidence inline for deterministic recovery"
+)]
 pub enum PublicationArchiveLocationTerminalFloorV1 {
     /// The transaction never acquired finalized application evidence; use its prepared page.
     #[codec(index = 0)]
@@ -1183,6 +1224,10 @@ pub struct PublicationArchiveLocationTerminalV1 {
 }
 
 impl PublicationArchiveLocationTerminalV1 {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the terminal validator keeps all finalized-floor, absence, and retirement invariants in one security-sensitive state check"
+    )]
     fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -1340,6 +1385,10 @@ impl PublicationArchiveLocationAttemptV1 {
 
 /// Result of submitting or recovering one exact archive-location transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the fixed advance protocol returns complete finalized location evidence without changing its stable API"
+)]
 pub enum PublicationArchiveLocationAdvanceV1 {
     /// The exact transaction remains pending or not yet authoritatively terminal.
     Pending,
@@ -1408,8 +1457,10 @@ pub(crate) fn validate_archive_location_page(
 ) -> Result<(), PublicationError> {
     page.validate()
         .map_err(|error| invalid(PublicationPhaseV1::ArchiveRegistration, error))?;
+    let observed_genesis_hash = page.genesis_hash;
+    let expected_genesis_hash = request.genesis_block_hash;
     if page.chain_id != request.chain_id
-        || page.genesis_hash != request.genesis_block_hash
+        || observed_genesis_hash != expected_genesis_hash
         || page.archive.registration_projection() != registered.archive.registration_projection()
         || page.snapshot.finalized_height < registered.snapshot.finalized_height
         || page.snapshot.index_revision < registered.snapshot.index_revision
@@ -1466,7 +1517,7 @@ impl PublicationReadbackEvidenceV1 {
         if self.provider != expected_provider
             || self.location_id != location.location_id
             || self.replication_order != location.replication_order
-            || &self.commitment != &request.archive_commitment
+            || self.commitment != request.archive_commitment
             || self.semantic_release_digest != request.publication.manifest.semantic_digest()
             || self.verification_lock_digest
                 != request.publication.manifest.verification_lock_digest
@@ -1478,6 +1529,31 @@ impl PublicationReadbackEvidenceV1 {
         }
         Ok(())
     }
+}
+
+fn validate_readback_subset(
+    request: &PublicationRequestV1,
+    location: &MusubiArchiveLocationV1,
+    readbacks: &[PublicationReadbackEvidenceV1],
+) -> Result<(), PublicationError> {
+    let is_strictly_ordered = readbacks
+        .windows(2)
+        .all(|pair| pair[0].provider < pair[1].provider);
+    let all_are_location_providers = readbacks
+        .iter()
+        .all(|readback| location.providers.binary_search(&readback.provider).is_ok());
+    if readbacks.len() != 2 || !is_strictly_ordered || !all_are_location_providers {
+        return Err(PublicationError::InvalidEvidence {
+            phase: PublicationPhaseV1::Readback,
+            reason:
+                "provider readbacks were not a strictly ordered distinct location-provider subset"
+                    .to_owned(),
+        });
+    }
+    for readback in readbacks {
+        readback.validate_for(request, location, readback.provider)?;
+    }
+    Ok(())
 }
 
 /// Finalized replication and readback floor that authorized one release signature.
@@ -1499,6 +1575,11 @@ pub struct PublicationReleasePreparationFloorV1 {
 
 impl PublicationReleasePreparationFloorV1 {
     /// Construct and validate an independently auditable release-preparation floor.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid evidence when the replication checkpoint, selected location generation, or
+    /// two provider readbacks do not match the immutable publication request.
     pub fn try_new(
         location_generation: u8,
         replication: PublicationReplicationCheckpointV1,
@@ -1537,8 +1618,10 @@ impl PublicationReleasePreparationFloorV1 {
                     page.archive.staging_receipt.payload.issued_at_ms,
                 )
                 .is_ok();
+        let observed_genesis_hash = page.genesis_hash;
+        let expected_genesis_hash = request.genesis_block_hash;
         if page.chain_id != request.chain_id
-            || page.genesis_hash != request.genesis_block_hash
+            || observed_genesis_hash != expected_genesis_hash
             || !exact_archive
             || page.next_cursor.is_some()
             || page.items.len() != page.archive.location_ids.len()
@@ -1560,10 +1643,7 @@ impl PublicationReleasePreparationFloorV1 {
                     .to_owned(),
             });
         }
-        for (readback, provider) in self.readbacks.iter().zip(location.providers.iter()) {
-            readback.validate_for(request, location, *provider)?;
-        }
-        Ok(())
+        validate_readback_subset(request, location, &self.readbacks)
     }
 
     fn location(&self) -> Option<&MusubiArchiveLocationV1> {
@@ -1592,10 +1672,7 @@ impl PublicationReleasePreparationFloorV1 {
         }
         self.replication.validate_for(request, registration)?;
         let location = self.replication.location(registration)?;
-        for (readback, provider) in self.readbacks.iter().zip(location.providers.iter()) {
-            readback.validate_for(request, location, *provider)?;
-        }
-        Ok(())
+        validate_readback_subset(request, location, &self.readbacks)
     }
 }
 
@@ -1621,6 +1698,11 @@ pub struct PublicationReleaseSignedEnvelopeV1 {
 
 impl PublicationReleaseSignedEnvelopeV1 {
     /// Extract a compact envelope only from the exact canonical V1 release transaction shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid evidence when the transaction shape is not the fixed release protocol or
+    /// the compact envelope cannot reconstruct its exact signed bytes.
     pub fn try_from_signed_transaction(
         request: &PublicationRequestV1,
         signed_transaction: &SignedTransaction,
@@ -1652,6 +1734,11 @@ impl PublicationReleaseSignedEnvelopeV1 {
     }
 
     /// Reconstruct and validate the sole exact signed release transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid evidence when the compact payload, multisig bundle, or signature cannot
+    /// reconstruct the fixed release transaction shape.
     pub fn reconstruct_signed_transaction(
         &self,
         request: &PublicationRequestV1,
@@ -1705,6 +1792,11 @@ pub struct PublicationReleaseSubmissionIntentV1 {
 
 impl PublicationReleaseSubmissionIntentV1 {
     /// Extract, reconstruct, and bind one exact signed transaction before any submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid evidence when the preparation floor or signed transaction is malformed,
+    /// substituted, or exceeds the fixed release-intent budget.
     pub fn try_new(
         operation_id: PublicationOperationIdV1,
         request: &PublicationRequestV1,
@@ -1733,6 +1825,11 @@ impl PublicationReleaseSubmissionIntentV1 {
     }
 
     /// Reconstruct and validate the complete transaction represented by this compact intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid evidence when the compact envelope, instruction digest, signed-wire
+    /// digest, transaction hash, or operation binding differs.
     pub fn reconstruct_signed_transaction(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -1770,8 +1867,8 @@ impl PublicationReleaseSubmissionIntentV1 {
             self,
             MAX_RELEASE_INTENT_CANONICAL_BYTES,
             "release submission intent",
+            PublicationPhaseV1::ReleaseSubmission,
         )?;
-        ensure_projected_final_evidence_budget(request)?;
         self.reconstruct_signed_transaction(operation_id, request)
             .map(|_| ())
     }
@@ -1947,6 +2044,7 @@ impl PublicationReleaseSubmissionTerminalV1 {
             self,
             MAX_RELEASE_OUTCOME_CANONICAL_BYTES,
             "release terminal evidence",
+            PublicationPhaseV1::ReleaseSubmission,
         )?;
         let preparation_height = intent
             .preparation
@@ -1964,6 +2062,10 @@ impl PublicationReleaseSubmissionTerminalV1 {
             PublicationReleaseSubmissionTerminalReasonV1::RegistryExpired {
                 block_height,
                 absence,
+            }
+            | PublicationReleaseSubmissionTerminalReasonV1::RegistryRejected {
+                block_height,
+                absence,
             } => {
                 absence.validate_for(request)?;
                 *block_height > preparation_height
@@ -1976,14 +2078,6 @@ impl PublicationReleaseSubmissionTerminalV1 {
                 absence.snapshot().finalized_height > preparation_height
                     && release_submission_valid_until_ms(intent)
                         .is_some_and(|deadline| absence.finalized_time_ms() > deadline)
-            }
-            PublicationReleaseSubmissionTerminalReasonV1::RegistryRejected {
-                block_height,
-                absence,
-            } => {
-                absence.validate_for(request)?;
-                *block_height > preparation_height
-                    && absence.snapshot().finalized_height >= *block_height
             }
         };
         if self.transaction_hash != intent.transaction_hash
@@ -2014,6 +2108,10 @@ impl PublicationReleaseSubmissionTerminalV1 {
 
 /// Append-only authoritative outcome of one exact release transaction generation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the stable wire enum retains complete applied or terminal evidence inline for deterministic journal recovery"
+)]
 pub enum PublicationReleaseSubmissionOutcomeV1 {
     /// The journaled payload transaction was finalized applied through Native AMX.
     #[codec(index = 0)]
@@ -2030,6 +2128,10 @@ pub enum PublicationReleaseSubmissionOutcomeV1 {
 
 /// Authoritative payload progress for one already-journaled release transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the fixed backend advance API returns complete authoritative evidence without heap indirection"
+)]
 pub enum PublicationReleaseSubmissionAdvanceV1 {
     /// The payload transaction is absent, live, pending, or not yet authoritatively resolved.
     Pending,
@@ -2118,6 +2220,7 @@ impl PublicationReleaseSubmissionAttemptV1 {
             self,
             MAX_RELEASE_ATTEMPT_CANONICAL_BYTES,
             "release submission attempt",
+            PublicationPhaseV1::ReleaseSubmission,
         )?;
         self.intent.validate_for(operation_id, request)?;
         if let Some(outcome) = &self.outcome {
@@ -2125,6 +2228,7 @@ impl PublicationReleaseSubmissionAttemptV1 {
                 outcome,
                 MAX_RELEASE_OUTCOME_CANONICAL_BYTES,
                 "release submission outcome",
+                PublicationPhaseV1::ReleaseSubmission,
             )?;
             outcome.validate_for(operation_id, request, &self.intent)?;
         }
@@ -2236,6 +2340,7 @@ impl PublicationAmxSubmissionV1 {
             self,
             MAX_RELEASE_SUBMISSION_CANONICAL_BYTES,
             "release submission evidence",
+            PublicationPhaseV1::ReleaseSubmission,
         )?;
         if self.operation_id != operation_id
             || self.instruction_digest
@@ -2275,8 +2380,9 @@ impl PublicationFinalEvidenceV1 {
     ) -> Result<(), PublicationError> {
         ensure_release_component_budget(
             self,
-            MAX_RELEASE_FINAL_EVIDENCE_CANONICAL_BYTES,
+            MAX_RELEASE_FINAL_QUERY_EVIDENCE_CANONICAL_BYTES,
             "release final evidence",
+            PublicationPhaseV1::FinalVerification,
         )?;
         self.snapshot
             .validate()
@@ -2287,6 +2393,15 @@ impl PublicationFinalEvidenceV1 {
         self.universal_release
             .validate()
             .map_err(|error| invalid(PublicationPhaseV1::FinalVerification, error))?;
+        MusubiExactReleaseSnapshotV1 {
+            chain_id: self.chain_id.clone(),
+            genesis_hash: self.genesis_block_hash,
+            snapshot: self.snapshot,
+            home_release: self.home_release.clone(),
+            universal_release: self.universal_release.clone(),
+        }
+        .validate()
+        .map_err(|error| invalid(PublicationPhaseV1::FinalVerification, error))?;
         let manifest = &request.publication.manifest;
         let row = &self.universal_release;
         if self.chain_id != request.chain_id
@@ -2297,35 +2412,154 @@ impl PublicationFinalEvidenceV1 {
             || self.snapshot.index_revision < request.publication.resolution.snapshot.index_revision
             || &self.home_release.manifest != manifest
             || self.home_release.release_digest != manifest.release_digest()
-            || &self.home_release.published_by != &request.publisher
+            || self.home_release.published_by != request.publisher
             || self.home_release.published_at_height > self.snapshot.finalized_height
-            || &self.home_release.yank.changed_by != &request.publisher
-            || self.home_release.yank.revision != 1
-            || self.home_release.revisions.yank != 1
-            || self.home_release.revisions.artifact_governance != 1
-            || &row.release != &manifest.release
+            || row.release != manifest.release
             || row.release_digest != manifest.release_digest()
             || row.archive_id != manifest.archive_id
             || row.source_digest != request.archive_commitment.source_tree_digest
             || row.interface_digest != manifest.interface_digest
             || row.abi != manifest.abi
-            || &row.dependencies != &manifest.dependencies
+            || row.dependencies != manifest.dependencies
             || row.index_revision > self.snapshot.index_revision
             || row.selection.storage.index_revision > row.index_revision
             || row.selection.storage.archive_id != manifest.archive_id
-            || row.selection.storage.availability != MusubiStorageAvailabilityV1::Selectable
-            || row.selection.storage.healthy_replicas < MUSUBI_MIN_HEALTHY_REPLICAS_V1
             || row.selection.storage.finalized_height > self.snapshot.finalized_height
             || (row.selection.storage.finalized_height == self.snapshot.finalized_height
                 && row.selection.storage.finalized_block_hash != self.snapshot.finalized_block_hash)
             || row.selection.yank != self.home_release.yank
             || row.selection.governance != self.home_release.artifact_governance
-            || !row.selection.fresh_selectable()
         {
             return Err(PublicationError::InvalidEvidence {
                 phase: PublicationPhaseV1::FinalVerification,
                 reason: "finalized home record or universal resolver entry was substituted"
                     .to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Compact local journal commitment to one fully verified paired release projection.
+///
+/// The checkpoint binds the immutable request and canonical projection digests, but its public
+/// self-digest is not an authenticated finalized-query receipt. Completed resume therefore relies
+/// on the publication journal's trusted private-storage boundary.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct PublicationFinalCheckpointV1 {
+    /// Stable request-derived operation identity, including the public anti-replay nonce.
+    pub operation_id: PublicationOperationIdV1,
+    /// Deployment-selected chain identity returned with the exact projections.
+    pub chain_id: ChainId,
+    /// Exact genesis block hash returned with the exact projections.
+    pub genesis_block_hash: [u8; 32],
+    /// Finalized registry snapshot at which both projections were verified.
+    pub snapshot: MusubiRegistrySnapshotV1,
+    /// Exact structural release identity.
+    pub release: MusubiReleaseIdV1,
+    /// Digest of the complete immutable release manifest, including its archive identity.
+    pub release_digest: MusubiReleaseDigestV1,
+    /// Exact immutable source archive identity.
+    pub archive_id: ArchiveId,
+    /// Domain-separated canonical digest of the verified home-dataspace record.
+    pub home_release_digest: [u8; 32],
+    /// Domain-separated canonical digest of the verified universal resolver row.
+    pub universal_release_digest: [u8; 32],
+    /// Integrity digest binding every compact checkpoint field and projection digest.
+    pub checkpoint_digest: [u8; 32],
+}
+
+impl PublicationFinalCheckpointV1 {
+    fn from_verified(
+        request: &PublicationRequestV1,
+        submission: &PublicationAmxSubmissionV1,
+        evidence: &PublicationFinalEvidenceV1,
+    ) -> Result<Self, PublicationError> {
+        evidence.validate_for(request, submission)?;
+        let home_release = norito::encode_canonical(&evidence.home_release).map_err(|error| {
+            PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::FinalVerification,
+                reason: format!("home release could not be canonically encoded: {error}"),
+            }
+        })?;
+        let universal_release =
+            norito::encode_canonical(&evidence.universal_release).map_err(|error| {
+                PublicationError::InvalidEvidence {
+                    phase: PublicationPhaseV1::FinalVerification,
+                    reason: format!(
+                        "universal release row could not be canonically encoded: {error}"
+                    ),
+                }
+            })?;
+        let mut checkpoint = Self {
+            operation_id: request.operation_id(),
+            chain_id: evidence.chain_id.clone(),
+            genesis_block_hash: evidence.genesis_block_hash,
+            snapshot: evidence.snapshot,
+            release: evidence.home_release.manifest.release.clone(),
+            release_digest: evidence.home_release.release_digest,
+            archive_id: evidence.universal_release.archive_id,
+            home_release_digest: domain_hash(FINAL_HOME_RELEASE_DOMAIN, &home_release),
+            universal_release_digest: domain_hash(
+                FINAL_UNIVERSAL_RELEASE_DOMAIN,
+                &universal_release,
+            ),
+            checkpoint_digest: [0; 32],
+        };
+        checkpoint.checkpoint_digest = checkpoint.digest()?;
+        checkpoint.validate_for(request, submission)?;
+        Ok(checkpoint)
+    }
+
+    fn digest(&self) -> Result<[u8; 32], PublicationError> {
+        let mut payload = self.clone();
+        payload.checkpoint_digest = [0; 32];
+        let canonical = norito::encode_canonical(&payload).map_err(|error| {
+            PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::FinalVerification,
+                reason: format!("final checkpoint could not be canonically encoded: {error}"),
+            }
+        })?;
+        Ok(domain_hash(FINAL_CHECKPOINT_DOMAIN, &canonical))
+    }
+
+    fn validate_for(
+        &self,
+        request: &PublicationRequestV1,
+        submission: &PublicationAmxSubmissionV1,
+    ) -> Result<(), PublicationError> {
+        ensure_release_component_budget(
+            self,
+            MAX_RELEASE_FINAL_CHECKPOINT_CANONICAL_BYTES,
+            "release final checkpoint",
+            PublicationPhaseV1::FinalVerification,
+        )?;
+        self.snapshot
+            .validate()
+            .map_err(|error| invalid(PublicationPhaseV1::FinalVerification, error))?;
+        self.release
+            .validate()
+            .map_err(|error| invalid(PublicationPhaseV1::FinalVerification, error))?;
+        let manifest = &request.publication.manifest;
+        if self.operation_id != request.operation_id()
+            || self.operation_id != submission.operation_id
+            || self.chain_id != request.chain_id
+            || self.genesis_block_hash != request.genesis_block_hash
+            || self.snapshot.finalized_height
+                < request.publication.resolution.snapshot.finalized_height
+            || self.snapshot.finalized_height < submission.applied_height
+            || self.snapshot.index_revision < request.publication.resolution.snapshot.index_revision
+            || self.release != manifest.release
+            || self.release_digest != manifest.release_digest()
+            || self.archive_id != manifest.archive_id
+            || self.home_release_digest.iter().all(|byte| *byte == 0)
+            || self.universal_release_digest.iter().all(|byte| *byte == 0)
+            || self.checkpoint_digest.iter().all(|byte| *byte == 0)
+            || self.checkpoint_digest != self.digest()?
+        {
+            return Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::FinalVerification,
+                reason: "compact final publication checkpoint was substituted".to_owned(),
             });
         }
         Ok(())
@@ -2339,8 +2573,8 @@ pub struct PublicationResultV1 {
     pub operation_id: PublicationOperationIdV1,
     /// Final Native AMX submission.
     pub submission: PublicationAmxSubmissionV1,
-    /// Exact finalized registry evidence.
-    pub final_evidence: PublicationFinalEvidenceV1,
+    /// Compact local commitment to the verified exact registry projections.
+    pub final_checkpoint: PublicationFinalCheckpointV1,
 }
 
 /// Durable, secret-free operation journal.
@@ -2378,8 +2612,8 @@ pub struct PublicationJournalV1 {
     pub release_submission_attempts: Vec<PublicationReleaseSubmissionAttemptV1>,
     /// Idempotent Native AMX submission result.
     pub submission: Option<PublicationAmxSubmissionV1>,
-    /// Present only after exact finalized home/index verification.
-    pub completion: Option<PublicationFinalEvidenceV1>,
+    /// Present only after exact finalized home/index verification and compaction.
+    pub completion: Option<PublicationFinalCheckpointV1>,
 }
 
 impl PublicationJournalV1 {
@@ -2408,6 +2642,15 @@ impl PublicationJournalV1 {
     }
 
     /// Validate schema, operation identity, exact evidence, and phase consistency.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-journal or invalid-evidence error when any persisted phase, append-only
+    /// history, canonical budget, replay binding, or finalized checkpoint is inconsistent.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the journal validator keeps the complete append-only security state machine and all phase invariants adjacent"
+    )]
     pub fn validate(&self) -> Result<(), PublicationError> {
         if self.schema != JOURNAL_SCHEMA
             || self.version != JOURNAL_VERSION
@@ -2426,16 +2669,13 @@ impl PublicationJournalV1 {
             ));
         }
         let required = self.phase as u8;
-        if required >= PublicationPhaseV1::ReleaseSubmission as u8 {
-            ensure_projected_final_evidence_budget(&self.request)?;
-        }
         validate_option(
             required >= PublicationPhaseV1::SeedIngress as u8,
-            &self.validation,
+            self.validation.as_ref(),
         )?;
         validate_option(
             required >= PublicationPhaseV1::ArchiveRegistration as u8,
-            &self.staging_receipt,
+            self.staging_receipt.as_ref(),
         )?;
         if self.archive_registration_attempts.len() > MUSUBI_MAX_ARCHIVE_REGISTRATION_ATTEMPTS_V1 {
             return Err(PublicationError::InvalidJournal(
@@ -2465,9 +2705,9 @@ impl PublicationJournalV1 {
                     "completed archive registration is missing its active exact attempt".to_owned(),
                 ));
             }
-            validate_option(true, &self.registered_archive)?;
+            validate_option(true, self.registered_archive.as_ref())?;
         } else if required < PublicationPhaseV1::ArchiveRegistration as u8 {
-            validate_option(false, &self.registered_archive)?;
+            validate_option(false, self.registered_archive.as_ref())?;
             if !self.archive_location_attempts.is_empty() {
                 return Err(PublicationError::InvalidJournal(
                     "archive-location attempts are present before archive finality".to_owned(),
@@ -2499,17 +2739,15 @@ impl PublicationJournalV1 {
         for (index, checkpoint) in self.provider_registration_checkpoints.iter().enumerate() {
             let generation = u8::try_from(index + 1).expect("location-attempt bound fits u8");
             checkpoint.validate_for(&self.request, generation)?;
-            if let Some(attempt) = self.archive_location_attempts.get(index) {
-                if attempt.intent.generation != checkpoint.generation
+            if let Some(attempt) = self.archive_location_attempts.get(index)
+                && (attempt.intent.generation != checkpoint.generation
                     || attempt.intent.replication_order != checkpoint.replication_order
                     || attempt.intent.provider_attestation_set_digest
-                        != checkpoint.provider_attestation_set_digest
-                {
-                    return Err(PublicationError::InvalidJournal(
-                        "location intent does not bind its provider-registration checkpoint"
-                            .to_owned(),
-                    ));
-                }
+                        != checkpoint.provider_attestation_set_digest)
+            {
+                return Err(PublicationError::InvalidJournal(
+                    "location intent does not bind its provider-registration checkpoint".to_owned(),
+                ));
             }
         }
         if self.archive_location_attempts.len() > MUSUBI_MAX_ARCHIVE_LOCATION_ATTEMPTS_V1 {
@@ -2616,7 +2854,7 @@ impl PublicationJournalV1 {
         }
         validate_option(
             required >= PublicationPhaseV1::Readback as u8,
-            &self.replication,
+            self.replication.as_ref(),
         )?;
         let expects_readbacks = required >= PublicationPhaseV1::ReleaseSubmission as u8;
         if self.readbacks.len() != if expects_readbacks { 2 } else { 0 } {
@@ -2804,7 +3042,7 @@ impl PublicationJournalV1 {
         }
         validate_option(
             required >= PublicationPhaseV1::FinalVerification as u8,
-            &self.submission,
+            self.submission.as_ref(),
         )?;
         if self.completion.is_some() && self.phase != PublicationPhaseV1::FinalVerification {
             return Err(PublicationError::InvalidJournal(
@@ -2823,13 +3061,13 @@ impl PublicationJournalV1 {
                 )
                 .map_err(|error| invalid(PublicationPhaseV1::SeedIngress, error))?;
         }
-        if let Some(attempt) = active_attempt {
-            if self.staging_receipt.as_ref() != Some(&attempt.intent.staging_receipt) {
-                return Err(PublicationError::InvalidJournal(
-                    "active archive-registration attempt is missing its exact staging receipt"
-                        .to_owned(),
-                ));
-            }
+        if let Some(attempt) = active_attempt
+            && self.staging_receipt.as_ref() != Some(&attempt.intent.staging_receipt)
+        {
+            return Err(PublicationError::InvalidJournal(
+                "active archive-registration attempt is missing its exact staging receipt"
+                    .to_owned(),
+            ));
         }
         if let Some(registered) = &self.registered_archive {
             registered.validate_for(
@@ -2848,8 +3086,8 @@ impl PublicationJournalV1 {
         }
         if let Some(checkpoint) = &self.replication {
             let location = checkpoint.location(self.registration()?)?;
-            for (readback, provider) in self.readbacks.iter().zip(location.providers.iter()) {
-                readback.validate_for(&self.request, location, *provider)?;
+            if !self.readbacks.is_empty() {
+                validate_readback_subset(&self.request, location, &self.readbacks)?;
             }
         }
         if let Some(submission) = &self.submission {
@@ -2874,7 +3112,7 @@ impl PublicationJournalV1 {
                 &self.request,
                 self.submission.as_ref().ok_or_else(|| {
                     PublicationError::InvalidJournal(
-                        "final evidence is missing its Native AMX submission".to_owned(),
+                        "final checkpoint is missing its Native AMX submission".to_owned(),
                     )
                 })?,
             )?;
@@ -2953,10 +3191,11 @@ impl PublicationJournalV1 {
             .transpose()
             .map_err(PublicationError::InvalidJournal)?;
         if submission_size.is_some_and(|size| size > MAX_RELEASE_SUBMISSION_CANONICAL_BYTES)
-            || completion_size.is_some_and(|size| size > MAX_RELEASE_FINAL_EVIDENCE_CANONICAL_BYTES)
+            || completion_size
+                .is_some_and(|size| size > MAX_RELEASE_FINAL_CHECKPOINT_CANONICAL_BYTES)
         {
             return Err(PublicationError::InvalidJournal(
-                "release submission or final evidence exceeds its reserved canonical budget"
+                "release submission or final checkpoint exceeds its reserved canonical budget"
                     .to_owned(),
             ));
         }
@@ -2996,12 +3235,12 @@ impl PublicationJournalV1 {
         Some(PublicationResultV1 {
             operation_id: self.operation_id,
             submission: self.submission?,
-            final_evidence: self.completion.clone()?,
+            final_checkpoint: self.completion.clone()?,
         })
     }
 }
 
-fn validate_option<T>(required: bool, value: &Option<T>) -> Result<(), PublicationError> {
+fn validate_option<T>(required: bool, value: Option<&T>) -> Result<(), PublicationError> {
     if required != value.is_some() {
         return Err(PublicationError::InvalidJournal(
             "journal evidence presence is inconsistent with its phase".to_owned(),
@@ -3081,15 +3320,21 @@ fn archive_location_attempts_are_append_only(
     {
         return false;
     }
-    let registration_appended = previous[last].registration.is_none()
-        && next[last].registration.is_some()
-        && previous[last].terminal == next[last].terminal
-        && previous[last].terminal_floor == next[last].terminal_floor;
-    let terminal_appended = previous[last].registration == next[last].registration
-        && previous[last].terminal.is_none()
-        && next[last].terminal.is_some()
-        && previous[last].terminal_floor.is_none()
-        && next[last].terminal_floor.is_some();
+    let before = &previous[last];
+    let after = &next[last];
+    let registration_was_absent = before.registration.is_none();
+    let registration_is_present = after.registration.is_some();
+    let registration_appended = registration_was_absent
+        && registration_is_present
+        && before.terminal == after.terminal
+        && before.terminal_floor == after.terminal_floor;
+    let terminal_was_absent = before.terminal.is_none();
+    let terminal_is_present = after.terminal.is_some();
+    let terminal_appended = before.registration == after.registration
+        && terminal_was_absent
+        && terminal_is_present
+        && before.terminal_floor.is_none()
+        && after.terminal_floor.is_some();
     registration_appended || terminal_appended
 }
 
@@ -3128,21 +3373,41 @@ fn release_submission_attempts_are_append_only(
         && next[last].outcome.is_some()
 }
 
-/// Runtime-only source of exact CAR bytes.
+/// Runtime-only source of exact CAR bytes and their canonical build-plan witness.
 pub trait PublicationCarSource {
     /// Open a new reader at byte zero. Implementations must not persist their path or credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the exact bounded CAR cannot be opened safely at byte zero.
     fn open_car(&self) -> io::Result<Box<dyn Read + '_>>;
+
+    /// Return the exact validated seed-ingress wire plan for this CAR.
+    ///
+    /// The plan is runtime-only publication input. Implementations must not put its bytes or a
+    /// filesystem path into the secret-free publication journal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the immutable plan cannot be reopened, decoded canonically, or
+    /// validated against the complete archive commitment.
+    fn car_plan(
+        &self,
+        commitment: &MusubiArchiveCommitmentV1,
+    ) -> io::Result<MusubiSeedIngressCarPlanV1>;
 }
 
-/// Deterministic operation-local CAR source stored beside, but never inside, the secret-free journal.
+/// Deterministic operation-local CAR and plan stored beside, but never inside, the journal.
 #[derive(Clone, Debug)]
 pub struct PublicationStagedCarSourceV1 {
+    root: PathBuf,
     path: PathBuf,
+    plan_path: PathBuf,
     expected_size: u64,
 }
 
 impl PublicationStagedCarSourceV1 {
-    /// Bind the immutable CAR location for one operation below an explicit user state root.
+    /// Bind immutable CAR and plan locations for one operation below an explicit state root.
     #[must_use]
     pub fn new(
         user_state_root: &Path,
@@ -3150,7 +3415,9 @@ impl PublicationStagedCarSourceV1 {
         expected_size: u64,
     ) -> Self {
         Self {
+            root: user_state_root.to_path_buf(),
             path: user_state_root.join(staged_car_relative_path(operation_id)),
+            plan_path: user_state_root.join(staged_plan_relative_path(operation_id)),
             expected_size,
         }
     }
@@ -3161,42 +3428,139 @@ impl PublicationStagedCarSourceV1 {
         &self.path
     }
 
-    /// Durably stage exact CAR bytes below the private operation directory.
+    /// Return the deterministic immutable plan-sidecar path outside the journal.
+    #[must_use]
+    pub fn plan_path(&self) -> &Path {
+        &self.plan_path
+    }
+
+    /// Durably stage exact CAR bytes and their canonical plan below the private operation directory.
     ///
-    /// Identical retries reuse an already verified regular file. A different body at the same
+    /// Identical retries reuse both verified regular files. A different body or plan at the same
     /// operation id, an unsafe filesystem entry, or bytes that disagree with the request
-    /// commitment fail closed without replacing the existing path.
+    /// commitment fail closed without replacing either existing path.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid evidence, invalid journal state, or an I/O error when the CAR or plan is
+    /// unbounded, differs from its commitment, or cannot be staged and revalidated safely.
     pub fn stage_bytes(
         user_state_root: &Path,
         operation_id: PublicationOperationIdV1,
-        expected_size: u64,
-        expected_digest: MusubiContentDigestV1,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &CarBuildPlan,
         bytes: &[u8],
     ) -> Result<Self, PublicationError> {
-        if expected_size == 0
-            || expected_size > MUSUBI_MAX_CAR_BYTES_V1
-            || u64::try_from(bytes.len()).ok() != Some(expected_size)
-            || blake3::hash(bytes).as_bytes() != expected_digest.as_bytes()
+        commitment
+            .validate()
+            .map_err(|error| invalid(PublicationPhaseV1::Validation, error))?;
+        let wire_plan = MusubiSeedIngressCarPlanV1::from_car_build_plan(plan, commitment)
+            .map_err(|error| invalid(PublicationPhaseV1::Validation, error))?;
+        let canonical_digest = wire_plan
+            .canonical_digest()
+            .map_err(|error| invalid(PublicationPhaseV1::Validation, error))?;
+        let plan_bytes = wire_plan
+            .canonical_bytes()
+            .map_err(|error| invalid(PublicationPhaseV1::Validation, error))?;
+        if commitment.car_size == 0
+            || commitment.car_size > MUSUBI_MAX_CAR_BYTES_V1
+            || u64::try_from(bytes.len()).ok() != Some(commitment.car_size)
+            || blake3::hash(bytes).as_bytes() != commitment.car_digest.as_bytes()
+            || plan_bytes.is_empty()
+            || plan_bytes.len() > MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1
+            || canonical_digest.is_zero()
         {
-            return Err(PublicationError::InvalidEvidence {
-                phase: PublicationPhaseV1::Validation,
-                reason: "staged CAR bytes do not match their bounded request commitment".to_owned(),
-            });
+            return Err(invalid_staged_car_plan());
         }
-        let source = Self::new(user_state_root, operation_id, expected_size);
-        match fs::symlink_metadata(source.path()) {
-            Ok(_) => {
-                source.verify_digest(expected_digest)?;
-                return Ok(source);
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(PublicationError::CarSource(error)),
+        if !staged_car_plan_matches_commitment(commitment, plan, bytes) {
+            return Err(invalid_staged_car_plan());
         }
+        let source = Self::new(user_state_root, operation_id, commitment.car_size);
         let root = AtomicWriteRoot::new(user_state_root).map_err(PublicationError::JournalWrite)?;
-        root.replace(&staged_car_relative_path(operation_id), bytes)
+        root.install_immutable(&staged_plan_relative_path(operation_id), &plan_bytes)
             .map_err(PublicationError::JournalWrite)?;
-        source.verify_digest(expected_digest)?;
+        root.install_immutable(&staged_car_relative_path(operation_id), bytes)
+            .map_err(PublicationError::JournalWrite)?;
+        source.verify_digest(commitment.car_digest)?;
+        let reopened = source
+            .car_plan(commitment)
+            .map_err(PublicationError::CarSource)?;
+        if reopened != wire_plan {
+            return Err(PublicationError::InvalidJournal(
+                "existing staged plan differs from the immutable publication request".to_owned(),
+            ));
+        }
         Ok(source)
+    }
+
+    fn reopen_plan(
+        &self,
+        commitment: &MusubiArchiveCommitmentV1,
+    ) -> io::Result<MusubiSeedIngressCarPlanV1> {
+        let root = AtomicWriteRoot::new(&self.root)
+            .map_err(|_| invalid_plan_source("staged publication plan root is unsafe"))?;
+        let bytes = root
+            .load_immutable(
+                self.plan_path
+                    .strip_prefix(&self.root)
+                    .map_err(|_| invalid_plan_source("staged publication plan escaped its root"))?,
+                MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1,
+            )
+            .map_err(|_| invalid_plan_source("staged publication plan could not be opened safely"))?
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "staged publication plan sidecar is missing",
+                )
+            })?;
+        let plan: MusubiSeedIngressCarPlanV1 =
+            norito::decode_canonical_with_limits(&bytes, STAGED_PLAN_DECODE_LIMITS).map_err(
+                |_| invalid_plan_source("staged publication plan is not canonical Norito"),
+            )?;
+        let canonical_digest = plan
+            .canonical_digest()
+            .map_err(|_| invalid_plan_source("staged publication plan digest is invalid"))?;
+        let canonical = plan.canonical_bytes().map_err(|_| {
+            invalid_plan_source("staged publication plan cannot be encoded canonically")
+        })?;
+        if canonical != bytes || canonical_digest.is_zero() {
+            return Err(invalid_plan_source(
+                "staged publication plan has a noncanonical representation",
+            ));
+        }
+        plan.validate(commitment).map_err(|_| {
+            invalid_plan_source("staged publication plan differs from the commitment")
+        })?;
+        let car_plan = plan
+            .to_car_build_plan(commitment)
+            .map_err(|_| invalid_plan_source("staged publication plan cannot be reconstructed"))?;
+        let car = self.load_car_bytes_for_plan()?;
+        if !staged_car_plan_matches_commitment(commitment, &car_plan, &car) {
+            return Err(invalid_plan_source(
+                "staged publication CAR and plan do not reproduce their archive commitment",
+            ));
+        }
+        Ok(plan)
+    }
+
+    fn load_car_bytes_for_plan(&self) -> io::Result<Vec<u8>> {
+        let size = usize::try_from(self.expected_size).map_err(|_| {
+            invalid_plan_source("staged publication CAR length does not fit this platform")
+        })?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(size).map_err(|_| {
+            invalid_plan_source("staged publication CAR buffer could not be allocated")
+        })?;
+        bytes.resize(size, 0);
+        let mut reader = self.open_car()?;
+        reader.read_exact(&mut bytes)?;
+        let mut trailing = [0_u8; 1];
+        if reader.read(&mut trailing)? != 0 {
+            return Err(invalid_plan_source(
+                "staged publication CAR exceeds its committed length",
+            ));
+        }
+        Ok(bytes)
     }
 
     fn verify_digest(
@@ -3205,7 +3569,7 @@ impl PublicationStagedCarSourceV1 {
     ) -> Result<(), PublicationError> {
         let mut reader = self.open_car().map_err(PublicationError::CarSource)?;
         let mut hasher = blake3::Hasher::new();
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024];
         let mut observed = 0_u64;
         loop {
             let read = reader
@@ -3237,6 +3601,55 @@ impl PublicationStagedCarSourceV1 {
     }
 }
 
+fn invalid_staged_car_plan() -> PublicationError {
+    PublicationError::InvalidEvidence {
+        phase: PublicationPhaseV1::Validation,
+        reason: "staged CAR and plan do not reproduce their bounded archive commitment".to_owned(),
+    }
+}
+
+fn staged_car_plan_matches_commitment(
+    commitment: &MusubiArchiveCommitmentV1,
+    plan: &CarBuildPlan,
+    bytes: &[u8],
+) -> bool {
+    let Ok(verified) = CarVerifier::verify_canonical_car_with_plan_retained(plan, bytes) else {
+        return false;
+    };
+    let stats = verified.stats();
+    let observed_car_digest = stats.car_archive_digest.as_bytes();
+    let expected_car_digest = commitment.car_digest.as_bytes();
+    let observed_content_length = stats.payload_bytes;
+    let expected_content_length = commitment.content_length;
+    let observed_root_cid = stats.root_cids.first().map(Vec::as_slice);
+    let expected_root_cid: &[u8] = commitment.root_cid.as_bytes();
+    if stats.car_size != commitment.car_size
+        || observed_car_digest != expected_car_digest
+        || observed_content_length != expected_content_length
+        || stats.chunk_count != usize::try_from(commitment.chunk_count).unwrap_or(usize::MAX)
+        || stats.chunk_profile != plan.chunk_profile
+        || stats.root_cids.len() != 1
+        || observed_root_cid != Some(expected_root_cid)
+    {
+        return false;
+    }
+    let Ok(mut chunk_store) = ChunkStore::with_profile_and_heap_limit(
+        plan.chunk_profile,
+        STAGED_CAR_PLAN_HEAP_LIMIT_BYTES_V1,
+    ) else {
+        return false;
+    };
+    let mut payload_reader = verified.payload_reader();
+    if chunk_store
+        .ingest_plan_stream(plan, &mut payload_reader)
+        .is_err()
+    {
+        return false;
+    }
+    chunk_store.payload_digest() == &plan.payload_digest
+        && chunk_store.por_tree().root() == commitment.por_root.as_bytes()
+}
+
 impl PublicationCarSource for PublicationStagedCarSourceV1 {
     fn open_car(&self) -> io::Result<Box<dyn Read + '_>> {
         let inspected = fs::symlink_metadata(&self.path)?;
@@ -3254,7 +3667,7 @@ impl PublicationCarSource for PublicationStagedCarSourceV1 {
         options.read(true);
         #[cfg(windows)]
         options.share_mode(FILE_SHARE_READ);
-        set_no_follow(&mut options);
+        set_no_follow_nonblocking(&mut options);
         let file = options.open(&self.path)?;
         let opened = file.metadata()?;
         let linked_after = fs::symlink_metadata(&self.path)?;
@@ -3278,6 +3691,17 @@ impl PublicationCarSource for PublicationStagedCarSourceV1 {
             complete: false,
         }))
     }
+
+    fn car_plan(
+        &self,
+        commitment: &MusubiArchiveCommitmentV1,
+    ) -> io::Result<MusubiSeedIngressCarPlanV1> {
+        self.reopen_plan(commitment)
+    }
+}
+
+fn invalid_plan_source(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
 struct StableCarReader {
@@ -3406,9 +3830,17 @@ impl Error for PublicationBackendError {}
 /// Runtime publication adapter. Credentials and endpoints remain inside this object.
 pub trait PublicationBackend {
     /// Return current Unix time in milliseconds for receipt validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when the trusted publication clock cannot be sampled.
     fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError>;
 
     /// Validate and compiler-check the clean CAR and exact dependency graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when the exact CAR cannot be read, validated, or compiler-checked.
     fn validate_clean_package(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3417,14 +3849,24 @@ pub trait PublicationBackend {
     ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError>;
 
     /// Stage the CAR only through an admitted, authenticated seed-ingress service.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when authenticated staging or receipt verification cannot complete.
     fn stage_authenticated_seed_ingress(
         &mut self,
         operation_id: PublicationOperationIdV1,
         expected: &MusubiSeedIngressReceiptBindingV1,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &MusubiSeedIngressCarPlanV1,
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError>;
 
     /// Prebuild, fee-quote, and sign the exact archive-registration transaction without submitting it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when the exact registration intent cannot be built or signed.
     fn prepare_archive_registration_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3433,6 +3875,11 @@ pub trait PublicationBackend {
     ) -> Result<PublicationArchiveRegistrationIntentV1, PublicationBackendError>;
 
     /// Submit or recover the exact durable registration transaction and authoritative archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when transaction status, submission, or finalized archive recovery
+    /// is unavailable or invalid.
     fn submit_or_recover_archive_registration(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3445,6 +3892,10 @@ pub trait PublicationBackend {
     /// Backends that do not use detached provider-registration sidecars may retain this ready
     /// default. Production Musubi returns `Updated` after installing each new immutable sidecar;
     /// the engine journals that anchor and stops before the sidecar transaction can be submitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when provider sidecars cannot be revalidated or extended safely.
     fn checkpoint_archive_location_provider_registrations(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -3458,6 +3909,10 @@ pub trait PublicationBackend {
     }
 
     /// Coordinate and sign one exact location CAS without submitting it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when storage coordination, fee quotation, or exact CAS signing fails.
     fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3468,6 +3923,11 @@ pub trait PublicationBackend {
     ) -> Result<PublicationArchiveLocationIntentV1, PublicationBackendError>;
 
     /// Submit or recover the exact journaled location CAS and finalized directory state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when location submission, status recovery, or finalized directory
+    /// retrieval fails.
     fn submit_or_recover_archive_location(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3478,6 +3938,10 @@ pub trait PublicationBackend {
     ) -> Result<PublicationArchiveLocationAdvanceV1, PublicationBackendError>;
 
     /// Poll finalized provider completions and return a healthy location at quorum.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when finalized replication state cannot be queried or verified.
     fn finalized_replication(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3486,6 +3950,10 @@ pub trait PublicationBackend {
     ) -> Result<PublicationReplicationAdvanceV1, PublicationBackendError>;
 
     /// Read and fully verify the archive through one selected finalized provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when provider readback or complete archive verification fails.
     fn readback_provider(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3495,6 +3963,11 @@ pub trait PublicationBackend {
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError>;
 
     /// Prebuild, fee-quote, and sign one exact release transaction without submitting it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when the exact release transaction cannot be built, quoted, or
+    /// signed against the supplied preparation floor.
     fn prepare_release_submission_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3506,6 +3979,11 @@ pub trait PublicationBackend {
     ///
     /// When `allow_absent_submission` is false, an absent transaction must remain unsent; exact
     /// pending, applied, and terminal status recovery remains available.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when authoritative status recovery or permitted exact submission
+    /// cannot complete.
     fn submit_or_recover_release_submission(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3515,6 +3993,10 @@ pub trait PublicationBackend {
     ) -> Result<PublicationReleaseSubmissionAdvanceV1, PublicationBackendError>;
 
     /// Poll finality and query both the exact home record and exact universal index row.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when synchronized finalized release projections cannot be queried.
     fn finalized_release_and_index(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -3525,6 +4007,10 @@ pub trait PublicationBackend {
 
 /// One step of a resumable publication.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the fixed engine result returns complete publication evidence inline without changing its stable API"
+)]
 pub enum PublicationAdvanceV1 {
     /// A durable transition completed and the journal now names this phase.
     Progressed(PublicationPhaseV1),
@@ -3575,16 +4061,20 @@ impl PublicationOperationLockV1 {
 
     fn finish<T>(self, result: Result<T, PublicationError>) -> Result<T, PublicationError> {
         let unlock = File::unlock(&self.file).map_err(PublicationError::JournalIo);
-        match (result, unlock) {
-            (Err(error), _) => Err(error),
-            (Ok(value), Ok(())) => Ok(value),
-            (Ok(_), Err(error)) => Err(error),
+        match result {
+            Err(error) => Err(error),
+            Ok(value) => unlock.map(|()| value),
         }
     }
 }
 
 impl PublicationJournalStore {
     /// Open or create the private `publication-v1` journal directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns a journal error when the state root or publication directory cannot be opened,
+    /// created, synchronized, or proven to be a private real directory.
     pub fn open(user_state_root: &Path) -> Result<Self, PublicationError> {
         let root = AtomicWriteRoot::new(user_state_root).map_err(PublicationError::JournalWrite)?;
         let journal_directory = root.path().join(JOURNAL_DIRECTORY);
@@ -3608,7 +4098,7 @@ impl PublicationJournalStore {
             ));
         }
         if created {
-            File::open(root.path())
+            open_read_only_no_follow_nonblocking(root.path())
                 .and_then(|directory| directory.sync_all())
                 .map_err(PublicationError::JournalIo)?;
         }
@@ -3616,6 +4106,11 @@ impl PublicationJournalStore {
     }
 
     /// Persist a new operation, or return the identical existing operation idempotently.
+    ///
+    /// # Errors
+    ///
+    /// Returns a publication error when the request is invalid, the operation identity collides,
+    /// the operation lock cannot be acquired, or the journal cannot be persisted safely.
     pub fn create(
         &self,
         request: PublicationRequestV1,
@@ -3642,6 +4137,11 @@ impl PublicationJournalStore {
     }
 
     /// Load and fully validate one journal by typed operation id.
+    ///
+    /// # Errors
+    ///
+    /// Returns not-found, journal I/O, or invalid-journal errors when the bounded journal cannot be
+    /// opened as the same safe file, decoded canonically, or fully validated.
     pub fn load(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -3664,7 +4164,10 @@ impl PublicationJournalStore {
         options.read(true);
         #[cfg(windows)]
         options.share_mode(FILE_SHARE_READ);
-        set_no_follow(&mut options);
+        #[cfg(all(test, unix))]
+        substitute_publication_read_target_with_fifo_for_test(&path)
+            .map_err(PublicationError::JournalIo)?;
+        set_no_follow_nonblocking(&mut options);
         let mut file = options.open(&path).map_err(PublicationError::JournalIo)?;
         let opened = file.metadata().map_err(PublicationError::JournalIo)?;
         if !metadata_is_safe_regular_file(&opened) || !same_file_snapshot(&metadata, &opened) {
@@ -3767,6 +4270,11 @@ impl PublicationJournalStore {
                     "release-submission attempt history is not append-only".to_owned(),
                 ));
             }
+            if previous.completion.is_some() && previous.completion != next.completion {
+                return Err(PublicationError::InvalidJournal(
+                    "compact final checkpoint is not append-only".to_owned(),
+                ));
+            }
             next.revision = previous.revision.checked_add(1).ok_or_else(|| {
                 PublicationError::InvalidJournal("journal revision overflowed".to_owned())
             })?;
@@ -3794,7 +4302,8 @@ impl PublicationJournalStore {
                 "publication journal directory is not a real directory".to_owned(),
             ));
         }
-        let parent = File::open(&parent_path).map_err(PublicationError::JournalIo)?;
+        let parent = open_read_only_no_follow_nonblocking(&parent_path)
+            .map_err(PublicationError::JournalIo)?;
         let parent_opened = parent.metadata().map_err(PublicationError::JournalIo)?;
         let parent_named =
             fs::symlink_metadata(&parent_path).map_err(PublicationError::JournalIo)?;
@@ -3987,6 +4496,11 @@ impl<'a> PublicationEngine<'a> {
     }
 
     /// Persist a detached operation and return its resumable identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a publication error when request validation, operation locking, or initial journal
+    /// persistence fails.
     pub fn begin_detached(
         &self,
         request: PublicationRequestV1,
@@ -3996,7 +4510,120 @@ impl<'a> PublicationEngine<'a> {
             .map(|journal| journal.operation_id)
     }
 
+    /// Repair the immutable CAR and plan for one pristine pre-ingress journal.
+    ///
+    /// The caller may rebuild the clean package outside the operation lock, but must supply the
+    /// exact journal image it used. This method then compares that complete image under the
+    /// per-operation lock, proves that the rebuilt publication and archive commitment equal the
+    /// immutable request, and installs only absent or byte-identical sidecars. The journal is not
+    /// advanced or rewritten.
+    ///
+    /// # Errors
+    ///
+    /// Returns a publication error when the journal is not the initial validation revision, a
+    /// concurrent transition changed it, the rebuilt content differs from the immutable request,
+    /// or either exact sidecar cannot be verified and durably installed.
+    pub(crate) fn recover_pre_ingress_sidecars(
+        &self,
+        expected: &PublicationJournalV1,
+        rebuilt_publication: &MusubiPublicationV1,
+        rebuilt_commitment: &MusubiArchiveCommitmentV1,
+        plan: &CarBuildPlan,
+        car: &[u8],
+    ) -> Result<PublicationStagedCarSourceV1, PublicationError> {
+        expected.validate()?;
+        if expected.phase != PublicationPhaseV1::Validation || expected.revision != 1 {
+            return Err(PublicationError::InvalidJournal(
+                "pre-ingress sidecar recovery requires the pristine validation revision".to_owned(),
+            ));
+        }
+        if rebuilt_publication != &expected.request.publication
+            || rebuilt_commitment != &expected.request.archive_commitment
+        {
+            return Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Validation,
+                reason: "rebuilt publication content differs from the immutable recovery request"
+                    .to_owned(),
+            });
+        }
+
+        let operation_id = expected.operation_id;
+        let operation_lock = self.store.lock_operation(operation_id)?;
+        let result = (|| {
+            let current = self.store.load(operation_id)?;
+            if current != *expected {
+                return Err(PublicationError::ConcurrentJournalUpdate);
+            }
+            if current.phase != PublicationPhaseV1::Validation || current.revision != 1 {
+                return Err(PublicationError::InvalidJournal(
+                    "pre-ingress sidecar recovery requires the pristine validation revision"
+                        .to_owned(),
+                ));
+            }
+            if rebuilt_publication != &current.request.publication
+                || rebuilt_commitment != &current.request.archive_commitment
+            {
+                return Err(PublicationError::InvalidEvidence {
+                    phase: PublicationPhaseV1::Validation,
+                    reason:
+                        "rebuilt publication content differs from the immutable recovery request"
+                            .to_owned(),
+                });
+            }
+
+            operation_lock.validate()?;
+            let source = PublicationStagedCarSourceV1::stage_bytes(
+                self.store.root.path(),
+                operation_id,
+                rebuilt_commitment,
+                plan,
+                car,
+            )?;
+            operation_lock.validate()?;
+            if self.store.load(operation_id)? != current {
+                return Err(PublicationError::ConcurrentJournalUpdate);
+            }
+            Ok(source)
+        })();
+        operation_lock.finish(result)
+    }
+
+    /// Persist a secret-free operation journal before installing its immutable CAR and plan.
+    ///
+    /// This ordering leaves a small authoritative recovery anchor if power is lost or local
+    /// storage fails during either sidecar install; it never leaves an unindexed CAR behind. An
+    /// identical call against the pristine journal reuses both sidecars idempotently.
+    ///
+    /// # Errors
+    ///
+    /// Returns a publication error when the request cannot be journaled first, or when its exact
+    /// canonical CAR/plan pair cannot then be verified and durably installed.
+    pub fn begin_detached_with_car(
+        &self,
+        request: PublicationRequestV1,
+        plan: &CarBuildPlan,
+        car: &[u8],
+    ) -> Result<(PublicationOperationIdV1, PublicationStagedCarSourceV1), PublicationError> {
+        let operation_id = request.operation_id();
+        let publication = request.publication.clone();
+        let commitment = request.archive_commitment.clone();
+        let journal = self.store.create(request)?;
+        if journal.operation_id != operation_id {
+            return Err(PublicationError::InvalidJournal(
+                "persisted publication operation identity changed".to_owned(),
+            ));
+        }
+        let source =
+            self.recover_pre_ingress_sidecars(&journal, &publication, &commitment, plan, car)?;
+        Ok((operation_id, source))
+    }
+
     /// Start or idempotently recover an operation, running until finality or a pending poll.
+    ///
+    /// # Errors
+    ///
+    /// Returns a publication error when journal recovery, CAR access, backend execution, evidence
+    /// validation, or a durable transition fails.
     pub fn publish(
         &self,
         request: PublicationRequestV1,
@@ -4008,6 +4635,11 @@ impl<'a> PublicationEngine<'a> {
     }
 
     /// Resume an operation by id and run until finality or a pending poll.
+    ///
+    /// # Errors
+    ///
+    /// Returns a publication error when the journal cannot be loaded or a subsequent backend,
+    /// validation, or durable transition fails.
     pub fn resume(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -4018,6 +4650,15 @@ impl<'a> PublicationEngine<'a> {
     }
 
     /// Advance exactly one durable phase, making retries observable to callers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a publication error when the current journal, CAR, backend evidence, append-only
+    /// transition, or persistent state fails validation.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the publication engine keeps the complete persist-before-send security state machine explicit in one fixed-protocol transition"
+    )]
     pub fn advance_once(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -4032,6 +4673,11 @@ impl<'a> PublicationEngine<'a> {
         let mut next = journal.clone();
         match phase {
             PublicationPhaseV1::Validation => {
+                let plan = source
+                    .car_plan(&journal.request.archive_commitment)
+                    .map_err(PublicationError::CarSource)?;
+                plan.validate(&journal.request.archive_commitment)
+                    .map_err(|error| invalid(PublicationPhaseV1::Validation, error))?;
                 let mut car = source.open_car().map_err(PublicationError::CarSource)?;
                 let evidence = backend
                     .validate_clean_package(operation_id, &journal.request, car.as_mut())
@@ -4051,16 +4697,25 @@ impl<'a> PublicationEngine<'a> {
                     ));
                 }
                 let expected = journal.request.receipt_binding();
+                let plan = source
+                    .car_plan(&journal.request.archive_commitment)
+                    .map_err(PublicationError::CarSource)?;
+                plan.validate(&journal.request.archive_commitment)
+                    .map_err(|error| invalid(PublicationPhaseV1::SeedIngress, error))?;
                 let mut car = source.open_car().map_err(PublicationError::CarSource)?;
                 let receipt = backend
-                    .stage_authenticated_seed_ingress(operation_id, &expected, car.as_mut())
+                    .stage_authenticated_seed_ingress(
+                        operation_id,
+                        &expected,
+                        &journal.request.archive_commitment,
+                        &plan,
+                        car.as_mut(),
+                    )
                     .map_err(PublicationError::Backend)?;
                 let now = backend
                     .current_time_ms()
                     .map_err(PublicationError::Backend)?;
-                receipt
-                    .verify(&expected, now)
-                    .map_err(|error| invalid(PublicationPhaseV1::SeedIngress, error))?;
+                verify_seed_ingress_receipt_with_bounded_service_lead(&receipt, &expected, now)?;
                 next.staging_receipt = Some(receipt);
                 next.phase = PublicationPhaseV1::ArchiveRegistration;
             }
@@ -4076,10 +4731,18 @@ impl<'a> PublicationEngine<'a> {
                     let now = backend
                         .current_time_ms()
                         .map_err(PublicationError::Backend)?;
-                    if now < receipt.payload.issued_at_ms || now > receipt.payload.expires_at_ms {
+                    if now > receipt.payload.expires_at_ms {
                         next.staging_receipt = None;
                         next.phase = PublicationPhaseV1::SeedIngress;
                     } else {
+                        verify_seed_ingress_receipt_with_bounded_service_lead(
+                            receipt,
+                            &journal.request.receipt_binding(),
+                            now,
+                        )?;
+                        if now < receipt.payload.issued_at_ms {
+                            return Ok(PublicationAdvanceV1::Pending(phase));
+                        }
                         let intent = backend
                             .prepare_archive_registration_intent(
                                 operation_id,
@@ -4095,8 +4758,9 @@ impl<'a> PublicationEngine<'a> {
                             PublicationArchiveRegistrationAttemptV1::new(generation, intent),
                         );
                     }
-                } else if journal.registered_archive.is_none() {
-                    let attempt = active_attempt.expect("checked active registration attempt");
+                } else if let Some(attempt) = active_attempt
+                    && journal.registered_archive.is_none()
+                {
                     match backend
                         .submit_or_recover_archive_registration(
                             operation_id,
@@ -4211,8 +4875,7 @@ impl<'a> PublicationEngine<'a> {
                                 }
                             }
                         }
-                    } else {
-                        let attempt = active_location_attempt.expect("checked active location");
+                    } else if let Some(attempt) = active_location_attempt {
                         if attempt.registration.is_some() {
                             next.phase = PublicationPhaseV1::Replication;
                         } else {
@@ -4320,26 +4983,58 @@ impl<'a> PublicationEngine<'a> {
                     next.replication = Some(checkpoint.clone());
                 }
                 let location = checkpoint.location(registration)?;
-                let providers = location.providers.get(..2).ok_or_else(|| {
-                    PublicationError::InvalidEvidence {
-                        phase,
-                        reason: "fewer than two finalized providers are available".to_owned(),
-                    }
-                })?;
                 let mut readbacks = Vec::with_capacity(2);
-                for provider in providers {
-                    let evidence = backend
-                        .readback_provider(operation_id, &journal.request, &location, *provider)
-                        .map_err(PublicationError::Backend)?;
-                    evidence.validate_for(&journal.request, &location, *provider)?;
+                let mut first_permanent_failure = None;
+                let mut first_retryable_failure = None;
+                let mut first_invalid_evidence = None;
+                for provider in &location.providers {
+                    let evidence = match backend.readback_provider(
+                        operation_id,
+                        &journal.request,
+                        location,
+                        *provider,
+                    ) {
+                        Ok(evidence) => evidence,
+                        Err(error) => {
+                            match error.class() {
+                                PublicationBackendFailureClass::Permanent => {
+                                    if first_permanent_failure.is_none() {
+                                        first_permanent_failure = Some(error);
+                                    }
+                                }
+                                PublicationBackendFailureClass::Retryable => {
+                                    if first_retryable_failure.is_none() {
+                                        first_retryable_failure = Some(error);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                    };
+                    if let Err(error) = evidence.validate_for(&journal.request, location, *provider)
+                    {
+                        if first_invalid_evidence.is_none() {
+                            first_invalid_evidence = Some(error);
+                        }
+                        continue;
+                    }
                     readbacks.push(evidence);
+                    if readbacks.len() == 2 {
+                        break;
+                    }
                 }
-                if readbacks[0].provider == readbacks[1].provider {
-                    return Err(PublicationError::InvalidEvidence {
-                        phase,
-                        reason: "readbacks did not use two distinct providers".to_owned(),
-                    });
+                if readbacks.len() != 2 {
+                    if let Some(error) = first_permanent_failure.or(first_retryable_failure) {
+                        return Err(PublicationError::Backend(error));
+                    }
+                    if let Some(error) = first_invalid_evidence {
+                        return Err(error);
+                    }
+                    return Err(PublicationError::Backend(
+                        PublicationBackendError::retryable("PROVIDER_READBACK_QUORUM_UNAVAILABLE"),
+                    ));
                 }
+                validate_readback_subset(&journal.request, location, &readbacks)?;
                 let Some(attempt) = prepare_release_submission_attempt(
                     &journal,
                     registration,
@@ -4355,7 +5050,8 @@ impl<'a> PublicationEngine<'a> {
                     return Ok(PublicationAdvanceV1::Pending(phase));
                 };
                 next.replication = Some(attempt.intent.preparation.replication.clone());
-                next.readbacks = attempt.intent.preparation.readbacks.clone();
+                next.readbacks
+                    .clone_from(&attempt.intent.preparation.readbacks);
                 next.release_submission_attempts.push(attempt);
                 next.phase = PublicationPhaseV1::ReleaseSubmission;
             }
@@ -4496,7 +5192,8 @@ impl<'a> PublicationEngine<'a> {
                             return Ok(PublicationAdvanceV1::Pending(phase));
                         };
                         next.replication = Some(attempt.intent.preparation.replication.clone());
-                        next.readbacks = attempt.intent.preparation.readbacks.clone();
+                        next.readbacks
+                            .clone_from(&attempt.intent.preparation.readbacks);
                         next.release_submission_attempts.push(attempt);
                     }
                 }
@@ -4511,8 +5208,11 @@ impl<'a> PublicationEngine<'a> {
                 else {
                     return Ok(PublicationAdvanceV1::Pending(phase));
                 };
-                final_evidence.validate_for(&journal.request, submission)?;
-                next.completion = Some(final_evidence);
+                next.completion = Some(PublicationFinalCheckpointV1::from_verified(
+                    &journal.request,
+                    submission,
+                    &final_evidence,
+                )?);
             }
         }
         self.persist_advance(&journal, next)
@@ -4546,6 +5246,28 @@ impl<'a> PublicationEngine<'a> {
     }
 }
 
+fn verify_seed_ingress_receipt_with_bounded_service_lead(
+    receipt: &MusubiSeedIngressReceiptV1,
+    expected: &MusubiSeedIngressReceiptBindingV1,
+    current_time_ms: u64,
+) -> Result<(), PublicationError> {
+    let latest_accepted_issue_time = current_time_ms
+        .checked_add(MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1)
+        .ok_or_else(|| PublicationError::InvalidEvidence {
+            phase: PublicationPhaseV1::SeedIngress,
+            reason: "seed-ingress receipt clock bound overflowed".to_owned(),
+        })?;
+    if current_time_ms == 0 || receipt.payload.issued_at_ms > latest_accepted_issue_time {
+        return Err(PublicationError::InvalidEvidence {
+            phase: PublicationPhaseV1::SeedIngress,
+            reason: "seed-ingress receipt exceeds the bounded service clock lead".to_owned(),
+        });
+    }
+    receipt
+        .verify(expected, current_time_ms.max(receipt.payload.issued_at_ms))
+        .map_err(|error| invalid(PublicationPhaseV1::SeedIngress, error))
+}
+
 fn append_location_terminal(
     journal: &PublicationJournalV1,
     next: &mut PublicationJournalV1,
@@ -4577,13 +5299,16 @@ fn location_terminal_floor(
                 "archive-location terminal evidence has no active generation".to_owned(),
             )
         })?;
-    Ok(if let Some(checkpoint) = &journal.replication {
-        PublicationArchiveLocationTerminalFloorV1::Replication(checkpoint.clone())
-    } else if attempt.registration.is_some() {
-        PublicationArchiveLocationTerminalFloorV1::Registered
-    } else {
-        PublicationArchiveLocationTerminalFloorV1::Prepared
-    })
+    Ok(journal.replication.as_ref().map_or_else(
+        || {
+            if attempt.registration.is_some() {
+                PublicationArchiveLocationTerminalFloorV1::Registered
+            } else {
+                PublicationArchiveLocationTerminalFloorV1::Prepared
+            }
+        },
+        |checkpoint| PublicationArchiveLocationTerminalFloorV1::Replication(checkpoint.clone()),
+    ))
 }
 
 fn validate_location_terminal(
@@ -4763,7 +5488,7 @@ pub(crate) fn validate_replication(
 /// Publication workflow error with retry class preserved for backend failures.
 #[derive(Debug)]
 pub enum PublicationError {
-    /// The CAR source could not be reopened or read.
+    /// The immutable CAR or canonical plan sidecar could not be reopened or read.
     CarSource(io::Error),
     /// A backend transition failed without persisting secrets in the journal.
     Backend(PublicationBackendError),
@@ -4789,7 +5514,12 @@ pub enum PublicationError {
 impl fmt::Display for PublicationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CarSource(error) => write!(formatter, "failed to open publication CAR: {error}"),
+            Self::CarSource(error) => {
+                write!(
+                    formatter,
+                    "failed to open publication CAR or plan sidecar: {error}"
+                )
+            }
             Self::Backend(error) => write!(formatter, "publication backend failed: {error}"),
             Self::InvalidEvidence { phase, reason } => {
                 write!(formatter, "invalid {phase:?} evidence: {reason}")
@@ -4860,6 +5590,10 @@ fn staged_car_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
     PathBuf::from(JOURNAL_DIRECTORY).join(format!("{operation_id}.{STAGED_CAR_EXTENSION}"))
 }
 
+fn staged_plan_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
+    PathBuf::from(JOURNAL_DIRECTORY).join(format!("{operation_id}.{STAGED_PLAN_EXTENSION}"))
+}
+
 fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(
@@ -4887,67 +5621,17 @@ fn ensure_release_component_budget<T: Encode>(
     value: &T,
     maximum: usize,
     component: &str,
+    phase: PublicationPhaseV1,
 ) -> Result<(), PublicationError> {
-    let observed =
-        canonical_encoded_len(value).map_err(|reason| PublicationError::InvalidEvidence {
-            phase: PublicationPhaseV1::ReleaseSubmission,
-            reason,
-        })?;
+    let observed = canonical_encoded_len(value)
+        .map_err(|reason| PublicationError::InvalidEvidence { phase, reason })?;
     if observed > maximum {
         return Err(PublicationError::InvalidEvidence {
-            phase: PublicationPhaseV1::ReleaseSubmission,
-            reason: format!(
-                "{component} canonical size {observed} exceeds the journal-safe limit {maximum}"
-            ),
+            phase,
+            reason: format!("{component} canonical size {observed} exceeds the limit {maximum}"),
         });
     }
     Ok(())
-}
-
-fn ensure_projected_final_evidence_budget(
-    request: &PublicationRequestV1,
-) -> Result<(), PublicationError> {
-    let projected = projected_final_evidence_size(request)?;
-    if projected > MAX_RELEASE_FINAL_EVIDENCE_CANONICAL_BYTES {
-        return Err(PublicationError::InvalidEvidence {
-            phase: PublicationPhaseV1::ReleaseSubmission,
-            reason: format!(
-                "projected exact final evidence size {projected} exceeds its reserved \
-                 {MAX_RELEASE_FINAL_EVIDENCE_CANONICAL_BYTES}-byte budget"
-            ),
-        });
-    }
-    Ok(())
-}
-
-fn projected_final_evidence_size(
-    request: &PublicationRequestV1,
-) -> Result<usize, PublicationError> {
-    let manifest_size = canonical_encoded_len(&request.publication.manifest).map_err(|reason| {
-        PublicationError::InvalidEvidence {
-            phase: PublicationPhaseV1::ReleaseSubmission,
-            reason,
-        }
-    })?;
-    let publisher_size = canonical_encoded_len(&request.publisher).map_err(|reason| {
-        PublicationError::InvalidEvidence {
-            phase: PublicationPhaseV1::ReleaseSubmission,
-            reason,
-        }
-    })?;
-    let projected = manifest_size
-        .checked_mul(2)
-        .and_then(|size| {
-            publisher_size
-                .checked_mul(3)
-                .and_then(|publisher| size.checked_add(publisher))
-        })
-        .and_then(|size| size.checked_add(RELEASE_FINAL_EVIDENCE_FIXED_ALLOWANCE_BYTES))
-        .ok_or_else(|| PublicationError::InvalidEvidence {
-            phase: PublicationPhaseV1::ReleaseSubmission,
-            reason: "projected final evidence size overflowed".to_owned(),
-        })?;
-    Ok(projected)
 }
 
 fn archive_registration_instruction_digest(instruction: &RegisterMusubiArchiveV1) -> [u8; 32] {
@@ -4965,7 +5649,7 @@ fn archive_location_instruction_digest(instruction: &AddMusubiArchiveLocationV1)
 fn open_existing_operation_lock(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true);
-    set_no_follow(&mut options);
+    set_no_follow_nonblocking(&mut options);
     #[cfg(windows)]
     options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     options.open(path)
@@ -4974,7 +5658,7 @@ fn open_existing_operation_lock(path: &Path) -> io::Result<File> {
 fn create_operation_lock(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create_new(true);
-    set_no_follow(&mut options);
+    set_no_follow_nonblocking(&mut options);
     #[cfg(unix)]
     options.mode(0o600);
     #[cfg(windows)]
@@ -5111,11 +5795,20 @@ const fn same_file_snapshot(_left: &fs::Metadata, _right: &fs::Metadata) -> bool
     false
 }
 
-fn set_no_follow(options: &mut OpenOptions) {
+fn open_read_only_no_follow_nonblocking(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_no_follow_nonblocking(&mut options);
+    options.open(path)
+}
+
+fn set_no_follow_nonblocking(options: &mut OpenOptions) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(platform_no_follow_flag());
+
+        // A substituted FIFO or device must never block before descriptor metadata rejects it.
+        options.custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
     }
     #[cfg(windows)]
     options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
@@ -5123,9 +5816,106 @@ fn set_no_follow(options: &mut OpenOptions) {
     let _ = options;
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(test, unix))]
+fn substitute_publication_read_target_with_fifo_for_test(path: &Path) -> io::Result<()> {
+    let substitute = TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS.with(|remaining| {
+        let count = remaining.get();
+        remaining.set(count.saturating_sub(1));
+        count != 0
+    });
+    if !substitute {
+        return Ok(());
+    }
+    fs::remove_file(path)?;
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "test fixture could not substitute a FIFO publication input",
+        ))
+    }
+}
+
+#[cfg(all(
+    target_os = "android",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))
+))]
+compile_error!("Musubi publication file reads are not qualified for this Android architecture");
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("Musubi publication file reads are not qualified for this Unix target");
+
+#[cfg(all(target_os = "android", target_arch = "riscv64"))]
 const fn platform_no_follow_flag() -> i32 {
-    0o400000
+    0x400000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "aarch64", target_arch = "arm")
+))]
+const fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+const fn platform_no_follow_flag() -> i32 {
+    0x20000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+const fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    ))
+))]
+const fn platform_no_follow_flag() -> i32 {
+    0x20000
 }
 
 #[cfg(all(
@@ -5145,20 +5935,58 @@ const fn platform_no_follow_flag() -> i32 {
 }
 
 #[cfg(all(
-    unix,
-    not(any(
+    target_os = "linux",
+    any(
+        target_arch = "mips",
+        target_arch = "mips32r6",
+        target_arch = "mips64",
+        target_arch = "mips64r6"
+    )
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x80
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "sparc", target_arch = "sparc64")
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x4000
+}
+
+#[cfg(any(
+    target_os = "android",
+    all(
         target_os = "linux",
-        target_os = "android",
+        not(any(
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6",
+            target_arch = "sparc",
+            target_arch = "sparc64"
+        ))
+    )
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x800
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
         target_os = "macos",
         target_os = "ios",
         target_os = "freebsd",
         target_os = "openbsd",
         target_os = "netbsd",
         target_os = "dragonfly"
-    ))
+    )
 ))]
-const fn platform_no_follow_flag() -> i32 {
-    0
+const fn platform_nonblocking_flag() -> i32 {
+    0x4
 }
 
 #[cfg(test)]
@@ -5168,17 +5996,18 @@ mod tests {
     #[cfg(unix)]
     use std::io::Write as _;
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 
     use iroha::{
         crypto::{Algorithm, KeyPair, SignatureOf},
         data_model::{
             account::{MultisigMember, MultisigPolicy},
             musubi::{
-                MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-                MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveAvailabilityV1,
-                MusubiArtifactGovernanceStateV1, MusubiKotodamaEditionV1, MusubiPackageIdV1,
-                MusubiPackageScopeV1, MusubiPageRequestV1,
+                MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1,
+                MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1,
+                MusubiArchiveAvailabilityV1, MusubiArtifactGovernanceStateV1,
+                MusubiArtifactTakedownV1, MusubiGovernanceActionDigestV1, MusubiKotodamaEditionV1,
+                MusubiPackageIdV1, MusubiPackageScopeV1, MusubiPageRequestV1,
                 MusubiProviderBundleVerificationApprovalV1,
                 MusubiProviderBundleVerificationAttestationV1,
                 MusubiProviderBundleVerificationBindingV1,
@@ -5186,8 +6015,9 @@ mod tests {
                 MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiReleaseRevisionsV1,
                 MusubiReleaseSelectionStateV1, MusubiReleaseYankV1, MusubiResolutionProofV1,
                 MusubiResolverIndexQueryV1, MusubiSeedIngressReceiptApprovalV1,
-                MusubiSeedIngressReceiptPayloadV1, MusubiVerificationLockV1, MusubiVersionV1,
-                musubi_provider_bundle_attestation_set_digest_v1,
+                MusubiSeedIngressReceiptPayloadV1, MusubiStorageAvailabilityV1,
+                MusubiVerificationLockV1, MusubiVersionV1,
+                musubi_provider_bundle_attestation_set_digest_v1, validate_musubi_account_id_v1,
             },
             nexus::DataSpaceId,
             proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
@@ -5207,6 +6037,17 @@ mod tests {
     impl PublicationCarSource for BytesSource {
         fn open_car(&self) -> io::Result<Box<dyn Read + '_>> {
             Ok(Box::new(Cursor::new(self.0.as_slice())))
+        }
+
+        fn car_plan(
+            &self,
+            commitment: &MusubiArchiveCommitmentV1,
+        ) -> io::Result<MusubiSeedIngressCarPlanV1> {
+            MusubiSeedIngressCarPlanV1::from_car_build_plan(
+                &publication_fixture_car_plan(),
+                commitment,
+            )
+            .map_err(|_| invalid_plan_source("test publication plan differs from the commitment"))
         }
     }
 
@@ -5285,48 +6126,63 @@ mod tests {
         let operation_id = "0202020202020202020202020202020202020202020202020202020202020202"
             .parse()
             .expect("operation id");
-        let bytes = b"canonical-car";
-        let expected_size = u64::try_from(bytes.len()).expect("fixture length fits u64");
-        let digest = MusubiContentDigestV1::new(*blake3::hash(bytes).as_bytes());
+        let (plan, bytes, commitment) = publication_fixture_canonical_car();
         let source = PublicationStagedCarSourceV1::stage_bytes(
             state.path(),
             operation_id,
-            expected_size,
-            digest,
-            bytes,
+            &commitment,
+            &plan,
+            &bytes,
         )
         .expect("stage committed CAR");
+        let car_before = fs::metadata(source.path()).expect("staged CAR metadata");
+        let plan_before = fs::metadata(source.plan_path()).expect("staged plan metadata");
         PublicationStagedCarSourceV1::stage_bytes(
             state.path(),
             operation_id,
-            expected_size,
-            digest,
-            bytes,
+            &commitment,
+            &plan,
+            &bytes,
         )
-        .expect("identical retry reuses staged CAR");
+        .expect("identical retry reuses staged CAR and plan");
+        assert!(same_file_snapshot(
+            &car_before,
+            &fs::metadata(source.path()).expect("reused CAR metadata")
+        ));
+        assert!(same_file_snapshot(
+            &plan_before,
+            &fs::metadata(source.plan_path()).expect("reused plan metadata")
+        ));
+        assert_eq!(
+            source.car_plan(&commitment).expect("reopen exact plan"),
+            MusubiSeedIngressCarPlanV1::from_car_build_plan(&plan, &commitment).expect("wire plan")
+        );
 
-        fs::write(source.path(), b"substituted!!").expect("substitute same-length fixture");
+        fs::write(source.path(), vec![0xA5; bytes.len()]).expect("substitute same-length fixture");
         assert!(matches!(
             PublicationStagedCarSourceV1::stage_bytes(
                 state.path(),
                 operation_id,
-                expected_size,
-                digest,
-                bytes,
+                &commitment,
+                &plan,
+                &bytes,
             ),
-            Err(PublicationError::InvalidJournal(_))
+            Err(PublicationError::JournalWrite(ref error))
+                if error.code() == crate::atomic_io::AtomicWriteErrorCode::ImmutableConflict
         ));
 
         let other_id = "0303030303030303030303030303030303030303030303030303030303030303"
             .parse()
             .expect("other operation id");
+        let mut wrong_commitment = commitment.clone();
+        wrong_commitment.car_digest = MusubiContentDigestV1::new([9; 32]);
         assert!(matches!(
             PublicationStagedCarSourceV1::stage_bytes(
                 state.path(),
                 other_id,
-                expected_size,
-                MusubiContentDigestV1::new([9; 32]),
-                bytes,
+                &wrong_commitment,
+                &plan,
+                &bytes,
             ),
             Err(PublicationError::InvalidEvidence {
                 phase: PublicationPhaseV1::Validation,
@@ -5334,10 +6190,522 @@ mod tests {
             })
         ));
         assert!(
-            !PublicationStagedCarSourceV1::new(state.path(), other_id, expected_size)
+            !PublicationStagedCarSourceV1::new(state.path(), other_id, commitment.car_size)
                 .path()
                 .exists()
         );
+    }
+
+    #[test]
+    fn staged_car_rejects_a_different_file_inventory_before_install() {
+        let state = tempdir().expect("state root");
+        let _store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let operation_id = "2929292929292929292929292929292929292929292929292929292929292929"
+            .parse()
+            .expect("operation id");
+        let (mut substituted_plan, bytes, commitment) = publication_fixture_canonical_car();
+        let source_file = substituted_plan
+            .files
+            .iter_mut()
+            .find(|file| file.path.iter().map(String::as_str).eq(["src", "lib.ko"]))
+            .expect("fixture source file");
+        source_file.path = vec!["src".to_owned(), "renamed.ko".to_owned()];
+        substituted_plan
+            .validate()
+            .expect("substituted inventory remains a valid SoraFS plan");
+        MusubiSeedIngressCarPlanV1::from_car_build_plan(&substituted_plan, &commitment)
+            .expect("scalar commitment fields do not bind the file inventory");
+
+        assert!(matches!(
+            PublicationStagedCarSourceV1::stage_bytes(
+                state.path(),
+                operation_id,
+                &commitment,
+                &substituted_plan,
+                &bytes,
+            ),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Validation,
+                ..
+            })
+        ));
+        let source =
+            PublicationStagedCarSourceV1::new(state.path(), operation_id, commitment.car_size);
+        assert!(!source.path().exists());
+        assert!(!source.plan_path().exists());
+    }
+
+    #[test]
+    fn detached_begin_persists_the_recovery_anchor_before_sidecar_failure() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, _) = request();
+        let operation_id = request.operation_id();
+        let expected_size = request.archive_commitment.car_size;
+
+        assert!(matches!(
+            engine.begin_detached_with_car(
+                request.clone(),
+                &publication_fixture_car_plan(),
+                b"not the committed canonical CAR",
+            ),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Validation,
+                ..
+            })
+        ));
+        assert_eq!(
+            store
+                .load(operation_id)
+                .expect("durable recovery anchor")
+                .request,
+            request
+        );
+        let source = PublicationStagedCarSourceV1::new(state.path(), operation_id, expected_size);
+        assert!(!source.path().exists());
+        assert!(!source.plan_path().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_begin_idempotently_reuses_sidecars_while_the_journal_is_pristine() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let engine = PublicationEngine::new(&store);
+        let (plan, car, commitment) = publication_fixture_canonical_car();
+        let (request, _) = request_with_archive_commitment(commitment);
+        let expected_operation_id = request.operation_id();
+
+        let (operation_id, source) = engine
+            .begin_detached_with_car(request.clone(), &plan, &car)
+            .expect("begin detached publication");
+        assert_eq!(operation_id, expected_operation_id);
+        let journal_before = store.load(operation_id).expect("pristine journal");
+        assert_eq!(journal_before.phase, PublicationPhaseV1::Validation);
+        assert_eq!(journal_before.revision, 1);
+        let car_before = fs::metadata(source.path()).expect("staged CAR metadata");
+        let plan_before = fs::metadata(source.plan_path()).expect("staged plan metadata");
+
+        let (retried_operation_id, retried_source) = engine
+            .begin_detached_with_car(request, &plan, &car)
+            .expect("idempotently recover pristine detached publication");
+        assert_eq!(retried_operation_id, operation_id);
+        assert!(same_file_snapshot(
+            &car_before,
+            &fs::metadata(retried_source.path()).expect("reused CAR metadata")
+        ));
+        assert!(same_file_snapshot(
+            &plan_before,
+            &fs::metadata(retried_source.plan_path()).expect("reused plan metadata")
+        ));
+        assert_eq!(
+            store
+                .load(operation_id)
+                .expect("unchanged pristine journal"),
+            journal_before
+        );
+    }
+
+    #[test]
+    fn detached_begin_rejects_an_advanced_journal_that_must_resume() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let engine = PublicationEngine::new(&store);
+        let (plan, car, commitment) = publication_fixture_canonical_car();
+        let (request, _) = request_with_archive_commitment(commitment);
+        let (operation_id, source) = engine
+            .begin_detached_with_car(request.clone(), &plan, &car)
+            .expect("begin detached publication");
+        let pristine = store.load(operation_id).expect("pristine journal");
+        let mut next = pristine.clone();
+        next.validation = Some(validation_evidence(&request));
+        next.phase = PublicationPhaseV1::SeedIngress;
+        let advanced = store
+            .transition(&pristine, next)
+            .expect("advance fixture journal");
+        let car_before = fs::read(source.path()).expect("read staged CAR");
+        let plan_before = fs::read(source.plan_path()).expect("read staged plan");
+
+        assert!(matches!(
+            engine.begin_detached_with_car(request, &plan, &car),
+            Err(PublicationError::InvalidJournal(ref reason))
+                if reason.contains("pristine validation revision")
+        ));
+        assert_eq!(
+            store
+                .load(operation_id)
+                .expect("unchanged advanced journal"),
+            advanced
+        );
+        assert_eq!(
+            fs::read(source.path()).expect("reread staged CAR"),
+            car_before
+        );
+        assert_eq!(
+            fs::read(source.plan_path()).expect("reread staged plan"),
+            plan_before
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pristine_pre_ingress_recovery_installs_and_idempotently_reuses_exact_sidecars() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let engine = PublicationEngine::new(&store);
+        let (plan, car, commitment) = publication_fixture_canonical_car();
+        let (request, _) = request_with_archive_commitment(commitment.clone());
+        let journal = store
+            .create(request.clone())
+            .expect("persist pristine recovery anchor");
+        let journal_path = state
+            .path()
+            .join(journal_relative_path(journal.operation_id));
+        let journal_before = fs::read(&journal_path).expect("read pristine journal");
+
+        let source = engine
+            .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
+            .expect("recover exact sidecars");
+        let car_before = fs::metadata(source.path()).expect("recovered CAR metadata");
+        let plan_before = fs::metadata(source.plan_path()).expect("recovered plan metadata");
+        assert_eq!(
+            store.load(journal.operation_id).expect("unchanged journal"),
+            journal
+        );
+        assert_eq!(
+            source.car_plan(&commitment).expect("reopen recovered plan"),
+            MusubiSeedIngressCarPlanV1::from_car_build_plan(&plan, &commitment)
+                .expect("canonical wire plan")
+        );
+
+        let retried = engine
+            .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
+            .expect("idempotently recover exact sidecars");
+        assert!(same_file_snapshot(
+            &car_before,
+            &fs::metadata(retried.path()).expect("reused CAR metadata")
+        ));
+        assert!(same_file_snapshot(
+            &plan_before,
+            &fs::metadata(retried.plan_path()).expect("reused plan metadata")
+        ));
+        assert_eq!(
+            fs::read(journal_path).expect("reread pristine journal"),
+            journal_before
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pristine_pre_ingress_recovery_repairs_a_car_only_partial_install() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let engine = PublicationEngine::new(&store);
+        let (plan, car, commitment) = publication_fixture_canonical_car();
+        let (request, _) = request_with_archive_commitment(commitment.clone());
+        let journal = store
+            .create(request.clone())
+            .expect("persist pristine recovery anchor");
+        store
+            .root
+            .install_immutable(&staged_car_relative_path(journal.operation_id), &car)
+            .expect("install exact CAR-only crash fixture");
+        let source = PublicationStagedCarSourceV1::new(
+            state.path(),
+            journal.operation_id,
+            commitment.car_size,
+        );
+        let car_before = fs::metadata(source.path()).expect("partial CAR metadata");
+        assert!(!source.plan_path().exists());
+
+        let repaired = engine
+            .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
+            .expect("repair missing plan sidecar");
+        assert!(same_file_snapshot(
+            &car_before,
+            &fs::metadata(repaired.path()).expect("reused partial CAR metadata")
+        ));
+        assert!(repaired.plan_path().exists());
+        assert_eq!(
+            store.load(journal.operation_id).expect("unchanged journal"),
+            journal
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pristine_pre_ingress_recovery_repairs_a_plan_only_partial_install() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let engine = PublicationEngine::new(&store);
+        let (plan, car, commitment) = publication_fixture_canonical_car();
+        let (request, _) = request_with_archive_commitment(commitment.clone());
+        let journal = store
+            .create(request.clone())
+            .expect("persist pristine recovery anchor");
+        let plan_bytes = MusubiSeedIngressCarPlanV1::from_car_build_plan(&plan, &commitment)
+            .and_then(|plan| plan.canonical_bytes())
+            .expect("canonical plan sidecar");
+        store
+            .root
+            .install_immutable(
+                &staged_plan_relative_path(journal.operation_id),
+                &plan_bytes,
+            )
+            .expect("install exact plan-only crash fixture");
+        let source = PublicationStagedCarSourceV1::new(
+            state.path(),
+            journal.operation_id,
+            commitment.car_size,
+        );
+        let plan_before = fs::metadata(source.plan_path()).expect("partial plan metadata");
+        assert!(!source.path().exists());
+
+        let repaired = engine
+            .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
+            .expect("repair missing CAR sidecar");
+        assert!(same_file_snapshot(
+            &plan_before,
+            &fs::metadata(repaired.plan_path()).expect("reused partial plan metadata")
+        ));
+        assert!(repaired.path().exists());
+        assert_eq!(
+            store.load(journal.operation_id).expect("unchanged journal"),
+            journal
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pre_ingress_recovery_rejects_mismatch_stale_and_advanced_journals_before_install() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let engine = PublicationEngine::new(&store);
+        let (plan, car, commitment) = publication_fixture_canonical_car();
+        let (request, _) = request_with_archive_commitment(commitment.clone());
+        let journal = store
+            .create(request.clone())
+            .expect("persist pristine recovery anchor");
+        let source = PublicationStagedCarSourceV1::new(
+            state.path(),
+            journal.operation_id,
+            commitment.car_size,
+        );
+
+        let mut substituted_publication = request.publication.clone();
+        substituted_publication.manifest.interface_digest = MusubiContentDigestV1::new([0xA5; 32]);
+        assert!(matches!(
+            engine.recover_pre_ingress_sidecars(
+                &journal,
+                &substituted_publication,
+                &commitment,
+                &plan,
+                &car,
+            ),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Validation,
+                ..
+            })
+        ));
+        assert!(!source.path().exists());
+        assert!(!source.plan_path().exists());
+
+        let mut next = journal.clone();
+        next.validation = Some(validation_evidence(&request));
+        next.phase = PublicationPhaseV1::SeedIngress;
+        let advanced = store
+            .transition(&journal, next)
+            .expect("advance fixture journal");
+        assert!(matches!(
+            engine.recover_pre_ingress_sidecars(
+                &journal,
+                &request.publication,
+                &commitment,
+                &plan,
+                &car,
+            ),
+            Err(PublicationError::ConcurrentJournalUpdate)
+        ));
+        assert!(matches!(
+            engine.recover_pre_ingress_sidecars(
+                &advanced,
+                &request.publication,
+                &commitment,
+                &plan,
+                &car,
+            ),
+            Err(PublicationError::InvalidJournal(_))
+        ));
+        assert!(!source.path().exists());
+        assert!(!source.plan_path().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validation_requires_the_exact_plan_before_calling_the_backend() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let engine = PublicationEngine::new(&store);
+        let (_plan, car, commitment) = publication_fixture_canonical_car();
+        let (request, broker) = request_with_archive_commitment(commitment.clone());
+        let journal = store
+            .create(request.clone())
+            .expect("persist pristine recovery anchor");
+        store
+            .root
+            .install_immutable(&staged_car_relative_path(journal.operation_id), &car)
+            .expect("install exact CAR-only crash fixture");
+        let source = PublicationStagedCarSourceV1::new(
+            state.path(),
+            journal.operation_id,
+            commitment.car_size,
+        );
+        let mut backend = EarlyBackend {
+            broker,
+            fail_validation_once: true,
+            substitute_receipt: false,
+            now_ms: 1_500,
+            receipt_window: None,
+            prepare_calls: 0,
+        };
+
+        assert!(matches!(
+            engine.advance_once(journal.operation_id, &source, &mut backend),
+            Err(PublicationError::CarSource(_))
+        ));
+        assert!(
+            backend.fail_validation_once,
+            "backend validation was not called"
+        );
+        assert_eq!(
+            store.load(journal.operation_id).expect("unchanged journal"),
+            journal
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_plan_missing_corrupt_or_hard_linked_fails_closed() {
+        let state = tempdir().expect("state root");
+        let _store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let (plan, bytes, commitment) = publication_fixture_canonical_car();
+        for (id_byte, mutation) in [(0x31, "missing"), (0x32, "corrupt"), (0x33, "linked")] {
+            let operation_id = PublicationOperationIdV1::from_str(&hex::encode([id_byte; 32]))
+                .expect("operation id");
+            let source = PublicationStagedCarSourceV1::stage_bytes(
+                state.path(),
+                operation_id,
+                &commitment,
+                &plan,
+                &bytes,
+            )
+            .expect("stage fixture");
+            let linked = state.path().join(format!("{mutation}.plan"));
+            match mutation {
+                "missing" => fs::remove_file(source.plan_path()).expect("remove plan sidecar"),
+                "corrupt" => {
+                    let mut noncanonical =
+                        fs::read(source.plan_path()).expect("read canonical sidecar");
+                    noncanonical.push(0);
+                    fs::write(source.plan_path(), noncanonical)
+                        .expect("append trailing sidecar byte");
+                }
+                "linked" => fs::hard_link(source.plan_path(), linked).expect("hard-link sidecar"),
+                _ => unreachable!("closed fixture mutation"),
+            }
+            assert!(source.car_plan(&commitment).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_plan_substitution_fails_commitment_validation() {
+        let state = tempdir().expect("state root");
+        let _store = PublicationJournalStore::open(state.path()).expect("private journal store");
+        let operation_id = "3434343434343434343434343434343434343434343434343434343434343434"
+            .parse()
+            .expect("operation id");
+        let (expected_plan, bytes, expected_commitment) = publication_fixture_canonical_car();
+        let source = PublicationStagedCarSourceV1::stage_bytes(
+            state.path(),
+            operation_id,
+            &expected_commitment,
+            &expected_plan,
+            &bytes,
+        )
+        .expect("stage fixture");
+
+        let mut substituted_plan = expected_plan.clone();
+        let source_file = substituted_plan
+            .files
+            .iter_mut()
+            .find(|file| file.path.iter().map(String::as_str).eq(["src", "lib.ko"]))
+            .expect("fixture source file");
+        source_file.path = vec!["src".to_owned(), "renamed.ko".to_owned()];
+        substituted_plan
+            .validate()
+            .expect("substituted inventory remains structurally valid");
+        let substituted_commitment = expected_commitment.clone();
+        let substituted_wire = MusubiSeedIngressCarPlanV1::from_car_build_plan(
+            &substituted_plan,
+            &substituted_commitment,
+        )
+        .expect("substituted wire plan");
+        assert!(matches!(
+            PublicationStagedCarSourceV1::stage_bytes(
+                state.path(),
+                operation_id,
+                &substituted_commitment,
+                &substituted_plan,
+                &bytes,
+            ),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Validation,
+                ..
+            })
+        ));
+        assert!(source.path().exists());
+        assert!(source.plan_path().exists());
+        fs::write(
+            source.plan_path(),
+            substituted_wire
+                .canonical_bytes()
+                .expect("encode substituted plan"),
+        )
+        .expect("substitute sidecar bytes");
+
+        assert_eq!(
+            source
+                .car_plan(&expected_commitment)
+                .expect_err("substituted plan must fail")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_load_rejects_a_fifo_substitution_without_blocking() {
+        let state = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(state.path()).expect("journal store");
+        let (request, _) = request();
+        let operation_id = request.operation_id();
+        store.create(request).expect("create canonical journal");
+
+        TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS.with(|remaining| remaining.set(1));
+        assert!(matches!(
+            store.load(operation_id),
+            Err(PublicationError::InvalidJournal(_))
+        ));
+        let path = state.path().join(journal_relative_path(operation_id));
+        assert!(
+            fs::symlink_metadata(path)
+                .expect("substituted FIFO metadata")
+                .file_type()
+                .is_fifo()
+        );
+        TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS.with(|remaining| assert_eq!(remaining.get(), 0));
     }
 
     #[cfg(unix)]
@@ -5471,39 +6839,45 @@ mod tests {
         .with_instructions([request.publish_instruction()]);
         builder.set_creation_time(std::time::Duration::from_millis(2_500));
         builder.set_nonce(NonZeroU32::new(1).expect("fixture nonce"));
-        let signed_a = builder.clone().sign_multisig([signer_a.private_key()]);
-        let signed_b = builder.sign_multisig([signer_b.private_key()]);
+        let transaction_a = builder.clone().sign_multisig([signer_a.private_key()]);
+        let transaction_b = builder.sign_multisig([signer_b.private_key()]);
 
-        assert_eq!(signed_a.payload(), signed_b.payload());
-        assert_eq!(signed_a.hash(), signed_b.hash());
-        signed_a.verify_signature().expect("first valid proof");
-        signed_b.verify_signature().expect("second valid proof");
-        let wire_a = release_signed_transaction_wire_v1(&signed_a).expect("first exact wire");
-        let wire_b = release_signed_transaction_wire_v1(&signed_b).expect("second exact wire");
+        assert_eq!(transaction_a.payload(), transaction_b.payload());
+        assert_eq!(transaction_a.hash(), transaction_b.hash());
+        transaction_a.verify_signature().expect("first valid proof");
+        transaction_b
+            .verify_signature()
+            .expect("second valid proof");
+        let wire_a = release_signed_transaction_wire_v1(&transaction_a).expect("first exact wire");
+        let wire_b = release_signed_transaction_wire_v1(&transaction_b).expect("second exact wire");
         assert_ne!(wire_a, wire_b);
         assert_ne!(
             domain_hash(RELEASE_SIGNED_TRANSACTION_DOMAIN, &wire_a),
             domain_hash(RELEASE_SIGNED_TRANSACTION_DOMAIN, &wire_b)
         );
 
-        let envelope_a =
-            PublicationReleaseSignedEnvelopeV1::try_from_signed_transaction(&request, &signed_a)
-                .expect("first compact authorization");
-        let envelope_b =
-            PublicationReleaseSignedEnvelopeV1::try_from_signed_transaction(&request, &signed_b)
-                .expect("second compact authorization");
+        let envelope_a = PublicationReleaseSignedEnvelopeV1::try_from_signed_transaction(
+            &request,
+            &transaction_a,
+        )
+        .expect("first compact authorization");
+        let envelope_b = PublicationReleaseSignedEnvelopeV1::try_from_signed_transaction(
+            &request,
+            &transaction_b,
+        )
+        .expect("second compact authorization");
         assert_ne!(envelope_a, envelope_b);
         assert_eq!(
             envelope_a
                 .reconstruct_signed_transaction(&request)
                 .expect("first reconstruction"),
-            signed_a
+            transaction_a
         );
         assert_eq!(
             envelope_b
                 .reconstruct_signed_transaction(&request)
                 .expect("second reconstruction"),
-            signed_b
+            transaction_b
         );
     }
 
@@ -5600,21 +6974,169 @@ mod tests {
     }
 
     #[test]
-    fn projected_final_evidence_covers_the_maximum_admitted_release_signers() {
+    fn compact_final_checkpoint_covers_the_maximum_admitted_release_signers() {
         let (request, _) = request();
         let (request, _) = maximum_multisig_release_transaction(request);
         let evidence = final_evidence(&request);
-        let actual = canonical_encoded_len(&evidence).expect("encode exact final evidence");
-        let projected =
-            projected_final_evidence_size(&request).expect("project final evidence size");
-        assert!(actual <= projected);
-        assert!(projected <= MAX_RELEASE_FINAL_EVIDENCE_CANONICAL_BYTES);
+        let submission = PublicationAmxSubmissionV1::new(
+            request.operation_id(),
+            &request.publish_instruction(),
+            [0xA5; 32],
+            evidence.snapshot.finalized_height,
+        );
+        let checkpoint =
+            PublicationFinalCheckpointV1::from_verified(&request, &submission, &evidence)
+                .expect("compact verified final checkpoint");
         ensure_release_component_budget(
-            &evidence,
-            MAX_RELEASE_FINAL_EVIDENCE_CANONICAL_BYTES,
-            "maximum-admitted-signer final evidence",
+            &checkpoint,
+            MAX_RELEASE_FINAL_CHECKPOINT_CANONICAL_BYTES,
+            "maximum-admitted-signer final checkpoint",
+            PublicationPhaseV1::FinalVerification,
         )
-        .expect("maximum admitted release signers fit final evidence reserve");
+        .expect("maximum admitted release signers fit the compact checkpoint reserve");
+        assert!(
+            canonical_encoded_len(&checkpoint).expect("encode compact final checkpoint")
+                < canonical_encoded_len(&evidence).expect("encode full final evidence")
+        );
+        assert_eq!(checkpoint.release, request.publication.manifest.release);
+        assert_ne!(checkpoint.home_release_digest, [0; 32]);
+        assert_ne!(checkpoint.universal_release_digest, [0; 32]);
+
+        let encoded = norito::encode_canonical(&checkpoint).expect("encode final checkpoint");
+        let decoded: PublicationFinalCheckpointV1 =
+            norito::decode_canonical(&encoded).expect("decode final checkpoint");
+        assert_eq!(decoded, checkpoint);
+        assert_eq!(
+            decoded.checkpoint_digest,
+            decoded.digest().expect("checkpoint digest")
+        );
+
+        let mut different_operation = request.clone();
+        different_operation.nonce[0] ^= 1;
+        assert_ne!(different_operation.operation_id(), request.operation_id());
+        assert!(
+            checkpoint
+                .validate_for(&different_operation, &submission)
+                .is_err()
+        );
+        let mut substituted_submission = submission;
+        substituted_submission.operation_id = different_operation.operation_id();
+        assert!(
+            checkpoint
+                .validate_for(&request, &substituted_submission)
+                .is_err()
+        );
+
+        let mut substituted = checkpoint;
+        substituted.home_release_digest[0] ^= 1;
+        assert!(substituted.validate_for(&request, &submission).is_err());
+    }
+
+    #[test]
+    fn compact_final_checkpoint_accepts_later_paired_yank_and_storage_projection() {
+        let (request, _) = request();
+        let mut evidence = final_evidence(&request);
+        let (changed_by, _) = account(0xD1);
+        let yank = MusubiReleaseYankV1 {
+            release: request.publication.manifest.release.clone(),
+            yanked: true,
+            reason: MusubiReasonV1::new("post-publication policy change").expect("reason"),
+            changed_by,
+            changed_at_height: 90,
+            revision: 2,
+        };
+        evidence.home_release.yank = yank.clone();
+        evidence.home_release.revisions.yank = yank.revision;
+        evidence.universal_release.selection.yank = yank;
+        let governance = MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
+            action_digest: MusubiGovernanceActionDigestV1::new([0xD3; 32]),
+            reason: MusubiReasonV1::new("post-publication governed takedown").expect("reason"),
+            applied_at_height: 91,
+        });
+        evidence.home_release.artifact_governance = governance.clone();
+        evidence.home_release.revisions.artifact_governance = 2;
+        evidence.universal_release.selection.governance = governance;
+        evidence.universal_release.selection.storage.availability =
+            MusubiStorageAvailabilityV1::BelowQuorum;
+        evidence
+            .universal_release
+            .selection
+            .storage
+            .healthy_replicas = 1;
+        assert!(!evidence.universal_release.selection.fresh_selectable());
+
+        let submission = PublicationAmxSubmissionV1::new(
+            request.operation_id(),
+            &request.publish_instruction(),
+            [0xD2; 32],
+            81,
+        );
+        let checkpoint =
+            PublicationFinalCheckpointV1::from_verified(&request, &submission, &evidence)
+                .expect("later paired projections still prove the immutable release claim");
+        checkpoint
+            .validate_for(&request, &submission)
+            .expect("compact checkpoint remains request-bound");
+    }
+
+    #[test]
+    fn compact_final_checkpoint_decouples_near_limit_governance_account() {
+        let (request, _) = request();
+        let submission = PublicationAmxSubmissionV1::new(
+            request.operation_id(),
+            &request.publish_instruction(),
+            [0xD4; 32],
+            81,
+        );
+        let ordinary_evidence = final_evidence(&request);
+        let ordinary_checkpoint =
+            PublicationFinalCheckpointV1::from_verified(&request, &submission, &ordinary_evidence)
+                .expect("ordinary compact checkpoint");
+
+        let changed_by = maximum_legal_musubi_account();
+        let changed_by_size = norito::to_bytes(&changed_by)
+            .expect("near-limit account has canonical Norito bytes")
+            .len();
+        assert!(changed_by_size <= MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1);
+        assert!(changed_by_size > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 - 256);
+        validate_musubi_account_id_v1(&changed_by).expect("near-limit account is legal in Musubi");
+
+        let mut large_evidence = ordinary_evidence.clone();
+        let yank = MusubiReleaseYankV1 {
+            release: request.publication.manifest.release.clone(),
+            yanked: true,
+            reason: MusubiReasonV1::new("post-publication owner change").expect("reason"),
+            changed_by,
+            changed_at_height: 90,
+            revision: 2,
+        };
+        large_evidence.home_release.yank = yank.clone();
+        large_evidence.home_release.revisions.yank = yank.revision;
+        large_evidence.universal_release.selection.yank = yank;
+
+        let large_checkpoint =
+            PublicationFinalCheckpointV1::from_verified(&request, &submission, &large_evidence)
+                .expect("near-limit governance projection compacts");
+        let ordinary_evidence_size =
+            canonical_encoded_len(&ordinary_evidence).expect("ordinary final evidence size");
+        let large_evidence_size =
+            canonical_encoded_len(&large_evidence).expect("large final evidence size");
+        let ordinary_checkpoint_size =
+            canonical_encoded_len(&ordinary_checkpoint).expect("ordinary final checkpoint size");
+        let large_checkpoint_size =
+            canonical_encoded_len(&large_checkpoint).expect("large final checkpoint size");
+
+        assert!(large_evidence_size > ordinary_evidence_size + changed_by_size);
+        assert_eq!(large_checkpoint_size, ordinary_checkpoint_size);
+        assert!(large_checkpoint_size <= MAX_RELEASE_FINAL_CHECKPOINT_CANONICAL_BYTES);
+        assert_ne!(
+            large_checkpoint.home_release_digest,
+            ordinary_checkpoint.home_release_digest
+        );
+        assert_ne!(
+            large_checkpoint.universal_release_digest,
+            ordinary_checkpoint.universal_release_digest
+        );
     }
 
     #[test]
@@ -5648,6 +7170,7 @@ mod tests {
             &at_limit,
             MAX_RELEASE_INTENT_CANONICAL_BYTES,
             "boundary fixture",
+            PublicationPhaseV1::ReleaseSubmission,
         )
         .expect("exact canonical boundary is admitted");
 
@@ -5657,9 +7180,22 @@ mod tests {
                 &above_limit,
                 MAX_RELEASE_INTENT_CANONICAL_BYTES,
                 "boundary fixture",
+                PublicationPhaseV1::ReleaseSubmission,
             ),
             Err(PublicationError::InvalidEvidence {
                 phase: PublicationPhaseV1::ReleaseSubmission,
+                ..
+            })
+        ));
+        assert!(matches!(
+            ensure_release_component_budget(
+                &[0_u8],
+                0,
+                "final verification fixture",
+                PublicationPhaseV1::FinalVerification,
+            ),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::FinalVerification,
                 ..
             })
         ));
@@ -5725,6 +7261,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the test verifies every boundary and append-only mutation of the bounded release journal"
+    )]
     fn release_attempt_journal_is_append_only_bounded_and_durable() {
         let state = tempdir().expect("state root");
         let store = PublicationJournalStore::open(state.path()).expect("journal store");
@@ -5848,10 +7388,17 @@ mod tests {
         ));
         completed.phase = PublicationPhaseV1::FinalVerification;
         completed.submission = Some(submission);
-        completed.completion = Some(final_evidence(&request));
+        completed.completion = Some(
+            PublicationFinalCheckpointV1::from_verified(
+                &request,
+                &submission,
+                &final_evidence(&request),
+            )
+            .expect("compact exact final checkpoint"),
+        );
         let completed = store
             .transition(&journal, completed)
-            .expect("persist applied outcome and exact final evidence with maximum history");
+            .expect("persist applied outcome and compact final checkpoint with maximum history");
         let completed_len = fs::metadata(state.path().join(journal_relative_path(operation_id)))
             .expect("completed maximum release journal metadata")
             .len();
@@ -5862,6 +7409,23 @@ mod tests {
                 .expect("reload completed maximum release history"),
             completed
         );
+        let mut rewritten_completion = completed.clone();
+        let rewritten_checkpoint = rewritten_completion
+            .completion
+            .as_mut()
+            .expect("completed journal checkpoint");
+        rewritten_checkpoint.home_release_digest[0] ^= 1;
+        rewritten_checkpoint.checkpoint_digest = rewritten_checkpoint
+            .digest()
+            .expect("alternate checkpoint digest");
+        rewritten_checkpoint
+            .validate_for(&request, &submission)
+            .expect("self-consistent alternate checkpoint shape");
+        assert!(matches!(
+            store.transition(&completed, rewritten_completion),
+            Err(PublicationError::InvalidJournal(ref reason))
+                if reason.contains("compact final checkpoint is not append-only")
+        ));
 
         let mut immutable_rewrite = journal.clone();
         let first_terminal = match immutable_rewrite.release_submission_attempts[0]
@@ -5926,6 +7490,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the test exercises each forbidden direct release-attempt transition in one coherent state history"
+    )]
     fn release_attempt_transition_persists_live_intent_before_any_outcome() {
         let state = tempdir().expect("state root");
         let store = PublicationJournalStore::open(state.path()).expect("journal store");
@@ -6069,6 +7637,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the test keeps applied binding and rejected-successor invariants in one exact release history"
+    )]
     fn release_attempt_applied_binding_and_rejected_successor_are_exact() {
         let (request, broker) = request();
         let operation_id = request.operation_id();
@@ -6289,22 +7861,17 @@ mod tests {
         let previous = store.create(request).expect("create journal");
         let barrier = Arc::new(Barrier::new(2));
         let root = state.path().to_path_buf();
-        let workers = (0..2)
-            .map(|_| {
-                let barrier = Arc::clone(&barrier);
-                let root = root.clone();
-                let previous = previous.clone();
-                std::thread::spawn(move || {
-                    let store = PublicationJournalStore::open(&root).expect("worker journal store");
-                    barrier.wait();
-                    store.transition(&previous, previous.clone())
-                })
+        let workers = [(), ()].map(|()| {
+            let barrier = Arc::clone(&barrier);
+            let root = root.clone();
+            let previous = previous.clone();
+            std::thread::spawn(move || {
+                let store = PublicationJournalStore::open(&root).expect("worker journal store");
+                barrier.wait();
+                store.transition(&previous, previous.clone())
             })
-            .collect::<Vec<_>>();
-        let results = workers
-            .into_iter()
-            .map(|worker| worker.join().expect("transition worker"))
-            .collect::<Vec<_>>();
+        });
+        let results = workers.map(|worker| worker.join().expect("transition worker"));
         assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
         assert_eq!(
             results
@@ -6323,13 +7890,23 @@ mod tests {
         broker: KeyPair,
         fail_validation_once: bool,
         substitute_receipt: bool,
+        now_ms: u64,
+        receipt_window: Option<(u64, u64)>,
+        prepare_calls: usize,
     }
 
+    #[allow(
+        clippy::struct_excessive_bools,
+        reason = "independent fault-injection switches make each publication phase explicit in tests"
+    )]
     struct CompleteBackend {
         broker: KeyPair,
         replication_pending_once: bool,
         finality_pending_once: bool,
         substitute_readback: bool,
+        substitute_all_readbacks: bool,
+        readback_backend_failure: Option<(ProviderId, PublicationBackendError)>,
+        readback_providers: Vec<ProviderId>,
         submissions: usize,
     }
 
@@ -6346,6 +7923,10 @@ mod tests {
         registration_mode: ArchiveRecoveryMode,
     }
 
+    #[allow(
+        clippy::struct_excessive_bools,
+        reason = "independent crash and rejection switches model distinct recovery cuts in tests"
+    )]
     struct LocationRecoveryBackend {
         broker: KeyPair,
         replication_script: VecDeque<LocationPollV1>,
@@ -6383,9 +7964,26 @@ mod tests {
         }
     }
 
+    fn validate_seed_stage_fixture(
+        expected: &MusubiSeedIngressReceiptBindingV1,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &MusubiSeedIngressCarPlanV1,
+    ) -> Result<(), PublicationBackendError> {
+        if expected.archive_id != commitment.archive_id()
+            || expected.car_body_digest != commitment.car_digest
+            || expected.car_body_length != commitment.car_size
+        {
+            return Err(PublicationBackendError::permanent(
+                "TEST_SEED_COMMITMENT_INVALID",
+            ));
+        }
+        plan.validate(commitment)
+            .map_err(|_| PublicationBackendError::permanent("TEST_SEED_PLAN_INVALID"))
+    }
+
     impl PublicationBackend for EarlyBackend {
         fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError> {
-            Ok(1_500)
+            Ok(self.now_ms)
         }
 
         fn validate_clean_package(
@@ -6413,9 +8011,17 @@ mod tests {
             &mut self,
             _operation_id: PublicationOperationIdV1,
             expected: &MusubiSeedIngressReceiptBindingV1,
+            commitment: &MusubiArchiveCommitmentV1,
+            plan: &MusubiSeedIngressCarPlanV1,
             _car: &mut dyn Read,
         ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
-            let mut receipt = signed_receipt(expected, &self.broker);
+            validate_seed_stage_fixture(expected, commitment, plan)?;
+            let mut receipt = self.receipt_window.map_or_else(
+                || signed_receipt(expected, &self.broker),
+                |(issued_at_ms, expires_at_ms)| {
+                    signed_receipt_at(expected, &self.broker, issued_at_ms, expires_at_ms)
+                },
+            );
             if self.substitute_receipt {
                 receipt.payload.binding.archive_id = ArchiveId::new([0xEE; 32]);
             }
@@ -6424,11 +8030,12 @@ mod tests {
 
         fn prepare_archive_registration_intent(
             &mut self,
-            _operation_id: PublicationOperationIdV1,
-            _request: &PublicationRequestV1,
-            _receipt: &MusubiSeedIngressReceiptV1,
+            operation_id: PublicationOperationIdV1,
+            request: &PublicationRequestV1,
+            receipt: &MusubiSeedIngressReceiptV1,
         ) -> Result<PublicationArchiveRegistrationIntentV1, PublicationBackendError> {
-            Err(Self::unsupported())
+            self.prepare_calls += 1;
+            Ok(registration_intent(operation_id, request, receipt.clone()))
         }
 
         fn submit_or_recover_archive_registration(
@@ -6528,8 +8135,11 @@ mod tests {
             &mut self,
             _operation_id: PublicationOperationIdV1,
             expected: &MusubiSeedIngressReceiptBindingV1,
+            commitment: &MusubiArchiveCommitmentV1,
+            plan: &MusubiSeedIngressCarPlanV1,
             _car: &mut dyn Read,
         ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
+            validate_seed_stage_fixture(expected, commitment, plan)?;
             Ok(signed_receipt(expected, &self.broker))
         }
 
@@ -6602,6 +8212,12 @@ mod tests {
             location: &MusubiArchiveLocationV1,
             provider: ProviderId,
         ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError> {
+            self.readback_providers.push(provider);
+            if let Some((failed_provider, error)) = &self.readback_backend_failure
+                && *failed_provider == provider
+            {
+                return Err(error.clone());
+            }
             let mut evidence = PublicationReadbackEvidenceV1 {
                 provider,
                 location_id: location.location_id,
@@ -6610,7 +8226,9 @@ mod tests {
                 semantic_release_digest: request.publication.manifest.semantic_digest(),
                 verification_lock_digest: request.publication.manifest.verification_lock_digest,
             };
-            if self.substitute_readback && provider == location.providers[0] {
+            if self.substitute_all_readbacks
+                || (self.substitute_readback && provider == location.providers[0])
+            {
                 evidence.commitment.car_digest = MusubiContentDigestV1::new([0xEE; 32]);
             }
             Ok(evidence)
@@ -6692,8 +8310,11 @@ mod tests {
             &mut self,
             _operation_id: PublicationOperationIdV1,
             expected: &MusubiSeedIngressReceiptBindingV1,
+            commitment: &MusubiArchiveCommitmentV1,
+            plan: &MusubiSeedIngressCarPlanV1,
             _car: &mut dyn Read,
         ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
+            validate_seed_stage_fixture(expected, commitment, plan)?;
             let receipt = signed_receipt_at(expected, &self.broker, self.now_ms, self.now_ms + 100);
             self.staged_receipts.push(receipt.clone());
             Ok(receipt)
@@ -6755,15 +8376,15 @@ mod tests {
             &mut self,
             operation_id: PublicationOperationIdV1,
             request: &PublicationRequestV1,
-            _registered: &PublicationRegisteredArchiveV1,
+            registered: &PublicationRegisteredArchiveV1,
             generation: u8,
             _prior_location_ids: &[MusubiArchiveLocationIdV1],
         ) -> Result<PublicationArchiveLocationIntentV1, PublicationBackendError> {
             self.pin_calls += 1;
-            let mut result = registration(request, &self.broker).intent;
-            result.operation_id = operation_id;
-            result.generation = generation;
-            Ok(result)
+            Ok(
+                location_registration_generation(operation_id, request, registered, generation)
+                    .intent,
+            )
         }
 
         fn submit_or_recover_archive_location(
@@ -6774,9 +8395,9 @@ mod tests {
             intent: &PublicationArchiveLocationIntentV1,
             _prior_location_ids: &[MusubiArchiveLocationIdV1],
         ) -> Result<PublicationArchiveLocationAdvanceV1, PublicationBackendError> {
-            let mut result = registration(request, &self.broker);
-            result.intent = intent.clone();
-            Ok(PublicationArchiveLocationAdvanceV1::Registered(result))
+            Ok(PublicationArchiveLocationAdvanceV1::Registered(
+                finalized_location_registration(request, intent),
+            ))
         }
 
         fn finalized_replication(
@@ -6867,8 +8488,11 @@ mod tests {
             &mut self,
             _operation_id: PublicationOperationIdV1,
             expected: &MusubiSeedIngressReceiptBindingV1,
+            commitment: &MusubiArchiveCommitmentV1,
+            plan: &MusubiSeedIngressCarPlanV1,
             _car: &mut dyn Read,
         ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
+            validate_seed_stage_fixture(expected, commitment, plan)?;
             Ok(signed_receipt(expected, &self.broker))
         }
 
@@ -7046,6 +8670,7 @@ mod tests {
                     .snapshot
                     .index_revision;
                 absence.resolver_page.snapshot.index_revision = preparation_revision;
+                absence.retention_query.expected_snapshot = Some(absence.resolver_page.snapshot);
                 absence.retention_page.snapshot.index_revision = preparation_revision;
                 absence.retention_page.items[0]
                     .storage
@@ -7093,6 +8718,44 @@ mod tests {
         (AccountId::new(keypair.public_key().clone()), keypair)
     }
 
+    fn maximum_legal_musubi_account() -> AccountId {
+        let members = (0_u16..256)
+            .map(|index| {
+                let mut seed = [0xC4; 32];
+                seed[..2].copy_from_slice(&index.to_le_bytes());
+                let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+                    .expect("near-limit account keypair");
+                MultisigMember::new(keypair.public_key().clone(), 1)
+                    .expect("near-limit account member")
+            })
+            .collect::<Vec<_>>();
+
+        for count in (1..=members.len()).rev() {
+            let policy = MultisigPolicy::new(1, members[..count].to_vec())
+                .expect("near-limit account policy");
+            let account = AccountId::new_multisig(policy);
+            let size = norito::to_bytes(&account)
+                .expect("near-limit account canonical bytes")
+                .len();
+            if size <= MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 {
+                assert!(count < members.len(), "fixture must cross the Musubi bound");
+                let larger = AccountId::new_multisig(
+                    MultisigPolicy::new(1, members[..=count].to_vec())
+                        .expect("one-member-larger account policy"),
+                );
+                assert!(
+                    norito::to_bytes(&larger)
+                        .expect("one-member-larger account canonical bytes")
+                        .len()
+                        > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1,
+                    "selected account must be the largest legal member prefix"
+                );
+                return account;
+            }
+        }
+        panic!("at least one multisig member must fit the Musubi account bound");
+    }
+
     fn snapshot() -> MusubiRegistrySnapshotV1 {
         MusubiRegistrySnapshotV1 {
             finalized_height: 42,
@@ -7101,27 +8764,133 @@ mod tests {
         }
     }
 
-    fn archive_commitment() -> MusubiArchiveCommitmentV1 {
-        MusubiArchiveCommitmentV1 {
-            root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("root CID"),
-            chunker: ChunkerProfileHandle {
-                profile_id: 1,
-                namespace: "sorafs".to_owned(),
-                name: "sf1".to_owned(),
-                semver: "1.0.0".to_owned(),
-                multihash_code: 0x1f,
+    const PUBLICATION_FIXTURE_PLAN_PAYLOAD: &[u8] = b"canonical publication source payload";
+    const PUBLICATION_FIXTURE_CAR_BODY: &[u8] = b"canonical publication CAR body";
+
+    fn publication_fixture_car_plan() -> CarBuildPlan {
+        publication_fixture_car_plan_with_source(PUBLICATION_FIXTURE_PLAN_PAYLOAD)
+    }
+
+    fn publication_fixture_car_plan_with_source(source: &[u8]) -> CarBuildPlan {
+        publication_fixture_car_plan_and_payload_with_source(source).0
+    }
+
+    fn publication_fixture_car_plan_and_payload_with_source(
+        source: &[u8],
+    ) -> (CarBuildPlan, Vec<u8>) {
+        let entries = [
+            sorafs_car::FileEntry {
+                path: vec!["src".to_owned(), "lib.ko".to_owned()],
+                data: source.to_vec(),
             },
-            chunk_plan_digest: MusubiContentDigestV1::new([2; 32]),
-            por_root: MusubiContentDigestV1::new([3; 32]),
-            content_length: 1_024,
-            car_digest: MusubiContentDigestV1::new([4; 32]),
-            car_size: 2_048,
+            sorafs_car::FileEntry {
+                path: vec![".musubi".to_owned(), "semantic-release.norito".to_owned()],
+                data: b"semantic release".to_vec(),
+            },
+            sorafs_car::FileEntry {
+                path: vec![
+                    ".musubi".to_owned(),
+                    "artifact-descriptor.norito".to_owned(),
+                ],
+                data: b"artifact descriptor".to_vec(),
+            },
+            sorafs_car::FileEntry {
+                path: vec![".musubi".to_owned(), "verification-lock.norito".to_owned()],
+                data: b"verification lock".to_vec(),
+            },
+        ];
+        CarBuildPlan::from_files(entries.into_iter().collect()).expect("fixture CAR plan")
+    }
+
+    fn publication_fixture_canonical_car() -> (CarBuildPlan, Vec<u8>, MusubiArchiveCommitmentV1) {
+        let (plan, payload) =
+            publication_fixture_car_plan_and_payload_with_source(PUBLICATION_FIXTURE_PLAN_PAYLOAD);
+        let mut car = Vec::new();
+        let stats = sorafs_car::CarWriter::new(&plan, &payload)
+            .expect("fixture CAR writer")
+            .write_to(&mut car)
+            .expect("canonical fixture CAR");
+        let descriptor = sorafs_car::chunker_registry::default_descriptor();
+        assert_eq!(descriptor.profile, plan.chunk_profile);
+        let commitment = MusubiArchiveCommitmentV1 {
+            root_cid: ManifestRootCid::try_from(
+                stats.root_cids.first().expect("fixture CAR root").clone(),
+            )
+            .expect("canonical fixture root CID"),
+            chunker: ChunkerProfileHandle {
+                profile_id: descriptor.id.0,
+                namespace: descriptor.namespace.to_owned(),
+                name: descriptor.name.to_owned(),
+                semver: descriptor.semver.to_owned(),
+                multihash_code: descriptor.multihash_code,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new(
+                sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks),
+            ),
+            por_root: MusubiContentDigestV1::new(
+                sorafs_car::compute_por_root(&payload, &plan).expect("fixture PoR root"),
+            ),
+            content_length: plan.content_length,
+            car_digest: MusubiContentDigestV1::new(*stats.car_archive_digest.as_bytes()),
+            car_size: stats.car_size,
             bundle_digest: MusubiContentDigestV1::new([5; 32]),
             source_tree_digest: MusubiContentDigestV1::new([6; 32]),
             descriptor_digest: MusubiContentDigestV1::new([7; 32]),
-            file_count: 2,
-            chunk_count: 4,
+            file_count: u32::try_from(
+                plan.files
+                    .len()
+                    .checked_sub(3)
+                    .expect("fixture contains the mandatory bundle entries"),
+            )
+            .expect("fixture source file count fits u32"),
+            chunk_count: u32::try_from(plan.chunks.len()).expect("fixture chunk count fits u32"),
+        };
+        commitment.validate().expect("fixture archive commitment");
+        (plan, car, commitment)
+    }
+
+    fn publication_fixture_commitment_for_car(car: &[u8]) -> MusubiArchiveCommitmentV1 {
+        publication_fixture_commitment_for_plan(car, &publication_fixture_car_plan())
+    }
+
+    fn publication_fixture_commitment_for_plan(
+        car: &[u8],
+        plan: &CarBuildPlan,
+    ) -> MusubiArchiveCommitmentV1 {
+        let descriptor = sorafs_car::chunker_registry::default_descriptor();
+        assert_eq!(descriptor.profile, plan.chunk_profile);
+        MusubiArchiveCommitmentV1 {
+            root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("root CID"),
+            chunker: ChunkerProfileHandle {
+                profile_id: descriptor.id.0,
+                namespace: descriptor.namespace.to_owned(),
+                name: descriptor.name.to_owned(),
+                semver: descriptor.semver.to_owned(),
+                multihash_code: descriptor.multihash_code,
+            },
+            chunk_plan_digest: MusubiContentDigestV1::new(
+                sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks),
+            ),
+            por_root: MusubiContentDigestV1::new([3; 32]),
+            content_length: plan.content_length,
+            car_digest: MusubiContentDigestV1::new(*blake3::hash(car).as_bytes()),
+            car_size: u64::try_from(car.len()).expect("fixture CAR length fits u64"),
+            bundle_digest: MusubiContentDigestV1::new([5; 32]),
+            source_tree_digest: MusubiContentDigestV1::new([6; 32]),
+            descriptor_digest: MusubiContentDigestV1::new([7; 32]),
+            file_count: u32::try_from(
+                plan.files
+                    .len()
+                    .checked_sub(3)
+                    .expect("fixture contains the mandatory bundle entries"),
+            )
+            .expect("fixture source file count fits u32"),
+            chunk_count: u32::try_from(plan.chunks.len()).expect("fixture chunk count fits u32"),
         }
+    }
+
+    fn archive_commitment() -> MusubiArchiveCommitmentV1 {
+        publication_fixture_commitment_for_car(PUBLICATION_FIXTURE_CAR_BODY)
     }
 
     fn request() -> (PublicationRequestV1, KeyPair) {
@@ -7178,6 +8947,16 @@ mod tests {
             },
             broker_keypair,
         )
+    }
+
+    fn request_with_archive_commitment(
+        commitment: MusubiArchiveCommitmentV1,
+    ) -> (PublicationRequestV1, KeyPair) {
+        let (mut request, broker) = request();
+        request.publication.manifest.archive_id = commitment.archive_id();
+        request.archive_commitment = commitment;
+        request.validate().expect("canonical CAR request");
+        (request, broker)
     }
 
     fn signed_release_transaction(request: &PublicationRequestV1, nonce: u32) -> SignedTransaction {
@@ -7278,15 +9057,14 @@ mod tests {
                 verification_lock_digest: request.publication.manifest.verification_lock_digest,
             })
             .collect::<Vec<_>>();
-        let floor = PublicationReleasePreparationFloorV1::try_new(
+        PublicationReleasePreparationFloorV1::try_new(
             registration.intent.generation,
             replication,
             readbacks,
             request,
             registration,
         )
-        .expect("release preparation floor");
-        floor
+        .expect("release preparation floor")
     }
 
     fn release_ready_journal(
@@ -8064,10 +9842,15 @@ mod tests {
         let store = PublicationJournalStore::open(temp.path()).expect("journal store");
         let engine = PublicationEngine::new(&store);
         let (request, broker) = request();
+        let source = BytesSource(b"runtime-only-car-secret".to_vec());
+        let plan_bytes = source
+            .car_plan(&request.archive_commitment)
+            .expect("fixture wire plan")
+            .canonical_bytes()
+            .expect("canonical fixture plan");
         let operation_id = engine
             .begin_detached(request)
             .expect("persist detached operation");
-        let source = BytesSource(b"runtime-only-car-secret".to_vec());
         let journal_bytes = fs::read(
             temp.path()
                 .join(JOURNAL_DIRECTORY)
@@ -8079,11 +9862,19 @@ mod tests {
                 .windows(b"runtime-only-car-secret".len())
                 .any(|window| window == b"runtime-only-car-secret")
         );
+        assert!(
+            !journal_bytes
+                .windows(plan_bytes.len())
+                .any(|window| window == plan_bytes.as_slice())
+        );
 
         let mut backend = EarlyBackend {
             broker,
             fail_validation_once: true,
             substitute_receipt: true,
+            now_ms: 1_500,
+            receipt_window: None,
+            prepare_calls: 0,
         };
         let error = engine
             .advance_once(operation_id, &source, &mut backend)
@@ -8118,6 +9909,117 @@ mod tests {
         assert_eq!(unchanged.phase, PublicationPhaseV1::SeedIngress);
         assert_eq!(unchanged.revision, 2);
         assert!(unchanged.staging_receipt.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn future_issued_receipt_waits_within_service_skew_before_registration() {
+        let within = tempdir().expect("within-skew state root");
+        let within_store =
+            PublicationJournalStore::open(within.path()).expect("within-skew journal store");
+        let within_engine = PublicationEngine::new(&within_store);
+        let (within_request, within_broker) = request();
+        let within_operation = within_engine
+            .begin_detached(within_request)
+            .expect("persist within-skew operation");
+        let source = BytesSource(b"canonical-car".to_vec());
+        let now_ms = 1_000;
+        let issued_at_ms = now_ms + MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1;
+        let mut within_backend = EarlyBackend {
+            broker: within_broker,
+            fail_validation_once: false,
+            substitute_receipt: false,
+            now_ms,
+            receipt_window: Some((issued_at_ms, issued_at_ms + 100)),
+            prepare_calls: 0,
+        };
+
+        assert_eq!(
+            within_engine
+                .advance_once(within_operation, &source, &mut within_backend)
+                .expect("validate within-skew operation"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::SeedIngress)
+        );
+        assert_eq!(
+            within_engine
+                .advance_once(within_operation, &source, &mut within_backend)
+                .expect("accept bounded future-issued receipt"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::ArchiveRegistration)
+        );
+        let waiting = within_store
+            .load(within_operation)
+            .expect("future-issued receipt journal");
+        assert_eq!(
+            within_engine
+                .advance_once(within_operation, &source, &mut within_backend)
+                .expect("wait for receipt issue time"),
+            PublicationAdvanceV1::Pending(PublicationPhaseV1::ArchiveRegistration)
+        );
+        assert_eq!(
+            within_store
+                .load(within_operation)
+                .expect("unchanged waiting journal"),
+            waiting
+        );
+        assert_eq!(within_backend.prepare_calls, 0);
+
+        within_backend.now_ms = issued_at_ms;
+        assert_eq!(
+            within_engine
+                .advance_once(within_operation, &source, &mut within_backend)
+                .expect("prepare at the inclusive issue time"),
+            PublicationAdvanceV1::Progressed(PublicationPhaseV1::ArchiveRegistration)
+        );
+        assert_eq!(within_backend.prepare_calls, 1);
+        assert_eq!(
+            within_store
+                .load(within_operation)
+                .expect("prepared registration journal")
+                .archive_registration_attempts
+                .len(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn future_issued_receipt_beyond_service_skew_is_rejected_before_persistence() {
+        let beyond = tempdir().expect("beyond-skew state root");
+        let beyond_store =
+            PublicationJournalStore::open(beyond.path()).expect("beyond-skew journal store");
+        let beyond_engine = PublicationEngine::new(&beyond_store);
+        let (beyond_request, beyond_broker) = request();
+        let beyond_operation = beyond_engine
+            .begin_detached(beyond_request)
+            .expect("persist beyond-skew operation");
+        let source = BytesSource(b"canonical-car".to_vec());
+        let now_ms = 1_000;
+        let beyond_issue = now_ms + MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1 + 1;
+        let mut beyond_backend = EarlyBackend {
+            broker: beyond_broker,
+            fail_validation_once: false,
+            substitute_receipt: false,
+            now_ms,
+            receipt_window: Some((beyond_issue, beyond_issue + 100)),
+            prepare_calls: 0,
+        };
+        beyond_engine
+            .advance_once(beyond_operation, &source, &mut beyond_backend)
+            .expect("validate beyond-skew operation");
+        assert!(matches!(
+            beyond_engine.advance_once(beyond_operation, &source, &mut beyond_backend),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::SeedIngress,
+                ..
+            })
+        ));
+        let rejected = beyond_store
+            .load(beyond_operation)
+            .expect("unchanged beyond-skew journal");
+        assert_eq!(rejected.phase, PublicationPhaseV1::SeedIngress);
+        assert!(rejected.staging_receipt.is_none());
+        assert!(rejected.archive_registration_attempts.is_empty());
+        assert_eq!(beyond_backend.prepare_calls, 0);
     }
 
     #[cfg(unix)]
@@ -8177,8 +10079,6 @@ mod tests {
         assert_eq!(backend.prepare_calls, 1);
         assert_eq!(backend.registration_calls, 0);
 
-        drop(engine);
-        drop(store);
         let reopened = PublicationJournalStore::open(temp.path()).expect("reopen journal store");
         let resumed = PublicationEngine::new(&reopened);
         let error = resumed
@@ -8223,8 +10123,6 @@ mod tests {
         assert_eq!(backend.registration_calls, 2);
         assert_eq!(backend.pin_calls, 0);
 
-        drop(resumed);
-        drop(reopened);
         let pin_store = PublicationJournalStore::open(temp.path()).expect("reopen before pin");
         let pin_resume = PublicationEngine::new(&pin_store);
         assert_eq!(
@@ -8272,8 +10170,6 @@ mod tests {
         assert!(prepared.archive_location_attempts[0].terminal.is_none());
         let first_intent = prepared.archive_location_attempts[0].intent.clone();
 
-        drop(engine);
-        drop(store);
         let submitted_store =
             PublicationJournalStore::open(temp.path()).expect("reopen after preparation");
         let submitted_engine = PublicationEngine::new(&submitted_store);
@@ -8293,8 +10189,6 @@ mod tests {
         );
         assert_eq!(backend.applied_generations, vec![1]);
 
-        drop(submitted_engine);
-        drop(submitted_store);
         let applied_store =
             PublicationJournalStore::open(temp.path()).expect("reopen after applied cut");
         let applied_engine = PublicationEngine::new(&applied_store);
@@ -8334,8 +10228,6 @@ mod tests {
         assert!(retired.replication.is_none());
         assert!(retired.readbacks.is_empty());
 
-        drop(applied_engine);
-        drop(applied_store);
         let replacement_store =
             PublicationJournalStore::open(temp.path()).expect("reopen after retirement");
         let replacement_engine = PublicationEngine::new(&replacement_store);
@@ -8677,9 +10569,6 @@ mod tests {
         assert_eq!(store.load(operation_id).expect("unchanged journal"), before);
         assert_eq!(backend.release_preparations, 1);
         assert_eq!(backend.release_submissions, 1);
-        drop(engine);
-        drop(store);
-
         let reopened_store =
             PublicationJournalStore::open(temp.path()).expect("reopen publication journal");
         let reopened_engine = PublicationEngine::new(&reopened_store);
@@ -9067,8 +10956,6 @@ mod tests {
         let first_attempt = before_crash.archive_registration_attempts[0].clone();
         assert_eq!(backend.registration_calls, 0);
 
-        drop(engine);
-        drop(store);
         backend.now_ms = first_attempt.intent.staging_receipt.payload.expires_at_ms + 1;
         let reopened = PublicationJournalStore::open(temp.path()).expect("reopen journal store");
         let resumed = PublicationEngine::new(&reopened);
@@ -9341,6 +11228,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the test covers substitution at each terminal-to-replacement snapshot boundary"
+    )]
     fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution() {
         let (request, broker) = request();
         let operation_id = request.operation_id();
@@ -9605,6 +11496,9 @@ mod tests {
             replication_pending_once: true,
             finality_pending_once: true,
             substitute_readback: false,
+            substitute_all_readbacks: false,
+            readback_backend_failure: None,
+            readback_providers: Vec::new(),
             submissions: 0,
         };
 
@@ -9648,7 +11542,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn trait_backed_readback_substitution_stops_before_amx() {
+    fn trait_backed_readback_skips_corrupt_provider_and_uses_later_quorum() {
         let temp = tempdir().expect("state root");
         let store = PublicationJournalStore::open(temp.path()).expect("journal store");
         let engine = PublicationEngine::new(&store);
@@ -9660,19 +11554,165 @@ mod tests {
             replication_pending_once: false,
             finality_pending_once: false,
             substitute_readback: true,
+            substitute_all_readbacks: false,
+            readback_backend_failure: None,
+            readback_providers: Vec::new(),
             submissions: 0,
         };
         assert!(matches!(
-            engine.publish(request, &source, &mut backend),
-            Err(PublicationError::InvalidEvidence {
+            engine
+                .publish(request, &source, &mut backend)
+                .expect("later providers satisfy the readback floor"),
+            PublicationAdvanceV1::Complete(_)
+        ));
+        assert_eq!(backend.submissions, 1);
+        assert_eq!(
+            backend.readback_providers,
+            vec![
+                ProviderId::new([1; 32]),
+                ProviderId::new([2; 32]),
+                ProviderId::new([3; 32]),
+            ]
+        );
+        let journal = store.load(operation_id).expect("completed journal");
+        assert_eq!(
+            journal
+                .readbacks
+                .iter()
+                .map(|readback| readback.provider)
+                .collect::<Vec<_>>(),
+            vec![ProviderId::new([2; 32]), ProviderId::new([3; 32])]
+        );
+        journal.validate().expect("fallback journal remains valid");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutation() {
+        let temp = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, broker) = request();
+        let operation_id = request.operation_id();
+        let source = BytesSource(b"canonical-car".to_vec());
+        let mut backend = CompleteBackend {
+            broker,
+            replication_pending_once: false,
+            finality_pending_once: false,
+            substitute_readback: false,
+            substitute_all_readbacks: true,
+            readback_backend_failure: None,
+            readback_providers: Vec::new(),
+            submissions: 0,
+        };
+
+        let error = engine
+            .publish(request, &source, &mut backend)
+            .expect_err("invalid providers cannot authorize AMX submission");
+        let PublicationError::InvalidEvidence { phase, reason } = error else {
+            panic!("substituted provider evidence must retain its integrity classification");
+        };
+        assert_eq!(phase, PublicationPhaseV1::Readback);
+        assert_eq!(reason, "provider readback evidence was substituted");
+        assert_eq!(backend.submissions, 0);
+        assert_eq!(
+            backend.readback_providers,
+            vec![
+                ProviderId::new([1; 32]),
+                ProviderId::new([2; 32]),
+                ProviderId::new([3; 32]),
+            ]
+        );
+        let unchanged = store.load(operation_id).expect("readback journal");
+        assert_eq!(unchanged.phase, PublicationPhaseV1::Readback);
+        assert!(unchanged.readbacks.is_empty());
+        assert!(unchanged.release_submission_attempts.is_empty());
+        assert!(unchanged.submission.is_none());
+        unchanged
+            .validate()
+            .expect("failed readbacks leave a valid journal");
+
+        let error = engine
+            .resume(operation_id, &source, &mut backend)
+            .expect_err("retry still lacks two valid providers");
+        assert!(matches!(
+            error,
+            PublicationError::InvalidEvidence {
                 phase: PublicationPhaseV1::Readback,
                 ..
-            })
+            }
         ));
+        assert_eq!(
+            store.load(operation_id).expect("retried readback journal"),
+            unchanged
+        );
         assert_eq!(backend.submissions, 0);
-        let journal = store.load(operation_id).expect("readback journal");
-        assert_eq!(journal.phase, PublicationPhaseV1::Readback);
-        assert!(journal.readbacks.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trait_backed_readback_exhaustion_preserves_backend_failure_class_and_code() {
+        for (class, code) in [
+            (
+                PublicationBackendFailureClass::Permanent,
+                "READBACK_AUTHENTICATION_FAILED",
+            ),
+            (
+                PublicationBackendFailureClass::Retryable,
+                "READBACK_PROVIDER_TIMEOUT",
+            ),
+        ] {
+            let temp = tempdir().expect("state root");
+            let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+            let engine = PublicationEngine::new(&store);
+            let (request, broker) = request();
+            let operation_id = request.operation_id();
+            let source = BytesSource(b"canonical-car".to_vec());
+            let failure = match class {
+                PublicationBackendFailureClass::Retryable => {
+                    PublicationBackendError::retryable(code)
+                }
+                PublicationBackendFailureClass::Permanent => {
+                    PublicationBackendError::permanent(code)
+                }
+            };
+            let mut backend = CompleteBackend {
+                broker,
+                replication_pending_once: false,
+                finality_pending_once: false,
+                substitute_readback: false,
+                substitute_all_readbacks: true,
+                readback_backend_failure: Some((ProviderId::new([1; 32]), failure)),
+                readback_providers: Vec::new(),
+                submissions: 0,
+            };
+
+            let error = engine
+                .publish(request, &source, &mut backend)
+                .expect_err("one backend failure plus invalid evidence cannot authorize AMX");
+            let PublicationError::Backend(error) = error else {
+                panic!("backend failure must retain its redacted classification");
+            };
+            assert_eq!(error.class(), class);
+            assert_eq!(error.code(), code);
+            assert_eq!(backend.submissions, 0);
+            assert_eq!(
+                backend.readback_providers,
+                vec![
+                    ProviderId::new([1; 32]),
+                    ProviderId::new([2; 32]),
+                    ProviderId::new([3; 32]),
+                ]
+            );
+            let unchanged = store.load(operation_id).expect("readback journal");
+            assert_eq!(unchanged.phase, PublicationPhaseV1::Readback);
+            assert!(unchanged.readbacks.is_empty());
+            assert!(unchanged.release_submission_attempts.is_empty());
+            assert!(unchanged.submission.is_none());
+            unchanged
+                .validate()
+                .expect("failed readbacks leave a valid journal");
+        }
     }
 
     #[cfg(unix)]
@@ -9698,6 +11738,9 @@ mod tests {
             broker,
             fail_validation_once: false,
             substitute_receipt: false,
+            now_ms: 1_500,
+            receipt_window: None,
+            prepare_calls: 0,
         };
         assert!(matches!(
             engine
@@ -9845,10 +11888,8 @@ mod tests {
         journal.phase = PublicationPhaseV1::Replication;
         assert!(matches!(
             journal.validate(),
-            Err(PublicationError::InvalidEvidence {
-                phase: PublicationPhaseV1::ArchiveRegistration,
-                ..
-            })
+            Err(PublicationError::InvalidJournal(ref reason))
+                if reason.contains("exact staging receipt")
         ));
     }
 
@@ -9959,6 +12000,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the test checks the complete revision and snapshot substitution matrix for location checkpoints"
+    )]
     fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
         let (request, broker) = request();
         let registration = registration(&request, &broker);
@@ -10136,6 +12181,65 @@ mod tests {
     }
 
     #[test]
+    fn release_preparation_requires_a_sorted_distinct_location_provider_subset() {
+        let (request, broker) = request();
+        let registration = registration(&request, &broker);
+        let replication = replication_checkpoint(&request, &registration, 3);
+        let location = replication
+            .location(&registration)
+            .expect("fixture location");
+        let readback_for = |provider| PublicationReadbackEvidenceV1 {
+            provider,
+            location_id: location.location_id,
+            replication_order: location.replication_order,
+            commitment: request.archive_commitment.clone(),
+            semantic_release_digest: request.publication.manifest.semantic_digest(),
+            verification_lock_digest: request.publication.manifest.verification_lock_digest,
+        };
+        let later_subset = vec![
+            readback_for(location.providers[1]),
+            readback_for(location.providers[2]),
+        ];
+        PublicationReleasePreparationFloorV1::try_new(
+            registration.intent.generation,
+            replication.clone(),
+            later_subset.clone(),
+            &request,
+            &registration,
+        )
+        .expect("any sorted two-provider location subset is valid");
+
+        let assert_rejected = |readbacks| {
+            assert!(matches!(
+                PublicationReleasePreparationFloorV1::try_new(
+                    registration.intent.generation,
+                    replication.clone(),
+                    readbacks,
+                    &request,
+                    &registration,
+                ),
+                Err(PublicationError::InvalidEvidence {
+                    phase: PublicationPhaseV1::Readback,
+                    ref reason,
+                }) if reason
+                    == "provider readbacks were not a strictly ordered distinct location-provider subset"
+            ));
+        };
+
+        let mut duplicate = later_subset.clone();
+        duplicate[1] = duplicate[0].clone();
+        assert_rejected(duplicate);
+
+        let mut unsorted = later_subset.clone();
+        unsorted.swap(0, 1);
+        assert_rejected(unsorted);
+
+        let mut nonmember = later_subset;
+        nonmember[1].provider = ProviderId::new([0xFE; 32]);
+        assert_rejected(nonmember);
+    }
+
+    #[test]
     fn amx_and_final_index_evidence_bind_the_exact_release() {
         let (request, _) = request();
         let operation_id = request.operation_id();
@@ -10253,15 +12357,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_request_rejects_an_empty_chain_identity() {
-        let (mut request, _) = request();
-        request.chain_id = ChainId::from("");
-        assert!(matches!(
-            request.validate(),
-            Err(PublicationError::InvalidEvidence {
-                phase: PublicationPhaseV1::Validation,
-                ..
-            })
-        ));
+    fn empty_chain_identity_is_rejected_before_publication_request_construction() {
+        assert!(ChainId::try_from(String::new()).is_err());
     }
 }

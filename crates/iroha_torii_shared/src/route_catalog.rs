@@ -2489,18 +2489,6 @@ pub mod sumeragi {
         public_get(id, path).with_feature_gate(FeatureGate::Feature("telemetry"))
     }
 
-    const fn operator_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        RouteDescriptor::new(
-            id,
-            HttpMethod::Post,
-            path,
-            ApiSurface::Operator,
-            Listener::Torii,
-        )
-        .with_authentication(AuthenticationPolicy::OperatorSignature)
-        .with_projections(RouteProjections::ALL)
-    }
-
     const fn telemetry_sse(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2622,16 +2610,6 @@ pub mod sumeragi {
         "/v1/sumeragi/commit-qcs/{block_hash}",
     );
 
-    /// Submit authenticated consensus evidence.
-    pub const EVIDENCE_SUBMIT: RouteDescriptor =
-        operator_post("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence");
-    /// Submit an authenticated VRF commitment.
-    pub const VRF_COMMIT: RouteDescriptor =
-        operator_post("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit");
-    /// Submit an authenticated VRF reveal.
-    pub const VRF_REVEAL: RouteDescriptor =
-        operator_post("operator.sumeragi.vrf.reveal", "/v1/sumeragi/vrf/reveal");
-
     /// Complete route family registered by `add_sumeragi_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         EVIDENCE_COUNT,
@@ -2662,9 +2640,6 @@ pub mod sumeragi {
         TELEMETRY,
         PARAMETERS,
         COMMIT_QC,
-        EVIDENCE_SUBMIT,
-        VRF_COMMIT,
-        VRF_REVEAL,
     ];
 }
 
@@ -4014,8 +3989,6 @@ pub mod application_api {
         ASSETS_DEFINITIONS_BY_ASSET_GET => app_get("application.assets_definitions_by_asset_get", "/v1/assets/definitions/{asset}");
         ASSETS_DEFINITIONS_QUERY_POST => app_post("application.assets_definitions_query_post", "/v1/assets/definitions/query");
         CONFIDENTIAL_ASSETS_BY_DEFINITION_ID_TRANSITIONS_GET => app_get("application.confidential_assets_by_definition_id_transitions_get", "/v1/confidential/assets/{definition_id}/transitions");
-        CONFIDENTIAL_NOTES_GET => app_sdk_get("application.confidential_notes_get", "/v1/confidential/notes");
-        CONFIDENTIAL_RELAY_SUBMIT_POST => app_sdk_post("application.confidential_relay_submit_post", "/v1/confidential/relay/submit");
         NFTS_GET => app_get("application.nfts_get", "/v1/nfts");
         NFTS_QUERY_POST => app_post("application.nfts_query_post", "/v1/nfts/query");
         RWAS_GET => app_get("application.rwas_get", "/v1/rwas");
@@ -4219,6 +4192,11 @@ pub mod contracts_and_verification_keys {
         MULTISIG_SPEC_POST => app_signed_post("contracts.multisig_spec_post", "/v1/multisig/spec");
         MULTISIG_PROPOSALS_QUERY_POST => app_signed_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
         MULTISIG_PROPOSALS_RESOLVE_POST => app_signed_post("contracts.multisig_proposals_resolve_post", "/v1/multisig/proposals/resolve");
+        ACCOUNT_RECOVERY_POLICY_SET_POST => app_post("contracts.account_recovery_policy_set_post", "/v1/accounts/recovery/policy/set");
+        ACCOUNT_RECOVERY_PROPOSE_POST => app_post("contracts.account_recovery_propose_post", "/v1/accounts/recovery/propose");
+        ACCOUNT_RECOVERY_APPROVE_POST => app_post("contracts.account_recovery_approve_post", "/v1/accounts/recovery/approve");
+        ACCOUNT_RECOVERY_FINALIZE_POST => app_post("contracts.account_recovery_finalize_post", "/v1/accounts/recovery/finalize");
+        ACCOUNT_RECOVERY_STATUS_POST => app_post("contracts.account_recovery_status_post", "/v1/accounts/recovery/status");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4559,6 +4537,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     musubi::SEARCH,
     musubi::NAMESPACE_BINDING_REGISTER,
     musubi::ARCHIVE_REGISTER,
+    musubi::PROVIDER_BUNDLE_ATTESTATION_REGISTER,
     musubi::ARCHIVE_LOCATION_ADD,
     musubi::ARCHIVE_LOCATION_RETIRE,
     musubi::RELEASE_PUBLISH,
@@ -4622,9 +4601,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::TELEMETRY,
     sumeragi::PARAMETERS,
     sumeragi::COMMIT_QC,
-    sumeragi::EVIDENCE_SUBMIT,
-    sumeragi::VRF_COMMIT,
-    sumeragi::VRF_REVEAL,
     runtime_governance::ZK_ROOTS,
     runtime_governance::ZK_MERKLE_PATH,
     runtime_governance::ZK_VOTE_TALLY,
@@ -4904,8 +4880,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     application_api::ASSETS_DEFINITIONS_BY_ASSET_GET,
     application_api::ASSETS_DEFINITIONS_QUERY_POST,
     application_api::CONFIDENTIAL_ASSETS_BY_DEFINITION_ID_TRANSITIONS_GET,
-    application_api::CONFIDENTIAL_NOTES_GET,
-    application_api::CONFIDENTIAL_RELAY_SUBMIT_POST,
     application_api::NFTS_GET,
     application_api::NFTS_QUERY_POST,
     application_api::RWAS_GET,
@@ -4990,6 +4964,11 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_POLICY_SET_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_PROPOSE_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_APPROVE_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_FINALIZE_POST,
+    contracts_and_verification_keys::ACCOUNT_RECOVERY_STATUS_POST,
     contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
     contracts_and_verification_keys::ZK_VK_REGISTER_POST,
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
@@ -5217,6 +5196,38 @@ mod tests {
     }
 
     #[test]
+    fn canonical_catalog_retires_direct_sumeragi_mutation_routes() {
+        assert_eq!(sumeragi::EVIDENCE_LIST.method(), HttpMethod::Get);
+        assert_eq!(sumeragi::EVIDENCE_LIST.path(), "/v1/sumeragi/evidence");
+
+        for (stable_route_id, path) in [
+            ("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence"),
+            ("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit"),
+            ("operator.sumeragi.vrf.reveal", "/v1/sumeragi/vrf/reveal"),
+        ] {
+            assert!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .all(|route| route.stable_route_id() != stable_route_id),
+                "retired Sumeragi route id remains cataloged: {stable_route_id}"
+            );
+            assert!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .all(|route| route.method() != HttpMethod::Post || route.path() != path),
+                "retired Sumeragi mutation route remains cataloged: POST {path}"
+            );
+        }
+
+        for path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+            assert!(
+                CATALOGED_ROUTES.iter().all(|route| route.path() != path),
+                "retired Sumeragi mutation path remains cataloged: {path}"
+            );
+        }
+    }
+
+    #[test]
     fn canonical_catalog_exposes_only_the_authoritative_privacy_routes() {
         let privacy_routes = CATALOGED_ROUTES
             .iter()
@@ -5272,6 +5283,38 @@ mod tests {
             assert_eq!(route.path_normalization(), PathNormalization::Strict);
             assert!(route.cors_options());
             assert!(!route.implicit_head());
+        }
+    }
+
+    #[test]
+    fn canonical_catalog_exposes_the_complete_regulated_account_recovery_family() {
+        let expected = [
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_POLICY_SET_POST,
+                "/v1/accounts/recovery/policy/set",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_PROPOSE_POST,
+                "/v1/accounts/recovery/propose",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_APPROVE_POST,
+                "/v1/accounts/recovery/approve",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_FINALIZE_POST,
+                "/v1/accounts/recovery/finalize",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_STATUS_POST,
+                "/v1/accounts/recovery/status",
+            ),
+        ];
+        for (route, path) in expected {
+            assert_eq!(route.method(), HttpMethod::Post);
+            assert_eq!(route.path(), path);
+            assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
+            assert!(CATALOGED_ROUTES.contains(&route));
         }
     }
 

@@ -333,14 +333,12 @@
         };
         let proposal_round = wire::ConsensusRound { view: 1, ..round };
         let proposal_subject = subject(0xD8);
-        let proposal_manifest = wire::PayloadManifest::derive(
-            &context,
-            proposal_round,
-            proposal_subject,
-            5,
-            &[b"chunk".to_vec()],
-        )
-        .expect("valid fixture manifest");
+        let proposal_payload = [0xD8, 2];
+        let proposal_manifest =
+            encode_payload(&context, proposal_round, proposal_subject, &proposal_payload)
+                .expect("encode fixture proposal payload")
+                .manifest()
+                .clone();
         let proposal = wire::Proposal {
             round: proposal_round,
             proposer: context.leader(proposal_round.view),
@@ -415,14 +413,16 @@
             view: 0,
         };
         let successor_subject = subject(0xD9);
-        let successor_manifest = wire::PayloadManifest::derive(
+        let successor_payload = [0xD9, 2];
+        let successor_manifest = encode_payload(
             &successor,
             successor_round,
             successor_subject,
-            5,
-            &[b"chunk".to_vec()],
+            &successor_payload,
         )
-        .expect("valid successor fixture manifest");
+        .expect("encode successor fixture payload")
+        .manifest()
+        .clone();
         let parent_proposal = wire::Proposal {
             round: successor_round,
             proposer: successor.leader(0),
@@ -1418,4 +1418,3 @@
             assert!(admission.is_none());
         }
     }
-

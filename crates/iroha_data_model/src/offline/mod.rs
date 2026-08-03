@@ -555,7 +555,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
 /// Canonical V4 release name for the unchanged typed finality roster payload.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-roster-v4.norito";
-/// Maximum canonical roster artifact size; one full 4,096-validator window is
+/// Maximum canonical roster artifact size; one full 31-validator window is
 /// pinned below this bound by an exact maximum wire-shape test.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Native-width mirror of [`KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2`].
@@ -12341,12 +12341,12 @@ mod kagemusha_v4_topup_provenance_tests {
                     nexus_amx_context_hash: Hash::new([seed, 11]),
                     execution_policy_hash: Hash::new([seed, 12]),
                     da_layout: DataAvailabilityLayout {
-                        encoding: crate::block::consensus_v2::PayloadEncoding::Plain,
+                        encoding: crate::block::consensus_v2::PayloadEncoding::ReedSolomon16,
                         chunk_size_bytes: 1024,
-                        data_shards: 0,
-                        parity_shards: 0,
+                        data_shards: 1,
+                        parity_shards: 1,
                         max_payload_size_bytes: 4096,
-                        max_chunk_count: 4,
+                        max_chunk_count: 8,
                     },
                     leader_seed: [seed.wrapping_add(12); 32],
                 },

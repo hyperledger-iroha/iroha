@@ -834,8 +834,8 @@ pub mod settlement {
         /// Exact consent from a debited counterparty for one bilateral settlement intent.
         ///
         /// Only the account named by `debited_asset` may delegate or revoke this
-        /// token. The intent hash commits to the complete domain-separated DvP,
-        /// PvP, or repo phase, so changing any economic term or the settlement
+        /// token. The intent hash commits to the complete domain-separated `DvP`,
+        /// `PvP`, or repo phase, so changing any economic term or the settlement
         /// identifier requires fresh consent. Repo initiation requires distinct
         /// cash-debit and maturity-collateral consents before any asset moves.
         pub struct CanExecuteSettlement {
@@ -956,7 +956,7 @@ pub mod governance {
     permission! {
         /// Allow submitting a governance ballot to a referendum/election
         pub struct CanSubmitGovernanceBallot {
-            /// Referendum or election identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum or election.
             pub referendum_id: String,
         }
     }
@@ -990,7 +990,7 @@ pub mod governance {
     permission! {
         /// Allow slashing governance bond locks for a referendum.
         pub struct CanSlashGovernanceLock {
-            /// Referendum identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum.
             pub referendum_id: String,
         }
     }
@@ -998,7 +998,7 @@ pub mod governance {
     permission! {
         /// Allow restituting governance bond locks after appeal.
         pub struct CanRestituteGovernanceLock {
-            /// Referendum identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum.
             pub referendum_id: String,
         }
     }
@@ -1450,7 +1450,7 @@ mod tests {
         );
         let malformed_global = iroha_data_model::permission::Permission::new(
             "CanReadAllLedgerData".into(),
-            norito::json!({"account": account.to_string()}),
+            norito::json!({"account": (account.to_string())}),
         );
         assert!(
             CanReadAllLedgerData::try_from(&malformed_global).is_err(),

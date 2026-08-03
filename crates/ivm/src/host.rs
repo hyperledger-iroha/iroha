@@ -144,8 +144,6 @@ pub const ERR_VK_INACTIVE: u64 = 13;
 pub const ERR_NAMESPACE: u64 = 14;
 pub const ERR_DOMAIN_TAG: u64 = 15;
 
-pub const LABEL_TRANSFER: &str = "zk_verify_transfer/v2";
-pub const LABEL_UNSHIELD: &str = "zk_verify_unshield/v2";
 pub const LABEL_VOTE_BALLOT: &str = "zk_verify_ballot/v2";
 pub const LABEL_VOTE_TALLY: &str = "zk_verify_tally/v2";
 pub const LABEL_BATCH: &str = "zk_verify_batch/v2";
@@ -1115,8 +1113,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
     if matches!(
         number,
         syscalls::SYSCALL_VERIFY_PROOF
-            | syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
             | syscalls::SYSCALL_ZK_VERIFY_BATCH
@@ -1135,11 +1131,8 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
     if matches!(
         number,
         syscalls::SYSCALL_SCHEMA_ENCODE
-            | syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
             | syscalls::SYSCALL_SCHEMA_DECODE
-            | syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
             | syscalls::SYSCALL_SCHEMA_INFO
-            | syscalls::SYSCALL_SCHEMA_INFO_DIRECT
     ) {
         return Some(HostSyscallGasFormula::SchemaByteLinear);
     }
@@ -1297,18 +1290,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_JSON_OBJECT
             | syscalls::SYSCALL_JSON_SET_I64
             | syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
-            | syscalls::SYSCALL_JSON_GET_JSON_DIRECT
-            | syscalls::SYSCALL_JSON_GET_NAME_DIRECT
-            | syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
-            | syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
-            | syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
-            | syscalls::SYSCALL_JSON_GET_INT_DIRECT
-            | syscalls::SYSCALL_JSON_GET_DECIMAL_DIRECT
-            | syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT
-            | syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
-            | syscalls::SYSCALL_JSON_SET_I64_DIRECT
-            | syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
-            | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
             | syscalls::SYSCALL_NAME_DECODE
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | syscalls::SYSCALL_STATE_PATH_FROM_NAME
@@ -1762,7 +1743,6 @@ pub(crate) const fn is_sm_syscall(number: u32) -> bool {
 /// `None` means the syscall's gas depends on host-owned state or on an output
 /// whose encoded size must be estimated by that host.
 pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u64>, VMError> {
-    let number = syscalls::canonical_helper_syscall(number);
     let blob_len = |register: usize| -> Result<usize, VMError> {
         quote_tlv_payload_len_at(
             vm,
@@ -3052,7 +3032,6 @@ impl IVMHost for DefaultHost {
         if metering.metering == SyscallMetering::Staged {
             return Ok(0);
         }
-        let number = crate::syscalls::canonical_helper_syscall(number);
         if is_sm_syscall(number) && !self.sm_enabled {
             // Disabled ShangMi helpers fail before doing metered work.
             return Ok(0);
@@ -3222,9 +3201,7 @@ impl IVMHost for DefaultHost {
                 )?;
                 Self::vrf_verify_gas(crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1, payload_len)
             }
-            crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
+            crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
                 quote_zk_single_at(vm, vm.register(10), self.zk_gas_schedule)?.1
             }
@@ -3312,15 +3289,12 @@ impl IVMHost for DefaultHost {
     }
 
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        let requested_number = number;
-        require_host_syscall_metering_spec(vm.syscall_policy(), requested_number)?;
-        let number = crate::syscalls::canonical_helper_syscall(number);
+        require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if crate::syscalls::is_numeric_v1_syscall(number) {
             return crate::numeric_v1::execute(number, vm);
         }
         if crate::syscalls::is_json_getter_syscall(number) {
-            let cost =
-                crate::json::typed_getter(vm, requested_number, Self::resolve_code_tlv_addr)?;
+            let cost = crate::json::typed_getter(vm, number, Self::resolve_code_tlv_addr)?;
             return Ok(crate::json::typed_getter_gas(
                 cost.input_bytes,
                 cost.output_bytes,
@@ -4855,9 +4829,7 @@ impl IVMHost for DefaultHost {
                 Ok(Self::merkle_path_gas(depth))
             }
             // --- ZK verify/state-read helpers ---
-            crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
+            crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
@@ -4932,8 +4904,11 @@ impl IVMHost for DefaultHost {
                     Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
                 } else {
                     // Vote tally read
-                    let _req: crate::zk_verify::VoteGetTallyRequest =
+                    let req: crate::zk_verify::VoteGetTallyRequest =
                         decode_canonical_norito(tlv.payload)?;
+                    if !req.is_valid_v1() {
+                        return Err(VMError::NoritoInvalid);
+                    }
                     let resp = crate::zk_verify::VoteGetTallyResponse {
                         finalized: false,
                         tally: Vec::new(),
@@ -6320,7 +6295,7 @@ mod tests {
             .expect("alloc malformed envelope");
         vm.set_register(10, ptr);
         assert_eq!(
-            host.syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm),
+            host.syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm),
             Ok(gas::zk_verify_gas(malformed.len()))
         );
         assert_eq!(vm.register(10), 0);
@@ -6333,7 +6308,7 @@ mod tests {
             .expect("allocate canonical envelope");
         vm.set_register(10, canonical_ptr);
         assert_eq!(
-            host.syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm),
+            host.syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm),
             Ok(host
                 .zk_gas_schedule()
                 .actual_single_gas(canonical.len(), 64))
@@ -6719,6 +6694,31 @@ mod tests {
             DefaultHost::state_query_gas(
                 tally_payload.len().saturating_add(tally_out.payload.len())
             )
+        );
+    }
+
+    #[test]
+    fn default_host_vote_tally_rejects_noncanonical_selector_without_response() {
+        crate::set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let mut host = DefaultHost::new();
+        let request = crate::zk_verify::VoteGetTallyRequest {
+            election_id: ".hidden".to_owned(),
+        };
+        let payload = norito::to_bytes(&request).expect("encode tally request");
+        let request_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &payload))
+            .expect("allocate tally request");
+        vm.set_register(10, request_ptr);
+
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            vm.register(10),
+            request_ptr,
+            "failed tally queries must not publish a response pointer"
         );
     }
 

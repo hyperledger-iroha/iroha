@@ -1,10 +1,10 @@
-//! Bounded authenticated SoraFS archive fetching for exact Musubi lock nodes.
+//! Bounded authenticated `SoraFS` archive fetching for exact Musubi lock nodes.
 //!
 //! The registry supplies finalized archive commitments and renewable provider
 //! locations. A runtime transport supplies only bounded storage plans and
 //! authenticated CAR readers; it never returns credentials to this module.
 //! Every successful stream still crosses [`MusubiCache::install`], so provider
-//! authentication cannot replace commitment, CAR, PoR, bundle, or source-tree
+//! authentication cannot replace commitment, CAR, `PoR`, bundle, or source-tree
 //! verification.
 
 use std::{
@@ -16,10 +16,12 @@ use std::{
 };
 
 use iroha_data_model::{
+    ChainId,
     musubi::{
         ArchiveId, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
         MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationQueryV1,
         MusubiArchiveLocationStateV1, MusubiArchiveLocationV1, MusubiPageRequestV1,
+        MusubiRegistrySnapshotV1,
     },
     sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
@@ -102,7 +104,7 @@ impl fmt::Display for ArchiveFetchErrorV1 {
 
 impl Error for ArchiveFetchErrorV1 {}
 
-/// Stable transport-only failure returned by an authenticated SoraFS runtime.
+/// Stable transport-only failure returned by an authenticated `SoraFS` runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArchiveTransportErrorV1 {
     class: ArchiveFetchFailureClassV1,
@@ -201,6 +203,11 @@ pub trait AuthenticatedSorafsArchiveTransportV1 {
     /// the exact declared file and chunk counts are present, reject duplicates
     /// or inconsistent pages, bind `manifest_id` to `pin_manifest`, and enforce
     /// the supplied commitment bounds before allocating.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted transport error when the assigned provider's complete
+    /// bounded plan cannot be loaded or authenticated.
     fn storage_plan(
         &mut self,
         pin_manifest: &ManifestDigest,
@@ -216,6 +223,11 @@ pub trait AuthenticatedSorafsArchiveTransportV1 {
     /// token to the provider, manifest, and chunker, and cap response reads at
     /// `commitment.car_size + 1` bytes. The extra byte lets the cache reject
     /// trailing data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted transport error when an authenticated, bounded stream
+    /// cannot be opened for the exact provider, manifest, commitment, and plan.
     fn open_authenticated_car(
         &mut self,
         pin_manifest: &ManifestDigest,
@@ -266,9 +278,38 @@ impl AuthenticatedSorafsArchiveTransportV1 for UnavailableSorafsArchiveTransport
     }
 }
 
-/// Production authenticated SoraFS archive transport.
+/// Production authenticated `SoraFS` archive transport.
 pub type ProductionSorafsArchiveTransportV1 =
     iroha::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1;
+
+/// Parsed secret-free fetch configuration that defers tokens, DNS, and HTTP clients.
+pub type PreparedProductionSorafsArchiveTransportV1 =
+    iroha::musubi_archive_fetch::PreparedMusubiArchiveFetchConfigV1;
+
+/// Parse the fetch subtree from the same bounded `client.toml` image used by registry reads.
+///
+/// # Errors
+/// Returns a stable redacted configuration error without opening token files or contacting DNS.
+pub fn prepare_production_archive_transport_v1(
+    config_path: &Path,
+    config_bytes: &[u8],
+) -> Result<PreparedProductionSorafsArchiveTransportV1, ArchiveTransportErrorV1> {
+    PreparedProductionSorafsArchiveTransportV1::from_platform_config_bytes(
+        config_path,
+        config_bytes,
+    )
+    .map_err(runtime_error)
+}
+
+/// Materialize a prepared fetch configuration after the immutable cache reports a miss.
+///
+/// # Errors
+/// Returns a stable redacted configuration error when runtime token, DNS, or client setup fails.
+pub fn build_production_archive_transport_v1(
+    prepared: &PreparedProductionSorafsArchiveTransportV1,
+) -> Result<ProductionSorafsArchiveTransportV1, ArchiveTransportErrorV1> {
+    prepared.build_client().map_err(runtime_error)
+}
 
 /// Load the signer-free production archive transport from `client.toml`.
 ///
@@ -348,7 +389,7 @@ pub struct PreparedArchivePlanV1 {
     pub commitment: MusubiArchiveCommitmentV1,
     /// Finalized renewable location selected deterministically.
     pub location_id: MusubiArchiveLocationIdV1,
-    /// Exact renewable SoraFS pin manifest.
+    /// Exact renewable `SoraFS` pin manifest.
     pub pin_manifest: ManifestDigest,
     /// Assigned provider whose plan was accepted.
     pub provider: ProviderId,
@@ -365,11 +406,19 @@ struct ArchiveCandidateV1 {
 }
 
 /// Fetch adapter joining finalized registry evidence to the immutable cache boundary.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct MusubiArchiveFetchAdapterV1<'client> {
     registry: &'client RegistryReadClientV1,
     cache: &'client MusubiCache,
     integrity_observer: Option<&'client dyn ArchiveFetchIntegrityObserverV1>,
+    expected_deployment: Option<ArchiveFetchDeploymentBindingV1>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArchiveFetchDeploymentBindingV1 {
+    chain_id: ChainId,
+    genesis_hash: [u8; 32],
+    minimum_snapshot: MusubiRegistrySnapshotV1,
 }
 
 impl fmt::Debug for MusubiArchiveFetchAdapterV1<'_> {
@@ -389,7 +438,28 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
             registry,
             cache,
             integrity_observer: None,
+            expected_deployment: None,
         }
+    }
+
+    /// Bind finalized archive-location evidence to an exact lock deployment and minimum snapshot.
+    ///
+    /// Locked graph fetches use this boundary so a changed endpoint cannot supply provider
+    /// authorization from another chain or from a finalized view older than the graph anchor.
+    /// Maintenance commands whose configured registry is itself the authority may remain unbound.
+    #[must_use]
+    pub fn with_expected_deployment(
+        mut self,
+        chain_id: &ChainId,
+        genesis_hash: [u8; 32],
+        minimum_snapshot: MusubiRegistrySnapshotV1,
+    ) -> Self {
+        self.expected_deployment = Some(ArchiveFetchDeploymentBindingV1 {
+            chain_id: chain_id.clone(),
+            genesis_hash,
+            minimum_snapshot,
+        });
+        self
     }
 
     /// Attach the long-lived host's bounded integrity observer.
@@ -409,6 +479,16 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     /// while at least one attested provider remains. Pending and retired
     /// locations are never used. Within each health rank, distinct providers
     /// are tried before an alternate pin assigned to an already-tried provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable redacted error when finalized registry evidence is
+    /// unavailable or invalid, every provider attempt fails, or cache
+    /// verification or publication cannot be completed safely.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fail-closed fetch state machine keeps provider attempt, cache verification, stream fallback, and error precedence visible together"
+    )]
     pub fn fetch_exact(
         &self,
         archive_id: ArchiveId,
@@ -472,13 +552,11 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
                     );
                     continue;
                 }
-                Err(CacheError::InvalidArchive(_)) => {
-                    return Err(ArchiveFetchErrorV1::new(
-                        ArchiveFetchFailureClassV1::Permanent,
-                        "MUSUBI_CACHE_CORRUPT",
-                    ));
-                }
-                Err(CacheError::CorruptEntry(_) | CacheError::UnsafeDescendant(_)) => {
+                Err(
+                    CacheError::InvalidArchive(_)
+                    | CacheError::CorruptEntry(_)
+                    | CacheError::UnsafeDescendant(_),
+                ) => {
                     return Err(ArchiveFetchErrorV1::new(
                         ArchiveFetchFailureClassV1::Permanent,
                         "MUSUBI_CACHE_CORRUPT",
@@ -563,15 +641,10 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
             }
         }
 
-        if let Some(error) = integrity {
-            Err(transport_error(error))
-        } else if let Some(error) = retryable {
-            Err(transport_error(error))
-        } else if let Some(error) = permanent {
-            Err(transport_error(error))
-        } else {
-            Err(archive_unavailable())
-        }
+        Err(integrity
+            .or(retryable)
+            .or(permanent)
+            .map_or_else(archive_unavailable, transport_error))
     }
 
     /// Select and validate one exact finalized provider plan without reading CAR bytes.
@@ -581,6 +654,12 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     /// plans. The chunk plan, registered profile, bundle metadata inventory, and file-plan-derived
     /// root CID are checked without reading CAR body bytes. Providers are tried in deterministic
     /// healthy-then-degraded order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable redacted error when finalized registry evidence is
+    /// unavailable or invalid, or no provider supplies an authenticated plan
+    /// matching the exact archive commitment.
     pub fn prepare_exact(
         &self,
         archive_id: ArchiveId,
@@ -624,15 +703,10 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
                 }
             }
         }
-        if let Some(error) = integrity {
-            Err(transport_error(error))
-        } else if let Some(error) = retryable {
-            Err(transport_error(error))
-        } else if let Some(error) = permanent {
-            Err(transport_error(error))
-        } else {
-            Err(archive_unavailable())
-        }
+        Err(integrity
+            .or(retryable)
+            .or(permanent)
+            .map_or_else(archive_unavailable, transport_error))
     }
 
     fn finalized_candidates(
@@ -655,6 +729,14 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
             .archive_locations(&query)
             .map_err(registry_error)?
             .ok_or_else(archive_unavailable)?;
+        if let Some(expected) = &self.expected_deployment {
+            validate_deployment_binding(
+                expected,
+                &page.chain_id,
+                page.genesis_hash,
+                page.snapshot,
+            )?;
+        }
         // The V1 directory contains at most four locations and this first-page request asks for
         // all four. A cursor or a shorter/different identity list is therefore incomplete rather
         // than a legitimate continuation.
@@ -706,6 +788,28 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
         }
         Ok((commitment, candidates))
     }
+}
+
+fn validate_deployment_binding(
+    expected: &ArchiveFetchDeploymentBindingV1,
+    observed_chain_id: &ChainId,
+    observed_genesis_hash: [u8; 32],
+    observed_snapshot: MusubiRegistrySnapshotV1,
+) -> Result<(), ArchiveFetchErrorV1> {
+    let minimum = expected.minimum_snapshot;
+    if expected.genesis_hash.iter().all(|byte| *byte == 0)
+        || minimum.validate().is_err()
+        || observed_snapshot.validate().is_err()
+        || observed_chain_id != &expected.chain_id
+        || observed_genesis_hash != expected.genesis_hash
+        || observed_snapshot.finalized_height < minimum.finalized_height
+        || observed_snapshot.index_revision < minimum.index_revision
+        || (observed_snapshot.finalized_height == minimum.finalized_height
+            && observed_snapshot != minimum)
+    {
+        return Err(invalid_evidence());
+    }
+    Ok(())
 }
 
 fn validate_location_evidence(
@@ -1163,6 +1267,144 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 0, 0, 1, 1]
         );
+    }
+
+    fn deployment_binding() -> ArchiveFetchDeploymentBindingV1 {
+        ArchiveFetchDeploymentBindingV1 {
+            chain_id: ChainId::from("musubi-fetch-binding-test"),
+            genesis_hash: [0x51; 32],
+            minimum_snapshot: MusubiRegistrySnapshotV1 {
+                finalized_height: 10,
+                finalized_block_hash: [0x52; 32],
+                index_revision: 7,
+            },
+        }
+    }
+
+    #[test]
+    fn locked_fetch_binding_rejects_another_chain_or_genesis() {
+        let expected = deployment_binding();
+        for (chain_id, genesis_hash) in [
+            (ChainId::from("another-musubi-chain"), expected.genesis_hash),
+            (expected.chain_id.clone(), [0x53; 32]),
+        ] {
+            let error = validate_deployment_binding(
+                &expected,
+                &chain_id,
+                genesis_hash,
+                expected.minimum_snapshot,
+            )
+            .expect_err("another deployment must not authorize a locked fetch");
+            assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
+            assert_eq!(error.class(), ArchiveFetchFailureClassV1::Permanent);
+        }
+    }
+
+    #[test]
+    fn locked_fetch_binding_rejects_a_regressing_snapshot() {
+        let expected = deployment_binding();
+        for snapshot in [
+            MusubiRegistrySnapshotV1 {
+                finalized_height: expected.minimum_snapshot.finalized_height - 1,
+                finalized_block_hash: [0x54; 32],
+                index_revision: expected.minimum_snapshot.index_revision,
+            },
+            MusubiRegistrySnapshotV1 {
+                finalized_height: expected.minimum_snapshot.finalized_height + 1,
+                finalized_block_hash: [0x55; 32],
+                index_revision: expected.minimum_snapshot.index_revision - 1,
+            },
+        ] {
+            let error = validate_deployment_binding(
+                &expected,
+                &expected.chain_id,
+                expected.genesis_hash,
+                snapshot,
+            )
+            .expect_err("a finalized view older than the lock anchor must fail");
+            assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
+        }
+    }
+
+    #[test]
+    fn locked_fetch_binding_rejects_a_same_height_snapshot_conflict() {
+        let expected = deployment_binding();
+        let conflicting = MusubiRegistrySnapshotV1 {
+            finalized_block_hash: [0x56; 32],
+            ..expected.minimum_snapshot
+        };
+        let error = validate_deployment_binding(
+            &expected,
+            &expected.chain_id,
+            expected.genesis_hash,
+            conflicting,
+        )
+        .expect_err("a conflicting finalized block at the anchor height must fail");
+        assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
+    }
+
+    #[test]
+    fn locked_fetch_binding_rejects_an_invalid_observed_snapshot() {
+        let expected = deployment_binding();
+        let invalid = MusubiRegistrySnapshotV1 {
+            finalized_height: expected.minimum_snapshot.finalized_height + 1,
+            finalized_block_hash: [0; 32],
+            index_revision: expected.minimum_snapshot.index_revision,
+        };
+        let error = validate_deployment_binding(
+            &expected,
+            &expected.chain_id,
+            expected.genesis_hash,
+            invalid,
+        )
+        .expect_err("an invalid observed snapshot must fail even when its counters do not regress");
+        assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
+    }
+
+    #[test]
+    fn locked_fetch_binding_accepts_the_anchor_and_a_later_snapshot() {
+        let expected = deployment_binding();
+        validate_deployment_binding(
+            &expected,
+            &expected.chain_id,
+            expected.genesis_hash,
+            expected.minimum_snapshot,
+        )
+        .expect("the exact lock anchor is valid");
+        validate_deployment_binding(
+            &expected,
+            &expected.chain_id,
+            expected.genesis_hash,
+            MusubiRegistrySnapshotV1 {
+                finalized_height: expected.minimum_snapshot.finalized_height + 1,
+                finalized_block_hash: [0x57; 32],
+                index_revision: expected.minimum_snapshot.index_revision + 1,
+            },
+        )
+        .expect("a non-regressing later finalized snapshot is valid");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn fetch_adapter_records_the_expected_locked_deployment() {
+        let temporary = tempfile::tempdir().expect("temporary cache root");
+        let cache = MusubiCache::open(temporary.path()).expect("secure cache root");
+        let registry = RegistryReadClientV1::new(
+            "https://registry.example/"
+                .parse()
+                .expect("public registry URL"),
+            Duration::from_secs(1),
+            753,
+        )
+        .expect("signer-free registry client");
+        let expected = deployment_binding();
+        let adapter = MusubiArchiveFetchAdapterV1::new(&registry, &cache).with_expected_deployment(
+            &expected.chain_id,
+            expected.genesis_hash,
+            expected.minimum_snapshot,
+        );
+
+        assert_eq!(adapter.expected_deployment.as_ref(), Some(&expected));
     }
 
     #[test]

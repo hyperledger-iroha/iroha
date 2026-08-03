@@ -44,6 +44,28 @@ Overview
   matches the requested proposal id, owner, and direction together with the
   returned immutable amount and duration.
 
+## SoraFS Governance DAG read authority
+
+The `/v1/sorafs/governance/dag/*` read routes do not trust mutable authority
+filenames. Publish-index and CAR-queue handlers consume one canonical typed
+publication snapshot from `NodeHandle`; runtime handlers consume one typed
+head/index snapshot authenticated by the exact sealed producer checkpoint. The
+dashboard, head, block, and node routes consume only the supervised Governance
+DAG service's mirror-read capability, which irohad installs exactly once before
+the first `NodeHandle` clone is shared. A configured node without that
+capability has no mirror authority, and there is no loose-file fallback.
+
+Successful JSON projections identify the authority with `source`,
+`source_generation`, and `source_record_blake3`. Mirror and runtime projections
+also include `source_checkpoint_generation` and
+`source_checkpoint_revision`. They never expose a mutable authority
+`source_path` or runtime `head_path`; root-relative immutable artifact paths may
+still appear where a response identifies a content-addressed source, block, or
+CAR object. Representation ETags commit the typed record identity and, for
+mirror/runtime reads, the sealed checkpoint identity before conditional
+matching, so changed authentication metadata cannot be hidden by `304 Not
+Modified`.
+
 Endpoints
 
 - GET `/v1/gov/capabilities`
@@ -203,19 +225,21 @@ Code Size Cap
     proposal-time Parliament body must first reach its exact snapshot quorum,
     after which consensus opens the referendum. Standalone PLAIN referenda
     retain their explicit non-proposal behavior.
-    Context identifiers are exact non-empty tokens. `amount` uses the same
+    Context identifiers use the canonical first-release governance selector
+    grammar: 1–128 RFC 3986 unreserved ASCII bytes without a leading dot.
+    `amount` uses the same
     canonical Kotodama V1 `Quantity` grammar as ZK lock hints, while
     `duration_blocks` is a canonical decimal string in `0..=u64::MAX`.
 
 - POST `/v1/gov/finalize`
-  - Strict request: { "referendum_id": "r1", "proposal_id": "…64hex" }
+  - Strict request: { "referendum_id": "…64hex", "proposal_id": "…same 64hex" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
-    - `referendum_id` is an exact non-empty token. `proposal_id` uses the
-      shared governance hash grammar: one 64-hex body with an optional
-      case-insensitive `blake2b32:` scheme and optional `0x`/`0X` prefix.
-      Whitespace, empty/unknown schemes, and extra suffixes are rejected.
+    - `referendum_id` and `proposal_id` must be the same exact 64-character
+      lowercase hexadecimal proposal fingerprint. Prefixes, uppercase forms,
+      whitespace, and distinct selector aliases are rejected before a draft
+      instruction is constructed.
     - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
     - `h_end` is inclusive. PLAIN referenda close and tally at the start of
       `h_end + 1`, while finalization evidence remains anchored to `h_end`.

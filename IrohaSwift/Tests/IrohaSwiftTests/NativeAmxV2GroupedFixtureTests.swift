@@ -572,7 +572,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         )
         let idle: [String: Any] = ["stage": "idle", "details": NSNull()]
         let statusObject: [String: Any] = [
-            "protocol_version": 3,
+            "protocol_version": 4,
             "node_fingerprint": canonicalHash,
             "build_fingerprint": canonicalHash,
             "config_fingerprint": canonicalHash,

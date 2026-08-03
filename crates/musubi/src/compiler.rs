@@ -46,7 +46,7 @@ use crate::{
 
 /// Compiler operation requested by the Cargo-style command surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CompilerActionV1 {
+pub enum CompilerActionV1 {
     /// Parse, type-check, link, and lint without writing artifacts.
     Check,
     /// Compile and atomically publish every selected local contract target.
@@ -55,7 +55,7 @@ pub(crate) enum CompilerActionV1 {
 
 /// One generated contract artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CompilerArtifactV1 {
+pub struct CompilerArtifactV1 {
     /// Selected package declaring the contract target.
     pub package: MusubiPackageSelectorV1,
     /// Manifest target name, with a deterministic ordinal for directory targets.
@@ -72,7 +72,7 @@ pub(crate) struct CompilerArtifactV1 {
 
 /// Canonical typed interface proven for one reusable local package.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CompilerPackageInterfaceV1 {
+pub struct CompilerPackageInterfaceV1 {
     /// Public package selector used by the workspace root.
     pub package: MusubiPackageSelectorV1,
     /// Domain-separated digest of the exact exported function signatures.
@@ -81,7 +81,7 @@ pub(crate) struct CompilerPackageInterfaceV1 {
 
 /// Successful compiler graph execution summary.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CompilerExecutionV1 {
+pub struct CompilerExecutionV1 {
     /// Number of local reusable packages validated through the typed linker.
     pub validated_packages: usize,
     /// Number of deployable contract roots checked or built.
@@ -96,7 +96,7 @@ pub(crate) struct CompilerExecutionV1 {
 
 /// Stable compiler-bridge failure.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum CompilerBridgeErrorV1 {
+pub enum CompilerBridgeErrorV1 {
     /// Local workspace/path graph construction failed.
     Workspace(String),
     /// The exact lock graph is missing a required parent-local edge.
@@ -141,7 +141,7 @@ impl RegistryCompilerSourceV1 for MusubiCache {
 }
 
 /// Execute one authenticated compiler operation for selected workspace packages.
-pub(crate) fn execute_compiler_graph(
+pub fn execute_compiler_graph(
     cache: &MusubiCache,
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
@@ -165,7 +165,7 @@ pub(crate) fn execute_compiler_graph(
 ///
 /// Unlike ordinary workspace checking, every root import is taken from the normalized
 /// publication lock. A local path dependency therefore cannot influence the packaged build.
-pub(crate) fn validate_packaged_plan(
+pub fn validate_packaged_plan(
     cache: &MusubiCache,
     plan: &PackagePlan,
     verification_lock: &MusubiVerificationLockV1,
@@ -174,6 +174,10 @@ pub(crate) fn validate_packaged_plan(
     validate_packaged_with_source(cache, plan, verification_lock, chain_discriminant)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "clean-package validation is one fail-closed compiler boundary"
+)]
 fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
     source: &S,
     plan: &PackagePlan,
@@ -321,7 +325,7 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
     clippy::needless_lifetimes,
     reason = "stable Rust requires a named lifetime for references nested in impl Trait items"
 )]
-pub(crate) fn validate_exact_registry_interfaces_v1<'node>(
+pub fn validate_exact_registry_interfaces_v1<'node>(
     nodes: impl IntoIterator<Item = &'node MusubiVerificationNodeV1>,
     packages: &[SourcePackageUnit],
     options: CompilerOptions,
@@ -479,7 +483,7 @@ fn packaged_target_source_units(
     if target_path != "."
         && let Some(file) = plan.files().iter().find(|file| file.path() == target_path)
     {
-        if kind == PackagedTargetKindV1::Test && !file.path().ends_with(".ko") {
+        if kind == PackagedTargetKindV1::Test && !has_kotodama_extension(file.path()) {
             return Err(CompilerBridgeErrorV1::Package(format!(
                 "packaged test target `{target_path}` must be a `.ko` file or directory"
             )));
@@ -499,7 +503,7 @@ fn packaged_target_source_units(
             },
             None => file.path(),
         };
-        if relative.is_empty() || !relative.ends_with(".ko") {
+        if relative.is_empty() || !has_kotodama_extension(relative) {
             continue;
         }
         source_bytes = source_bytes
@@ -555,6 +559,10 @@ fn packaged_source_unit(
     })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "compiler graph authentication and execution form one deterministic workflow"
+)]
 fn execute_with_source<S: RegistryCompilerSourceV1>(
     source: &S,
     workspace: &Workspace,
@@ -571,7 +579,8 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     }
     lock.validate()
         .map_err(|error| CompilerBridgeErrorV1::Lock(error.to_string()))?;
-    let local_members = collect_local_members(workspace, selected).map_err(graph_error)?;
+    let local_members =
+        collect_local_members(workspace, selected).map_err(|error| graph_error(&error))?;
     let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
     let local_identities = local_members
         .iter()
@@ -727,7 +736,7 @@ fn package_target_root(workspace: &Workspace, member: &WorkspaceMember) -> PathB
         .join(member.package.selector.name.as_str())
 }
 
-fn graph_error(error: GraphErrorV1) -> CompilerBridgeErrorV1 {
+fn graph_error(error: &GraphErrorV1) -> CompilerBridgeErrorV1 {
     CompilerBridgeErrorV1::Workspace(error.to_string())
 }
 
@@ -933,8 +942,7 @@ fn validate_manifest_dependency_edges(
 ) -> Result<(), CompilerBridgeErrorV1> {
     if dependencies.len() != edges.len() {
         return Err(CompilerBridgeErrorV1::Package(format!(
-            "release `{}` manifest dependency count disagrees with its exact proof",
-            release
+            "release `{release}` manifest dependency count disagrees with its exact proof"
         )));
     }
     for (alias, dependency) in dependencies {
@@ -944,8 +952,7 @@ fn validate_manifest_dependency_edges(
         }) = dependency
         else {
             return Err(CompilerBridgeErrorV1::Package(format!(
-                "release `{}` retains a path or workspace dependency `{alias}`",
-                release
+                "release `{release}` retains a path or workspace dependency `{alias}`"
             )));
         };
         let edge = edges
@@ -953,8 +960,7 @@ fn validate_manifest_dependency_edges(
             .find(|edge| &edge.alias == alias)
             .ok_or_else(|| {
                 CompilerBridgeErrorV1::Package(format!(
-                    "release `{}` dependency `{alias}` has no exact edge",
-                    release
+                    "release `{release}` dependency `{alias}` has no exact edge"
                 ))
             })?;
         if edge.kind != MusubiDependencyKindV1::Normal
@@ -962,8 +968,7 @@ fn validate_manifest_dependency_edges(
             || edge.requirement != *requirement
         {
             return Err(CompilerBridgeErrorV1::Package(format!(
-                "release `{}` dependency `{alias}` disagrees with its exact edge",
-                release
+                "release `{release}` dependency `{alias}` disagrees with its exact edge"
             )));
         }
     }
@@ -972,12 +977,16 @@ fn validate_manifest_dependency_edges(
 
 fn relative_library_source(path: &str, source_dir: &PortablePath) -> Option<String> {
     if source_dir.as_str() == "." {
-        return path.ends_with(".ko").then(|| path.to_owned());
+        return has_kotodama_extension(path).then(|| path.to_owned());
     }
     let prefix = format!("{}/", source_dir.as_str());
     path.strip_prefix(&prefix)
-        .filter(|relative| relative.ends_with(".ko") && !relative.is_empty())
+        .filter(|relative| has_kotodama_extension(relative) && !relative.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn has_kotodama_extension(path: &str) -> bool {
+    path.strip_suffix(".ko").is_some()
 }
 
 fn target_source_units(
@@ -1140,7 +1149,7 @@ exports = ["value"]
         let execution = execute_with_source(
             &EmptyRegistry,
             &workspace,
-            &[selector.clone()],
+            std::slice::from_ref(&selector),
             &lock,
             CompilerActionV1::Check,
             false,
@@ -1167,6 +1176,20 @@ exports = ["value"]
     }
 
     #[test]
+    fn kotodama_extension_is_an_exact_case_sensitive_portable_suffix() {
+        assert!(has_kotodama_extension(".ko"));
+        assert!(has_kotodama_extension("src/.ko"));
+        assert!(has_kotodama_extension("src/main.ko"));
+        assert!(!has_kotodama_extension("src/main.KO"));
+        assert!(!has_kotodama_extension("src/main.ko.bak"));
+        assert!(!has_kotodama_extension("src/mainko"));
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the fixture verifies one complete authenticated dependency-interface workflow"
+    )]
     fn clean_publication_recomputes_each_locked_dependency_interface() {
         let temp = TempDir::new().expect("temporary directory");
         write_clean_library(temp.path());

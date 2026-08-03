@@ -232,27 +232,28 @@ IndexedHistoricalPostGstTick(initialContext) ==
   /\ IndexedHistoricalTransport(initialContext)!AsyncTick
 
 THEOREM IndexedHistoricalNonPacketActionsMatchIndexedAsync ==
-  \A initialContext \in AdmissibleContextRecords, node:
-    /\ (IndexedHistoricalPostGstTick(initialContext)
+  \A initialContext \in AdmissibleContextRecords:
+    \A node:
+      /\ (IndexedHistoricalPostGstTick(initialContext)
           <=> IndexedPostGstTick(initialContext))
-    /\ (IndexedHistoricalTransport(initialContext)!
-          PostGstRunNode(node)
-          <=> IndexedAsync(initialContext)!PostGstRunNode(node))
-    /\ (IndexedHistoricalTransport(initialContext)!
-          PostGstRunHistoricalServer(node)
-          <=> IndexedAsync(initialContext)!
-                PostGstRunHistoricalServer(node))
-    /\ (IndexedHistoricalTransport(initialContext)!
-          PostGstServiceIoWorker(node)
-          <=> IndexedAsync(initialContext)!PostGstServiceIoWorker(node))
-    /\ (IndexedHistoricalTransport(initialContext)!
-          PostGstRunHistoricalRecoveryNode(node)
-          <=> IndexedAsync(initialContext)!
-                PostGstRunHistoricalRecoveryNode(node))
-    /\ (IndexedHistoricalTransport(initialContext)!
-          PostGstServiceHistoricalRecoveryIoWorker(node)
-          <=> IndexedAsync(initialContext)!
-                PostGstServiceHistoricalRecoveryIoWorker(node))
+      /\ (IndexedHistoricalTransport(initialContext)!
+            PostGstRunNode(node)
+            <=> IndexedAsync(initialContext)!PostGstRunNode(node))
+      /\ (IndexedHistoricalTransport(initialContext)!
+            PostGstRunHistoricalServer(node)
+            <=> IndexedAsync(initialContext)!
+                  PostGstRunHistoricalServer(node))
+      /\ (IndexedHistoricalTransport(initialContext)!
+            PostGstServiceIoWorker(node)
+            <=> IndexedAsync(initialContext)!PostGstServiceIoWorker(node))
+      /\ (IndexedHistoricalTransport(initialContext)!
+            PostGstRunHistoricalRecoveryNode(node)
+            <=> IndexedAsync(initialContext)!
+                  PostGstRunHistoricalRecoveryNode(node))
+      /\ (IndexedHistoricalTransport(initialContext)!
+            PostGstServiceHistoricalRecoveryIoWorker(node)
+            <=> IndexedAsync(initialContext)!
+                  PostGstServiceHistoricalRecoveryIoWorker(node))
 BY Isa
    DEF IndexedHistoricalPostGstTick, IndexedPostGstTick,
        IndexedHistoricalTransport!PostGstRunNode,
@@ -862,16 +863,16 @@ IndexedHistoricalPacketConcreteActionFairDomain(
        [] OTHER -> FALSE
 
 THEOREM IndexedHistoricalPacketProductActionProjectsFrozenLocalAction ==
-  \A initialContext \in AdmissibleContextRecords,
-     packet,
-     actionKind \in
-       IndexedHistoricalTransport(initialContext)!
-         HistoricalDiscoveryPacketConcreteActionKindCarrier,
-     actionSource \in
-       IndexedHistoricalTransport(initialContext)!AsyncIngressSources:
-    IndexedHistoricalPacketConcreteProductAction(
-      initialContext, packet, actionKind, actionSource)
-      => <<IndexedHistoricalTransport(initialContext)!
+  \A initialContext \in AdmissibleContextRecords:
+    \A packet:
+      \A actionKind \in
+           IndexedHistoricalTransport(initialContext)!
+             HistoricalDiscoveryPacketConcreteActionKindCarrier,
+         actionSource \in
+           IndexedHistoricalTransport(initialContext)!AsyncIngressSources:
+        IndexedHistoricalPacketConcreteProductAction(
+          initialContext, packet, actionKind, actionSource)
+          => <<IndexedHistoricalTransport(initialContext)!
               HistoricalDiscoveryPacketConcreteAction(
                 packet, actionKind, actionSource)>>_(
             IndexedHistoricalTransport(initialContext)!AsyncAllVars)
@@ -897,19 +898,19 @@ BY IndexedFairProductStepsProjectExactOccurrences,
        IndexedAsyncStateAt
 
 THEOREM IndexedChainSpecProvidesEachHistoricalPacketProductActionFairness ==
-  \A initialContext \in AdmissibleContextRecords,
-     packet,
-     actionKind \in
-       IndexedHistoricalTransport(initialContext)!
-         HistoricalDiscoveryPacketConcreteActionKindCarrier,
-     actionSource \in
-       IndexedHistoricalTransport(initialContext)!AsyncIngressSources:
-    /\ IndexedChainSpec
-    /\ IndexedHistoricalPacketConcreteActionFairDomain(
-         initialContext, packet, actionKind, actionSource)
-    => WF_IndexedChainVars(
-         IndexedHistoricalPacketConcreteProductAction(
-           initialContext, packet, actionKind, actionSource))
+  \A initialContext \in AdmissibleContextRecords:
+    \A packet:
+      \A actionKind \in
+           IndexedHistoricalTransport(initialContext)!
+             HistoricalDiscoveryPacketConcreteActionKindCarrier,
+         actionSource \in
+           IndexedHistoricalTransport(initialContext)!AsyncIngressSources:
+        /\ IndexedChainSpec
+        /\ IndexedHistoricalPacketConcreteActionFairDomain(
+             initialContext, packet, actionKind, actionSource)
+        => WF_IndexedChainVars(
+             IndexedHistoricalPacketConcreteProductAction(
+               initialContext, packet, actionKind, actionSource))
 BY Isa
    DEF IndexedChainSpec, IndexedFairness,
        IndexedHistoricalPacketConcreteProductAction,
@@ -927,18 +928,18 @@ THEOREM IndexedChainSpecProvidesHistoricalCandidateExactOwnerFairness ==
      clockValue \in Nat,
      sourceRank \in
        IndexedHistoricalTransport(initialContext)!
-         HistoricalDiscoveryFixedClockBlockerCarrier,
-     packet, known, budget,
-     identity, candidate, occurrenceRank, physicalKnown:
-    /\ IndexedChainSpec
-    /\ IndexedHistoricalTransport(initialContext)!
-         HistoricalDiscoveryCandidateExactActionOwnerAtRank(
-           node, clockValue, sourceRank, packet, known, budget,
-           identity, candidate, occurrenceRank, physicalKnown)
-    => WF_(IndexedHistoricalTransport(initialContext)!AsyncAllVars)(
-         IndexedHistoricalTransport(initialContext)!
-           HistoricalDiscoveryCandidateExactRunnerAction(
-             packet, identity.runnerKind))
+         HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, budget,
+       identity, candidate, occurrenceRank, physicalKnown:
+      /\ IndexedChainSpec
+      /\ IndexedHistoricalTransport(initialContext)!
+           HistoricalDiscoveryCandidateExactActionOwnerAtRank(
+             node, clockValue, sourceRank, packet, known, budget,
+             identity, candidate, occurrenceRank, physicalKnown)
+      => WF_(IndexedHistoricalTransport(initialContext)!AsyncAllVars)(
+           IndexedHistoricalTransport(initialContext)!
+             HistoricalDiscoveryCandidateExactRunnerAction(
+               packet, identity.runnerKind))
 BY IndexedChainSpecProvidesHistoricalRunNodeFairness,
    IndexedChainSpecProvidesHistoricalOwnerServiceFairness,
    IndexedHistoricalTransport(initialContext)!
@@ -971,24 +972,23 @@ THEOREM IndexedChainSpecProvidesHistoricalServeExactOwnerFairness ==
      clockValue \in Nat,
      sourceRank \in
        IndexedHistoricalTransport(initialContext)!
-         HistoricalDiscoveryFixedClockBlockerCarrier,
-     packet, known, budget,
-     identity, job, occurrenceRank,
-     workerKind \in
-       IndexedHistoricalTransport(initialContext)!
-         HistoricalDiscoveryServeExactWorkerActionKindCarrier,
-     workerMode \in
-       IndexedHistoricalTransport(initialContext)!
-         HistoricalDiscoveryServeExactWorkerModeCarrier:
-    /\ IndexedChainSpec
-    /\ IndexedHistoricalTransport(initialContext)!
-         HistoricalDiscoveryServeExactActionOwnerAtRank(
-           node, clockValue, sourceRank, packet, known, budget,
-           identity, job, occurrenceRank, workerKind, workerMode)
-    => WF_(IndexedHistoricalTransport(initialContext)!AsyncAllVars)(
-         IndexedHistoricalTransport(initialContext)!
-           HistoricalDiscoveryServeExactWorkerAction(
-             packet, workerKind))
+         HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A packet, known, budget, identity, job, occurrenceRank:
+      \A workerKind \in
+           IndexedHistoricalTransport(initialContext)!
+             HistoricalDiscoveryServeExactWorkerActionKindCarrier,
+         workerMode \in
+           IndexedHistoricalTransport(initialContext)!
+             HistoricalDiscoveryServeExactWorkerModeCarrier:
+        /\ IndexedChainSpec
+        /\ IndexedHistoricalTransport(initialContext)!
+             HistoricalDiscoveryServeExactActionOwnerAtRank(
+               node, clockValue, sourceRank, packet, known, budget,
+               identity, job, occurrenceRank, workerKind, workerMode)
+        => WF_(IndexedHistoricalTransport(initialContext)!AsyncAllVars)(
+             IndexedHistoricalTransport(initialContext)!
+               HistoricalDiscoveryServeExactWorkerAction(
+                 packet, workerKind))
 BY IndexedChainSpecProvidesHistoricalOwnerServiceFairness,
    IndexedHistoricalTransport(initialContext)!
      HistoricalDiscoveryLiveServeDebtHasExactFairOwner,
@@ -1231,17 +1231,17 @@ THEOREM IndexedHistoricalDueNodeModeHasFairDomain ==
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in IndexedHistoricalTransport(initialContext)!
-                       HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner,
-     mode \in IndexedHistoricalTransport(initialContext)!
-               HistoricalDiscoveryTimedOwnerModeCarrier:
-    /\ IndexedHistoricalTemporalSupportAt(initialContext)
-    /\ IndexedHistoricalDueNodeOwnerAtMode(
-         initialContext, node, clockValue, sourceRank, owner, mode)
-    => /\ owner \in Responsive
-       /\ (mode = 2
-             => owner \in IndexedHistoricalTransport(initialContext)!
-                            AsyncVotersAt(initialContext))
+                       HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A owner:
+      \A mode \in IndexedHistoricalTransport(initialContext)!
+                   HistoricalDiscoveryTimedOwnerModeCarrier:
+        /\ IndexedHistoricalTemporalSupportAt(initialContext)
+        /\ IndexedHistoricalDueNodeOwnerAtMode(
+             initialContext, node, clockValue, sourceRank, owner, mode)
+        => /\ owner \in Responsive
+           /\ (mode = 2
+                 => owner \in IndexedHistoricalTransport(initialContext)!
+                                AsyncVotersAt(initialContext))
 BY IndexedHistoricalTransport(initialContext)!
      HistoricalDiscoveryOwnersIncludeNonVoterService,
    IndexedHistoricalTransport(initialContext)!
@@ -1272,14 +1272,14 @@ THEOREM IndexedHistoricalDueIoModeHasFairDomain ==
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in IndexedHistoricalTransport(initialContext)!
-                       HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner,
-     mode \in IndexedHistoricalTransport(initialContext)!
-               HistoricalDiscoveryTimedOwnerModeCarrier:
-    /\ IndexedHistoricalTemporalSupportAt(initialContext)
-    /\ IndexedHistoricalDueIoOwnerAtMode(
-         initialContext, node, clockValue, sourceRank, owner, mode)
-    => owner \in Responsive
+                       HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A owner:
+      \A mode \in IndexedHistoricalTransport(initialContext)!
+                   HistoricalDiscoveryTimedOwnerModeCarrier:
+        /\ IndexedHistoricalTemporalSupportAt(initialContext)
+        /\ IndexedHistoricalDueIoOwnerAtMode(
+             initialContext, node, clockValue, sourceRank, owner, mode)
+        => owner \in Responsive
 BY IndexedHistoricalTransport(initialContext)!
      HistoricalDiscoveryOwnersIncludeNonVoterService,
    IndexedHistoricalTransport(initialContext)!
@@ -1303,18 +1303,18 @@ BY IndexedHistoricalTransport(initialContext)!
        IndexedHistoricalTransport!AsyncHistoricalRecoveryTypeInvariant
 
 THEOREM IndexedChainSpecProvidesHistoricalDueNodeModeFairness ==
-  \A initialContext \in AdmissibleContextRecords,
-     owner,
-     mode \in IndexedHistoricalTransport(initialContext)!
-               HistoricalDiscoveryTimedOwnerModeCarrier:
-    /\ IndexedChainSpec
-    /\ owner \in Responsive
-    /\ (mode = 2
-          => owner \in IndexedHistoricalTransport(initialContext)!
-                         AsyncVotersAt(initialContext))
-    => WF_(IndexedHistoricalTransport(initialContext)!AsyncAllVars)(
-         IndexedHistoricalDueNodeModeFairAction(
-           initialContext, owner, mode))
+  \A initialContext \in AdmissibleContextRecords:
+    \A owner:
+      \A mode \in IndexedHistoricalTransport(initialContext)!
+                   HistoricalDiscoveryTimedOwnerModeCarrier:
+        /\ IndexedChainSpec
+        /\ owner \in Responsive
+        /\ (mode = 2
+              => owner \in IndexedHistoricalTransport(initialContext)!
+                             AsyncVotersAt(initialContext))
+        => WF_(IndexedHistoricalTransport(initialContext)!AsyncAllVars)(
+             IndexedHistoricalDueNodeModeFairAction(
+               initialContext, owner, mode))
 BY IndexedChainSpecProvidesHistoricalRunNodeFairness,
    IndexedChainSpecProvidesHistoricalOwnerServiceFairness, Isa
    DEF IndexedHistoricalDueNodeModeFairAction,
@@ -1344,16 +1344,16 @@ THEOREM IndexedChainSpecHistoricalDueNodeModeMakesProgress ==
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in IndexedHistoricalTransport(initialContext)!
-                       HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner,
-     mode \in IndexedHistoricalTransport(initialContext)!
-               HistoricalDiscoveryTimedOwnerModeCarrier:
-    IndexedChainSpec
-      => (IndexedHistoricalDueNodeOwnerAtMode(
-            initialContext, node, clockValue, sourceRank, owner, mode)
-           ~> IndexedHistoricalDueNodeModeProgressGoal(
-                initialContext, node, clockValue, sourceRank,
-                owner, mode))
+                       HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A owner:
+      \A mode \in IndexedHistoricalTransport(initialContext)!
+                   HistoricalDiscoveryTimedOwnerModeCarrier:
+        IndexedChainSpec
+          => (IndexedHistoricalDueNodeOwnerAtMode(
+                initialContext, node, clockValue, sourceRank, owner, mode)
+               ~> IndexedHistoricalDueNodeModeProgressGoal(
+                    initialContext, node, clockValue, sourceRank,
+                    owner, mode))
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW node \in Responsive,
@@ -1470,16 +1470,16 @@ THEOREM IndexedChainSpecHistoricalDueIoModeMakesProgress ==
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in IndexedHistoricalTransport(initialContext)!
-                       HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner,
-     mode \in IndexedHistoricalTransport(initialContext)!
-               HistoricalDiscoveryTimedOwnerModeCarrier:
-    IndexedChainSpec
-      => (IndexedHistoricalDueIoOwnerAtMode(
-            initialContext, node, clockValue, sourceRank, owner, mode)
-           ~> IndexedHistoricalDueIoModeProgressGoal(
-                initialContext, node, clockValue, sourceRank,
-                owner, mode))
+                       HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A owner:
+      \A mode \in IndexedHistoricalTransport(initialContext)!
+                   HistoricalDiscoveryTimedOwnerModeCarrier:
+        IndexedChainSpec
+          => (IndexedHistoricalDueIoOwnerAtMode(
+                initialContext, node, clockValue, sourceRank, owner, mode)
+               ~> IndexedHistoricalDueIoModeProgressGoal(
+                    initialContext, node, clockValue, sourceRank,
+                    owner, mode))
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW node \in Responsive,
@@ -1588,9 +1588,9 @@ THEOREM IndexedChainSpecHistoricalDueNodeOwnerReachesRankGoal ==
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in IndexedHistoricalTransport(initialContext)!
-                       HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner:
-    IndexedChainSpec
+                       HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A owner:
+      IndexedChainSpec
       => ((/\ IndexedHistoricalTransport(initialContext)!
                    HistoricalDiscoveryFixedClockBlockedAtRank(
                      node, clockValue, sourceRank)
@@ -1680,9 +1680,9 @@ THEOREM IndexedChainSpecHistoricalDueIoOwnerReachesRankGoal ==
      node \in Responsive,
      clockValue \in Nat,
      sourceRank \in IndexedHistoricalTransport(initialContext)!
-                       HistoricalDiscoveryFixedClockBlockerCarrier,
-     owner:
-    IndexedChainSpec
+                       HistoricalDiscoveryFixedClockBlockerCarrier:
+    \A owner:
+      IndexedChainSpec
       => ((/\ IndexedHistoricalTransport(initialContext)!
                    HistoricalDiscoveryFixedClockBlockedAtRank(
                      node, clockValue, sourceRank)
@@ -2587,15 +2587,16 @@ IndexedHistoricalTemporalCandidateRunnerPending(
        HistoricalProtectedCandidateOwned(candidate)
 
 THEOREM IndexedHistoricalCandidateRunnerHasJoinedFairOwner ==
-  \A initialContext \in AdmissibleContextRecords, candidate:
-    /\ IndexedCompositionInvariant
-    /\ IndexedHistoricalTemporalCandidateRunnerPending(
-         initialContext, candidate)
-    => /\ candidate.node \in Responsive
-       /\ candidate.node \in joinedByContext[initialContext]
-       /\ initialContext \in JoinedContexts
-       /\ IndexedHistoricalTransport(initialContext)!
-            HistoricalRecoveryTarget(candidate.node)
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate:
+      /\ IndexedCompositionInvariant
+      /\ IndexedHistoricalTemporalCandidateRunnerPending(
+           initialContext, candidate)
+      => /\ candidate.node \in Responsive
+         /\ candidate.node \in joinedByContext[initialContext]
+         /\ initialContext \in JoinedContexts
+         /\ IndexedHistoricalTransport(initialContext)!
+              HistoricalRecoveryTarget(candidate.node)
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate,
@@ -2630,13 +2631,14 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalCandidateRunnerEnablesExactAction ==
-  \A initialContext \in AdmissibleContextRecords, candidate:
-    /\ IndexedCompositionInvariant
-    /\ IndexedHistoricalTemporalCandidateRunnerPending(
-         initialContext, candidate)
-    => ENABLED
-         IndexedRunHistoricalRecoveryStep(
-           initialContext, candidate.node)
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate:
+      /\ IndexedCompositionInvariant
+      /\ IndexedHistoricalTemporalCandidateRunnerPending(
+           initialContext, candidate)
+      => ENABLED
+           IndexedRunHistoricalRecoveryStep(
+             initialContext, candidate.node)
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate,
@@ -2699,13 +2701,14 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalCandidateRunnerIsNonstuttering ==
-  \A initialContext \in AdmissibleContextRecords, candidate:
-    /\ IndexedHistoricalTemporalCandidateRunnerPending(
-         initialContext, candidate)
-    /\ IndexedRunHistoricalRecoveryStep(
-         initialContext, candidate.node)
-    => <<IndexedRunHistoricalRecoveryStep(
-           initialContext, candidate.node)>>_IndexedChainVars
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate:
+      /\ IndexedHistoricalTemporalCandidateRunnerPending(
+           initialContext, candidate)
+      /\ IndexedRunHistoricalRecoveryStep(
+           initialContext, candidate.node)
+      => <<IndexedRunHistoricalRecoveryStep(
+             initialContext, candidate.node)>>_IndexedChainVars
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate,
@@ -2743,13 +2746,14 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalCandidateRunnerEnablesFairOccurrence ==
-  \A initialContext \in AdmissibleContextRecords, candidate:
-    /\ IndexedCompositionInvariant
-    /\ IndexedHistoricalTemporalCandidateRunnerPending(
-         initialContext, candidate)
-    => ENABLED
-         <<IndexedRunHistoricalRecoveryStep(
-             initialContext, candidate.node)>>_IndexedChainVars
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate:
+      /\ IndexedCompositionInvariant
+      /\ IndexedHistoricalTemporalCandidateRunnerPending(
+           initialContext, candidate)
+      => ENABLED
+           <<IndexedRunHistoricalRecoveryStep(
+               initialContext, candidate.node)>>_IndexedChainVars
 BY IndexedHistoricalCandidateRunnerEnablesExactAction,
    IndexedHistoricalCandidateRunnerIsNonstuttering,
    ENABLEDaxioms
@@ -2791,22 +2795,22 @@ IndexedHistoricalTemporalStage3ServeEpisodeResidual(
       candidate, position, rank)
 
 IndexedHistoricalTemporalStage3FiniteServeEpisodeResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    \A rank \in IndexedHistoricalTransport(initialContext)!
-                   ReadyRunAuxCarrier:
-      IndexedHistoricalTemporalStage3ServeEpisodeResidual(
-        initialContext, candidate, position, rank)
-        ~> IndexedHistoricalTemporalStage3AuxProgress(
-             initialContext, candidate, position, rank)
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      \A rank \in IndexedHistoricalTransport(initialContext)!
+                     ReadyRunAuxCarrier:
+        IndexedHistoricalTemporalStage3ServeEpisodeResidual(
+          initialContext, candidate, position, rank)
+          ~> IndexedHistoricalTemporalStage3AuxProgress(
+               initialContext, candidate, position, rank)
 
 THEOREM IndexedHistoricalStage3BlockedHasRunnerPending ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position, rank:
-    IndexedHistoricalTemporalStage3BlockedAtAux(
-      initialContext, candidate, position, rank)
-      => IndexedHistoricalTemporalCandidateRunnerPending(
-           initialContext, candidate)
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position, rank:
+      IndexedHistoricalTemporalStage3BlockedAtAux(
+        initialContext, candidate, position, rank)
+        => IndexedHistoricalTemporalCandidateRunnerPending(
+             initialContext, candidate)
 BY DEF IndexedHistoricalTemporalStage3BlockedAtAux,
        IndexedHistoricalTemporalCandidateRunnerPending,
        IndexedHistoricalTemporalSupportAt,
@@ -2818,18 +2822,18 @@ BY DEF IndexedHistoricalTemporalStage3BlockedAtAux,
          HistoricalProtectedOwnedAtServiceRank
 
 THEOREM IndexedHistoricalStage3RunnerProducesOutcome ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    \A rank \in IndexedHistoricalTransport(initialContext)!
-                   ReadyRunAuxCarrier:
-      /\ IndexedHistoricalTemporalStage3BlockedAtAux(
-           initialContext, candidate, position, rank)
-      /\ <<IndexedRunHistoricalRecoveryStep(
-             initialContext, candidate.node)>>_IndexedChainVars
-      => \/ IndexedHistoricalTemporalStage3AuxProgress(
-              initialContext, candidate, position, rank)'
-         \/ IndexedHistoricalTemporalStage3ServeEpisodeResidual(
-              initialContext, candidate, position, rank)'
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      \A rank \in IndexedHistoricalTransport(initialContext)!
+                     ReadyRunAuxCarrier:
+        /\ IndexedHistoricalTemporalStage3BlockedAtAux(
+             initialContext, candidate, position, rank)
+        /\ <<IndexedRunHistoricalRecoveryStep(
+               initialContext, candidate.node)>>_IndexedChainVars
+        => \/ IndexedHistoricalTemporalStage3AuxProgress(
+                initialContext, candidate, position, rank)'
+           \/ IndexedHistoricalTemporalStage3ServeEpisodeResidual(
+                initialContext, candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -2860,19 +2864,19 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage3UnlessAuxProgress ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    \A rank \in IndexedHistoricalTransport(initialContext)!
-                   ReadyRunAuxCarrier:
-      /\ IndexedHistoricalTemporalStage3BlockedAtAux(
-           initialContext, candidate, position, rank)
-      /\ [IndexedChainNext]_IndexedChainVars
-      => \/ IndexedHistoricalTemporalStage3BlockedAtAux(
-              initialContext, candidate, position, rank)'
-         \/ IndexedHistoricalTemporalStage3AuxProgress(
-              initialContext, candidate, position, rank)'
-         \/ IndexedHistoricalTemporalStage3ServeEpisodeResidual(
-              initialContext, candidate, position, rank)'
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      \A rank \in IndexedHistoricalTransport(initialContext)!
+                     ReadyRunAuxCarrier:
+        /\ IndexedHistoricalTemporalStage3BlockedAtAux(
+             initialContext, candidate, position, rank)
+        /\ [IndexedChainNext]_IndexedChainVars
+        => \/ IndexedHistoricalTemporalStage3BlockedAtAux(
+                initialContext, candidate, position, rank)'
+           \/ IndexedHistoricalTemporalStage3AuxProgress(
+                initialContext, candidate, position, rank)'
+           \/ IndexedHistoricalTemporalStage3ServeEpisodeResidual(
+                initialContext, candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -2915,12 +2919,13 @@ PROOF
 THEOREM IndexedChainSpecClosesHistoricalTemporalStage3Rank ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalTemporalStage3FiniteServeEpisodeResidualProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position \in Nat:
-         IndexedHistoricalTemporalStage3Pending(
-           initialContext, candidate, position)
-           ~> IndexedHistoricalTemporalRankProgressExit(
-                initialContext, candidate, <<3, position>>)
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate:
+           \A position \in Nat:
+             IndexedHistoricalTemporalStage3Pending(
+               initialContext, candidate, position)
+               ~> IndexedHistoricalTemporalRankProgressExit(
+                    initialContext, candidate, <<3, position>>)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
                 IndexedHistoricalTemporalStage3FiniteServeEpisodeResidualProperty,
@@ -3171,22 +3176,22 @@ IndexedHistoricalTemporalStage4ServeEpisodeResidual(
       candidate, position, rank)
 
 IndexedHistoricalTemporalStage4FiniteServeEpisodeResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    \A rank \in IndexedHistoricalTransport(initialContext)!
-                   HistoricalTemporalStage4EpisodeCarrier:
-      IndexedHistoricalTemporalStage4ServeEpisodeResidual(
-        initialContext, candidate, position, rank)
-        ~> IndexedHistoricalTemporalStage4Progress(
-             initialContext, candidate, position, rank)
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      \A rank \in IndexedHistoricalTransport(initialContext)!
+                     HistoricalTemporalStage4EpisodeCarrier:
+        IndexedHistoricalTemporalStage4ServeEpisodeResidual(
+          initialContext, candidate, position, rank)
+          ~> IndexedHistoricalTemporalStage4Progress(
+               initialContext, candidate, position, rank)
 
 THEOREM IndexedHistoricalStage4BlockedHasRunnerPending ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position, rank:
-    IndexedHistoricalTemporalStage4BlockedAtRank(
-      initialContext, candidate, position, rank)
-      => IndexedHistoricalTemporalCandidateRunnerPending(
-           initialContext, candidate)
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position, rank:
+      IndexedHistoricalTemporalStage4BlockedAtRank(
+        initialContext, candidate, position, rank)
+        => IndexedHistoricalTemporalCandidateRunnerPending(
+             initialContext, candidate)
 BY DEF IndexedHistoricalTemporalStage4BlockedAtRank,
        IndexedHistoricalTemporalCandidateRunnerPending,
        IndexedHistoricalTemporalSupportAt,
@@ -3198,18 +3203,18 @@ BY DEF IndexedHistoricalTemporalStage4BlockedAtRank,
          HistoricalProtectedOwnedAtServiceRank
 
 THEOREM IndexedHistoricalStage4RunnerProducesOutcome ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    \A rank \in IndexedHistoricalTransport(initialContext)!
-                   HistoricalTemporalStage4EpisodeCarrier:
-      /\ IndexedHistoricalTemporalStage4BlockedAtRank(
-           initialContext, candidate, position, rank)
-      /\ <<IndexedRunHistoricalRecoveryStep(
-             initialContext, candidate.node)>>_IndexedChainVars
-      => \/ IndexedHistoricalTemporalStage4Progress(
-              initialContext, candidate, position, rank)'
-         \/ IndexedHistoricalTemporalStage4ServeEpisodeResidual(
-              initialContext, candidate, position, rank)'
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      \A rank \in IndexedHistoricalTransport(initialContext)!
+                     HistoricalTemporalStage4EpisodeCarrier:
+        /\ IndexedHistoricalTemporalStage4BlockedAtRank(
+             initialContext, candidate, position, rank)
+        /\ <<IndexedRunHistoricalRecoveryStep(
+               initialContext, candidate.node)>>_IndexedChainVars
+        => \/ IndexedHistoricalTemporalStage4Progress(
+                initialContext, candidate, position, rank)'
+           \/ IndexedHistoricalTemporalStage4ServeEpisodeResidual(
+                initialContext, candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -3240,19 +3245,19 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage4UnlessProgress ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    \A rank \in IndexedHistoricalTransport(initialContext)!
-                   HistoricalTemporalStage4EpisodeCarrier:
-      /\ IndexedHistoricalTemporalStage4BlockedAtRank(
-           initialContext, candidate, position, rank)
-      /\ [IndexedChainNext]_IndexedChainVars
-      => \/ IndexedHistoricalTemporalStage4BlockedAtRank(
-              initialContext, candidate, position, rank)'
-         \/ IndexedHistoricalTemporalStage4Progress(
-              initialContext, candidate, position, rank)'
-         \/ IndexedHistoricalTemporalStage4ServeEpisodeResidual(
-              initialContext, candidate, position, rank)'
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      \A rank \in IndexedHistoricalTransport(initialContext)!
+                     HistoricalTemporalStage4EpisodeCarrier:
+        /\ IndexedHistoricalTemporalStage4BlockedAtRank(
+             initialContext, candidate, position, rank)
+        /\ [IndexedChainNext]_IndexedChainVars
+        => \/ IndexedHistoricalTemporalStage4BlockedAtRank(
+                initialContext, candidate, position, rank)'
+           \/ IndexedHistoricalTemporalStage4Progress(
+                initialContext, candidate, position, rank)'
+           \/ IndexedHistoricalTemporalStage4ServeEpisodeResidual(
+                initialContext, candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -3295,12 +3300,13 @@ PROOF
 THEOREM IndexedChainSpecClosesHistoricalTemporalStage4Rank ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalTemporalStage4FiniteServeEpisodeResidualProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position \in Nat:
-         IndexedHistoricalTemporalStage4Pending(
-           initialContext, candidate, position)
-           ~> IndexedHistoricalTemporalRankProgressExit(
-                initialContext, candidate, <<4, position>>)
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate:
+           \A position \in Nat:
+             IndexedHistoricalTemporalStage4Pending(
+               initialContext, candidate, position)
+               ~> IndexedHistoricalTemporalRankProgressExit(
+                    initialContext, candidate, <<4, position>>)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
                 IndexedHistoricalTemporalStage4FiniteServeEpisodeResidualProperty,
@@ -3533,16 +3539,16 @@ IndexedHistoricalTemporalStage5Pending(
     HistoricalTemporalStage5Pending(candidate, position)
 
 THEOREM IndexedHistoricalStage5PendingHasJoinedFairOwner ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    /\ IndexedCompositionInvariant
-    /\ IndexedHistoricalTemporalStage5Pending(
-         initialContext, candidate, position)
-    => /\ candidate.node \in Responsive
-       /\ candidate.node \in joinedByContext[initialContext]
-       /\ initialContext \in JoinedContexts
-       /\ IndexedHistoricalTransport(initialContext)!
-            HistoricalRecoveryTarget(candidate.node)
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      /\ IndexedCompositionInvariant
+      /\ IndexedHistoricalTemporalStage5Pending(
+           initialContext, candidate, position)
+      => /\ candidate.node \in Responsive
+         /\ candidate.node \in joinedByContext[initialContext]
+         /\ initialContext \in JoinedContexts
+         /\ IndexedHistoricalTransport(initialContext)!
+              HistoricalRecoveryTarget(candidate.node)
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -3577,14 +3583,14 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage5PendingEnablesExactWorker ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    /\ IndexedCompositionInvariant
-    /\ IndexedHistoricalTemporalStage5Pending(
-         initialContext, candidate, position)
-    => ENABLED
-         IndexedHistoricalRecoveryIoWorkerStep(
-           initialContext, candidate.node)
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      /\ IndexedCompositionInvariant
+      /\ IndexedHistoricalTemporalStage5Pending(
+           initialContext, candidate, position)
+      => ENABLED
+           IndexedHistoricalRecoveryIoWorkerStep(
+             initialContext, candidate.node)
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -3633,14 +3639,14 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage5WorkerIsNonstuttering ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    /\ IndexedHistoricalTemporalStage5Pending(
-         initialContext, candidate, position)
-    /\ IndexedHistoricalRecoveryIoWorkerStep(
-         initialContext, candidate.node)
-    => <<IndexedHistoricalRecoveryIoWorkerStep(
-           initialContext, candidate.node)>>_IndexedChainVars
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      /\ IndexedHistoricalTemporalStage5Pending(
+           initialContext, candidate, position)
+      /\ IndexedHistoricalRecoveryIoWorkerStep(
+           initialContext, candidate.node)
+      => <<IndexedHistoricalRecoveryIoWorkerStep(
+             initialContext, candidate.node)>>_IndexedChainVars
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -3683,27 +3689,27 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage5PendingEnablesFairOccurrence ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    /\ IndexedCompositionInvariant
-    /\ IndexedHistoricalTemporalStage5Pending(
-         initialContext, candidate, position)
-    => ENABLED
-         <<IndexedHistoricalRecoveryIoWorkerStep(
-             initialContext, candidate.node)>>_IndexedChainVars
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      /\ IndexedCompositionInvariant
+      /\ IndexedHistoricalTemporalStage5Pending(
+           initialContext, candidate, position)
+      => ENABLED
+           <<IndexedHistoricalRecoveryIoWorkerStep(
+               initialContext, candidate.node)>>_IndexedChainVars
 BY IndexedHistoricalStage5PendingEnablesExactWorker,
    IndexedHistoricalStage5WorkerIsNonstuttering,
    ENABLEDaxioms
 
 THEOREM IndexedHistoricalStage5FairOccurrenceStrictlyProgresses ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    /\ IndexedHistoricalTemporalStage5Pending(
-         initialContext, candidate, position)
-    /\ <<IndexedHistoricalRecoveryIoWorkerStep(
-           initialContext, candidate.node)>>_IndexedChainVars
-    => IndexedHistoricalTemporalRankProgressExit(
-         initialContext, candidate, <<5, position>>)'
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      /\ IndexedHistoricalTemporalStage5Pending(
+           initialContext, candidate, position)
+      /\ <<IndexedHistoricalRecoveryIoWorkerStep(
+             initialContext, candidate.node)>>_IndexedChainVars
+      => IndexedHistoricalTemporalRankProgressExit(
+           initialContext, candidate, <<5, position>>)'
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -3729,15 +3735,15 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage5UnlessProgress ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
-    /\ IndexedHistoricalTemporalStage5Pending(
-         initialContext, candidate, position)
-    /\ [IndexedChainNext]_IndexedChainVars
-    => \/ IndexedHistoricalTemporalStage5Pending(
-            initialContext, candidate, position)'
-       \/ IndexedHistoricalTemporalRankProgressExit(
-            initialContext, candidate, <<5, position>>)'
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
+      /\ IndexedHistoricalTemporalStage5Pending(
+           initialContext, candidate, position)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => \/ IndexedHistoricalTemporalStage5Pending(
+              initialContext, candidate, position)'
+         \/ IndexedHistoricalTemporalRankProgressExit(
+              initialContext, candidate, <<5, position>>)'
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW candidate, NEW position,
@@ -3762,12 +3768,13 @@ PROOF
 
 THEOREM IndexedChainSpecClosesHistoricalTemporalStage5Rank ==
   IndexedChainSpec
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position \in Nat:
-         IndexedHistoricalTemporalStage5Pending(
-           initialContext, candidate, position)
-           ~> IndexedHistoricalTemporalRankProgressExit(
-                initialContext, candidate, <<5, position>>)
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate:
+           \A position \in Nat:
+             IndexedHistoricalTemporalStage5Pending(
+               initialContext, candidate, position)
+               ~> IndexedHistoricalTemporalRankProgressExit(
+                    initialContext, candidate, <<5, position>>)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
                 NEW initialContext \in AdmissibleContextRecords,
@@ -3991,14 +3998,14 @@ IndexedHistoricalStage6RunnerEpisodeResidual(
 
 IndexedHistoricalStage6FiniteRunnerEpisodeResidualProperty ==
   \A initialContext \in AdmissibleContextRecords,
-     mode \in IndexedHistoricalStage6RunnerModes,
-     candidate, position:
-    \A rank \in
-         IndexedHistoricalStage6RunnerCarrier(initialContext, mode):
-      IndexedHistoricalStage6RunnerEpisodeResidual(
-        initialContext, mode, candidate, position, rank)
-        ~> IndexedHistoricalStage6RunnerProgress(
-             initialContext, mode, candidate, position, rank)
+     mode \in IndexedHistoricalStage6RunnerModes:
+    \A candidate, position:
+      \A rank \in
+           IndexedHistoricalStage6RunnerCarrier(initialContext, mode):
+        IndexedHistoricalStage6RunnerEpisodeResidual(
+          initialContext, mode, candidate, position, rank)
+          ~> IndexedHistoricalStage6RunnerProgress(
+               initialContext, mode, candidate, position, rank)
 
 IndexedHistoricalFiniteRunnerEpisodeClosureProperty ==
   /\ IndexedHistoricalTemporalStage3FiniteServeEpisodeResidualProperty
@@ -4051,12 +4058,12 @@ PROOF
 
 THEOREM IndexedHistoricalStage6RunnerBlockedHasPendingOwner ==
   \A initialContext \in AdmissibleContextRecords,
-     mode \in IndexedHistoricalStage6RunnerModes,
-     candidate, position, rank:
-    IndexedHistoricalStage6RunnerBlocked(
-      initialContext, mode, candidate, position, rank)
-      => IndexedHistoricalTemporalCandidateRunnerPending(
-           initialContext, candidate)
+     mode \in IndexedHistoricalStage6RunnerModes:
+    \A candidate, position, rank:
+      IndexedHistoricalStage6RunnerBlocked(
+        initialContext, mode, candidate, position, rank)
+        => IndexedHistoricalTemporalCandidateRunnerPending(
+             initialContext, candidate)
 BY Isa
    DEF IndexedHistoricalStage6RunnerModes,
        IndexedHistoricalStage6RunnerBlocked,
@@ -4075,18 +4082,18 @@ BY Isa
 
 THEOREM IndexedHistoricalStage6RunnerProducesOutcome ==
   \A initialContext \in AdmissibleContextRecords,
-     mode \in IndexedHistoricalStage6RunnerModes,
-     candidate, position:
-    \A rank \in
-         IndexedHistoricalStage6RunnerCarrier(initialContext, mode):
-      /\ IndexedHistoricalStage6RunnerBlocked(
-           initialContext, mode, candidate, position, rank)
-      /\ <<IndexedRunHistoricalRecoveryStep(
-             initialContext, candidate.node)>>_IndexedChainVars
-      => \/ IndexedHistoricalStage6RunnerProgress(
-              initialContext, mode, candidate, position, rank)'
-         \/ IndexedHistoricalStage6RunnerEpisodeResidual(
-              initialContext, mode, candidate, position, rank)'
+     mode \in IndexedHistoricalStage6RunnerModes:
+    \A candidate, position:
+      \A rank \in
+           IndexedHistoricalStage6RunnerCarrier(initialContext, mode):
+        /\ IndexedHistoricalStage6RunnerBlocked(
+             initialContext, mode, candidate, position, rank)
+        /\ <<IndexedRunHistoricalRecoveryStep(
+               initialContext, candidate.node)>>_IndexedChainVars
+        => \/ IndexedHistoricalStage6RunnerProgress(
+                initialContext, mode, candidate, position, rank)'
+           \/ IndexedHistoricalStage6RunnerEpisodeResidual(
+                initialContext, mode, candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW mode \in IndexedHistoricalStage6RunnerModes,
@@ -4139,19 +4146,19 @@ PROOF
 
 THEOREM IndexedHistoricalStage6RunnerUnlessProgress ==
   \A initialContext \in AdmissibleContextRecords,
-     mode \in IndexedHistoricalStage6RunnerModes,
-     candidate, position:
-    \A rank \in
-         IndexedHistoricalStage6RunnerCarrier(initialContext, mode):
-      /\ IndexedHistoricalStage6RunnerBlocked(
-           initialContext, mode, candidate, position, rank)
-      /\ [IndexedChainNext]_IndexedChainVars
-      => \/ IndexedHistoricalStage6RunnerBlocked(
-              initialContext, mode, candidate, position, rank)'
-         \/ IndexedHistoricalStage6RunnerProgress(
-              initialContext, mode, candidate, position, rank)'
-         \/ IndexedHistoricalStage6RunnerEpisodeResidual(
-              initialContext, mode, candidate, position, rank)'
+     mode \in IndexedHistoricalStage6RunnerModes:
+    \A candidate, position:
+      \A rank \in
+           IndexedHistoricalStage6RunnerCarrier(initialContext, mode):
+        /\ IndexedHistoricalStage6RunnerBlocked(
+             initialContext, mode, candidate, position, rank)
+        /\ [IndexedChainNext]_IndexedChainVars
+        => \/ IndexedHistoricalStage6RunnerBlocked(
+                initialContext, mode, candidate, position, rank)'
+           \/ IndexedHistoricalStage6RunnerProgress(
+                initialContext, mode, candidate, position, rank)'
+           \/ IndexedHistoricalStage6RunnerEpisodeResidual(
+                initialContext, mode, candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
                 NEW mode \in IndexedHistoricalStage6RunnerModes,
@@ -4867,8 +4874,8 @@ THEOREM IndexedHistoricalStage6FairRunnerOneStep ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalStage6FiniteRunnerEpisodeResidualProperty
     => \A initialContext \in AdmissibleContextRecords,
-          mode \in IndexedHistoricalStage6RunnerModes,
-          candidate, position:
+          mode \in IndexedHistoricalStage6RunnerModes:
+         \A candidate, position:
          \A rank \in
               IndexedHistoricalStage6RunnerCarrier(
                 initialContext, mode):
@@ -4967,8 +4974,8 @@ THEOREM IndexedHistoricalStage6RunnerModeDescent ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalStage6FiniteRunnerEpisodeResidualProperty
     => \A initialContext \in AdmissibleContextRecords,
-          mode \in IndexedHistoricalStage6RunnerModes,
-          candidate, position:
+          mode \in IndexedHistoricalStage6RunnerModes:
+         \A candidate, position:
          \A rank \in
               IndexedHistoricalStage6RunnerCarrier(
                 initialContext, mode):
@@ -5027,8 +5034,8 @@ product descent above.
 THEOREM IndexedChainSpecClosesHistoricalStage6PreAdmission ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalStage6FiniteRunnerEpisodeResidualProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          IndexedHistoricalTransport(initialContext)!
            HistoricalTemporalStage6Pending(candidate, position)
            ~> IndexedHistoricalTransport(initialContext)!
@@ -5098,8 +5105,8 @@ PROOF
 THEOREM IndexedChainSpecClosesHistoricalStage6Owed ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalStage6FiniteRunnerEpisodeResidualProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          IndexedHistoricalTransport(initialContext)!
            HistoricalTemporalStage6OwedCausalReady(candidate, position)
            ~> IndexedHistoricalTemporalRankProgressExit(
@@ -5162,8 +5169,8 @@ PROOF
 THEOREM IndexedChainSpecClosesHistoricalStage6NonCompletion ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalStage6FiniteRunnerEpisodeResidualProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          IndexedHistoricalTransport(initialContext)!
            HistoricalTemporalStage6NonCompletionCapacityBlocked(
              candidate, position)
@@ -5257,8 +5264,8 @@ IndexedHistoricalStage6CompletionIoProgress(
       candidate, position, depth)
 
 THEOREM IndexedHistoricalStage6CompletionIoBlockedHasFairOwner ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position, depth:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position, depth:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalStage6CompletionIoBlockedAtDepth(
          initialContext, candidate, position, depth)
@@ -5297,8 +5304,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage6CompletionIoBlockedEnablesExactWorker ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position, depth:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position, depth:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalStage6CompletionIoBlockedAtDepth(
          initialContext, candidate, position, depth)
@@ -5353,8 +5360,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage6CompletionIoWorkerIsNonstuttering ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position, depth:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position, depth:
     /\ IndexedHistoricalStage6CompletionIoBlockedAtDepth(
          initialContext, candidate, position, depth)
     /\ IndexedHistoricalRecoveryIoWorkerStep(
@@ -5406,8 +5413,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage6CompletionIoBlockedEnablesFairOccurrence ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position, depth:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position, depth:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalStage6CompletionIoBlockedAtDepth(
          initialContext, candidate, position, depth)
@@ -5419,8 +5426,8 @@ BY IndexedHistoricalStage6CompletionIoBlockedEnablesExactWorker,
    ENABLEDaxioms
 
 THEOREM IndexedHistoricalStage6CompletionIoFairOccurrenceProgresses ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
     \A depth \in Nat:
       /\ IndexedHistoricalStage6CompletionIoBlockedAtDepth(
            initialContext, candidate, position, depth)
@@ -5457,8 +5464,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage6CompletionIoUnlessProgress ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
     \A depth \in Nat:
       /\ IndexedHistoricalStage6CompletionIoBlockedAtDepth(
            initialContext, candidate, position, depth)
@@ -5502,8 +5509,8 @@ PROOF
 
 THEOREM IndexedChainSpecHistoricalStage6CompletionIoOneStep ==
   IndexedChainSpec
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          \A depth \in Nat:
            IndexedHistoricalStage6CompletionIoBlockedAtDepth(
              initialContext, candidate, position, depth)
@@ -5574,8 +5581,8 @@ PROOF
 
 THEOREM IndexedChainSpecDrainsHistoricalStage6CompletionIo ==
   IndexedChainSpec
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          \A depth \in Nat:
            IndexedHistoricalStage6CompletionIoBlockedAtDepth(
              initialContext, candidate, position, depth)
@@ -5632,8 +5639,8 @@ IndexedHistoricalStage6CompletionReadyWitnessBlocked(
       candidate, position, readyCandidate, readyPosition)
 
 THEOREM IndexedHistoricalStage4GoalImpliesRankExit ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
     /\ position \in Nat
     /\ IndexedHistoricalTemporalStage4Goal(
          initialContext, candidate, position)
@@ -5695,8 +5702,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage6CompletionReadyWitnessExists ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position:
     IndexedHistoricalStage6CompletionReadyBlocked(
       initialContext, candidate, position)
       => \E readyCandidate \in
@@ -5726,8 +5733,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalStage6CompletionReadyWitnessUnless ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, position, readyCandidate, readyPosition:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, position, readyCandidate, readyPosition:
     /\ IndexedHistoricalStage6CompletionReadyWitnessBlocked(
          initialContext, candidate, position,
          readyCandidate, readyPosition)
@@ -5765,8 +5772,8 @@ PROOF
 THEOREM IndexedChainSpecOpensHistoricalStage6CompletionReadyWitness ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          \A readyCandidate \in
               IndexedHistoricalTransport(initialContext)!
                 AsyncCandidateSet,
@@ -5838,8 +5845,8 @@ PROOF
 THEOREM IndexedChainSpecOpensHistoricalStage6CompletionReady ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          IndexedHistoricalStage6CompletionReadyBlocked(
            initialContext, candidate, position)
            ~> IndexedHistoricalStage6CompletionGoal(
@@ -5881,8 +5888,8 @@ PROOF
 THEOREM IndexedChainSpecOpensHistoricalStage6CompletionCapacity ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          IndexedHistoricalTransport(initialContext)!
            HistoricalTemporalStage6CompletionCapacityBlocked(
              candidate, position)
@@ -6137,8 +6144,8 @@ IndexedHistoricalTemporalPostDeferredAtRank(
     HistoricalTemporalPostDeferredAtRank(candidate, rank)
 
 THEOREM IndexedHistoricalStageLeafGoalImpliesStrictRank ==
-  \A initialContext \in AdmissibleContextRecords,
-     candidate, stage, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A candidate, stage, position:
     /\ stage \in 3..6
     /\ position \in Nat
     /\ (IndexedHistoricalTransport(initialContext)!
@@ -6284,7 +6291,8 @@ PROOF
 THEOREM IndexedChainSpecConvergesHistoricalPostDeferredRank ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords, candidate:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate:
          (IndexedHistoricalTransport(initialContext)!gst
            /\ IndexedHistoricalTransport(initialContext)!
                 HistoricalProtectedCandidateOwned(candidate)
@@ -6441,8 +6449,8 @@ IndexedHistoricalTemporalStage2BusyWitnessBlocked(
       target, witness, phase)
 
 THEOREM IndexedHistoricalBusyWitnessHasPostDeferredRank ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, witness:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, witness:
     /\ IndexedHistoricalTemporalSupportAt(initialContext)
     /\ IndexedHistoricalTemporalBusyCompletionWitness(
          initialContext, target, witness)
@@ -6473,8 +6481,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalBusyWitnessPersistsOrPhaseDrops ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, witness:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, witness:
     /\ IndexedHistoricalTemporalSupportAt(initialContext)
     /\ IndexedHistoricalTemporalBusyCompletionWitness(
          initialContext, target, witness)
@@ -6514,7 +6522,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalBusyPhaseCannotIncrease ==
-  \A initialContext \in AdmissibleContextRecords, target:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target:
     /\ IndexedHistoricalTemporalSupportAt(initialContext)
     /\ IndexedHistoricalTemporalStage2Owned(initialContext, target)
     /\ IndexedHistoricalTransport(initialContext)!
@@ -6555,7 +6564,8 @@ PROOF
 THEOREM IndexedChainSpecDescendsHistoricalStage2BusyPhase ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords, target:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A target:
          \A phase \in 1..2:
            (IndexedHistoricalTemporalStage2Owned(
               initialContext, target)
@@ -6755,7 +6765,8 @@ IndexedHistoricalTemporalStage2BusyTerminationGoal(
 THEOREM IndexedChainSpecTerminatesHistoricalStage2Busy ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords, target:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A target:
          (IndexedHistoricalTemporalStage2Owned(initialContext, target)
            /\ ~IndexedHistoricalTransport(initialContext)!
                  NodeIdle(target.node))
@@ -6889,7 +6900,8 @@ IndexedHistoricalTemporalStage2HandoffProgressExit(
 THEOREM IndexedChainSpecExitsHistoricalStage2IdleHandoff ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords, candidate:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate:
          IndexedHistoricalTemporalStage2ExactIdleRetryPending(
            initialContext, candidate)
            ~> IndexedHistoricalTemporalStage2HandoffProgressExit(
@@ -7073,8 +7085,8 @@ IndexedHistoricalTemporalStage2RankOrHandoffProgress(
 THEOREM IndexedChainSpecReachesHistoricalStage2ExitOrHandoff ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          IndexedHistoricalTransport(initialContext)!
            HistoricalProtectedOwnedAtServiceRank(
              candidate, <<2, position>>)
@@ -7222,8 +7234,8 @@ PROOF
 THEOREM IndexedChainSpecExitsHistoricalStage2HandoffRank ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFiniteRunnerEpisodeClosureProperty
-    => \A initialContext \in AdmissibleContextRecords,
-          candidate, position:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A candidate, position:
          IndexedHistoricalTemporalStage2HandoffRankBlocked(
            initialContext, candidate, position)
            ~> IndexedHistoricalTemporalStage2RankProgressExit(
@@ -8350,8 +8362,8 @@ IndexedHistoricalServeRankProgressExit(
     ProtectedServeRankProgressExit(node, job, <<5, position>>)
 
 THEOREM IndexedHistoricalServePendingHasJoinedFairWorker ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, job, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, job, position:
     /\ IndexedHistoricalServeOwnerJoinedInvariant
     /\ IndexedHistoricalServeStage5Pending(
          initialContext, node, job, position)
@@ -8383,8 +8395,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalServePendingEnablesExactProductWorker ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, job, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, job, position:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalServeOwnerJoinedInvariant
     /\ IndexedHistoricalServeStage5Pending(
@@ -8422,8 +8434,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalServeProductWorkerIsNonstuttering ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, job, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, job, position:
     /\ IndexedHistoricalServeStage5Pending(
          initialContext, node, job, position)
     /\ IndexedIoWorkerStep(initialContext, node)
@@ -8469,8 +8481,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalServePendingEnablesFairOccurrence ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, job, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, job, position:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalServeOwnerJoinedInvariant
     /\ IndexedHistoricalServeStage5Pending(
@@ -8483,8 +8495,8 @@ BY IndexedHistoricalServePendingEnablesExactProductWorker,
    ENABLEDaxioms
 
 THEOREM IndexedHistoricalServeFairOccurrenceStrictlyProgresses ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, job, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, job, position:
     /\ IndexedHistoricalServeStage5Pending(
          initialContext, node, job, position)
     /\ <<IndexedIoWorkerStep(
@@ -8516,8 +8528,8 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHistoricalServePendingUnlessProgress ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, job, position:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, job, position:
     /\ IndexedHistoricalServeStage5Pending(
          initialContext, node, job, position)
     /\ [IndexedChainNext]_IndexedChainVars
@@ -8533,8 +8545,8 @@ BY IndexedBracketStepProjectsEveryHistoricalTransportStep,
 
 THEOREM IndexedChainSpecClosesHistoricalServeRankCell ==
   IndexedChainSpec
-    => \A initialContext \in AdmissibleContextRecords,
-          node, job:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A node, job:
          \A position \in Nat:
            IndexedHistoricalServeStage5Pending(
              initialContext, node, job, position)
@@ -8696,8 +8708,8 @@ assuming either broad transport leaf.
 ***************************************************************************)
 
 THEOREM IndexedHistoricalCommitServeResidualPersistsOrResponds ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, job:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, job:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalTransport(initialContext)!
@@ -8720,8 +8732,8 @@ BY IndexedBracketStepProjectsEveryHistoricalTransportStep,
          HistoricalCommitResponsePacketGoal
 
 THEOREM IndexedHistoricalDecisionServeResidualPersistsOrResponds ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, job:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, job:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalTransport(initialContext)!
@@ -8746,8 +8758,8 @@ BY IndexedBracketStepProjectsEveryHistoricalTransportStep,
 
 THEOREM IndexedChainSpecClosesHistoricalCommitServeResponseKernel ==
   IndexedChainSpec
-    => \A initialContext \in AdmissibleContextRecords,
-          target, server, request, job:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A target, server, request, job:
          IndexedHistoricalTransport(initialContext)!
            HistoricalCommitServeJobOwned(
              target, server, request, job)
@@ -8826,8 +8838,8 @@ PROOF
 
 THEOREM IndexedChainSpecClosesHistoricalDecisionServeResponseKernel ==
   IndexedChainSpec
-    => \A initialContext \in AdmissibleContextRecords,
-          node, qc, archive, request, job:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A node, qc, archive, request, job:
          IndexedHistoricalTransport(initialContext)!
            HistoricalDecisionServeJobOwned(
              node, qc, archive, request, job)
@@ -9040,8 +9052,8 @@ IndexedHistoricalCommitRequestSendingReadyResidual(
          IndexedHistoricalTransport(initialContext)!AsyncAllVars)
 
 THEOREM IndexedHistoricalCommitEmissionOwnerHasJoinedFairRunnerDomain ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     /\ IndexedChainSpec
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalCommitRequestEmissionResidual(
@@ -9058,8 +9070,8 @@ BY IndexedHistoricalRecoveryTargetHasJoinedActiveOwner, Isa
        IndexedHistoricalTransport!HistoricalCommitRequestRegistered
 
 THEOREM IndexedHistoricalCommitSendingStepPublishesExactPacket ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalCommitRequestEmissionResidual(
@@ -9093,8 +9105,8 @@ BY IndexedHistoricalTransport(initialContext)!
        IndexedHistoricalTransport!SelectedLocalAdmissionAdvance
 
 IndexedHistoricalCommitEmissionClockResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     IndexedChainSpec
       => (IndexedHistoricalCommitRequestEmissionResidual(
             initialContext, target, server, request)
@@ -9105,8 +9117,8 @@ IndexedHistoricalCommitEmissionClockResidualProperty ==
                      initialContext, target, server, request)))
 
 IndexedHistoricalCommitEmissionRunnerSplitResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     IndexedChainSpec
       => (IndexedHistoricalCommitRequestRetransmitArmedResidual(
             initialContext, target, server, request)
@@ -9119,8 +9131,8 @@ IndexedHistoricalCommitEmissionRunnerSplitResidualProperty ==
                         initialContext, target)))
 
 IndexedHistoricalCommitEmissionRuntimePrefixResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     IndexedChainSpec
       => ((/\ IndexedHistoricalCommitRequestRetransmitArmedResidual(
                  initialContext, target, server, request)
@@ -9133,8 +9145,8 @@ IndexedHistoricalCommitEmissionRuntimePrefixResidualProperty ==
                      initialContext, target, server, request)))
 
 IndexedHistoricalCommitEmissionSendingHandoffResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     IndexedChainSpec
       => (IndexedHistoricalCommitRequestSendingReadyResidual(
             initialContext, target, server, request)
@@ -9194,8 +9206,8 @@ IndexedHistoricalDecisionRequestSendingReadyResidual(
          IndexedHistoricalTransport(initialContext)!AsyncAllVars)
 
 THEOREM IndexedHistoricalDecisionEmissionOwnerHasJoinedFairRunnerDomain ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     /\ IndexedChainSpec
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalDecisionRequestEmissionResidual(
@@ -9214,8 +9226,8 @@ BY IndexedHistoricalRecoveryTargetHasJoinedActiveOwner, Isa
        IndexedHistoricalTransport!HistoricalExactDecisionServiceSource
 
 THEOREM IndexedHistoricalDecisionSendingStepPublishesExactPacket ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalDecisionRequestEmissionResidual(
@@ -9249,8 +9261,8 @@ BY IndexedHistoricalTransport(initialContext)!
        IndexedHistoricalTransport!SelectedLocalAdmissionAdvance
 
 IndexedHistoricalDecisionEmissionClockResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     IndexedChainSpec
       => (IndexedHistoricalDecisionRequestEmissionResidual(
             initialContext, node, qc, archive, request)
@@ -9261,8 +9273,8 @@ IndexedHistoricalDecisionEmissionClockResidualProperty ==
                      initialContext, node, qc, archive, request)))
 
 IndexedHistoricalDecisionEmissionRunnerSplitResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     IndexedChainSpec
       => (IndexedHistoricalDecisionRequestRetransmitArmedResidual(
             initialContext, node, qc, archive, request)
@@ -9275,8 +9287,8 @@ IndexedHistoricalDecisionEmissionRunnerSplitResidualProperty ==
                         initialContext, node)))
 
 IndexedHistoricalDecisionEmissionRuntimePrefixResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     IndexedChainSpec
       => ((/\ IndexedHistoricalDecisionRequestRetransmitArmedResidual(
                  initialContext, node, qc, archive, request)
@@ -9289,8 +9301,8 @@ IndexedHistoricalDecisionEmissionRuntimePrefixResidualProperty ==
                      initialContext, node, qc, archive, request)))
 
 IndexedHistoricalDecisionEmissionSendingHandoffResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     IndexedChainSpec
       => (IndexedHistoricalDecisionRequestSendingReadyResidual(
             initialContext, node, qc, archive, request)
@@ -9371,8 +9383,8 @@ IndexedHistoricalCommitRequestAdmissionOutcome(
          target, server, request)
 
 THEOREM IndexedHistoricalCommitPacketAdmissionHasExactLifecycleOutcome ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, packet:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
@@ -9424,8 +9436,8 @@ IndexedHistoricalCommitLifecycleArchiveOwnerReady(
                  AsyncVotersAt(initialContext)
 
 IndexedHistoricalCommitLifecycleArchiveActivationResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     IndexedChainSpec
       => (IndexedHistoricalTransport(initialContext)!
             HistoricalCommitRequestLifecycleResidual(
@@ -9437,8 +9449,8 @@ IndexedHistoricalCommitLifecycleArchiveActivationResidualProperty ==
                      initialContext, server)))
 
 THEOREM IndexedHistoricalCommitLifecycleHasActivatedArchiveOwner ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalTemporalSupportAt(initialContext)
     /\ IndexedHistoricalTransport(initialContext)!
@@ -9474,7 +9486,8 @@ BY IndexedChainSpecEstablishesCompositionInvariant,
    DEF IndexedHistoricalCommitLifecycleArchiveActivationResidualProperty
 
 THEOREM IndexedHistoricalCommitLifecycleReadyOwnerHasExactFairActions ==
-  \A initialContext \in AdmissibleContextRecords, server:
+  \A initialContext \in AdmissibleContextRecords:
+    \A server:
     /\ IndexedChainSpec
     /\ IndexedHistoricalCommitLifecycleArchiveOwnerReady(
          initialContext, server)
@@ -9504,8 +9517,8 @@ IndexedHistoricalCommitLifecycleRankGoal(
          initialContext, target, server, request, lower)
 
 IndexedHistoricalCommitLifecycleRankStepResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     IndexedChainSpec
       => \A rank \in
            IndexedHistoricalTransport(initialContext)!
@@ -9517,8 +9530,8 @@ IndexedHistoricalCommitLifecycleRankStepResidualProperty ==
 
 THEOREM IndexedHistoricalCommitLifecycleRankStepClosesLifecycle ==
   IndexedHistoricalCommitLifecycleRankStepResidualProperty
-    => \A initialContext \in AdmissibleContextRecords,
-         target, server, request:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A target, server, request:
          IndexedChainSpec
            => (IndexedHistoricalTransport(initialContext)!
                  HistoricalCommitRequestLifecycleResidual(
@@ -9581,8 +9594,8 @@ PROOF
   <1> QED BY <1>1
 
 IndexedHistoricalCommitRequestHeadGateResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, packet:
     IndexedChainSpec
       => (IndexedHistoricalCommitRequestPacketResidual(
             initialContext, target, server, request, packet)
@@ -9593,8 +9606,8 @@ IndexedHistoricalCommitRequestHeadGateResidualProperty ==
                      initialContext, target, server, request, packet)))
 
 IndexedHistoricalCommitRequestAdmissionHandoffResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, packet:
     IndexedChainSpec
       => (IndexedHistoricalCommitRequestPacketAdmissionReady(
             initialContext, target, server, request, packet)
@@ -9602,8 +9615,8 @@ IndexedHistoricalCommitRequestAdmissionHandoffResidualProperty ==
                  initialContext, target, server, request))
 
 THEOREM IndexedHistoricalCommitAdmissionReadyStepIsOutcomeOrFrame ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, packet:
     /\ IndexedHistoricalTemporalSupportAt(initialContext)
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalCommitRequestPacketAdmissionReady(
@@ -9633,8 +9646,8 @@ BY IndexedBracketStepProjectsEveryHistoricalTransportStep,
        IndexedHistoricalTransport!AsyncAllVars
 
 THEOREM IndexedHistoricalCommitAdmissionReadyEnablesProductOccurrence ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, packet:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalCommitRequestPacketAdmissionReady(
          initialContext, target, server, request, packet)
@@ -9658,8 +9671,8 @@ BY IndexedHistoricalTransportVariablesAreExact,
        IndexedAsyncStateAt, IndexedAdmitPacketStep
 
 THEOREM IndexedHistoricalCommitAdmissionProductOccurrenceCreatesOutcome ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, packet:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
@@ -9674,8 +9687,8 @@ BY IndexedHistoricalCommitPacketAdmissionHasExactLifecycleOutcome, Isa
    DEF IndexedHistoricalCommitRequestPacketAdmissionReady
 
 THEOREM IndexedHistoricalCommitAdmissionReadyHasProductFairness ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, packet:
     /\ IndexedChainSpec
     /\ IndexedHistoricalCommitRequestPacketAdmissionReady(
          initialContext, target, server, request, packet)
@@ -9758,8 +9771,8 @@ IndexedHistoricalDecisionRequestAdmissionOutcome(
          node, qc, archive, request)
 
 THEOREM IndexedHistoricalDecisionPacketAdmissionHasExactLifecycleOutcome ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, packet:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalDecisionRequestPacketResidual(
@@ -9808,8 +9821,8 @@ IndexedHistoricalDecisionLifecycleArchiveOwnerReady(
                   AsyncVotersAt(initialContext)
 
 IndexedHistoricalDecisionLifecycleArchiveActivationResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     IndexedChainSpec
       => (IndexedHistoricalTransport(initialContext)!
             HistoricalDecisionRequestLifecycleResidual(
@@ -9821,8 +9834,8 @@ IndexedHistoricalDecisionLifecycleArchiveActivationResidualProperty ==
                      initialContext, archive)))
 
 THEOREM IndexedHistoricalDecisionLifecycleHasActivatedArchiveOwner ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalTemporalSupportAt(initialContext)
     /\ IndexedHistoricalTransport(initialContext)!
@@ -9859,7 +9872,8 @@ BY IndexedChainSpecEstablishesCompositionInvariant,
    DEF IndexedHistoricalDecisionLifecycleArchiveActivationResidualProperty
 
 THEOREM IndexedHistoricalDecisionLifecycleReadyOwnerHasExactFairActions ==
-  \A initialContext \in AdmissibleContextRecords, archive:
+  \A initialContext \in AdmissibleContextRecords:
+    \A archive:
     /\ IndexedChainSpec
     /\ IndexedHistoricalDecisionLifecycleArchiveOwnerReady(
          initialContext, archive)
@@ -9890,8 +9904,8 @@ IndexedHistoricalDecisionLifecycleRankGoal(
          initialContext, node, qc, archive, request, lower)
 
 IndexedHistoricalDecisionLifecycleRankStepResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     IndexedChainSpec
       => \A rank \in
            IndexedHistoricalTransport(initialContext)!
@@ -9903,8 +9917,8 @@ IndexedHistoricalDecisionLifecycleRankStepResidualProperty ==
 
 THEOREM IndexedHistoricalDecisionLifecycleRankStepClosesLifecycle ==
   IndexedHistoricalDecisionLifecycleRankStepResidualProperty
-    => \A initialContext \in AdmissibleContextRecords,
-         node, qc, archive, request:
+    => \A initialContext \in AdmissibleContextRecords:
+         \A node, qc, archive, request:
          IndexedChainSpec
            => (IndexedHistoricalTransport(initialContext)!
                  HistoricalDecisionRequestLifecycleResidual(
@@ -9968,8 +9982,8 @@ PROOF
   <1> QED BY <1>1
 
 IndexedHistoricalDecisionRequestHeadGateResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, packet:
     IndexedChainSpec
       => (IndexedHistoricalDecisionRequestPacketResidual(
             initialContext, node, qc, archive, request, packet)
@@ -9981,8 +9995,8 @@ IndexedHistoricalDecisionRequestHeadGateResidualProperty ==
                      archive, request, packet)))
 
 IndexedHistoricalDecisionRequestAdmissionHandoffResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, packet:
     IndexedChainSpec
       => (IndexedHistoricalDecisionRequestPacketAdmissionReady(
             initialContext, node, qc, archive, request, packet)
@@ -9990,8 +10004,8 @@ IndexedHistoricalDecisionRequestAdmissionHandoffResidualProperty ==
                  initialContext, node, qc, archive, request))
 
 THEOREM IndexedHistoricalDecisionAdmissionReadyStepIsOutcomeOrFrame ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, packet:
     /\ IndexedHistoricalTemporalSupportAt(initialContext)
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalDecisionRequestPacketAdmissionReady(
@@ -10021,8 +10035,8 @@ BY IndexedBracketStepProjectsEveryHistoricalTransportStep,
        IndexedHistoricalTransport!AsyncAllVars
 
 THEOREM IndexedHistoricalDecisionAdmissionReadyEnablesProductOccurrence ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, packet:
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalDecisionRequestPacketAdmissionReady(
          initialContext, node, qc, archive, request, packet)
@@ -10048,8 +10062,8 @@ BY IndexedHistoricalTransportVariablesAreExact,
        IndexedAsyncStateAt, IndexedAdmitPacketStep
 
 THEOREM IndexedHistoricalDecisionAdmissionProductOccurrenceCreatesOutcome ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, packet:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalDecisionRequestPacketAdmissionReady(
@@ -10063,8 +10077,8 @@ BY IndexedHistoricalDecisionPacketAdmissionHasExactLifecycleOutcome, Isa
    DEF IndexedHistoricalDecisionRequestPacketAdmissionReady
 
 THEOREM IndexedHistoricalDecisionAdmissionReadyHasProductFairness ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, packet:
     /\ IndexedChainSpec
     /\ IndexedHistoricalDecisionRequestPacketAdmissionReady(
          initialContext, node, qc, archive, request, packet)
@@ -10155,8 +10169,8 @@ IndexedHistoricalCommitResponseRunnerOwnerResidual(
        initialContext, target, server, request, qc, response)
 
 THEOREM IndexedHistoricalCommitResponseHasJoinedFairRunnerOwner ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, qc, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, qc, response, packet:
     /\ IndexedChainSpec
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalCommitResponseRunnerOwnerResidual(
@@ -10179,8 +10193,8 @@ BY IndexedHistoricalRecoveryTargetHasJoinedActiveOwner, IsaT(180)
        IndexedHistoricalTransport!HistoricalCommitRequestRegistered
 
 THEOREM IndexedHistoricalCommitResponseAdmissionCreatesExactIngressOwner ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, qc, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, qc, response, packet:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalCommitResponsePacketResidual(
@@ -10205,8 +10219,8 @@ BY IndexedFairProductStepsProjectExactOccurrences,
        IndexedAdmitHistoricalRecoveryPacketStep
 
 THEOREM IndexedHistoricalCommitSelectedResponseDrainCreatesGoal ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, qc, response:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, qc, response:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalTransport(initialContext)!
@@ -10229,8 +10243,8 @@ BY IndexedHistoricalTransport(initialContext)!
        IndexedHistoricalTransport!HistoricalCommitTransportGoal
 
 IndexedHistoricalCommitResponseHeadGateResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, qc, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, qc, response, packet:
     IndexedChainSpec
       => (IndexedHistoricalCommitResponsePacketResidual(
             initialContext, target, server, request,
@@ -10242,8 +10256,8 @@ IndexedHistoricalCommitResponseHeadGateResidualProperty ==
                      request, qc, response)))
 
 IndexedHistoricalCommitResponseIngressRunnerResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, qc, response:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, qc, response:
     IndexedChainSpec
       => (IndexedHistoricalCommitResponseIngressResidual(
             initialContext, target, server, request, qc, response)
@@ -10304,8 +10318,8 @@ IndexedHistoricalDecisionResponseRunnerOwnerResidual(
        initialContext, node, qc, response)
 
 THEOREM IndexedHistoricalDecisionResponseHasJoinedFairRunnerOwner ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, response, packet:
     /\ IndexedChainSpec
     /\ IndexedCompositionInvariant
     /\ IndexedHistoricalDecisionResponseRunnerOwnerResidual(
@@ -10330,8 +10344,8 @@ BY IndexedHistoricalRecoveryTargetHasJoinedActiveOwner, IsaT(180)
        IndexedHistoricalTransport!HistoricalExactDecisionServiceSource
 
 THEOREM IndexedHistoricalDecisionResponseAdmissionCreatesRouteNeutralClaim ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, response, packet:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalDecisionResponsePacketResidual(
@@ -10364,8 +10378,8 @@ BY IndexedFairProductStepsProjectExactOccurrences,
        IndexedAdmitHistoricalRecoveryPacketStep
 
 THEOREM IndexedHistoricalDecisionRouteNeutralClaimHasExactIngressWitness ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, response:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, response:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalDecisionResponseClaimResidual(
@@ -10384,8 +10398,8 @@ BY IndexedHistoricalTransport(initialContext)!
    DEF IndexedHistoricalDecisionResponseClaimResidual
 
 THEOREM IndexedHistoricalDecisionSelectedClaimDrainCreatesGoal ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, response, admitted:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, response, admitted:
     /\ IndexedHistoricalTransport(initialContext)!
          AsyncStrongTypeInvariant
     /\ IndexedHistoricalDecisionResponseClaimResidual(
@@ -10412,8 +10426,8 @@ BY IndexedHistoricalTransport(initialContext)!
    DEF IndexedHistoricalDecisionResponseClaimResidual
 
 IndexedHistoricalDecisionResponseNonPhysicalHeadGateResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, response, packet:
     IndexedChainSpec
       => ((/\ IndexedHistoricalDecisionResponsePacketResidual(
                 initialContext, node, qc, archive,
@@ -10427,8 +10441,8 @@ IndexedHistoricalDecisionResponseNonPhysicalHeadGateResidualProperty ==
                      initialContext, node, qc, response)))
 
 IndexedHistoricalDecisionResponsePhysicalCompletionResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, response, packet:
     IndexedChainSpec
       => (IndexedHistoricalDecisionResponsePhysicalCompletionResidual(
             initialContext, node, qc, archive,
@@ -10445,8 +10459,8 @@ IndexedHistoricalDecisionResponsePhysicalCompletionResidualProperty ==
                          request, response, packet)))
 
 IndexedHistoricalDecisionResponseClaimRunnerResidualProperty ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, response:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, response:
     IndexedChainSpec
       => (IndexedHistoricalDecisionResponseClaimResidual(
             initialContext, node, qc, response)
@@ -10739,8 +10753,8 @@ IndexedCurrentVoterCausalEpisodeAt(
 THEOREM IndexedChainSpecProvidesCurrentVoterCausalEpisodeOwnerFairness ==
   \A initialContext \in AdmissibleContextRecords,
      candidate \in IndexedHistoricalTransport(initialContext)!
-                    AsyncCandidateSet,
-     ownerKind:
+                    AsyncCandidateSet:
+    \A ownerKind:
     /\ IndexedChainSpec
     /\ IndexedCurrentVoterCausalEpisodeAt(
          initialContext, candidate, ownerKind)
@@ -11613,8 +11627,8 @@ IndexedHistoricalCommitEmissionEpisodeProperties(
              HistoricalCommitRequestPacketGoal(target, server, request)
 
 THEOREM IndexedChainSpecClosesHistoricalCommitEmissionEpisode ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request:
     IndexedChainSpec
       => IndexedHistoricalCommitEmissionEpisodeProperties(
            initialContext, target, server, request)
@@ -11691,8 +11705,8 @@ IndexedHistoricalDecisionEmissionEpisodeProperties(
                node, qc, archive, request)
 
 THEOREM IndexedChainSpecClosesHistoricalDecisionEmissionEpisode ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request:
     IndexedChainSpec
       => IndexedHistoricalDecisionEmissionEpisodeProperties(
            initialContext, node, qc, archive, request)
@@ -11762,8 +11776,8 @@ IndexedHistoricalCommitIngressEpisodeProperties(
               initialContext, target, server, request, rank)
 
 THEOREM IndexedChainSpecClosesHistoricalCommitIngressEpisode ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, packet:
     IndexedChainSpec
       => IndexedHistoricalCommitIngressEpisodeProperties(
            initialContext, target, server, request, packet)
@@ -11853,8 +11867,8 @@ IndexedHistoricalDecisionIngressEpisodeProperties(
               initialContext, node, qc, archive, request, rank)
 
 THEOREM IndexedChainSpecClosesHistoricalDecisionIngressEpisode ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, packet:
     IndexedChainSpec
       => IndexedHistoricalDecisionIngressEpisodeProperties(
            initialContext, node, qc, archive, request, packet)
@@ -11929,8 +11943,8 @@ IndexedHistoricalCommitResponseEpisodeProperties(
              HistoricalCommitTransportGoal(target)
 
 THEOREM IndexedChainSpecClosesHistoricalCommitResponseEpisode ==
-  \A initialContext \in AdmissibleContextRecords,
-     target, server, request, qc, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A target, server, request, qc, response, packet:
     IndexedChainSpec
       => IndexedHistoricalCommitResponseEpisodeProperties(
            initialContext, target, server, request, qc, response, packet)
@@ -11997,8 +12011,8 @@ IndexedHistoricalDecisionResponseEpisodeProperties(
              HistoricalDecisionCertifiedResponseGoal(node, qc)
 
 THEOREM IndexedChainSpecClosesHistoricalDecisionResponseEpisode ==
-  \A initialContext \in AdmissibleContextRecords,
-     node, qc, archive, request, response, packet:
+  \A initialContext \in AdmissibleContextRecords:
+    \A node, qc, archive, request, response, packet:
     IndexedChainSpec
       => IndexedHistoricalDecisionResponseEpisodeProperties(
            initialContext, node, qc, archive, request, response, packet)

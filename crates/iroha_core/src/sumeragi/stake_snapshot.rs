@@ -304,14 +304,16 @@ pub(super) fn stake_map_from_world_with_active_lanes(
     stake_map
 }
 
-/// Convert a staged or finalized NPoS world snapshot into the exact voting
-/// powers frozen by a Sumeragi v2 height context.
+/// Convert a staged or finalized NPoS world snapshot into the equal-vote
+/// roster frozen by a Sumeragi v2 height context.
 ///
 /// Unlike the legacy commit-certificate helper, this function never invents a
 /// fallback stake. Every elected validator must have one active, integral,
-/// non-zero stake value representable by the v2 wire format. The returned
-/// roster is sorted by validator identity, matching the canonical context
-/// order used for validator indices and deterministic leader rotation.
+/// non-zero stake value. Stake determines election eligibility, finalized
+/// randomness selects seats, and every elected validator receives exactly one
+/// consensus vote. The returned roster is sorted by validator identity,
+/// matching the canonical context order used for validator indices and
+/// deterministic leader rotation.
 pub(crate) fn strict_v2_voting_roster(
     world: &impl WorldReadOnly,
     elected_roster: &[PeerId],
@@ -331,28 +333,20 @@ pub(crate) fn strict_v2_voting_roster(
     for validator in elected_roster {
         let stake = stake_map
             .get(validator)
-            .ok_or(StrictV2StakeSnapshotError::MissingStake)?
-            .as_numeric();
-        if stake.scale() != 0 {
-            return Err(StrictV2StakeSnapshotError::FractionalStake);
-        }
-        let power = stake
-            .try_mantissa_u128()
-            .and_then(|value| u64::try_from(value).ok())
-            .ok_or(StrictV2StakeSnapshotError::PowerOutOfRange)?;
-        if power == 0 {
+            .ok_or(StrictV2StakeSnapshotError::MissingStake)?;
+        if stake.is_zero() {
             return Err(StrictV2StakeSnapshotError::ZeroStake);
         }
         roster.push(consensus_v2::ValidatorPower {
             validator: validator.clone(),
-            power,
+            power: 1,
         });
     }
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
     Ok(roster)
 }
 
-/// Failure to freeze an exact NPoS voting-power snapshot for Sumeragi v2.
+/// Failure to freeze an exact NPoS eligibility snapshot for Sumeragi v2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum StrictV2StakeSnapshotError {
     /// The finalized election selected no voting validators.
@@ -364,15 +358,9 @@ pub(crate) enum StrictV2StakeSnapshotError {
     /// An elected validator has no active stake in the frozen lane snapshot.
     #[error("Sumeragi v2 NPoS roster is missing an elected validator stake")]
     MissingStake,
-    /// Voting power cannot contain fractional stake units.
-    #[error("Sumeragi v2 NPoS voting power must be an integer")]
-    FractionalStake,
-    /// Voting power is required to be strictly positive.
-    #[error("Sumeragi v2 NPoS voting power must be non-zero")]
+    /// Eligibility stake is required to be strictly positive.
+    #[error("Sumeragi v2 NPoS eligibility stake must be non-zero")]
     ZeroStake,
-    /// Voting power does not fit the canonical unsigned 64-bit wire field.
-    #[error("Sumeragi v2 NPoS voting power is outside the u64 wire range")]
-    PowerOutOfRange,
 }
 
 fn commit_stake_snapshot_from_exact_map(
@@ -652,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_v2_roster_uses_exact_stake_and_canonical_identity_order() {
+    fn strict_v2_roster_uses_equal_votes_and_canonical_identity_order() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
@@ -693,19 +681,19 @@ mod tests {
                 .iter()
                 .find(|entry| entry.validator == peer_a)
                 .map(|entry| entry.power),
-            Some(7)
+            Some(1)
         );
         assert_eq!(
             powers
                 .iter()
                 .find(|entry| entry.validator == peer_b)
                 .map(|entry| entry.power),
-            Some(3)
+            Some(1)
         );
     }
 
     #[test]
-    fn strict_v2_roster_rejects_missing_duplicate_fractional_and_zero_stake() {
+    fn strict_v2_roster_rejects_missing_duplicate_and_zero_stake() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
@@ -735,8 +723,10 @@ mod tests {
             block.commit();
         }
         assert_eq!(
-            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&peer), None),
-            Err(StrictV2StakeSnapshotError::FractionalStake)
+            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&peer), None)
+                .expect("fractional eligibility stake does not weight consensus")[0]
+                .power,
+            1
         );
 
         {

@@ -836,9 +836,7 @@ impl super::EventFilter for ConfidentialEventFilter {
 
     fn matches(&self, event: &Self::Event) -> bool {
         let asset_ok = self.asset_matcher.as_ref().is_none_or(|id| match event {
-            super::confidential::ConfidentialEvent::Shielded(e) => id == &e.asset_definition,
             super::confidential::ConfidentialEvent::Transferred(e) => id == &e.asset_definition,
-            super::confidential::ConfidentialEvent::Unshielded(e) => id == &e.asset_definition,
         });
         asset_ok && self.event_set.matches(event)
     }

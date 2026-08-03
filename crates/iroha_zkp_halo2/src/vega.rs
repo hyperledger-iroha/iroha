@@ -207,6 +207,15 @@ pub use zk_ams::{
     zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
     zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
 };
+pub use zk_ams::{
+    ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
+    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
+    ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheDirectObjectPublicationReceiptV1,
+    ZkAmsMkheDirectObjectPublicationTransactionV1, ZkAmsMkheDirectObjectPublishedBindingV1,
+    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectReadReceiptV1,
+    ZkAmsMkheDirectObjectSealTokenV1, ZkAmsMkheDirectObjectStagingTokenV1,
+    validate_zk_ams_mkhe_direct_object_v1,
+};
 
 /// Exact canonical COSE `Sig_structure` width in the released Figure 9 relation.
 pub const VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1: usize = 368;

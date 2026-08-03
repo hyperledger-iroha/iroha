@@ -20,10 +20,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   opaque seek cursors. Node and browser clients now send `cursor`/`limit`,
   validate the `{limit,next_cursor,has_more}` continuation contract, and the NFT
   and RWA async iterators advance only through server-issued cursors.
-- Removed caller-supplied `outputs` from the first-release `Unshield`
-  instruction. JavaScript builders, TypeScript declarations, and both native
-  and pure-JavaScript Norito codecs now use the exact six-field shape and reject
-  stale output-bearing objects and archives without a compatibility fallback.
+- Removed the generic `Shield`, `ZkTransfer`, and `Unshield` transaction surface
+  from ABI V1. JavaScript builders, TypeScript declarations, exports, and Norito
+  discriminants now fail closed; typed Kagemusha top-up/redemption routes and
+  their underlying proof helpers remain available.
 - Added a Node-only native authenticated `BlockProofs` verifier. It accepts
   bounded canonical bridge-finality, exact executed-`SignedBlockWire`, and
   proof archives; pins the application-selected chain, height context, and

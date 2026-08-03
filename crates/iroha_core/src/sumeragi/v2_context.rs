@@ -863,12 +863,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"genesis nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
         })
         .expect("valid genesis context")
@@ -999,12 +999,12 @@ mod tests {
                 nexus_amx_context_hash: Hash::new(b"signed genesis finality authority"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::Plain,
+                    encoding: wire::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0xA7; 32],
             };
@@ -1281,7 +1281,7 @@ mod tests {
 
     #[test]
     fn non_boundary_successor_copies_frozen_election_inputs_exactly() {
-        let parent_context = genesis(wire::ConsensusMode::Npos, &[7, 5, 3, 1], 3);
+        let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 3);
         let parent = artifact(parent_context.clone(), None);
         let successor = build_successor_height_context(&parent, Hash::new(b"next lanes"), None)
             .expect("successor context");
@@ -1296,8 +1296,8 @@ mod tests {
 
     #[test]
     fn boundary_successor_uses_only_the_finalized_next_epoch_snapshot() {
-        let parent_context = genesis(wire::ConsensusMode::Npos, &[7, 5, 3, 1], 1);
-        let next_roster = roster(&[2, 4, 6, 8]);
+        let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
+        let next_roster = roster(&[1, 1, 1, 1]);
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
             epoch: parent_context.epoch + 1,
             epoch_end_height: 5,
@@ -1319,13 +1319,13 @@ mod tests {
 
     #[test]
     fn successor_epoch_end_and_pops_come_only_from_the_authenticated_parent() {
-        let non_boundary = artifact(genesis(wire::ConsensusMode::Npos, &[4, 3, 2, 1], 3), None);
+        let non_boundary = artifact(genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 3), None);
         let unchanged = build_successor_height_context(&non_boundary, Hash::new(b"lanes"), None)
             .expect("non-boundary successor");
         assert_eq!(unchanged.epoch_end_height, 3);
         assert_eq!(unchanged.roster, non_boundary.height_context.roster);
 
-        let boundary_context = genesis(wire::ConsensusMode::Npos, &[4, 3, 2, 1], 1);
+        let boundary_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_pops = vec![vec![0x1A]; boundary_context.roster.len()];
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
             epoch: boundary_context.epoch + 1,
@@ -1502,7 +1502,7 @@ mod tests {
     }
 
     #[test]
-    fn permissioned_genesis_rejects_non_unit_power() {
+    fn genesis_rejects_non_unit_consensus_power() {
         let error = build_genesis_height_context(GenesisContextInputs {
             chain_id: "bad-permissioned-context".into(),
             election: FrozenElectionInputs {
@@ -1516,18 +1516,18 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
         })
-        .expect_err("permissioned power must be one");
+        .expect_err("consensus power must be one");
         assert!(matches!(
             error,
-            V2ContextBuildError::Wire(wire::ValidationError::PermissionedPowerNotOne)
+            V2ContextBuildError::Wire(wire::ValidationError::VotingPowerNotOne)
         ));
     }
 

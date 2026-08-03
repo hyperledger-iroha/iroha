@@ -45,7 +45,7 @@ use crate::{
 
 use super::{
     ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
-    ZkAmsMkhePartyIdV1, mod_add, mod_mul, mod_sub, negacyclic_multiply, signed_mod,
+    ZkAmsMkhePartyIdV1,
     active::{ZkAmsMkheActivePartySecretV1, ZkAmsMkheGovernedActiveRosterV1},
     direct_object_transport::{
         ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
@@ -58,14 +58,15 @@ use super::{
         ExactEightChunkMembershipEvidenceV1, VerifiedExactEightChunkMembershipV1,
         ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1,
     },
+    manifest::{
+        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_security_certificate_v1,
+    },
+    mod_add, mod_mul, mod_sub, negacyclic_multiply,
     persistent_membership_evidence::{
         ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_WIRE_BYTES_V1, ZkAmsMkhePersistentMembershipContextV1,
         ZkAmsMkhePersistentMembershipEvidenceV1, ZkAmsMkheVerifiedPersistentMembershipV1,
     },
-    manifest::{
-        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1,
-        zk_ams_mkhe_security_certificate_v1,
-    },
+    signed_mod,
     wire::ZkAmsMkheAuthenticationWireV1,
 };
 
@@ -154,7 +155,7 @@ pub(super) const ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1: usize =
 pub(super) const ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_BYTES_V1: usize =
     ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1;
 
-/// Stage one does not close relation verification or admission.
+/// Admission stays closed until the complete verifier is connected to the collective-key runtime.
 pub(super) const ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1: bool = false;
 
 const CPK_SHARE_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cpk-share-statement";
@@ -171,8 +172,7 @@ const CPK_CHALLENGE_COORDINATE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.cpk-relation.challenge-coordinate";
 const CPK_VERIFIED_RELATION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.cpk-relation.verified-receipt";
-const CPK_PUBLIC_A_CONTEXT_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.cpk-relation.public-a-context";
+const CPK_PUBLIC_A_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cpk-relation.public-a-context";
 // This is the frozen domain consumed by `active::derive_active_collective_public_a`.
 // The release KAT below compares the streamed limb derivation with that canonical
 // whole-polynomial implementation so the two paths cannot silently diverge.
@@ -218,7 +218,7 @@ const _: () = {
 // admission/runtime and archive its release-size four-peer KAT before opening
 // `ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1`.
 
-/// Stable errors at the stage-one exact CPK relation boundary.
+/// Stable errors at the exact native CPK relation boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ZkAmsMkheCpkRelationErrorV1 {
     /// A content-addressed object pointer is malformed or has the wrong sealed role.
@@ -438,9 +438,7 @@ impl ZkAmsMkheCpkShareStatementV1 {
         roster
             .validate()
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
-        if cpk_transcript_digest == [0; 32]
-            || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
-        {
+        if cpk_transcript_digest == [0; 32] || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
             return Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext);
         }
         let profile = release_profile_v1();
@@ -458,8 +456,7 @@ impl ZkAmsMkheCpkShareStatementV1 {
             cpk_transcript_digest,
             cpk_public_a_context_digest_v1(&profile, roster, cpk_transcript_digest)?,
             party,
-            u8::try_from(party_index)
-                .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?,
+            u8::try_from(party_index).map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?,
             roster.epoch(),
             party_b_pointer,
         )
@@ -518,11 +515,7 @@ impl ZkAmsMkheCpkShareStatementV1 {
             || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
             || self.party != roster.participants()[party_index].party()
             || self.public_a_context_digest
-                != cpk_public_a_context_digest_v1(
-                    &profile,
-                    roster,
-                    expected_cpk_transcript_digest,
-                )?
+                != cpk_public_a_context_digest_v1(&profile, roster, expected_cpk_transcript_digest)?
         {
             return Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext);
         }
@@ -848,7 +841,7 @@ impl fmt::Debug for ZkAmsMkheVerifiedCpkErrorMembershipV1 {
     }
 }
 
-/// Move-only, fail-closed input scaffold for the future complete CPK verifier.
+/// Move-only, fail-closed input scaffold consumed by the complete CPK verifier.
 ///
 /// Possession establishes the two role-specific membership proof sets and
 /// their common statement context only.  It cannot mint
@@ -2065,19 +2058,786 @@ fn cpk_challenges_from_seed_v1(seed: [u8; 32]) -> [u32; ZK_AMS_MKHE_CPK_CHALLENG
     })
 }
 
-/// Non-serializable receipt that only the future complete verifier may construct.
+fn active_collective_public_a_context_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    cpk_transcript_digest: [u8; 32],
+) -> Result<Vec<u8>, ZkAmsMkheCpkRelationErrorV1> {
+    roster
+        .validate()
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
+    if cpk_transcript_digest == [0; 32] {
+        return Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext);
+    }
+    let mut context = Vec::new();
+    context
+        .try_reserve_exact(1 + 32 + 8 + 32)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    context.push(MKHE_VERSION_V1);
+    context.extend_from_slice(&roster.roster_digest());
+    context.extend_from_slice(&roster.epoch().to_be_bytes());
+    context.extend_from_slice(&cpk_transcript_digest);
+    Ok(context)
+}
+
+fn cpk_public_a_context_digest_v1(
+    profile: &BgvProfile,
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    cpk_transcript_digest: [u8; 32],
+) -> Result<[u8; 32], ZkAmsMkheCpkRelationErrorV1> {
+    profile
+        .validate()
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
+    let derivation_context = active_collective_public_a_context_v1(roster, cpk_transcript_digest)?;
+    let mut hash = Keccak256::new();
+    hash.update(CPK_PUBLIC_A_CONTEXT_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1, CPK_PUBLIC_A_DERIVATION_ALGORITHM_V1]);
+    hash.update(
+        &profile
+            .digest()
+            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?,
+    );
+    hash.update(&roster.roster_digest());
+    hash.update(&roster.key_material_digest());
+    hash.update(&roster.epoch().to_be_bytes());
+    hash.update(&(derivation_context.len() as u32).to_be_bytes());
+    hash.update(&derivation_context);
+    Ok(hash.finalize())
+}
+
+fn derive_active_collective_public_a_limb_v1(
+    profile: &BgvProfile,
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    cpk_transcript_digest: [u8; 32],
+    limb: usize,
+) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1> {
+    profile
+        .validate()
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
+    if limb >= profile.moduli.len() {
+        return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+    }
+    let context = active_collective_public_a_context_v1(roster, cpk_transcript_digest)?;
+    let profile_digest = profile
+        .digest()
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
+    let mut frame = Vec::new();
+    let frame_bytes = ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1
+        .len()
+        .checked_add(profile_digest.len())
+        .and_then(|value| value.checked_add(4))
+        .and_then(|value| value.checked_add(context.len()))
+        .and_then(|value| value.checked_add(2))
+        .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    frame
+        .try_reserve_exact(frame_bytes)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    frame.extend_from_slice(ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1);
+    frame.extend_from_slice(&profile_digest);
+    frame.extend_from_slice(
+        &u32::try_from(context.len())
+            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(&context);
+    frame.extend_from_slice(
+        &u16::try_from(limb)
+            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
+            .to_be_bytes(),
+    );
+
+    let modulus = profile.moduli[limb];
+    let zone = u64::MAX - u64::MAX % modulus;
+    let mut stream = Shake256Reader::new(&frame);
+    let mut coefficients = Vec::new();
+    coefficients
+        .try_reserve_exact(profile.ring_degree)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    for _ in 0..profile.ring_degree {
+        let mut accepted = None;
+        for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
+            let mut bytes = [0_u8; 8];
+            stream.read(&mut bytes);
+            let candidate = u64::from_le_bytes(bytes);
+            if candidate < zone {
+                accepted = Some(candidate % modulus);
+                break;
+            }
+        }
+        coefficients.push(accepted.ok_or(ZkAmsMkheCpkRelationErrorV1::NativeRelation)?);
+    }
+    Ok(coefficients)
+}
+
+fn t256_scalar_from_signed_i64_v1(value: i64) -> Scalar {
+    let magnitude = Scalar::from_u64(value.unsigned_abs());
+    if value < 0 {
+        Scalar::zero() - magnitude
+    } else {
+        magnitude
+    }
+}
+
+fn reconstruct_cpk_commitment_first_messages_for_shape_v1(
+    shape: CpkRelationShapeV1,
+    body: &CpkRelationBodyV1,
+    challenges: [u32; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1],
+    secret_commitments: &[Point],
+    error_commitments: &[Point],
+) -> Result<
+    [ZkAmsMkheCpkCommitmentFirstMessageDigestV1; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1],
+    ZkAmsMkheCpkRelationErrorV1,
+> {
+    shape.validate()?;
+    body.validate(shape)?;
+    if secret_commitments.len() != shape.chunks
+        || error_commitments.len() != shape.chunks
+        || secret_commitments
+            .iter()
+            .chain(error_commitments)
+            .any(|point| point.is_identity())
+    {
+        return Err(ZkAmsMkheCpkRelationErrorV1::MembershipEvidence);
+    }
+    let chunk_coefficients = shape
+        .degree
+        .checked_div(shape.chunks)
+        .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    let generators = ZkAmsT256BulletproofSuiteV1::generators();
+    if chunk_coefficients == 0 || chunk_coefficients > generators.g_bold.len() {
+        return Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling);
+    }
+
+    let mut digests = Vec::new();
+    digests
+        .try_reserve_exact(shape.repetitions)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    for (repetition, challenge) in challenges.iter().copied().enumerate() {
+        let challenge_scalar = Scalar::from_u64(u64::from(challenge));
+        let negative_challenge = Scalar::zero() - challenge_scalar;
+        let mut role_points = [Vec::new(), Vec::new()];
+        for (role, commitments) in [secret_commitments, error_commitments]
+            .into_iter()
+            .enumerate()
+        {
+            role_points[role]
+                .try_reserve_exact(shape.chunks)
+                .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+            for (chunk, commitment) in commitments.iter().copied().enumerate() {
+                let mut terms = Vec::new();
+                terms
+                    .try_reserve_exact(
+                        chunk_coefficients
+                            .checked_add(2)
+                            .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?,
+                    )
+                    .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+                let coefficient_start = chunk
+                    .checked_mul(chunk_coefficients)
+                    .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+                for local_coefficient in 0..chunk_coefficients {
+                    let coefficient = coefficient_start
+                        .checked_add(local_coefficient)
+                        .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+                    let response =
+                        body.responses[response_index(shape, repetition, role, coefficient)?];
+                    terms.push((
+                        t256_scalar_from_signed_i64_v1(response),
+                        generators.g_bold[local_coefficient],
+                    ));
+                }
+                terms.push((
+                    body.blind_responses[blind_response_index(shape, repetition, role, chunk)?],
+                    generators.h,
+                ));
+                terms.push((negative_challenge, commitment));
+                let point = multiexp::<ZkAmsT256BulletproofSuiteV1>(&terms);
+                if point.is_identity() {
+                    return Err(ZkAmsMkheCpkRelationErrorV1::FirstMessageRejected);
+                }
+                role_points[role].push(point);
+            }
+        }
+        digests.push(
+            ZkAmsMkheCpkCommitmentFirstMessageDigestV1::from_reconstructed_points_for_shape(
+                repetition,
+                &role_points[0],
+                &role_points[1],
+            )?,
+        );
+    }
+    digests
+        .try_into()
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reconstruct_cpk_rns_first_messages_for_shape_v1<DA, RB>(
+    relation_shape: CpkRelationShapeV1,
+    rns_shape: CpkRnsDigestShapeV1,
+    moduli: &[u64],
+    negacyclic_roots: &[u64],
+    plaintext_modulus_residues: &[u64],
+    body: &CpkRelationBodyV1,
+    challenges: [u32; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1],
+    mut derive_public_a_limb: DA,
+    mut read_party_b_limb: RB,
+) -> Result<
+    [ZkAmsMkheCpkRnsFirstMessageDigestV1; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1],
+    ZkAmsMkheCpkRelationErrorV1,
+>
+where
+    DA: FnMut(usize, u64) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1>,
+    RB: FnMut(usize, u64) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1>,
+{
+    relation_shape.validate()?;
+    body.validate(relation_shape)?;
+    if rns_shape.degree != relation_shape.degree
+        || rns_shape.degree == 0
+        || rns_shape.degree > ZK_AMS_MKHE_CPK_RING_DEGREE_V1
+        || rns_shape.limbs == 0
+        || rns_shape.limbs > ZK_AMS_MKHE_CPK_RNS_LIMBS_V1
+        || moduli.len() != rns_shape.limbs
+        || negacyclic_roots.len() != rns_shape.limbs
+        || plaintext_modulus_residues.len() != rns_shape.limbs
+        || moduli
+            .iter()
+            .zip(negacyclic_roots)
+            .zip(plaintext_modulus_residues)
+            .any(|((&modulus, &root), &plaintext)| {
+                modulus <= u64::from(u32::MAX)
+                    || root <= 1
+                    || root >= modulus
+                    || plaintext == 0
+                    || plaintext >= modulus
+            })
+    {
+        return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+    }
+
+    let mut builders = Vec::new();
+    builders
+        .try_reserve_exact(relation_shape.repetitions)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    for repetition in 0..relation_shape.repetitions {
+        builders.push(ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(
+            repetition, rns_shape,
+        )?);
+    }
+
+    for (limb, ((&modulus, &root), &plaintext_modulus)) in moduli
+        .iter()
+        .zip(negacyclic_roots)
+        .zip(plaintext_modulus_residues)
+        .enumerate()
+    {
+        let public_a = derive_public_a_limb(limb, modulus)?;
+        let party_b = read_party_b_limb(limb, modulus)?;
+        if public_a.len() != rns_shape.degree
+            || party_b.len() != rns_shape.degree
+            || public_a
+                .iter()
+                .chain(&party_b)
+                .any(|value| *value >= modulus)
+        {
+            return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+        }
+        for builder in &mut builders {
+            builder.begin_limb(limb, modulus)?;
+        }
+        for (repetition, (&challenge, builder)) in challenges.iter().zip(&mut builders).enumerate()
+        {
+            let secret_start = response_index(relation_shape, repetition, 0, 0)?;
+            let error_start = response_index(relation_shape, repetition, 1, 0)?;
+            let secret_end = secret_start
+                .checked_add(rns_shape.degree)
+                .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+            let error_end = error_start
+                .checked_add(rns_shape.degree)
+                .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+            let secret_responses = body
+                .responses
+                .get(secret_start..secret_end)
+                .ok_or(ZkAmsMkheCpkRelationErrorV1::RelationBody)?;
+            let error_responses = body
+                .responses
+                .get(error_start..error_end)
+                .ok_or(ZkAmsMkheCpkRelationErrorV1::RelationBody)?;
+            let mut secret_residues = Vec::new();
+            secret_residues
+                .try_reserve_exact(rns_shape.degree)
+                .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+            secret_residues.extend(
+                secret_responses
+                    .iter()
+                    .copied()
+                    .map(|response| signed_mod(response, modulus)),
+            );
+            let mut first_message = negacyclic_multiply(&public_a, &secret_residues, modulus, root)
+                .map_err(|_| ZkAmsMkheCpkRelationErrorV1::NativeRelation)?;
+            for (coefficient, value) in first_message.iter_mut().enumerate() {
+                let negated_product = mod_sub(0, *value, modulus);
+                let scaled_error = mod_mul(
+                    plaintext_modulus,
+                    signed_mod(error_responses[coefficient], modulus),
+                    modulus,
+                );
+                let challenged_b = mod_mul(u64::from(challenge), party_b[coefficient], modulus);
+                *value = mod_sub(
+                    mod_add(negated_product, scaled_error, modulus),
+                    challenged_b,
+                    modulus,
+                );
+            }
+            builder.update_residues(&first_message)?;
+            builder.finish_limb()?;
+        }
+    }
+
+    let mut digests = Vec::new();
+    digests
+        .try_reserve_exact(builders.len())
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    for builder in builders {
+        digests.push(builder.finish()?);
+    }
+    digests
+        .try_into()
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
+}
+
+struct CpkPartyBStreamReaderV1<'a, P: ?Sized> {
+    provider: &'a mut P,
+    transaction: ZkAmsMkheDirectObjectReadTransactionV1,
+    shape: CpkRnsDigestShapeV1,
+    next_limb: usize,
+}
+
+impl<'a, P> CpkPartyBStreamReaderV1<'a, P>
+where
+    P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+{
+    fn begin(
+        pointer: ZkAmsMkheDirectObjectPointerV1,
+        shape: CpkRnsDigestShapeV1,
+        provider: &'a mut P,
+    ) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
+        if shape.limbs == 0
+            || shape.limbs > ZK_AMS_MKHE_CPK_RNS_LIMBS_V1
+            || shape.degree == 0
+            || shape.degree > ZK_AMS_MKHE_CPK_RING_DEGREE_V1
+        {
+            return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+        }
+        let coefficient_count = shape
+            .limbs
+            .checked_mul(shape.degree)
+            .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+        let expected_bytes = coefficient_count
+            .checked_mul(8)
+            .and_then(|value| value.checked_add(4))
+            .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+        if pointer.kind() != ZkAmsMkheDirectObjectKindV1::CpkPartyB
+            || usize::try_from(pointer.payload_bytes()).ok() != Some(expected_bytes)
+        {
+            return Err(ZkAmsMkheCpkRelationErrorV1::ObjectPointer);
+        }
+        let transaction = ZkAmsMkheDirectObjectReadTransactionV1::begin(
+            ZkAmsMkheDirectObjectKindV1::CpkPartyB,
+            pointer,
+            provider,
+        )
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)?;
+        let mut reader = Self {
+            provider,
+            transaction,
+            shape,
+            next_limb: 0,
+        };
+        let mut count = [0_u8; 4];
+        if reader
+            .transaction
+            .read_next(reader.provider, &mut count)
+            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)?
+            != count.len()
+            || usize::try_from(u32::from_be_bytes(count)).ok() != Some(coefficient_count)
+        {
+            return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+        }
+        Ok(reader)
+    }
+
+    fn read_limb(
+        &mut self,
+        limb: usize,
+        modulus: u64,
+    ) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1> {
+        if limb != self.next_limb || limb >= self.shape.limbs || modulus <= u64::from(u32::MAX) {
+            return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+        }
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(self.shape.degree)
+            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+        let mut buffer = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
+        while values.len() != self.shape.degree {
+            let remaining_coefficients = self.shape.degree - values.len();
+            let take_coefficients = remaining_coefficients.min(buffer.len() / 8);
+            let take_bytes = take_coefficients
+                .checked_mul(8)
+                .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+            let read = self
+                .transaction
+                .read_next(self.provider, &mut buffer[..take_bytes])
+                .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)?;
+            if read != take_bytes {
+                return Err(ZkAmsMkheCpkRelationErrorV1::DirectObject);
+            }
+            for encoded in buffer[..read].chunks_exact(8) {
+                let residue = u64::from_be_bytes(
+                    encoded
+                        .try_into()
+                        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::NativeRelation)?,
+                );
+                if residue >= modulus {
+                    return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+                }
+                values.push(residue);
+            }
+        }
+        self.next_limb += 1;
+        Ok(values)
+    }
+
+    fn finish(self) -> Result<ZkAmsMkheDirectObjectReadReceiptV1, ZkAmsMkheCpkRelationErrorV1> {
+        if self.next_limb != self.shape.limbs || self.transaction.remaining_bytes() != 0 {
+            return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+        }
+        self.transaction
+            .finish(self.provider)
+            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)
+    }
+}
+
+fn read_cpk_relation_proof_object_v1<P>(
+    pointer: ZkAmsMkheCpkRelationProofPointerV1,
+    provider: &mut P,
+) -> Result<
+    (
+        ZkAmsMkheCpkRelationProofV1,
+        ZkAmsMkheDirectObjectReadReceiptV1,
+    ),
+    ZkAmsMkheCpkRelationErrorV1,
+>
+where
+    P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+{
+    let mut transaction = ZkAmsMkheDirectObjectReadTransactionV1::begin(
+        ZkAmsMkheDirectObjectKindV1::CpkRelationProof,
+        pointer.0,
+        provider,
+    )
+    .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)?;
+    let mut wire = Vec::new();
+    wire.try_reserve_exact(ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    let mut buffer = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
+    while transaction.remaining_bytes() != 0 {
+        let read = transaction
+            .read_next(provider, &mut buffer)
+            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)?;
+        if read == 0 {
+            return Err(ZkAmsMkheCpkRelationErrorV1::DirectObject);
+        }
+        wire.extend_from_slice(&buffer[..read]);
+    }
+    let receipt = transaction
+        .finish(provider)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)?;
+    if wire.len() != ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1 {
+        return Err(ZkAmsMkheCpkRelationErrorV1::RelationBody);
+    }
+    let proof = ZkAmsMkheCpkRelationProofV1::from_wire_bytes_exact(&wire)?;
+    Ok((proof, receipt))
+}
+
+fn direct_object_receipts_share_snapshot_v1(
+    left: &ZkAmsMkheDirectObjectReadReceiptV1,
+    right: &ZkAmsMkheDirectObjectReadReceiptV1,
+) -> bool {
+    left.snapshot().provider_identity() == right.snapshot().provider_identity()
+        && left.snapshot().snapshot_identity() == right.snapshot().snapshot_identity()
+}
+
+fn complete_cpk_contribution_digest_v1(
+    statement: ZkAmsMkheCpkShareStatementV1,
+    header: ZkAmsMkheCpkRelationHeaderV1,
+    secret_membership_wire: &[u8],
+    error_membership_wire: &[u8],
+    relation_proof_pointer: ZkAmsMkheCpkRelationProofPointerV1,
+) -> Result<[u8; 32], ZkAmsMkheCpkRelationErrorV1> {
+    header.validate_against(statement, secret_membership_wire, error_membership_wire)?;
+    let statement_wire = statement.to_wire_bytes()?;
+    let header_wire = header.to_wire_bytes()?;
+    let mut hash = Keccak256::new();
+    hash.update(CPK_COMPLETE_CONTRIBUTION_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1, CPK_RELATION_ALGORITHM_V1]);
+    hash.update(&(statement_wire.len() as u16).to_be_bytes());
+    hash.update(&statement_wire);
+    hash.update(&(header_wire.len() as u16).to_be_bytes());
+    hash.update(&header_wire);
+    hash.update(&statement.party_b_pointer().to_wire_bytes());
+    hash.update(&relation_proof_pointer.to_wire_bytes());
+    hash.update(&framed_wire_digest(
+        CPK_SECRET_MEMBERSHIP_WIRE_DIGEST_DOMAIN_V1,
+        secret_membership_wire,
+    ));
+    hash.update(&framed_wire_digest(
+        CPK_ERROR_MEMBERSHIP_WIRE_DIGEST_DOMAIN_V1,
+        error_membership_wire,
+    ));
+    Ok(hash.finalize())
+}
+
+fn authentication_from_wire_v1(
+    authentication: ZkAmsMkheAuthenticationWireV1,
+) -> ArtifactAuthentication {
+    ArtifactAuthentication {
+        version: MKHE_VERSION_V1,
+        party: authentication.party(),
+        public_key: authentication.public_key(),
+        signature: authentication.signature(),
+    }
+}
+
+fn cpk_authentication_wire_digest_v1(authentication: ZkAmsMkheAuthenticationWireV1) -> [u8; 32] {
+    let mut hash = Keccak256::new();
+    hash.update(CPK_AUTHENTICATION_WIRE_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1]);
+    hash.update(&authentication.party().to_bytes());
+    hash.update(&authentication.public_key());
+    hash.update(&authentication.signature());
+    hash.finalize()
+}
+
+/// Authenticate the exact statement, both membership wires, and both direct-object pointers.
+///
+/// The relation proof must already have been encoded and content-addressed.
+/// The authentication scalar never crosses this boundary.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn authenticate_zk_ams_mkhe_cpk_contribution_v1<R: MaskedRelaxedRandomSourceV1>(
+    statement: ZkAmsMkheCpkShareStatementV1,
+    header: ZkAmsMkheCpkRelationHeaderV1,
+    secret_membership_wire: &[u8],
+    error_membership_wire: &[u8],
+    relation_proof_pointer: ZkAmsMkheCpkRelationProofPointerV1,
+    party_secret: &ZkAmsMkheActivePartySecretV1,
+    random: &mut R,
+) -> Result<ZkAmsMkheAuthenticationWireV1, ZkAmsMkheCpkRelationErrorV1> {
+    let contribution_digest = complete_cpk_contribution_digest_v1(
+        statement,
+        header,
+        secret_membership_wire,
+        error_membership_wire,
+        relation_proof_pointer,
+    )?;
+    let authentication = party_secret
+        .authenticate_artifact(CPK_CONTRIBUTION_AUTH_DOMAIN_V1, contribution_digest, random)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::Authentication)?;
+    if authentication.party != statement.party() {
+        return Err(ZkAmsMkheCpkRelationErrorV1::Authentication);
+    }
+    ZkAmsMkheAuthenticationWireV1::new(
+        authentication.party,
+        authentication.public_key,
+        authentication.signature,
+    )
+    .map_err(|_| ZkAmsMkheCpkRelationErrorV1::Authentication)
+}
+
+fn verify_cpk_contribution_authentication_v1(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    statement: ZkAmsMkheCpkShareStatementV1,
+    contribution_digest: [u8; 32],
+    authentication: ZkAmsMkheAuthenticationWireV1,
+) -> Result<ArtifactAuthentication, ZkAmsMkheCpkRelationErrorV1> {
+    let party_index = statement.party_index();
+    if contribution_digest == [0; 32]
+        || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+        || authentication.party() != statement.party()
+        || authentication.public_key()
+            != roster.participants()[party_index].authentication_public_key()
+    {
+        return Err(ZkAmsMkheCpkRelationErrorV1::Authentication);
+    }
+    let authentication = authentication_from_wire_v1(authentication);
+    authentication
+        .verify(CPK_CONTRIBUTION_AUTH_DOMAIN_V1, contribution_digest)
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::Authentication)?;
+    Ok(authentication)
+}
+
+/// Verify the complete native CPK relation under an independently governed roster.
+///
+/// Both direct objects must be served by the same immutable provider snapshot.
+/// The proof object is authenticated before membership or ring work; the party
+/// `b` object is then consumed in one canonical limb-major pass.  Success
+/// consumes both membership receipts, both read receipts, and the verified
+/// contribution authentication into one move-only relation receipt.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn verify_zk_ams_mkhe_cpk_relation_v1<P>(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    expected_cpk_transcript_digest: [u8; 32],
+    statement: ZkAmsMkheCpkShareStatementV1,
+    secret_membership_wire: &[u8],
+    error_membership_wire: &[u8],
+    relation_proof_pointer: ZkAmsMkheCpkRelationProofPointerV1,
+    authentication_wire: ZkAmsMkheAuthenticationWireV1,
+    provider: &mut P,
+) -> Result<VerifiedZkAmsMkheCpkRelationReceiptV1, ZkAmsMkheCpkRelationErrorV1>
+where
+    P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+{
+    let profile =
+        statement.validate_against_governed_roster(roster, expected_cpk_transcript_digest)?;
+    let (proof, relation_proof_read_receipt) =
+        read_cpk_relation_proof_object_v1(relation_proof_pointer, provider)?;
+    let header = proof.header();
+    header.validate_against(statement, secret_membership_wire, error_membership_wire)?;
+    let complete_contribution_digest = complete_cpk_contribution_digest_v1(
+        statement,
+        header,
+        secret_membership_wire,
+        error_membership_wire,
+        relation_proof_pointer,
+    )?;
+    let authentication = verify_cpk_contribution_authentication_v1(
+        roster,
+        statement,
+        complete_contribution_digest,
+        authentication_wire,
+    )?;
+    let membership_inputs = verify_zk_ams_mkhe_cpk_membership_inputs_v1(
+        statement,
+        header,
+        secret_membership_wire,
+        error_membership_wire,
+    )?;
+
+    let challenges = cpk_challenges_from_seed_v1(proof.challenge_seed());
+    let commitment_first_messages = reconstruct_cpk_commitment_first_messages_for_shape_v1(
+        CpkRelationShapeV1::RELEASE,
+        &proof.body,
+        challenges,
+        membership_inputs.secret.commitments(),
+        membership_inputs.error.commitments(),
+    )?;
+
+    let rns_shape = CpkRnsDigestShapeV1 {
+        limbs: ZK_AMS_MKHE_CPK_RNS_LIMBS_V1,
+        degree: ZK_AMS_MKHE_CPK_RING_DEGREE_V1,
+    };
+    let mut party_b_reader =
+        CpkPartyBStreamReaderV1::begin(statement.party_b_pointer().0, rns_shape, provider)?;
+    let mut plaintext_modulus_residues = Vec::new();
+    plaintext_modulus_residues
+        .try_reserve_exact(profile.moduli.len())
+        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    plaintext_modulus_residues.extend(
+        profile
+            .moduli
+            .iter()
+            .map(|modulus| profile.plaintext_modulus.residue(*modulus)),
+    );
+    let rns_first_messages = reconstruct_cpk_rns_first_messages_for_shape_v1(
+        CpkRelationShapeV1::RELEASE,
+        rns_shape,
+        profile.moduli,
+        profile.negacyclic_roots,
+        &plaintext_modulus_residues,
+        &proof.body,
+        challenges,
+        |limb, modulus| {
+            if profile.moduli.get(limb).copied() != Some(modulus) {
+                return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
+            }
+            derive_active_collective_public_a_limb_v1(
+                &profile,
+                roster,
+                expected_cpk_transcript_digest,
+                limb,
+            )
+        },
+        |limb, modulus| party_b_reader.read_limb(limb, modulus),
+    )?;
+    let party_b_read_receipt = party_b_reader.finish()?;
+    if !direct_object_receipts_share_snapshot_v1(
+        &relation_proof_read_receipt,
+        &party_b_read_receipt,
+    ) {
+        return Err(ZkAmsMkheCpkRelationErrorV1::DirectObject);
+    }
+
+    let (reconstructed_seed, reconstructed_challenges) = reconstruct_zk_ams_mkhe_cpk_challenges_v1(
+        statement,
+        secret_membership_wire,
+        error_membership_wire,
+        header,
+        commitment_first_messages,
+        rns_first_messages,
+    )?;
+    if reconstructed_seed != proof.challenge_seed() || reconstructed_challenges != challenges {
+        return Err(ZkAmsMkheCpkRelationErrorV1::Transcript);
+    }
+
+    let mut receipt = VerifiedZkAmsMkheCpkRelationReceiptV1 {
+        _seal: CpkRelationVerificationSealV1,
+        _membership_inputs: membership_inputs,
+        _party_b_read_receipt: party_b_read_receipt,
+        _relation_proof_read_receipt: relation_proof_read_receipt,
+        _authentication: authentication,
+        statement,
+        statement_digest: statement.statement_digest()?,
+        secret_membership_wire_digest: framed_wire_digest(
+            CPK_SECRET_MEMBERSHIP_WIRE_DIGEST_DOMAIN_V1,
+            secret_membership_wire,
+        ),
+        error_membership_wire_digest: framed_wire_digest(
+            CPK_ERROR_MEMBERSHIP_WIRE_DIGEST_DOMAIN_V1,
+            error_membership_wire,
+        ),
+        party_b_payload_blake3: statement.party_b_pointer().payload_blake3(),
+        relation_proof_payload_blake3: relation_proof_pointer.payload_blake3(),
+        complete_contribution_digest,
+        authentication_wire_digest: cpk_authentication_wire_digest_v1(authentication_wire),
+        verification_digest: [0; 32],
+    };
+    receipt.verification_digest = verified_relation_digest(&receipt);
+    if receipt.verification_digest == [0; 32] {
+        return Err(ZkAmsMkheCpkRelationErrorV1::Transcript);
+    }
+    Ok(receipt)
+}
+
+/// Non-serializable receipt constructed only by the complete native verifier.
 ///
 /// It is intentionally neither `Clone` nor `Copy` and has no decoder or
-/// membership-only constructor.  Its private seal remains unreachable in this
-/// stage-one module.
+/// membership-only constructor.  The owned capabilities prove that both
+/// membership proofs, both complete direct-object reads, native ring equations,
+/// transcript, and governed party authentication succeeded together.
 pub(super) struct VerifiedZkAmsMkheCpkRelationReceiptV1 {
     _seal: CpkRelationVerificationSealV1,
+    _membership_inputs: ZkAmsMkheVerifiedCpkMembershipInputsV1,
+    _party_b_read_receipt: ZkAmsMkheDirectObjectReadReceiptV1,
+    _relation_proof_read_receipt: ZkAmsMkheDirectObjectReadReceiptV1,
+    _authentication: ArtifactAuthentication,
+    statement: ZkAmsMkheCpkShareStatementV1,
     statement_digest: [u8; 32],
     secret_membership_wire_digest: [u8; 32],
     error_membership_wire_digest: [u8; 32],
     party_b_payload_blake3: [u8; 32],
     relation_proof_payload_blake3: [u8; 32],
     complete_contribution_digest: [u8; 32],
+    authentication_wire_digest: [u8; 32],
     verification_digest: [u8; 32],
 }
 
@@ -2111,6 +2871,61 @@ impl VerifiedZkAmsMkheCpkContributionV1 {
     pub(super) const fn verification_digest(&self) -> [u8; 32] {
         self.receipt.verification_digest
     }
+
+    /// Consume the complete contribution into the sole lineage accepted by
+    /// collective-key-share admission.
+    ///
+    /// This deliberately repeats every state/share axis at the transition:
+    /// possession of a previously verified relation is insufficient when its
+    /// roster, transcript, party position, or canonical `b_i` object does not
+    /// match the state being admitted.
+    pub(super) fn into_collective_binding_source(
+        self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        expected_cpk_transcript_digest: [u8; 32],
+        expected_party_index: usize,
+        expected_party_b_payload_blake3: [u8; 32],
+    ) -> Result<VerifiedZkAmsMkheCpkBindingSourceV1, ZkAmsMkheCpkRelationErrorV1> {
+        let receipt = self.receipt;
+        receipt
+            .statement
+            .validate_against_governed_roster(roster, expected_cpk_transcript_digest)?;
+        if expected_party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+            || receipt.statement.party_index() != expected_party_index
+            || expected_party_b_payload_blake3 == [0; 32]
+            || receipt.statement.party_b_pointer().payload_blake3()
+                != expected_party_b_payload_blake3
+            || receipt.party_b_payload_blake3 != expected_party_b_payload_blake3
+            || receipt.statement.statement_digest()? != receipt.statement_digest
+            || receipt.verification_digest == [0; 32]
+            || receipt.verification_digest != verified_relation_digest(&receipt)
+        {
+            return Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext);
+        }
+        validate_cpk_membership_context_axes_v1(
+            receipt.statement,
+            receipt._membership_inputs.secret.context(),
+            receipt._membership_inputs.error.context(),
+        )?;
+        let secret = &receipt._membership_inputs.secret;
+        Ok(VerifiedZkAmsMkheCpkBindingSourceV1 {
+            profile_digest: receipt.statement.profile_digest,
+            security_certificate_digest: receipt.statement.security_certificate_digest,
+            roster_digest: receipt.statement.roster_digest,
+            key_material_digest: receipt.statement.key_material_digest,
+            epoch: receipt.statement.epoch,
+            cpk_transcript_digest: receipt.statement.cpk_transcript_digest,
+            party_index: receipt.statement.party_index,
+            party: receipt.statement.party,
+            party_b_payload_blake3: receipt.party_b_payload_blake3,
+            generator_basis_digest: secret.generator_basis_digest(),
+            commitments: *secret.commitments(),
+            commitment_set_digest: secret.commitment_set_digest(),
+            membership_proof_digest: secret.proof_set_digest(),
+            verifier_transcript_digest: secret.verifier_transcript_digest(),
+            relation_verification_digest: receipt.verification_digest,
+        })
+    }
 }
 
 impl fmt::Debug for VerifiedZkAmsMkheCpkContributionV1 {
@@ -2125,6 +2940,104 @@ impl fmt::Debug for VerifiedZkAmsMkheCpkContributionV1 {
     }
 }
 
+/// Move-only secret-commitment lineage sealed by the complete CPK verifier.
+///
+/// The fields are private to this module and there is no decoder or public
+/// constructor.  In particular, the membership-only receipts cannot produce
+/// this type; it is obtained only by consuming
+/// [`VerifiedZkAmsMkheCpkContributionV1`] at the exact collective share axes.
+pub(super) struct VerifiedZkAmsMkheCpkBindingSourceV1 {
+    profile_digest: [u8; 32],
+    security_certificate_digest: [u8; 32],
+    roster_digest: [u8; 32],
+    key_material_digest: [u8; 32],
+    epoch: u64,
+    cpk_transcript_digest: [u8; 32],
+    party_index: u8,
+    party: ZkAmsMkhePartyIdV1,
+    party_b_payload_blake3: [u8; 32],
+    generator_basis_digest: [u8; 32],
+    commitments: [Point; ZK_AMS_MKHE_CPK_CHUNKS_V1],
+    commitment_set_digest: [u8; 32],
+    membership_proof_digest: [u8; 32],
+    verifier_transcript_digest: [u8; 32],
+    relation_verification_digest: [u8; 32],
+}
+
+impl VerifiedZkAmsMkheCpkBindingSourceV1 {
+    pub(super) const fn profile_digest(&self) -> [u8; 32] {
+        self.profile_digest
+    }
+
+    pub(super) const fn security_certificate_digest(&self) -> [u8; 32] {
+        self.security_certificate_digest
+    }
+
+    pub(super) const fn roster_digest(&self) -> [u8; 32] {
+        self.roster_digest
+    }
+
+    pub(super) const fn key_material_digest(&self) -> [u8; 32] {
+        self.key_material_digest
+    }
+
+    pub(super) const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    pub(super) const fn cpk_transcript_digest(&self) -> [u8; 32] {
+        self.cpk_transcript_digest
+    }
+
+    pub(super) const fn party_index(&self) -> usize {
+        self.party_index as usize
+    }
+
+    pub(super) const fn party(&self) -> ZkAmsMkhePartyIdV1 {
+        self.party
+    }
+
+    pub(super) const fn party_b_payload_blake3(&self) -> [u8; 32] {
+        self.party_b_payload_blake3
+    }
+
+    pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
+        self.generator_basis_digest
+    }
+
+    pub(super) const fn commitments(&self) -> &[Point; ZK_AMS_MKHE_CPK_CHUNKS_V1] {
+        &self.commitments
+    }
+
+    pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
+        self.commitment_set_digest
+    }
+
+    pub(super) const fn membership_proof_digest(&self) -> [u8; 32] {
+        self.membership_proof_digest
+    }
+
+    pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
+        self.verifier_transcript_digest
+    }
+
+    pub(super) const fn relation_verification_digest(&self) -> [u8; 32] {
+        self.relation_verification_digest
+    }
+}
+
+impl fmt::Debug for VerifiedZkAmsMkheCpkBindingSourceV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedZkAmsMkheCpkBindingSourceV1")
+            .field(
+                "relation_verification_digest",
+                &hex::encode(self.relation_verification_digest),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 fn verified_relation_digest(receipt: &VerifiedZkAmsMkheCpkRelationReceiptV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(CPK_VERIFIED_RELATION_DOMAIN_V1);
@@ -2134,6 +3047,9 @@ fn verified_relation_digest(receipt: &VerifiedZkAmsMkheCpkRelationReceiptV1) -> 
     hash.update(&receipt.party_b_payload_blake3);
     hash.update(&receipt.relation_proof_payload_blake3);
     hash.update(&receipt.complete_contribution_digest);
+    hash.update(&receipt.authentication_wire_digest);
+    hash.update(&receipt._party_b_read_receipt.receipt_digest());
+    hash.update(&receipt._relation_proof_read_receipt.receipt_digest());
     hash.finalize()
 }
 
@@ -2295,6 +3211,97 @@ mod tests {
             responses,
             blind_responses,
         }
+    }
+
+    fn tiny_public_vector_commitment(values: &[i64], blinding: Scalar) -> Point {
+        let generators = ZkAmsT256BulletproofSuiteV1::generators();
+        let mut terms = values
+            .iter()
+            .copied()
+            .zip(generators.g_bold.iter().copied())
+            .map(|(value, generator)| (t256_scalar_from_signed_i64_v1(value), generator))
+            .collect::<Vec<_>>();
+        terms.push((blinding, generators.h));
+        multiexp::<ZkAmsT256BulletproofSuiteV1>(&terms)
+    }
+
+    #[derive(Clone)]
+    struct TinyObjectProvider {
+        pointer: ZkAmsMkheDirectObjectPointerV1,
+        bytes: Vec<u8>,
+        provider_identity: [u8; 32],
+        snapshot_identity: [u8; 32],
+    }
+
+    impl TinyObjectProvider {
+        fn cpk_party_b(bytes: Vec<u8>) -> Self {
+            let pointer = ZkAmsMkheDirectObjectPointerV1::from_payload(
+                ZkAmsMkheDirectObjectKindV1::CpkPartyB,
+                &bytes,
+            )
+            .expect("tiny content address");
+            Self {
+                pointer,
+                bytes,
+                provider_identity: digest(b"tiny-provider", b"provider"),
+                snapshot_identity: digest(b"tiny-provider", b"snapshot"),
+            }
+        }
+    }
+
+    impl ZkAmsMkheDirectObjectReadAtProviderV1 for TinyObjectProvider {
+        fn provider_identity(&mut self) -> Result<[u8; 32], super::super::ZkAmsMkheErrorV1> {
+            Ok(self.provider_identity)
+        }
+
+        fn snapshot_identity(&mut self) -> Result<[u8; 32], super::super::ZkAmsMkheErrorV1> {
+            Ok(self.snapshot_identity)
+        }
+
+        fn object_len(
+            &mut self,
+            pointer: ZkAmsMkheDirectObjectPointerV1,
+        ) -> Result<u64, super::super::ZkAmsMkheErrorV1> {
+            if pointer != self.pointer {
+                return Err(super::super::ZkAmsMkheErrorV1::InvalidWireEncoding);
+            }
+            u64::try_from(self.bytes.len())
+                .map_err(|_| super::super::ZkAmsMkheErrorV1::ResourceCeilingExceeded)
+        }
+
+        fn read_at(
+            &mut self,
+            pointer: ZkAmsMkheDirectObjectPointerV1,
+            absolute_offset: u64,
+            destination: &mut [u8],
+        ) -> Result<usize, super::super::ZkAmsMkheErrorV1> {
+            if pointer != self.pointer {
+                return Err(super::super::ZkAmsMkheErrorV1::InvalidWireEncoding);
+            }
+            let start = usize::try_from(absolute_offset)
+                .map_err(|_| super::super::ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+            let end = start
+                .checked_add(destination.len())
+                .ok_or(super::super::ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+            let source = self
+                .bytes
+                .get(start..end)
+                .ok_or(super::super::ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+            destination.copy_from_slice(source);
+            Ok(destination.len())
+        }
+    }
+
+    fn tiny_party_b_wire(limbs: &[Vec<u64>]) -> Vec<u8> {
+        let count = limbs.iter().map(Vec::len).sum::<usize>();
+        let mut bytes = Vec::with_capacity(4 + count * 8);
+        bytes.extend_from_slice(&(count as u32).to_be_bytes());
+        for limb in limbs {
+            for residue in limb {
+                bytes.extend_from_slice(&residue.to_be_bytes());
+            }
+        }
+        bytes
     }
 
     struct StreamRandom {
@@ -3431,6 +4438,387 @@ mod tests {
     }
 
     #[test]
+    fn reconstructed_commitment_messages_match_masks_and_bind_every_public_axis() {
+        let shape = tiny_relation_shape();
+        let secret = [-1_i64, 0, 1, 1];
+        let error = [-2_i64, -1, 0, 2];
+        let secret_blindings = [Scalar::from_u64(7), Scalar::from_u64(11)];
+        let error_blindings = [Scalar::from_u64(13), Scalar::from_u64(17)];
+        let secret_commitments = [
+            tiny_public_vector_commitment(&secret[..2], secret_blindings[0]),
+            tiny_public_vector_commitment(&secret[2..], secret_blindings[1]),
+        ];
+        let error_commitments = [
+            tiny_public_vector_commitment(&error[..2], error_blindings[0]),
+            tiny_public_vector_commitment(&error[2..], error_blindings[1]),
+        ];
+        let challenges = [3_u32, 5, 7, 11];
+        let mut responses = vec![0_i64; shape.response_count().unwrap()];
+        let mut blind_responses = vec![Scalar::zero(); shape.blind_response_count().unwrap()];
+        let mut expected = Vec::new();
+        for (repetition, challenge) in challenges.iter().copied().enumerate() {
+            let challenge_i64 = i64::from(challenge);
+            let secret_masks = core::array::from_fn::<_, 4, _>(|coefficient| {
+                19 + repetition as i64 * 7 + coefficient as i64
+            });
+            let error_masks = core::array::from_fn::<_, 4, _>(|coefficient| {
+                -31 - repetition as i64 * 5 - coefficient as i64
+            });
+            let secret_blind_masks = [
+                Scalar::from_u64(101 + repetition as u64),
+                Scalar::from_u64(109 + repetition as u64),
+            ];
+            let error_blind_masks = [
+                Scalar::from_u64(127 + repetition as u64),
+                Scalar::from_u64(131 + repetition as u64),
+            ];
+            for role in 0..2 {
+                let witness = if role == 0 { &secret } else { &error };
+                let masks = if role == 0 {
+                    &secret_masks
+                } else {
+                    &error_masks
+                };
+                let witness_blindings = if role == 0 {
+                    &secret_blindings
+                } else {
+                    &error_blindings
+                };
+                let blind_masks = if role == 0 {
+                    &secret_blind_masks
+                } else {
+                    &error_blind_masks
+                };
+                for coefficient in 0..shape.degree {
+                    responses[response_index(shape, repetition, role, coefficient).unwrap()] =
+                        masks[coefficient] + challenge_i64 * witness[coefficient];
+                }
+                for chunk in 0..shape.chunks {
+                    blind_responses
+                        [blind_response_index(shape, repetition, role, chunk).unwrap()] =
+                        blind_masks[chunk]
+                            + Scalar::from_u64(u64::from(challenge)) * witness_blindings[chunk];
+                }
+            }
+            let expected_secret = [
+                tiny_public_vector_commitment(&secret_masks[..2], secret_blind_masks[0]),
+                tiny_public_vector_commitment(&secret_masks[2..], secret_blind_masks[1]),
+            ];
+            let expected_error = [
+                tiny_public_vector_commitment(&error_masks[..2], error_blind_masks[0]),
+                tiny_public_vector_commitment(&error_masks[2..], error_blind_masks[1]),
+            ];
+            expected.push(
+                ZkAmsMkheCpkCommitmentFirstMessageDigestV1::from_reconstructed_points_for_shape(
+                    repetition,
+                    &expected_secret,
+                    &expected_error,
+                )
+                .unwrap(),
+            );
+        }
+        let body = CpkRelationBodyV1 {
+            challenge_seed: digest(b"tiny-commitment-reconstruction", b"seed"),
+            responses,
+            blind_responses,
+        };
+        let expected: [_; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1] = expected.try_into().unwrap();
+        let reconstructed = reconstruct_cpk_commitment_first_messages_for_shape_v1(
+            shape,
+            &body,
+            challenges,
+            &secret_commitments,
+            &error_commitments,
+        )
+        .unwrap();
+        assert_eq!(reconstructed, expected);
+
+        let mut changed_response = CpkRelationBodyV1 {
+            challenge_seed: body.challenge_seed,
+            responses: body.responses.clone(),
+            blind_responses: body.blind_responses.clone(),
+        };
+        changed_response.responses[0] += 1;
+        assert_ne!(
+            reconstruct_cpk_commitment_first_messages_for_shape_v1(
+                shape,
+                &changed_response,
+                challenges,
+                &secret_commitments,
+                &error_commitments,
+            )
+            .unwrap(),
+            expected
+        );
+        let mut changed_blind = CpkRelationBodyV1 {
+            challenge_seed: body.challenge_seed,
+            responses: body.responses.clone(),
+            blind_responses: body.blind_responses.clone(),
+        };
+        changed_blind.blind_responses[0] += Scalar::one();
+        assert_ne!(
+            reconstruct_cpk_commitment_first_messages_for_shape_v1(
+                shape,
+                &changed_blind,
+                challenges,
+                &secret_commitments,
+                &error_commitments,
+            )
+            .unwrap(),
+            expected
+        );
+        let mut changed_commitments = secret_commitments;
+        changed_commitments[0] += ZkAmsT256BulletproofSuiteV1::generators().g;
+        assert_ne!(
+            reconstruct_cpk_commitment_first_messages_for_shape_v1(
+                shape,
+                &body,
+                challenges,
+                &changed_commitments,
+                &error_commitments,
+            )
+            .unwrap(),
+            expected
+        );
+        assert_eq!(
+            reconstruct_cpk_commitment_first_messages_for_shape_v1(
+                shape,
+                &body,
+                challenges,
+                &secret_commitments[..1],
+                &error_commitments,
+            ),
+            Err(ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
+        );
+    }
+
+    #[test]
+    fn streamed_native_relation_matches_mask_equation_and_detects_adversarial_changes() {
+        use super::super::manifest::{RELEASE_MODULI_V1, RELEASE_NEGACYCLIC_ROOTS_V1};
+
+        let relation_shape = tiny_relation_shape();
+        let rns_shape = CpkRnsDigestShapeV1 {
+            limbs: 2,
+            degree: relation_shape.degree,
+        };
+        let moduli = [RELEASE_MODULI_V1[0], RELEASE_MODULI_V1[1]];
+        let roots = core::array::from_fn::<_, 2, _>(|limb| {
+            super::super::mod_pow(
+                RELEASE_NEGACYCLIC_ROOTS_V1[limb],
+                (ZK_AMS_MKHE_CPK_RING_DEGREE_V1 / relation_shape.degree) as u64,
+                moduli[limb],
+            )
+        });
+        let plaintext = [7_u64, 11];
+        let public_a = [vec![2_u64, 3, 5, 7], vec![11_u64, 13, 17, 19]];
+        let secret = [-1_i64, 0, 1, 1];
+        let error = [-2_i64, -1, 0, 2];
+        let mut party_b = Vec::new();
+        for limb in 0..rns_shape.limbs {
+            let modulus = moduli[limb];
+            let secret_residues = secret
+                .iter()
+                .copied()
+                .map(|value| signed_mod(value, modulus))
+                .collect::<Vec<_>>();
+            let product =
+                negacyclic_multiply(&public_a[limb], &secret_residues, modulus, roots[limb])
+                    .unwrap();
+            party_b.push(
+                product
+                    .iter()
+                    .enumerate()
+                    .map(|(coefficient, product)| {
+                        mod_add(
+                            mod_sub(0, *product, modulus),
+                            mod_mul(
+                                plaintext[limb],
+                                signed_mod(error[coefficient], modulus),
+                                modulus,
+                            ),
+                            modulus,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let challenges = [17_u32, 19, 23, 29];
+        let mut responses = vec![0_i64; relation_shape.response_count().unwrap()];
+        let mut secret_masks = [[0_i64; 4]; 4];
+        let mut error_masks = [[0_i64; 4]; 4];
+        for (repetition, challenge) in challenges.iter().copied().enumerate() {
+            for coefficient in 0..relation_shape.degree {
+                secret_masks[repetition][coefficient] =
+                    37 + repetition as i64 * 11 + coefficient as i64;
+                error_masks[repetition][coefficient] =
+                    -41 - repetition as i64 * 13 - coefficient as i64;
+                responses[response_index(relation_shape, repetition, 0, coefficient).unwrap()] =
+                    secret_masks[repetition][coefficient]
+                        + i64::from(challenge) * secret[coefficient];
+                responses[response_index(relation_shape, repetition, 1, coefficient).unwrap()] =
+                    error_masks[repetition][coefficient]
+                        + i64::from(challenge) * error[coefficient];
+            }
+        }
+        let body = CpkRelationBodyV1 {
+            challenge_seed: digest(b"tiny-native-relation", b"seed"),
+            responses,
+            blind_responses: vec![Scalar::zero(); relation_shape.blind_response_count().unwrap()],
+        };
+        let mut expected = Vec::new();
+        for repetition in 0..relation_shape.repetitions {
+            let mut builder =
+                ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(repetition, rns_shape)
+                    .unwrap();
+            for limb in 0..rns_shape.limbs {
+                let modulus = moduli[limb];
+                let mask_residues = secret_masks[repetition]
+                    .iter()
+                    .copied()
+                    .map(|value| signed_mod(value, modulus))
+                    .collect::<Vec<_>>();
+                let product =
+                    negacyclic_multiply(&public_a[limb], &mask_residues, modulus, roots[limb])
+                        .unwrap();
+                let first_message = product
+                    .iter()
+                    .enumerate()
+                    .map(|(coefficient, product)| {
+                        mod_add(
+                            mod_sub(0, *product, modulus),
+                            mod_mul(
+                                plaintext[limb],
+                                signed_mod(error_masks[repetition][coefficient], modulus),
+                                modulus,
+                            ),
+                            modulus,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                builder.begin_limb(limb, modulus).unwrap();
+                builder.update_residues(&first_message).unwrap();
+                builder.finish_limb().unwrap();
+            }
+            expected.push(builder.finish().unwrap());
+        }
+        let expected: [_; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1] = expected.try_into().unwrap();
+        let reconstructed = reconstruct_cpk_rns_first_messages_for_shape_v1(
+            relation_shape,
+            rns_shape,
+            &moduli,
+            &roots,
+            &plaintext,
+            &body,
+            challenges,
+            |limb, _| Ok(public_a[limb].clone()),
+            |limb, _| Ok(party_b[limb].clone()),
+        )
+        .unwrap();
+        assert_eq!(reconstructed, expected);
+
+        let mut changed_b = party_b.clone();
+        changed_b[0][0] = mod_add(changed_b[0][0], 1, moduli[0]);
+        assert_ne!(
+            reconstruct_cpk_rns_first_messages_for_shape_v1(
+                relation_shape,
+                rns_shape,
+                &moduli,
+                &roots,
+                &plaintext,
+                &body,
+                challenges,
+                |limb, _| Ok(public_a[limb].clone()),
+                |limb, _| Ok(changed_b[limb].clone()),
+            )
+            .unwrap(),
+            expected
+        );
+        let mut changed_body = CpkRelationBodyV1 {
+            challenge_seed: body.challenge_seed,
+            responses: body.responses.clone(),
+            blind_responses: body.blind_responses.clone(),
+        };
+        changed_body.responses[0] += 1;
+        assert_ne!(
+            reconstruct_cpk_rns_first_messages_for_shape_v1(
+                relation_shape,
+                rns_shape,
+                &moduli,
+                &roots,
+                &plaintext,
+                &changed_body,
+                challenges,
+                |limb, _| Ok(public_a[limb].clone()),
+                |limb, _| Ok(party_b[limb].clone()),
+            )
+            .unwrap(),
+            expected
+        );
+        let mut noncanonical_b = party_b.clone();
+        noncanonical_b[0][0] = moduli[0];
+        assert_eq!(
+            reconstruct_cpk_rns_first_messages_for_shape_v1(
+                relation_shape,
+                rns_shape,
+                &moduli,
+                &roots,
+                &plaintext,
+                &body,
+                challenges,
+                |limb, _| Ok(public_a[limb].clone()),
+                |limb, _| Ok(noncanonical_b[limb].clone()),
+            ),
+            Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation)
+        );
+    }
+
+    #[test]
+    fn canonical_party_b_reader_is_single_pass_exact_and_fail_closed() {
+        use super::super::manifest::RELEASE_MODULI_V1;
+
+        let shape = CpkRnsDigestShapeV1 {
+            limbs: 2,
+            degree: 4,
+        };
+        let limbs = [vec![1_u64, 2, 3, 4], vec![5_u64, 6, 7, 8]];
+        let mut provider = TinyObjectProvider::cpk_party_b(tiny_party_b_wire(&limbs));
+        let pointer = provider.pointer;
+        let mut reader = CpkPartyBStreamReaderV1::begin(pointer, shape, &mut provider).unwrap();
+        assert_eq!(reader.read_limb(0, RELEASE_MODULI_V1[0]).unwrap(), limbs[0]);
+        assert_eq!(reader.read_limb(1, RELEASE_MODULI_V1[1]).unwrap(), limbs[1]);
+        let receipt = reader.finish().unwrap();
+        assert_eq!(receipt.payload_blake3(), pointer.payload_blake3());
+        assert_eq!(receipt.canonical_bytes(), pointer.payload_bytes());
+
+        let mut wrong_count_wire = tiny_party_b_wire(&limbs);
+        wrong_count_wire[..4].copy_from_slice(&7_u32.to_be_bytes());
+        let mut wrong_count = TinyObjectProvider::cpk_party_b(wrong_count_wire);
+        assert!(matches!(
+            CpkPartyBStreamReaderV1::begin(wrong_count.pointer, shape, &mut wrong_count),
+            Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation)
+        ));
+
+        let mut noncanonical_limbs = limbs.clone();
+        noncanonical_limbs[0][2] = RELEASE_MODULI_V1[0];
+        let mut noncanonical =
+            TinyObjectProvider::cpk_party_b(tiny_party_b_wire(&noncanonical_limbs));
+        let mut reader =
+            CpkPartyBStreamReaderV1::begin(noncanonical.pointer, shape, &mut noncanonical).unwrap();
+        assert_eq!(
+            reader.read_limb(0, RELEASE_MODULI_V1[0]),
+            Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation)
+        );
+
+        let mut trailing_wire = tiny_party_b_wire(&limbs);
+        trailing_wire.extend_from_slice(&0_u64.to_be_bytes());
+        let mut trailing = TinyObjectProvider::cpk_party_b(trailing_wire);
+        assert!(matches!(
+            CpkPartyBStreamReaderV1::begin(trailing.pointer, shape, &mut trailing),
+            Err(ZkAmsMkheCpkRelationErrorV1::ObjectPointer)
+        ));
+    }
+
+    #[test]
     fn production_capability_boundary_stays_fail_closed() {
         assert!(!ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1);
         assert_eq!(ZK_AMS_MKHE_CPK_RELATION_HEADER_BYTES_V1, 208);
@@ -3449,9 +4837,8 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
         ));
 
-        // The membership-input scaffold has no relation-receipt constructor or
-        // active-binding conversion.  The relation receipt fields and seal
-        // remain private and unreachable until the RNS/authentication verifier
-        // is implemented.
+        // The membership-input scaffold still has no relation-receipt
+        // constructor or active-binding conversion. Only the complete
+        // governed provider/authentication verifier can consume it.
     }
 }

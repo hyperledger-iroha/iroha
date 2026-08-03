@@ -6,7 +6,7 @@
 use std::{io, net::AddrParseError};
 
 use aead::{Nonce, Tag};
-use iroha_crypto::encryption::ChaCha20Poly1305;
+use iroha_crypto::{Algorithm, KeyPair, encryption::ChaCha20Poly1305};
 pub use iroha_data_model::{
     block::consensus_v2::ConsensusMode, confidential::ConfidentialFeatureDigest,
 };
@@ -52,6 +52,165 @@ pub(crate) mod sampler {
 
 /// The main type to use for secure communication.
 pub type NetworkHandle<T> = network::NetworkBaseHandle<T, ChaCha20Poly1305>;
+
+/// Cryptographic identities with separate, validated protocol roles.
+///
+/// The node identity is the BLS-normal consensus identity advertised as the
+/// [`iroha_data_model::peer::PeerId`]. The `SoraNet` transport identity is an
+/// independently rotatable Ed25519 key used only by the post-quantum transport
+/// handshake. A fresh-challenge- and chain-bound BLS delegation authenticates
+/// the latter before any admission puzzle or KEM work begins.
+#[derive(Clone, Debug)]
+pub struct P2pIdentityKeys {
+    pub(crate) node: KeyPair,
+    pub(crate) soranet_transport: KeyPair,
+}
+
+impl P2pIdentityKeys {
+    /// Validate and assign the only supported first-release identity roles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless `node` is BLS-normal and
+    /// `soranet_transport` is Ed25519.
+    pub fn new(node: KeyPair, soranet_transport: KeyPair) -> Result<Self> {
+        if node.algorithm() != Algorithm::BlsNormal {
+            return Err(
+                SoranetTransportDelegationError::LocalNodeAlgorithmMismatch {
+                    found: node.algorithm(),
+                }
+                .into(),
+            );
+        }
+        if soranet_transport.algorithm() != Algorithm::Ed25519 {
+            return Err(
+                SoranetTransportDelegationError::LocalTransportAlgorithmMismatch {
+                    found: soranet_transport.algorithm(),
+                }
+                .into(),
+            );
+        }
+        Ok(Self {
+            node,
+            soranet_transport,
+        })
+    }
+
+    /// Return the BLS-normal node identity.
+    #[must_use]
+    pub fn node(&self) -> &KeyPair {
+        &self.node
+    }
+
+    /// Return the delegated Ed25519 `SoraNet` transport identity.
+    #[must_use]
+    pub fn soranet_transport(&self) -> &KeyPair {
+        &self.soranet_transport
+    }
+}
+
+/// Fail-closed errors for the BLS-authorized `SoraNet` transport identity.
+#[derive(Debug, Error)]
+pub enum SoranetTransportDelegationError {
+    /// The local node identity must be BLS-normal, but `{found:?}` was supplied.
+    #[error("local node identity must be BLS-normal, found {found:?}")]
+    LocalNodeAlgorithmMismatch {
+        /// Algorithm supplied for the node role.
+        found: Algorithm,
+    },
+    /// The local transport identity must be Ed25519, but `{found:?}` was supplied.
+    #[error("local SoraNet transport identity must be Ed25519, found {found:?}")]
+    LocalTransportAlgorithmMismatch {
+        /// Algorithm supplied for the transport role.
+        found: Algorithm,
+    },
+    /// The delegation frame was empty.
+    #[error("SoraNet transport delegation frame is empty")]
+    EmptyFrame,
+    /// The delegation frame exceeded its exact first-release bound.
+    #[error("SoraNet transport delegation frame is {found} bytes; maximum is {max}")]
+    FrameTooLarge {
+        /// Received or locally signed frame length.
+        found: usize,
+        /// Maximum accepted frame length.
+        max: usize,
+    },
+    /// The delegation payload was not exact canonical Norito.
+    #[error("SoraNet transport delegation is not canonical Norito: {0}")]
+    NonCanonicalEncoding(String),
+    /// The delegation statement used an unsupported wire version.
+    #[error("unsupported SoraNet transport delegation version {found}; expected {expected}")]
+    UnsupportedVersion {
+        /// Required P2P preface version.
+        expected: u8,
+        /// Version authenticated by the delegation.
+        found: u8,
+    },
+    /// The signed delegation did not contain the initiator's fresh challenge.
+    #[error("SoraNet transport delegation challenge mismatch")]
+    ChallengeMismatch {
+        /// Challenge generated for this exact connection.
+        expected: [u8; 32],
+        /// Challenge authenticated by the received delegation.
+        found: [u8; 32],
+    },
+    /// The delegation belongs to another chain.
+    #[error("SoraNet transport delegation chain mismatch (expected {expected}, found {found})")]
+    ChainMismatch {
+        /// Locally configured chain.
+        expected: iroha_data_model::ChainId,
+        /// Chain authenticated by the delegation.
+        found: iroha_data_model::ChainId,
+    },
+    /// The delegation belongs to another node.
+    #[error("SoraNet transport delegation peer mismatch (expected {expected}, found {found})")]
+    PeerMismatch {
+        /// Node identity selected by topology.
+        expected: iroha_data_model::peer::PeerId,
+        /// Node identity authenticated by the delegation.
+        found: iroha_data_model::peer::PeerId,
+    },
+    /// The delegated node identity was not BLS-normal.
+    #[error("delegated node identity must be BLS-normal, found {found:?}")]
+    NodeAlgorithmMismatch {
+        /// Algorithm authenticated for the remote node.
+        found: Algorithm,
+    },
+    /// The delegated transport identity was not Ed25519.
+    #[error("delegated SoraNet transport identity must be Ed25519, found {found:?}")]
+    TransportAlgorithmMismatch {
+        /// Algorithm authenticated for the remote transport key.
+        found: Algorithm,
+    },
+    /// The delegated Ed25519 public key had the wrong payload length.
+    #[error("delegated Ed25519 public key is {found} bytes; expected {expected}")]
+    TransportKeyLength {
+        /// Required Ed25519 public-key payload length.
+        expected: usize,
+        /// Authenticated public-key payload length.
+        found: usize,
+    },
+    /// The BLS-normal authorization signature had the wrong payload length.
+    #[error("delegation BLS signature is {found} bytes; expected {expected}")]
+    NodeSignatureLength {
+        /// Required BLS-normal signature payload length.
+        expected: usize,
+        /// Received signature payload length.
+        found: usize,
+    },
+    /// The BLS authorization signature was not structurally valid.
+    #[error("delegation BLS signature is malformed")]
+    MalformedNodeSignature,
+    /// The BLS authorization signature did not authenticate the statement.
+    #[error("delegation BLS signature verification failed")]
+    InvalidNodeSignature,
+    /// A validated local node key failed to sign the delegation.
+    #[error("failed to sign SoraNet transport delegation: {0}")]
+    DelegationSigning(String),
+    /// A locally signed per-connection delegation violated its canonical wire contract.
+    #[error("failed to encode SoraNet transport delegation: {0}")]
+    DelegationEncoding(String),
+}
 
 #[cfg(test)]
 const P2P_ENCRYPTION_OVERHEAD_BYTES: usize =
@@ -194,8 +353,8 @@ pub enum Error {
     HandshakePublicKeyMalformed(#[source] iroha_crypto::error::ParseError),
     /// `SoraNet` handshake negotiation failed.
     HandshakeSoranet(String),
-    /// Noise handshake negotiation failed.
-    HandshakeNoise(String),
+    /// `SoraNet` transport identity delegation failed: {0}
+    HandshakeSoranetDelegation(#[from] SoranetTransportDelegationError),
 }
 
 impl From<io::Error> for Error {
@@ -206,6 +365,86 @@ impl From<io::Error> for Error {
 
 /// Result shorthand.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+#[cfg(test)]
+mod p2p_identity_keys_tests {
+    use super::*;
+
+    fn seeded_key_pair(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
+            .expect("test key pair generation must succeed")
+    }
+
+    #[test]
+    fn p2p_identity_keys_accept_canonical_bls_normal_and_ed25519_roles() {
+        let node = seeded_key_pair(0x31, Algorithm::BlsNormal);
+        let soranet_transport = seeded_key_pair(0x32, Algorithm::Ed25519);
+        let expected_node_public_key = node.public_key().clone();
+        let expected_transport_public_key = soranet_transport.public_key().clone();
+
+        let identities = P2pIdentityKeys::new(node, soranet_transport)
+            .expect("canonical P2P identity roles must be accepted");
+
+        assert_eq!(identities.node().algorithm(), Algorithm::BlsNormal);
+        assert_eq!(
+            identities.soranet_transport().algorithm(),
+            Algorithm::Ed25519
+        );
+        assert_eq!(identities.node().public_key(), &expected_node_public_key);
+        assert_eq!(
+            identities.soranet_transport().public_key(),
+            &expected_transport_public_key
+        );
+    }
+
+    #[test]
+    fn p2p_identity_keys_reject_swapped_roles_with_exact_node_error() {
+        let node = seeded_key_pair(0x33, Algorithm::Ed25519);
+        let soranet_transport = seeded_key_pair(0x34, Algorithm::BlsNormal);
+
+        let error = P2pIdentityKeys::new(node, soranet_transport)
+            .expect_err("swapped P2P identity roles must be rejected");
+
+        match error {
+            Error::HandshakeSoranetDelegation(
+                SoranetTransportDelegationError::LocalNodeAlgorithmMismatch { found },
+            ) => assert_eq!(found, Algorithm::Ed25519),
+            other => panic!("expected exact local-node algorithm error, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn p2p_identity_keys_reject_noncanonical_node_algorithm_with_exact_error() {
+        let node = seeded_key_pair(0x35, Algorithm::BlsSmall);
+        let soranet_transport = seeded_key_pair(0x36, Algorithm::Ed25519);
+
+        let error = P2pIdentityKeys::new(node, soranet_transport)
+            .expect_err("noncanonical node algorithm must be rejected");
+
+        match error {
+            Error::HandshakeSoranetDelegation(
+                SoranetTransportDelegationError::LocalNodeAlgorithmMismatch { found },
+            ) => assert_eq!(found, Algorithm::BlsSmall),
+            other => panic!("expected exact local-node algorithm error, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn p2p_identity_keys_reject_noncanonical_transport_algorithm_with_exact_error() {
+        let node = seeded_key_pair(0x37, Algorithm::BlsNormal);
+        let soranet_transport = seeded_key_pair(0x38, Algorithm::BlsSmall);
+
+        let error = P2pIdentityKeys::new(node, soranet_transport)
+            .expect_err("noncanonical transport algorithm must be rejected");
+
+        match error {
+            Error::HandshakeSoranetDelegation(
+                SoranetTransportDelegationError::LocalTransportAlgorithmMismatch { found },
+            ) => assert_eq!(found, Algorithm::BlsSmall),
+            other => panic!("expected exact local-transport algorithm error, found {other:?}"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod frame_tests {

@@ -86,6 +86,106 @@ pub(in crate::smartcontracts::isi) struct VerifiedNativeEscrowMovement {
     amount: Quantity,
 }
 
+/// Exact lifecycle context authenticated for one native anonymous-escrow tree transition.
+pub(in crate::smartcontracts::isi) enum VerifiedNativeAnonymousEscrowPurpose {
+    Funding {
+        escrow_id: EscrowId,
+        escrow_commitment: [u8; 32],
+    },
+    Closing {
+        escrow_id: EscrowId,
+        escrow_commitment: [u8; 32],
+        expected_status: AssetEscrowStatus,
+    },
+}
+
+/// Non-reusable proof that a native anonymous-escrow handler admitted one exact transfer.
+///
+/// Construction is private to this module. The world-state application path consumes the
+/// capability, so no public instruction, executor, or IVM guest can manufacture or replay it.
+pub(in crate::smartcontracts::isi) struct VerifiedNativeAnonymousEscrowTransfer {
+    purpose: VerifiedNativeAnonymousEscrowPurpose,
+    authority: AccountId,
+    asset_definition: AssetDefinitionId,
+    nullifiers: Vec<[u8; 32]>,
+    output_commitments: Vec<[u8; 32]>,
+    proof: ProofAttachment,
+    root_hint: Option<[u8; 32]>,
+}
+
+impl VerifiedNativeAnonymousEscrowTransfer {
+    fn funding(
+        escrow_id: EscrowId,
+        escrow_commitment: [u8; 32],
+        authority: AccountId,
+        asset_definition: AssetDefinitionId,
+        nullifiers: Vec<[u8; 32]>,
+        proof: ProofAttachment,
+        root_hint: Option<[u8; 32]>,
+    ) -> Self {
+        Self {
+            purpose: VerifiedNativeAnonymousEscrowPurpose::Funding {
+                escrow_id,
+                escrow_commitment,
+            },
+            authority,
+            asset_definition,
+            nullifiers,
+            output_commitments: vec![escrow_commitment],
+            proof,
+            root_hint,
+        }
+    }
+
+    fn closing(
+        escrow_id: EscrowId,
+        escrow_commitment: [u8; 32],
+        expected_status: AssetEscrowStatus,
+        authority: AccountId,
+        asset_definition: AssetDefinitionId,
+        nullifiers: Vec<[u8; 32]>,
+        output_commitments: Vec<[u8; 32]>,
+        proof: ProofAttachment,
+        root_hint: Option<[u8; 32]>,
+    ) -> Self {
+        Self {
+            purpose: VerifiedNativeAnonymousEscrowPurpose::Closing {
+                escrow_id,
+                escrow_commitment,
+                expected_status,
+            },
+            authority,
+            asset_definition,
+            nullifiers,
+            output_commitments,
+            proof,
+            root_hint,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (
+        VerifiedNativeAnonymousEscrowPurpose,
+        AccountId,
+        AssetDefinitionId,
+        Vec<[u8; 32]>,
+        Vec<[u8; 32]>,
+        ProofAttachment,
+        Option<[u8; 32]>,
+    ) {
+        (
+            self.purpose,
+            self.authority,
+            self.asset_definition,
+            self.nullifiers,
+            self.output_commitments,
+            self.proof,
+            self.root_hint,
+        )
+    }
+}
+
 /// Non-reusable proof for an exact multi-recipient orderbook custody settlement.
 pub(in crate::smartcontracts::isi) struct VerifiedNativeEscrowBatch {
     escrow_id: EscrowId,
@@ -1348,6 +1448,33 @@ fn ensure_close_proof_spends_escrow_commitment(
     Ok(())
 }
 
+pub(in crate::smartcontracts::isi) fn ensure_anonymous_escrow_funding_inputs_are_unreserved(
+    world: &impl WorldReadOnly,
+    asset_definition: &AssetDefinitionId,
+    proof_inputs: &[[u8; 32]],
+) -> Result<(), Error> {
+    let consumes_active_escrow = world
+        .anonymous_asset_escrows()
+        .iter()
+        .filter(|(_, record)| {
+            &record.asset_definition == asset_definition
+                && matches!(
+                    record.status,
+                    AssetEscrowStatus::Open
+                        | AssetEscrowStatus::Accepted
+                        | AssetEscrowStatus::PaymentSent
+                        | AssetEscrowStatus::Disputed
+                )
+        })
+        .any(|(_, record)| proof_inputs.contains(&record.escrow_commitment));
+    if consumes_active_escrow {
+        return Err(validation_err(
+            "native anonymous escrow funding cannot spend another escrow's custody commitment",
+        ));
+    }
+    Ok(())
+}
+
 fn proof_record(
     proof: &ProofAttachment,
     nullifiers: Vec<[u8; 32]>,
@@ -1394,40 +1521,30 @@ fn ensure_anonymous_escrow_asset_uses_transfer_v2(
 }
 
 fn execute_anonymous_escrow_transfer(
-    authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
-    asset_definition: AssetDefinitionId,
-    nullifiers: Vec<[u8; 32]>,
-    output_commitments: Vec<[u8; 32]>,
-    proof: ProofAttachment,
-    root_hint: Option<[u8; 32]>,
+    authorization: VerifiedNativeAnonymousEscrowTransfer,
 ) -> Result<AnonymousAssetEscrowProofRecord, Error> {
-    ensure_unique_non_zero_bytes("shielded nullifier", &nullifiers)?;
-    ensure_unique_non_zero_bytes("shielded output commitment", &output_commitments)?;
-    ensure_anonymous_escrow_asset_uses_transfer_v2(state_transaction, &asset_definition)?;
+    ensure_unique_non_zero_bytes("shielded nullifier", &authorization.nullifiers)?;
+    ensure_unique_non_zero_bytes(
+        "shielded output commitment",
+        &authorization.output_commitments,
+    )?;
+    ensure_anonymous_escrow_asset_uses_transfer_v2(
+        state_transaction,
+        &authorization.asset_definition,
+    )?;
     let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
     let record = proof_record(
-        &proof,
-        nullifiers.clone(),
-        output_commitments.clone(),
-        root_hint,
+        &authorization.proof,
+        authorization.nullifiers.clone(),
+        authorization.output_commitments.clone(),
+        authorization.root_hint,
         recorded_at_ms,
     );
-    let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
-        asset_definition,
-        nullifiers,
-        output_commitments,
-        proof,
-        root_hint,
-    );
-    state_transaction.native_anonymous_escrow_transfer_depth = state_transaction
-        .native_anonymous_escrow_transfer_depth
-        .saturating_add(1);
-    let result = transfer.execute(authority, state_transaction);
-    state_transaction.native_anonymous_escrow_transfer_depth = state_transaction
-        .native_anonymous_escrow_transfer_depth
-        .saturating_sub(1);
-    result?;
+    super::world::isi::apply_verified_native_anonymous_escrow_transfer(
+        authorization,
+        state_transaction,
+    )?;
     Ok(record)
 }
 
@@ -2579,13 +2696,16 @@ impl Execute for OpenAnonymousAssetEscrow {
         ensure_non_zero_bytes("escrow commitment", &self.escrow_commitment)?;
 
         let opening = execute_anonymous_escrow_transfer(
-            authority,
             state_transaction,
-            self.asset_definition.clone(),
-            self.funding_nullifiers,
-            vec![self.escrow_commitment],
-            self.proof,
-            self.root_hint,
+            VerifiedNativeAnonymousEscrowTransfer::funding(
+                self.escrow_id.clone(),
+                self.escrow_commitment,
+                authority.clone(),
+                self.asset_definition.clone(),
+                self.funding_nullifiers,
+                self.proof,
+                self.root_hint,
+            ),
         )?;
         let created_at_ms = state_transaction.block_unix_timestamp_ms();
         let record = AnonymousAssetEscrowRecord {
@@ -2679,13 +2799,18 @@ impl Execute for ReleaseAnonymousAssetEscrow {
         ensure_unique_non_zero_bytes("buyer output commitment", &self.buyer_output_commitments)?;
         ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
         let release = execute_anonymous_escrow_transfer(
-            authority,
             state_transaction,
-            record.asset_definition.clone(),
-            self.escrow_nullifiers,
-            self.buyer_output_commitments,
-            self.proof,
-            self.root_hint,
+            VerifiedNativeAnonymousEscrowTransfer::closing(
+                record.id.clone(),
+                record.escrow_commitment,
+                record.status,
+                authority.clone(),
+                record.asset_definition.clone(),
+                self.escrow_nullifiers,
+                self.buyer_output_commitments,
+                self.proof,
+                self.root_hint,
+            ),
         )?;
         record.status = AssetEscrowStatus::Released;
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
@@ -2719,13 +2844,18 @@ impl Execute for CancelAnonymousAssetEscrow {
         ensure_unique_non_zero_bytes("seller output commitment", &self.seller_output_commitments)?;
         ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
         let cancellation = execute_anonymous_escrow_transfer(
-            authority,
             state_transaction,
-            record.asset_definition.clone(),
-            self.escrow_nullifiers,
-            self.seller_output_commitments,
-            self.proof,
-            self.root_hint,
+            VerifiedNativeAnonymousEscrowTransfer::closing(
+                record.id.clone(),
+                record.escrow_commitment,
+                record.status,
+                authority.clone(),
+                record.asset_definition.clone(),
+                self.escrow_nullifiers,
+                self.seller_output_commitments,
+                self.proof,
+                self.root_hint,
+            ),
         )?;
         record.status = AssetEscrowStatus::Cancelled;
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
@@ -2806,13 +2936,18 @@ impl Execute for ResolveAnonymousEscrowDispute {
         ensure_unique_non_zero_bytes("resolution output commitment", &outputs)?;
         ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
         let proof = execute_anonymous_escrow_transfer(
-            authority,
             state_transaction,
-            record.asset_definition.clone(),
-            self.escrow_nullifiers,
-            outputs,
-            self.proof,
-            self.root_hint,
+            VerifiedNativeAnonymousEscrowTransfer::closing(
+                record.id.clone(),
+                record.escrow_commitment,
+                record.status,
+                authority.clone(),
+                record.asset_definition.clone(),
+                self.escrow_nullifiers,
+                outputs,
+                self.proof,
+                self.root_hint,
+            ),
         )?;
         let resolved_at_ms = state_transaction.block_unix_timestamp_ms();
         record.status = AssetEscrowStatus::Resolved;
@@ -3777,6 +3912,203 @@ mod tests {
         assert!(ensure_unique_non_zero_bytes("test", &[[0x01; 32], [0x01; 32]]).is_err());
         assert!(ensure_single_escrow_nullifier(&[[0x01; 32]]).is_ok());
         assert!(ensure_single_escrow_nullifier(&[[0x01; 32], [0x02; 32]]).is_err());
+    }
+
+    #[test]
+    fn anonymous_escrow_funding_cannot_consume_active_custody() {
+        let seller = fixture_account("funding-input-seller");
+        let buyer = fixture_account("funding-input-buyer");
+        let court = fixture_account("funding-input-court");
+        let asset_definition = fixture_asset_definition_id();
+        let state = state_with_parties(
+            &seller,
+            &buyer,
+            &court,
+            &asset_definition,
+            Quantity::from(100_u32),
+        );
+        let mut block = state.block(block_header(1));
+        let mut tx = block.transaction();
+        let escrow_id = fixture_escrow_id("active-anonymous-custody");
+        let record = anonymous_escrow_fixture(
+            escrow_id,
+            seller,
+            Some(buyer),
+            asset_definition.clone(),
+            AssetEscrowStatus::PaymentSent,
+        );
+        let custody_commitment = record.escrow_commitment;
+        tx.world.insert_anonymous_asset_escrow_entry(record);
+
+        let error = ensure_anonymous_escrow_funding_inputs_are_unreserved(
+            &tx.world,
+            &asset_definition,
+            &[custody_commitment],
+        )
+        .expect_err("active anonymous custody must be purpose-bound to its close path");
+        assert!(error.to_string().contains("cannot spend another escrow"));
+        ensure_anonymous_escrow_funding_inputs_are_unreserved(
+            &tx.world,
+            &asset_definition,
+            &[[0x77; 32]],
+        )
+        .expect("unreserved funding input remains admissible");
+    }
+
+    #[test]
+    fn native_anonymous_escrow_root_window_fails_before_ledger_mutation() {
+        let seller = fixture_account("root-window-seller");
+        let buyer = fixture_account("root-window-buyer");
+        let court = fixture_account("root-window-court");
+        let asset_definition = fixture_asset_definition_id();
+        let definition = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(AssetConfidentialPolicy::convertible())
+        .build(&seller);
+        let state = state_with_parties_and_definition(
+            &seller,
+            &buyer,
+            &court,
+            &asset_definition,
+            definition,
+            Quantity::from(100_u32),
+        );
+        let mut block = state.block(block_header(2));
+        let mut tx = block.transaction();
+        let mut zk_state = crate::state::ZkAssetState::default();
+        let recent_root = zk_state.persisted_root;
+        zk_state.root_history.push(recent_root);
+        tx.world
+            .zk_assets
+            .insert(asset_definition.clone(), zk_state);
+
+        let proof = ProofAttachment {
+            backend: "dummy".into(),
+            proof: iroha_data_model::proof::ProofBox::new("dummy".into(), Vec::new()),
+            vk_ref: iroha_data_model::proof::VerifyingKeyId::new("dummy", "dummy"),
+            vk_commitment: None,
+            envelope_hash: None,
+            lane_privacy: None,
+        };
+        let commitment = [0x81; 32];
+        let nullifier = [0x82; 32];
+        let before = tx
+            .world
+            .zk_assets
+            .get(&asset_definition)
+            .cloned()
+            .expect("confidential state");
+        let stale = VerifiedNativeAnonymousEscrowTransfer::funding(
+            fixture_escrow_id("stale-root-funding"),
+            commitment,
+            seller.clone(),
+            asset_definition.clone(),
+            vec![nullifier],
+            proof.clone(),
+            Some([0xA5; 32]),
+        );
+        let error = crate::smartcontracts::isi::world::isi::apply_verified_native_anonymous_escrow_transfer(
+            stale,
+            &mut tx,
+        )
+        .expect_err("stale root must fail closed");
+        assert!(error.to_string().contains("stale or unknown Merkle root"));
+        let after = tx
+            .world
+            .zk_assets
+            .get(&asset_definition)
+            .expect("confidential state remains present");
+        assert_eq!(after.nullifiers, before.nullifiers);
+        assert_eq!(after.commitments, before.commitments);
+        assert_eq!(after.tree_frontier, before.tree_frontier);
+        assert_eq!(after.persisted_root, before.persisted_root);
+        assert_eq!(
+            after.frontier_checkpoints.len(),
+            before.frontier_checkpoints.len()
+        );
+
+        let recent = VerifiedNativeAnonymousEscrowTransfer::funding(
+            fixture_escrow_id("recent-root-funding"),
+            commitment,
+            seller,
+            asset_definition,
+            vec![nullifier],
+            proof,
+            Some(recent_root),
+        );
+        let error = crate::smartcontracts::isi::world::isi::apply_verified_native_anonymous_escrow_transfer(
+            recent,
+            &mut tx,
+        )
+        .expect_err("missing verifier must fail after the recent-root check");
+        assert!(
+            error
+                .to_string()
+                .contains("verifying key is not configured")
+        );
+    }
+
+    #[test]
+    fn native_confidential_transfer_event_preserves_authenticated_context() {
+        let seller = fixture_account("event-seller");
+        let buyer = fixture_account("event-buyer");
+        let court = fixture_account("event-court");
+        let asset_definition = fixture_asset_definition_id();
+        let state = state_with_parties(
+            &seller,
+            &buyer,
+            &court,
+            &asset_definition,
+            Quantity::from(100_u32),
+        );
+        let mut block = state.block(block_header(3));
+        let mut tx = block.transaction();
+        seed_test_call_hash(&mut tx, 0x91);
+        let nullifiers = vec![[0x11; 32]];
+        let outputs = vec![[0x22; 32], [0x23; 32]];
+        let root_before = Some([0x31; 32]);
+        let root_after = [0x32; 32];
+        let proof_hash = [0x41; 32];
+        let envelope_hash = Some([0x42; 32]);
+
+        crate::smartcontracts::isi::world::isi::emit_verified_native_confidential_transfer_event(
+            &mut tx,
+            asset_definition.clone(),
+            nullifiers.clone(),
+            outputs.clone(),
+            root_before,
+            root_after,
+            proof_hash,
+            envelope_hash,
+        );
+        let transferred = tx
+            .world
+            .take_external_events()
+            .into_iter()
+            .find_map(|event| match event {
+                EventBox::Data(data) => match data.as_ref() {
+                    data_pre::DataEvent::Confidential(
+                        iroha_data_model::events::data::confidential::ConfidentialEvent::Transferred(
+                            transferred,
+                        ),
+                    ) => Some(transferred.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("native confidential transfer event");
+        assert_eq!(transferred.asset_definition, asset_definition);
+        assert_eq!(transferred.nullifiers, nullifiers);
+        assert_eq!(transferred.outputs, outputs);
+        assert_eq!(transferred.root_before, root_before);
+        assert_eq!(transferred.root_after, root_after);
+        assert_eq!(transferred.proof_hash, proof_hash);
+        assert_eq!(transferred.envelope_hash, envelope_hash);
+        assert_eq!(transferred.call_hash, Some([0x91; 32]));
     }
 
     #[test]

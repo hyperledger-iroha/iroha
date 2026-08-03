@@ -3140,12 +3140,12 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
         nexus_amx_context_hash: Hash::new(b"Native frontier token AMX context"),
         execution_policy_hash: Hash::new(b"Native frontier token execution policy"),
         da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
+            encoding: PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 1024,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 4096,
-            max_chunk_count: 4,
+            max_chunk_count: 8,
         },
         leader_seed: [0xA5; 32],
     };

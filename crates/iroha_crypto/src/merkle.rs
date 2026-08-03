@@ -2752,8 +2752,9 @@ mod tests {
 
     #[test]
     fn merkle_tree_encode_rejects_invalid_layout() {
-        let bad_leaf = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
-        let bad_tree = raw_application_tree(vec![Some(bad_leaf), Some(bad_leaf)]);
+        let bad_leaf: HashOf<()> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+        let bad_tree = raw_application_tree::<()>(vec![Some(bad_leaf), Some(bad_leaf)]);
         let err = norito::to_bytes(&bad_tree).expect_err("invalid merkle layout should fail");
         assert!(matches!(err, norito::Error::Message(_)));
     }
@@ -2767,8 +2768,9 @@ mod tests {
 
     #[test]
     fn merkle_tree_encode_rejects_missing_parent() {
-        let leaf = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-        let bad_tree = raw_application_tree(vec![
+        let leaf: HashOf<()> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+        let bad_tree = raw_application_tree::<()>(vec![
             Some(leaf),
             None,
             Some(leaf),

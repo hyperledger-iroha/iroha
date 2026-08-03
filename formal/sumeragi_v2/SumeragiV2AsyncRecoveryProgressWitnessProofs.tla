@@ -2066,7 +2066,8 @@ THEOREM PersistDecisionRecoveryUsesBodyStateCompletion ==
 BY DEF CommandSuccessors, PersistDecisionRecoverySuccessor,
        PersistDecisionRecoveryKind, PersistDecisionBody,
        PersistDecisionValidationHeld, PersistDecisionRequest,
-       AsyncCandidateAtConsumerWithOrigin,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound,
        AsyncCandidateWithIdentityAndOrigin,
        CandidateConsumerCurrent, PersistDecisionRequests
 

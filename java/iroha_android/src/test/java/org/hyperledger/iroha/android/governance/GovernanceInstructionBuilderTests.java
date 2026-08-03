@@ -315,13 +315,14 @@ public final class GovernanceInstructionBuilderTests {
   }
 
   private static void finalizeReferendumRoundTrip() {
+    final String proposalId = "e1".repeat(32);
     final FinalizeReferendumInstruction instruction =
         FinalizeReferendumInstruction.builder()
-            .setReferendumId("ref-final")
-            .setProposalIdHex("e1".repeat(32))
+            .setReferendumId(proposalId)
+            .setProposalIdHex(proposalId)
             .build();
-    assert "ref-final".equals(instruction.referendumId()) : "referendum id mismatch";
-    assert "e1".repeat(32).equals(instruction.proposalIdHex()) : "proposal id mismatch";
+    assert proposalId.equals(instruction.referendumId()) : "referendum id mismatch";
+    assert proposalId.equals(instruction.proposalIdHex()) : "proposal id mismatch";
   }
 
   private static void persistCouncilRoundTrip() {

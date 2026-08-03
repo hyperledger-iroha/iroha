@@ -838,33 +838,17 @@ impl ExactSizeIterator for EntrypointIterator {
 
 impl EntrypointIterator {
     fn new(block: &SignedBlock) -> Self {
-        let entries: Vec<TransactionEntrypoint> = if block.has_results() {
-            let mut tx_by_hash: BTreeMap<_, usize> = BTreeMap::new();
-            for (idx, entry) in block.external_entrypoints_cloned().enumerate() {
-                tx_by_hash.insert(entry.hash(), idx);
-            }
-            let result = block.result_ref();
-            let mut trig_by_hash: BTreeMap<_, usize> = BTreeMap::new();
-            for (idx, trig) in result.time_triggers.iter().enumerate() {
-                trig_by_hash.insert(trig.hash_as_entrypoint(), idx);
-            }
-            let external_entries: Vec<TransactionEntrypoint> =
-                block.external_entrypoints_cloned().collect();
-            block
-                .entrypoint_hashes()
-                .map(|hash| {
-                    if let Some(&idx) = tx_by_hash.get(&hash) {
-                        external_entries[idx].clone()
-                    } else if let Some(&idx) = trig_by_hash.get(&hash) {
-                        TransactionEntrypoint::from(result.time_triggers[idx].clone())
-                    } else {
-                        panic!("entrypoint hash missing from block contents");
-                    }
-                })
-                .collect()
-        } else {
-            block.external_entrypoints_cloned().collect()
-        };
+        let mut entries: Vec<TransactionEntrypoint> = block.external_entrypoints_cloned().collect();
+        if block.has_results() {
+            entries.extend(
+                block
+                    .result_ref()
+                    .time_triggers
+                    .iter()
+                    .cloned()
+                    .map(TransactionEntrypoint::from),
+            );
+        }
         let len = entries.len();
         Self {
             entries,

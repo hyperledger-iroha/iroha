@@ -50,7 +50,7 @@ Options:
   --no-sample-asset          Do not include kagami's extra sample asset
   --asset-id <ID>            Built-in Kagemusha asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
   --asset-name <NAME>        Built-in Kagemusha asset name to verify (default: usd)
-  --asset-alias <ALIAS>      Built-in Kagemusha alias to verify (default: usd#wonderland)
+  --asset-alias <ALIAS>      Built-in Kagemusha alias to verify (default: usd#wonderland.universal)
   --skip-asset-check         Skip built-in Kagemusha asset verification
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
@@ -98,7 +98,7 @@ PROFILE="debug"
 SAMPLE_ASSET=true
 ASSET_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 ASSET_NAME="usd"
-ASSET_ALIAS="usd#wonderland"
+ASSET_ALIAS="usd#wonderland.universal"
 SKIP_ASSET_CHECK=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30

@@ -58,6 +58,85 @@ class MusubiInstructionsV1FixtureTest {
     }
 
     @Test
+    fun `parent-local dependency aliases are unique across published graphs`() {
+        val publication = cases(fixture())
+            .first { it.string("id") == "publish-delegated-domain-release" }
+            .objectValue("semantic")
+            .let { parsePublication(it.objectValue("publication")) }
+        val manifest = publication.manifest
+        val lock = publication.resolution.lock
+        val firstRequirement = manifest.dependencies.single()
+        val firstEdge = lock.rootDependencies.single()
+        val firstNode = lock.nodes.single()
+        val secondPackage = MusubiPackageIdV1(
+            firstRequirement.packageId.homeDataspace,
+            firstRequirement.packageId.scope,
+            MusubiPackageNameV1("vector-next"),
+        )
+        val secondRequirement = MusubiDependencyReqV1(
+            firstRequirement.alias,
+            secondPackage,
+            firstRequirement.requirement,
+        )
+        val secondRelease = MusubiReleaseIdV1(secondPackage, firstEdge.selected.version)
+        val secondEdge = MusubiExactDependencyEdgeV1(
+            firstEdge.alias,
+            firstEdge.kind,
+            secondRelease.packageId,
+            firstEdge.requirement,
+            secondRelease,
+        )
+        val requirements = listOf(firstRequirement, secondRequirement).sorted()
+        val edges = listOf(firstEdge, secondEdge).sorted()
+
+        fun assertUniqueAliasFailure(block: () -> Unit) {
+            val error = assertFailsWith<IllegalArgumentException>(block = block)
+            assertTrue(error.message.orEmpty().contains("unique parent-local aliases"))
+        }
+
+        assertUniqueAliasFailure {
+            MusubiReleaseManifestV1(
+                manifest.release,
+                manifest.edition,
+                manifest.abi,
+                requirements,
+                manifest.exports,
+                manifest.interfaceDigest,
+                manifest.metadata,
+                manifest.archiveId,
+                manifest.verificationLockDigest,
+            )
+        }
+        assertUniqueAliasFailure {
+            MusubiVerificationNodeV1(
+                firstNode.release,
+                firstNode.releaseDigest,
+                firstNode.archiveId,
+                firstNode.sourceDigest,
+                firstNode.interfaceDigest,
+                firstNode.abi,
+                edges,
+            )
+        }
+        val secondNode = MusubiVerificationNodeV1(
+            secondRelease,
+            firstNode.releaseDigest,
+            firstNode.archiveId,
+            firstNode.sourceDigest,
+            firstNode.interfaceDigest,
+            firstNode.abi,
+            emptyList(),
+        )
+        assertUniqueAliasFailure {
+            MusubiVerificationLockV1(
+                lock.root,
+                edges,
+                listOf(firstNode, secondNode).sorted(),
+            )
+        }
+    }
+
+    @Test
     fun `new mutation compare-and-set revisions reject zero`() {
         val byId = cases(fixture()).associateBy { it.string("id") }
 

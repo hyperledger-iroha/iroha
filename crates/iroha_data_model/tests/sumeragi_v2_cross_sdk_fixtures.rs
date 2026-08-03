@@ -18,7 +18,7 @@ use iroha_data_model::{
         SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
         SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
         SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
-        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
+        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote, encode_payload_chunks,
     },
     peer::PeerId,
 };
@@ -57,12 +57,12 @@ fn context() -> HeightContext {
         nexus_amx_context_hash: Hash::new(b"nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
+            encoding: PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 4,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 1024,
-            max_chunk_count: 256,
+            max_chunk_count: 512,
         },
         leader_seed: [0xa5; 32],
     }
@@ -130,6 +130,7 @@ fn fixture_rows() -> BTreeMap<(String, String), String> {
 #[test]
 fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     let context = context();
+    let body = b"body";
     let prepare = qc(&context, 1, GlobalPhase::Prepare);
     let timeout = TimeoutCertificate {
         round: round(&context, 2),
@@ -139,12 +140,14 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
             aggregate_signature: vec![0x33; 48],
         }],
     };
+    let encoded_body_chunks = encode_payload_chunks(context.da_layout, body)
+        .expect("encode the complete canonical fixture RS16 stripe");
     let manifest = PayloadManifest::derive(
         &context,
         round(&context, 1),
         subject(9),
-        4,
-        &[b"body".to_vec()],
+        u64::try_from(body.len()).expect("canonical body length fits u64"),
+        &encoded_body_chunks,
     )
     .expect("derive canonical fixture manifest");
     let body_request = CertifiedBodyRequest {
@@ -209,7 +212,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
             manifest_hash: HashOf::new(&manifest),
             index: 0,
-            bytes: b"body".to_vec(),
+            bytes: encoded_body_chunks[0].clone(),
             sender: 0,
             signature: vec![0x66; 48],
         }),
@@ -223,7 +226,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         ConsensusMessageV2Payload::CertifiedBodyResponse(CertifiedBodyResponse {
             request_hash: HashOf::new(&body_request),
             manifest: manifest.clone(),
-            body: b"body".to_vec(),
+            body: body.to_vec(),
             responder: 0,
             signature: vec![3],
         }),

@@ -9,6 +9,7 @@ import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -52,6 +53,101 @@ class MusubiSdkV1FixtureTest {
             val requirement = MusubiVersionReqV1.parse(item["requirement"] as String)
             val candidate = MusubiVersionV1.parse(item["candidate"] as String)
             assertEquals(item["matches"], requirement.matches(candidate))
+        }
+    }
+
+    @Test
+    fun archiveCommitmentUsesTheFullBundlePayloadCeiling() {
+        val sourceCeilingPlusOne = java.math.BigInteger.valueOf(
+            64L * 1024L * 1024L + 1L,
+        )
+        val bundleCeiling = java.math.BigInteger.valueOf(MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1)
+
+        assertEquals(96L * 1024L * 1024L, MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1)
+        assertEquals(
+            sourceCeilingPlusOne,
+            archiveCommitment(sourceCeilingPlusOne).contentLength,
+        )
+        assertEquals(bundleCeiling, archiveCommitment(bundleCeiling).contentLength)
+        assertFailsWith<IllegalArgumentException> {
+            archiveCommitment(bundleCeiling.add(java.math.BigInteger.ONE))
+        }
+    }
+
+    @Test
+    fun finalizedCursorAcceptsMaximumVersionAndMaintainerKeys() {
+        val maximumU64 = java.math.BigInteger("18446744073709551615")
+        val maximumIdentifier = MusubiPrereleaseIdentifierV1.alphaNumeric("z".repeat(64))
+        val maximumVersion = MusubiVersionV1(
+            maximumU64,
+            maximumU64,
+            maximumU64,
+            List(16) { maximumIdentifier },
+        )
+        assertEquals(
+            1_102,
+            maximumVersion.canonicalText().toByteArray(StandardCharsets.UTF_8).size,
+        )
+
+        val snapshot = MusubiRegistrySnapshotV1(
+            java.math.BigInteger.ONE,
+            ByteArray(32) { 7 },
+            java.math.BigInteger.ONE,
+        )
+        val queryHash = MusubiDigest32V1(ByteArray(32) { 8 })
+        MusubiFinalizedCursorV1(
+            snapshot,
+            queryHash,
+            maximumVersion.canonicalText(),
+            null,
+        )
+
+        val maximumMaintainerKey = "ab".repeat(8_192) +
+            "|pending-" + "cd".repeat(32)
+        assertEquals(16_457, MUSUBI_MAX_CURSOR_KEY_BYTES_V1)
+        assertEquals(
+            MUSUBI_MAX_CURSOR_KEY_BYTES_V1,
+            maximumMaintainerKey.toByteArray(StandardCharsets.UTF_8).size,
+        )
+        MusubiFinalizedCursorV1(snapshot, queryHash, maximumMaintainerKey, null)
+        assertFails {
+            MusubiFinalizedCursorV1(snapshot, queryHash, maximumMaintainerKey + "0", null)
+        }
+    }
+
+    @Test
+    fun orderedPrefixUsesExactStructuralMaximumAndPortablePackagePrefix() {
+        val maximumPrefix = "n".repeat(255) + "/" + "p".repeat(64)
+        assertEquals(320, MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1)
+        assertEquals(
+            MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1,
+            maximumPrefix.toByteArray(StandardCharsets.UTF_8).size,
+        )
+        MusubiOrderedPrefixQueryV1(maximumPrefix)
+        MusubiOrderedPrefixQueryV1("sora/")
+        MusubiOrderedPrefixQueryV1("sora/pkg-")
+
+        val overlong = "n".repeat(255) + "/" + "p".repeat(65)
+        assertEquals(
+            MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1 + 1,
+            overlong.toByteArray(StandardCharsets.UTF_8).size,
+        )
+        assertFails { MusubiOrderedPrefixQueryV1(overlong) }
+
+        listOf(
+            "sora",
+            "/pkg",
+            "a.b.c/pkg",
+            "sora/pkg/extra",
+            "sora/-pkg",
+            "sora/pkg--extra",
+            "sora/Pkg",
+            "sora/pkg_name",
+            "sora/päkg",
+        ).forEach { malformed ->
+            assertFails("accepted malformed ordered prefix $malformed") {
+                MusubiOrderedPrefixQueryV1(malformed)
+            }
         }
     }
 
@@ -261,6 +357,76 @@ class MusubiSdkV1FixtureTest {
     }
 
     @Test
+    fun maintainerCursorUsesOpaqueAccountEqualityAndCanonicalShape() {
+        val route = routes().first { it["path"] == MusubiToriiClientV1.MAINTAINERS_PATH }
+        val page = MusubiJsonV1.parseMaintainerPage(MusubiJsonV1.encode(route["response"]))
+
+        fun response(firstItem: Int, lastKey: String): MutableMap<String, Any?> {
+            val response = objectValue(deepMutableCopy(route["response"]))
+            response["items"] = mutableListOf(
+                deepMutableCopy(arrayValue(response["items"])[firstItem]),
+            )
+            val controls = objectValue(objectValue(response["query"])["page"])
+            controls["cursor"] = finalizedCursorWire(response["snapshot"], lastKey, 1L)
+            return response
+        }
+
+        val acceptedKey = MusubiValidationV1.maintainerCursorKey(page.items[0])
+        val pendingKey = MusubiValidationV1.maintainerCursorKey(page.items[1])
+        val accountToken = acceptedKey.substringBefore('|')
+        MusubiJsonV1.decodeResponse(
+            MusubiToriiClientV1.MAINTAINERS_PATH,
+            response(0, "$accountToken|pending-${"01".repeat(32)}"),
+        )
+        MusubiJsonV1.decodeResponse(
+            MusubiToriiClientV1.MAINTAINERS_PATH,
+            response(1, "$accountToken|accepted"),
+        )
+
+        page.items.forEachIndexed { index, item ->
+            assertFails {
+                MusubiJsonV1.decodeResponse(
+                    MusubiToriiClientV1.MAINTAINERS_PATH,
+                    response(index, MusubiValidationV1.maintainerCursorKey(item)),
+                )
+            }
+        }
+        val repeatedLater = objectValue(deepMutableCopy(route["response"]))
+        objectValue(objectValue(repeatedLater["query"])["page"])["cursor"] =
+            finalizedCursorWire(repeatedLater["snapshot"], pendingKey, 1L)
+        assertFails {
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.MAINTAINERS_PATH,
+                repeatedLater,
+            )
+        }
+        assertFails {
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.MAINTAINERS_PATH,
+                response(0, "00|accepted"),
+            )
+        }
+        assertFails {
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.MAINTAINERS_PATH,
+                response(0, accountToken.dropLast(2) + "|accepted"),
+            )
+        }
+        assertFails {
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.MAINTAINERS_PATH,
+                response(0, "ab".repeat(8_193) + "|accepted"),
+            )
+        }
+        assertFails {
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.MAINTAINERS_PATH,
+                response(1, "ff|pending-${"00".repeat(32)}"),
+            )
+        }
+    }
+
+    @Test
     fun readOnlyClientPostsEachTypedQueryToItsExactV1Route() {
         val routes = routes()
         val executor = FixtureExecutor(routes.associate {
@@ -279,6 +445,7 @@ class MusubiSdkV1FixtureTest {
             assertEquals("POST", captured.method)
             assertEquals(path, captured.uri.path)
             assertEquals(route["request"], parseJson(captured.body))
+            assertEquals(32L * 1024L * 1024L, captured.maximumResponseBytes)
         }
         assertEquals(EXPECTED_PATHS, executor.requests.map { it.uri.path }.toSet())
     }
@@ -517,6 +684,71 @@ class MusubiSdkV1FixtureTest {
             "last_package" to previousPackage,
         )
         assertRejected(MusubiToriiClientV1.SEARCH_PATH, wrongSearchHash)
+    }
+
+    @Test
+    fun resolverIndexAcceptsShortByteBudgetPageAndBindsContinuationTail() {
+        val resolverRoute = routes().first {
+            it["path"] == MusubiToriiClientV1.RESOLVER_INDEX_PATH
+        }
+        val response = objectValue(deepMutableCopy(resolverRoute["response"]))
+        val releaseResponse = objectValue(
+            routes().first { it["path"] == MusubiToriiClientV1.EXACT_RELEASE_PATH }["response"],
+        )
+        response["items"] = mutableListOf(deepMutableCopy(releaseResponse["universal_release"]))
+
+        val query = objectValue(response["query"])
+        val page = objectValue(query["page"])
+        page["limit"] = 2L
+        page["cursor"] = finalizedCursorWire(response["snapshot"], "1.2.2", 19L)
+        response["next_cursor"] = finalizedCursorWire(response["snapshot"], "1.2.3", 19L)
+
+        MusubiJsonV1.decodeResponse(MusubiToriiClientV1.RESOLVER_INDEX_PATH, response)
+
+        val duplicateAliases = objectValue(deepMutableCopy(response))
+        val resolverRow = objectValue(arrayValue(duplicateAliases["items"]).single())
+        val packageTemplate = objectValue(
+            objectValue(resolverRow["release"])["package"],
+        )
+        val requirementTemplate = objectValue(
+            arrayValue(objectValue(fixture()["canonical"])["requirements"]).first(),
+        )["wire"]
+        fun dependency(name: String): MutableMap<String, Any?> {
+            val packageId = objectValue(deepMutableCopy(packageTemplate))
+            packageId["name"] = mutableListOf(name)
+            return linkedMapOf(
+                "alias" to "shared",
+                "package" to packageId,
+                "requirement" to deepMutableCopy(requirementTemplate),
+            )
+        }
+        resolverRow["dependencies"] = mutableListOf(
+            dependency("alpha-dependency"),
+            dependency("beta-dependency"),
+        )
+        val duplicateAliasError = assertFailsWith<IllegalArgumentException> {
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.RESOLVER_INDEX_PATH,
+                duplicateAliases,
+            )
+        }
+        assertTrue(
+            duplicateAliasError.message.orEmpty().contains("unique parent-local aliases"),
+        )
+
+        val wrongTail = objectValue(deepMutableCopy(response))
+        objectValue(wrongTail["next_cursor"])["last_key"] = "1.2.4"
+        assertFails {
+            MusubiJsonV1.decodeResponse(MusubiToriiClientV1.RESOLVER_INDEX_PATH, wrongTail)
+        }
+
+        val wrongPriorHash = objectValue(deepMutableCopy(response))
+        objectValue(
+            objectValue(objectValue(wrongPriorHash["query"])["page"])["cursor"],
+        )["query_hash"] = digestWire(20L)
+        assertFails {
+            MusubiJsonV1.decodeResponse(MusubiToriiClientV1.RESOLVER_INDEX_PATH, wrongPriorHash)
+        }
     }
 
     @Test
@@ -883,6 +1115,37 @@ class MusubiSdkV1FixtureTest {
                 archiveResponse,
             )
         }
+    }
+
+    private fun archiveCommitment(
+        contentLength: java.math.BigInteger,
+    ): MusubiArchiveCommitmentV1 {
+        val rootCid = ByteArray(36) { 7 }
+        rootCid[0] = 1
+        rootCid[1] = 113
+        rootCid[2] = 31
+        rootCid[3] = 32
+        val digest = MusubiDigest32V1(ByteArray(32) { 9 })
+        return MusubiArchiveCommitmentV1(
+            rootCid,
+            MusubiChunkerProfileHandleV1(
+                1L,
+                "sorafs",
+                "sf1",
+                "1.0.0",
+                java.math.BigInteger.valueOf(31L),
+            ),
+            digest,
+            digest,
+            contentLength,
+            digest,
+            java.math.BigInteger.valueOf(MUSUBI_MAX_CAR_BYTES_V1),
+            digest,
+            digest,
+            digest,
+            1L,
+            1L,
+        )
     }
 
     private fun invoke(

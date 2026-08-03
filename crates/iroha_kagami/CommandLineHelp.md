@@ -175,7 +175,7 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
 
 ###### **Options:**
 
-* `-p`, `--peers <COUNT>` — Number of peer services in the configuration
+* `-p`, `--peers <COUNT>` — Number of peer services in the configuration. Must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31
 * `-s`, `--seed <SEED>` — Enable deterministic development mode with this UTF-8 validator seed.
 
    When omitted, `--config-dir` must be an authoritative prepared bundle containing `peerN.toml`, signed genesis, verifier-key, and exact-hash files. Production workflows should omit this option so Compose cannot generate identities that diverge from genesis.
@@ -270,12 +270,13 @@ Sign the genesis block
 
 * `-o`, `--out-file <PATH>` — Path to signed genesis output file in Norito format (stdout by default)
 * `--bound-manifest-out <PATH>` — Persist the exact config-bound genesis manifest used to build the signed block. May point to `GENESIS_FILE` to replace the input only after binding succeeds
-* `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`
+* `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`. The final unique topology must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31
 * `--peer-pop <PEER_POPS>` — Embed one or more PoPs into the same transaction as `--topology`. Repeatable flag: `--peer-pop <public_key=pop_hex>`
 * `--private-key <HEX>` — Private key hex (multihash payload, not prefixed) that matches the genesis public key
 * `--private-key-file <PATH>` — Owner-held mode-0600 file containing one canonical private-key multihash
 * `--expected-public-key <PUBLIC_KEY>` — Public key that the selected private key must derive. Use this when the verifier key is distributed separately from the owner-held signing key, such as through container secrets
 * `--seed-hex <HEX>` — A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters. This is a testing convenience. Production operators should prefer an owner-held private-key file
+* `--creation-time-ms <MILLISECONDS>` — Deterministic genesis transaction creation-time base in Unix milliseconds. Omit this for a fresh wall-clock timestamp. Fixture generators should set it so repeated signing produces identical canonical wire bytes
 * `--algorithm <ALGORITHM>` — Algorithm of the genesis key (must match the genesis public key)
 
   Default value: `ed25519`

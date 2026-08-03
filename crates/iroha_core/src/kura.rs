@@ -57,7 +57,7 @@ use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
     AccountId, ChainId,
     block::{
-        BlockHeader, SignedBlock,
+        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
             CertPhase, ExecWitness, LaneBlockCommitment, LaneBlockDescriptorV1,
             LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt, SumeragiLanePayloadOwnership,
@@ -164,17 +164,39 @@ const KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME: &str =
 const KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME: &str = "kagemusha_active_receiver_finality";
 const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
 const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 32 * 1024;
-/// Hard limit for one immutable canonical block-retention record.
+/// Legacy hard limit for one version-two canonical block-retention record.
 ///
 /// The 512-message first-release cap and 4 KiB canonical payload cap require a
 /// little over 2 MiB at their joint maximum. Four MiB leaves deterministic
-/// framing/context headroom while preventing hostile on-disk data from turning
-/// startup or proof serving into an unbounded allocation.
-const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = 4 * 1024 * 1024;
-const RETAINED_BLOCK_RECORD_VERSION: u16 = 2;
+/// framing/context headroom.
+const MAX_RETAINED_BLOCK_RECORD_V2_BYTES: usize = 4 * 1024 * 1024;
+/// Hard limit for the compact merge reference added by retained-record version three.
+///
+/// Consensus accepts at most a 4 MiB merge QC. The remaining 256 KiB bounds
+/// reference metadata and Norito framing without coupling Kura to an
+/// implementation-specific encoded-size estimate.
+const MAX_RETAINED_MERGE_REFERENCE_BYTES: usize = 4 * 1024 * 1024 + 256 * 1024;
+/// Norito envelope headroom when the version-three optional field is present.
+///
+/// The two component maxima are complete independent encodings; this separate
+/// allowance covers the option tag, field framing, and any packed-struct
+/// envelope delta instead of assuming those bytes disappear into either
+/// component's budget.
+const MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES: usize = 256 * 1024;
+/// Hard limit for one immutable version-three canonical block-retention record.
+///
+/// This is the sum of the complete legacy SCCP/archive envelope and the new
+/// independently bounded merge-reference witness. Keeping the joint maximum
+/// explicit prevents a valid near-maximum archive and merge QC from making
+/// finality persistence or pre-eviction retention fail.
+const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = MAX_RETAINED_BLOCK_RECORD_V2_BYTES
+    + MAX_RETAINED_MERGE_REFERENCE_BYTES
+    + MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES;
+const RETAINED_BLOCK_RECORD_VERSION_V2: u16 = 2;
+const RETAINED_BLOCK_RECORD_VERSION: u16 = 3;
 /// Hard limit for the consensus artifact embedded in one Kura finality record.
 ///
-/// The maximum 4,096-validator roster, its current PoPs, and a boundary
+/// The maximum 31-validator revision-4 roster, its current PoPs, and a boundary
 /// snapshot containing the next roster and PoPs fit well below this limit.
 const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 /// Hard limit for the complete private record, including its retained block header.
@@ -13355,7 +13377,7 @@ impl Kura {
             return Ok(());
         }
 
-        if let Some((retained_header, _, retained_wire_hash, _)) =
+        if let Some((retained_header, _, retained_wire_hash, _, _)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
             if retained_header != block.header() || retained_wire_hash != incoming_wire_hash {
@@ -13517,6 +13539,47 @@ impl Kura {
             .map(|(record, _)| record))
     }
 
+    fn decode_canonical_retained_block_record(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<KuraRetainedBlockRecord> {
+        let mut current_input = bytes;
+        let current = KuraRetainedBlockRecord::decode_all(&mut current_input)
+            .ok()
+            .filter(|record| {
+                record.format_version == RETAINED_BLOCK_RECORD_VERSION && record.encode() == bytes
+            });
+        let legacy = if bytes.len() <= MAX_RETAINED_BLOCK_RECORD_V2_BYTES {
+            let mut legacy_input = bytes;
+            KuraRetainedBlockRecordV2::decode_all(&mut legacy_input)
+                .ok()
+                .filter(|record| {
+                    record.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
+                        && record.encode() == bytes
+                })
+        } else {
+            None
+        };
+        match (current, legacy) {
+            (Some(record), None) => Ok(record),
+            (None, Some(record)) => Ok(record.into_current()),
+            (Some(_), Some(_)) => Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura retained block record has an ambiguous canonical layout",
+                ),
+                path.to_path_buf(),
+            )),
+            (None, None) => Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura retained block record has an unsupported or noncanonical layout",
+                ),
+                path.to_path_buf(),
+            )),
+        }
+    }
+
     fn decode_retained_block_record_with_identity_at(
         &self,
         path: &Path,
@@ -13528,18 +13591,7 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let mut cursor = snapshot.bytes.as_slice();
-        let record =
-            KuraRetainedBlockRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
-        if record.encode() != snapshot.bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "Kura retained block record is not canonically encoded",
-                ),
-                path.to_path_buf(),
-            ));
-        }
+        let record = Self::decode_canonical_retained_block_record(path, &snapshot.bytes)?;
         Ok(Some((record, snapshot)))
     }
 
@@ -13549,11 +13601,25 @@ impl Kura {
         canonical_hash: HashOf<BlockHeader>,
         record: &KuraRetainedBlockRecord,
     ) -> Result<Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>> {
-        if record.format_version != RETAINED_BLOCK_RECORD_VERSION {
+        if !matches!(
+            record.format_version,
+            RETAINED_BLOCK_RECORD_VERSION_V2 | RETAINED_BLOCK_RECORD_VERSION
+        ) {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
                     "unsupported Kura retained block record version",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        if record.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
+            && record.merge_reference.is_some()
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "legacy Kura retained block record carries a version-three field",
                 ),
                 path.to_path_buf(),
             ));
@@ -13585,11 +13651,33 @@ impl Kura {
                 actual: actual_hash,
             });
         }
-        let encoded_len = record.encode().len();
-        if encoded_len > MAX_RETAINED_BLOCK_RECORD_BYTES {
+        if record.merge_reference.is_some()
+            && record.block_header.execution_context_hash().is_none()
+        {
+            return Err(Error::MergeReferenceMismatch(
+                "retained merge-reference witness lacks a committed execution-context hash"
+                    .to_owned(),
+            ));
+        }
+        if let Some(reference) = record.merge_reference.as_ref() {
+            let reference_len = reference.encoded_len();
+            if reference_len > MAX_RETAINED_MERGE_REFERENCE_BYTES {
+                return Err(Error::MergeReferenceMismatch(format!(
+                    "retained merge-reference witness is {reference_len} bytes; maximum is \
+                     {MAX_RETAINED_MERGE_REFERENCE_BYTES}"
+                )));
+            }
+        }
+        let encoded_len = record.canonical_storage_encoded_len();
+        let encoded_limit = if record.format_version == RETAINED_BLOCK_RECORD_VERSION_V2 {
+            MAX_RETAINED_BLOCK_RECORD_V2_BYTES
+        } else {
+            MAX_RETAINED_BLOCK_RECORD_BYTES
+        };
+        if encoded_len > encoded_limit {
             return Err(Error::RetainedBlockRecordTooLarge {
                 actual: encoded_len,
-                max: MAX_RETAINED_BLOCK_RECORD_BYTES,
+                max: encoded_limit,
             });
         }
         Self::validate_retained_sccp_archive(record)
@@ -13606,6 +13694,7 @@ impl Kura {
             Hash,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+            Option<CertifiedMergeLedgerReference>,
         )>,
     > {
         self.retained_block_record_at_inner(blocks_dir, height, canonical_hash, true)
@@ -13622,6 +13711,7 @@ impl Kura {
             Hash,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+            Option<CertifiedMergeLedgerReference>,
         )>,
     > {
         self.retained_block_record_at_inner(blocks_dir, height, canonical_hash, false)
@@ -13640,6 +13730,7 @@ impl Kura {
                 Hash,
                 Hash,
                 Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+                Option<CertifiedMergeLedgerReference>,
             ),
             StableSidecarRead,
         )>,
@@ -13664,6 +13755,7 @@ impl Kura {
             Hash,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+            Option<CertifiedMergeLedgerReference>,
         )>,
     > {
         Ok(self
@@ -13689,6 +13781,7 @@ impl Kura {
                 Hash,
                 Hash,
                 Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+                Option<CertifiedMergeLedgerReference>,
             ),
             StableSidecarRead,
         )>,
@@ -13705,6 +13798,7 @@ impl Kura {
         };
         let archive =
             Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
+        let mut legacy_live_merge_reference = None;
         if validate_live_body
             && let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?)
             && let Some(block) = self.get_block(block_height)
@@ -13713,16 +13807,24 @@ impl Kura {
                 || Self::canonical_proposal_wire_hash(block.as_ref())? != record.proposal_wire_hash
                 || Self::canonical_block_wire_hash(block.as_ref())?
                     != record.executed_block_wire_hash
+                || (record.format_version == RETAINED_BLOCK_RECORD_VERSION
+                    && Self::block_merge_reference(block.as_ref())
+                        != record.merge_reference.as_ref())
             {
                 return Err(Error::ConflictingRetainedBlockRecord { height });
             }
+            if record.format_version == RETAINED_BLOCK_RECORD_VERSION_V2 {
+                legacy_live_merge_reference = Self::block_merge_reference(block.as_ref()).cloned();
+            }
         }
+        let merge_reference = legacy_live_merge_reference.or(record.merge_reference);
         Ok(Some((
             (
                 record.block_header,
                 record.proposal_wire_hash,
                 record.executed_block_wire_hash,
                 archive,
+                merge_reference,
             ),
             read_identity,
         )))
@@ -13741,15 +13843,23 @@ impl Kura {
                 actual: block.hash(),
             });
         }
+        let execution_context_hash = block.execution_context().map(HashOf::new);
+        if block.header().execution_context_hash() != execution_context_hash {
+            return Err(Error::MergeReferenceMismatch(
+                "canonical block execution context differs from its retained header commitment"
+                    .to_owned(),
+            ));
+        }
         let path = Self::retained_block_record_path_for(blocks_dir, height);
         let record = KuraRetainedBlockRecord::new(
             block.header(),
             Self::canonical_proposal_wire_hash(block)?,
             Self::canonical_block_wire_hash(block)?,
+            Self::block_merge_reference(block).cloned(),
             Self::retained_sccp_archive_from_block(block)?,
         );
         let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-        let bytes = record.encode();
+        let bytes = record.canonical_storage_bytes();
         if bytes.len() > MAX_RETAINED_BLOCK_RECORD_BYTES {
             return Err(Error::RetainedBlockRecordTooLarge {
                 actual: bytes.len(),
@@ -13769,7 +13879,7 @@ impl Kura {
         let directory = Self::retained_block_record_dir_for(blocks_dir);
         let path = Self::retained_block_record_path_for(blocks_dir, height);
         let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, record)?;
-        let bytes = record.encode();
+        let bytes = record.canonical_storage_bytes();
         if bytes.len() > MAX_RETAINED_BLOCK_RECORD_BYTES {
             return Err(Error::RetainedBlockRecordTooLarge {
                 actual: bytes.len(),
@@ -13777,14 +13887,59 @@ impl Kura {
             });
         }
 
-        if let Some(existing) = self.decode_retained_block_record_at(&path, &directory)? {
+        if let Some((existing, existing_identity)) =
+            self.decode_retained_block_record_with_identity_at(&path, &directory)?
+        {
             let _ =
                 Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
-            return if existing == *record {
-                Ok(())
-            } else {
-                Err(Error::ConflictingRetainedBlockRecord { height })
-            };
+            if existing == *record {
+                return Ok(());
+            }
+            if record.is_legacy_upgrade_of(&existing) {
+                let current_metadata = self
+                    .regular_sidecar_metadata(&path, &directory)?
+                    .ok_or_else(|| {
+                        Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::NotFound,
+                                "legacy retained block record disappeared before upgrade",
+                            ),
+                            path.clone(),
+                        )
+                    })?;
+                if !Self::stable_sidecar_metadata_unchanged(
+                    &existing_identity.metadata,
+                    &current_metadata,
+                ) {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "legacy retained block record changed before upgrade",
+                        ),
+                        path,
+                    ));
+                }
+                let accounting_mutation = self.begin_total_disk_usage_mutation();
+                let before_len = u64::try_from(existing_identity.bytes.len())?;
+                self.write_atomic_synced_replace(&path, &bytes)?;
+                self.update_total_disk_usage_delta(before_len, u64::try_from(bytes.len())?);
+                let Some(upgraded) = self.decode_retained_block_record_at(&path, &directory)?
+                else {
+                    return Err(Error::ConflictingRetainedBlockRecord { height });
+                };
+                let _ = Self::validate_retained_block_record_at(
+                    &path,
+                    height,
+                    canonical_hash,
+                    &upgraded,
+                )?;
+                if upgraded != *record {
+                    return Err(Error::ConflictingRetainedBlockRecord { height });
+                }
+                accounting_mutation.finish();
+                return Ok(());
+            }
+            return Err(Error::ConflictingRetainedBlockRecord { height });
         }
 
         create_dir_all_with_context(&directory)?;
@@ -13853,7 +14008,7 @@ impl Kura {
             .get_durable_block_hash(block_height)
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        if let Some((header, _, _, archive)) =
+        if let Some((header, _, _, archive, _)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
             return Ok(Some((header, archive)));
@@ -13926,7 +14081,7 @@ impl Kura {
             let canonical_hash = self
                 .get_durable_block_hash(block_height)
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let (header, _, _, archive) = self
+            let (header, _, _, archive, _) = self
                 .retained_block_record_at(&blocks_dir, height, canonical_hash)?
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
             if archive.is_empty() {
@@ -14143,17 +14298,7 @@ impl Kura {
                 path,
             ));
         }
-        let mut input = snapshot.bytes.as_slice();
-        let record = KuraRetainedBlockRecord::decode_all(&mut input).map_err(Error::NoritoFrame)?;
-        if record.encode() != snapshot.bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "staged retained block record is not canonically encoded",
-                ),
-                path,
-            ));
-        }
+        let record = Self::decode_canonical_retained_block_record(&path, &snapshot.bytes)?;
         let _ = Self::validate_retained_block_record_at(
             &path,
             entry.height,
@@ -14195,19 +14340,19 @@ impl Kura {
                 .get_durable_block_hash(block_height)
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
             let path = Self::retained_block_record_path_for(blocks_dir, height);
-            let Some(record) = self.decode_retained_block_record_at(&path, &retained_directory)?
+            let Some((record, physical)) =
+                self.decode_retained_block_record_with_identity_at(&path, &retained_directory)?
             else {
                 return Err(Error::MissingRetainedBlockRecord { height });
             };
             let _ =
                 Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-            let bytes = record.encode();
-            let bytes_len = u64::try_from(bytes.len())?;
+            let bytes_len = u64::try_from(physical.bytes.len())?;
             removed_total_bytes = removed_total_bytes.saturating_add(bytes_len);
             entries.push(StagedRetainedBlockRewriteEntry {
                 height,
                 block_hash: canonical_hash,
-                bytes_hash: Hash::new(&bytes),
+                bytes_hash: physical.bytes_hash,
                 bytes_len,
             });
         }
@@ -14303,7 +14448,7 @@ impl Kura {
                         entry.block_hash,
                         &existing,
                     )?;
-                    if existing != record {
+                    if existing != record && !existing.is_legacy_upgrade_of(&record) {
                         return Err(Error::ConflictingRetainedBlockRecord {
                             height: entry.height,
                         });
@@ -14530,7 +14675,7 @@ impl Kura {
                         record.block_hash,
                         &existing,
                     )?;
-                    if existing != record {
+                    if existing != record && !existing.is_legacy_upgrade_of(&record) {
                         return Err(Error::ConflictingRetainedBlockRecord { height });
                     }
                     authority.validate_for(self)?;
@@ -14675,7 +14820,7 @@ impl Kura {
         // retained record directly here; recursively asking `get_block` to compare the live body
         // would deadlock on a cold read of an evicted height. The caller compares any available
         // body/DA bytes with the returned signed complete-wire hash before exposing them.
-        let Some((retained_header, proposal_wire_hash, executed_block_wire_hash, _)) =
+        let Some((retained_header, proposal_wire_hash, executed_block_wire_hash, _, _)) =
             self.retained_block_record_at_without_live_body(blocks_dir, height, canonical_hash)?
         else {
             return Err(Error::MissingRetainedBlockRecord { height });
@@ -15108,8 +15253,11 @@ impl Kura {
                         &read_identity,
                     )?;
                     self.remember_verified_v2_finality_entry(finality.clone());
-                    let ((_, proposal_wire_hash, executed_block_wire_hash, _), retained_identity) =
-                        self.retained_block_record_at_with_identity(
+                    let (
+                        (_, proposal_wire_hash, executed_block_wire_hash, _, _),
+                        retained_identity,
+                    ) = self
+                        .retained_block_record_at_with_identity(
                             &blocks_dir,
                             height,
                             canonical_hash,
@@ -15833,7 +15981,7 @@ impl Kura {
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
         let (retained_header, prepared_retained_record) =
             match self.retained_block_record_at(&blocks_dir, height, canonical_hash)? {
-                Some((header, proposal_wire_hash, executed_block_wire_hash, _)) => {
+                Some((header, proposal_wire_hash, executed_block_wire_hash, _, _)) => {
                     Self::validate_v2_finality_wire_bindings(
                         height,
                         artifact,
@@ -16085,6 +16233,33 @@ impl Kura {
         self.v2_finality_artifact_with_archive_under_prune_guard(height)
     }
 
+    /// Read verified finality and the immutable local merge-reference witness.
+    ///
+    /// The witness is extracted while the canonical body is present and is
+    /// retained only as bounded serving authority. A recipient independently
+    /// verifies the exact compact reference and merge QC against its canonical
+    /// block, so this API cannot create consensus authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if finality, the retained canonical association, or
+    /// the immutable retained record is invalid.
+    pub(crate) fn v2_finality_artifact_with_merge_reference(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            BlockHeader,
+            V2FinalityArtifact,
+            Option<CertifiedMergeLedgerReference>,
+        )>,
+    > {
+        let _prune_guard = self.prune_lock.lock();
+        Ok(self
+            .v2_finality_artifact_with_retained_witness_under_prune_guard(height)?
+            .map(|(header, artifact, _, reference)| (header, artifact, reference)))
+    }
+
     /// Inner finality reader for callers that already hold `prune_lock`.
     ///
     /// Keeping the complete canonical-header, retained-wire, and cryptographic
@@ -16100,10 +16275,26 @@ impl Kura {
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
     > {
+        Ok(self
+            .v2_finality_artifact_with_retained_witness_under_prune_guard(height)?
+            .map(|(header, artifact, archive, _)| (header, artifact, archive)))
+    }
+
+    fn v2_finality_artifact_with_retained_witness_under_prune_guard(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            BlockHeader,
+            V2FinalityArtifact,
+            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+            Option<CertifiedMergeLedgerReference>,
+        )>,
+    > {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)
+        self.v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(height)
     }
 
     /// Inner finality reader for callers that already hold `prune_lock` and
@@ -16121,6 +16312,22 @@ impl Kura {
             BlockHeader,
             V2FinalityArtifact,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+        )>,
+    > {
+        Ok(self
+            .v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(height)?
+            .map(|(header, artifact, archive, _)| (header, artifact, archive)))
+    }
+
+    fn v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            BlockHeader,
+            V2FinalityArtifact,
+            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+            Option<CertifiedMergeLedgerReference>,
         )>,
     > {
         self.ensure_prune_recovery_not_required()?;
@@ -16148,7 +16355,13 @@ impl Kura {
             });
         };
         Self::validate_v2_finality_record_at(&path, height, block_hash, &record)?;
-        let (retained_header, proposal_wire_hash, executed_block_wire_hash, archive) = self
+        let (
+            retained_header,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+            archive,
+            merge_reference,
+        ) = self
             .retained_block_record_at(&blocks_dir, height, block_hash)?
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         if retained_header != record.block_header {
@@ -16161,7 +16374,12 @@ impl Kura {
             executed_block_wire_hash,
         )?;
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
-        Ok(Some((record.block_header, record.artifact, archive)))
+        Ok(Some((
+            record.block_header,
+            record.artifact,
+            archive,
+            merge_reference,
+        )))
     }
 
     /// Recover a validated durable v2 finality artifact together with the
@@ -45179,18 +45397,7 @@ impl BlockStore {
         else {
             return Err(Error::MissingRetainedBlockRecord { height });
         };
-        let mut cursor = bytes.as_slice();
-        let record =
-            KuraRetainedBlockRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
-        if record.encode() != bytes {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "evicted canonical block retained record is not canonically encoded",
-                ),
-                path,
-            ));
-        }
+        let record = Kura::decode_canonical_retained_block_record(&path, &bytes)?;
         let _ = Kura::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
         Ok((record.proposal_wire_hash, record.executed_block_wire_hash))
     }

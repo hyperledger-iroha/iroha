@@ -319,7 +319,6 @@ function assertContractCallPayloadJson(body, expected, label) {
     "multisig_account_id",
     "multisig_account_alias",
     "signer_account_id",
-    "private_key",
     "public_key_hex",
     "signature_b64",
     "creation_time_ms",
@@ -373,7 +372,6 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "multisig_account_id",
     "multisig_account_alias",
     "signer_account_id",
-    "private_key",
     "public_key_hex",
     "signature_b64",
     "creation_time_ms",
@@ -928,7 +926,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
   };
   const commitContextId = [fakeSumeragiHash(0x41)];
   return {
-    protocol_version: 3,
+    protocol_version: 4,
     node_fingerprint: fakeSumeragiHash(0x11),
     build_fingerprint: fakeSumeragiHash(0x12),
     config_fingerprint: fakeSumeragiHash(0x13),
@@ -8164,7 +8162,7 @@ test("SoraFS storage helpers reject unsupported option fields", async () => {
 test("governance helpers validate options", async () => {
   const client = new ToriiClient(BASE_URL);
   const finalizePayload = {
-    referendumId: "ref-123",
+    referendumId: "ab".repeat(32),
     proposalId: "ab".repeat(32),
   };
   const enactPayload = { proposalId: "cd".repeat(32) };
@@ -8285,7 +8283,7 @@ test("governance id validation surfaces structured errors", async () => {
   }
 });
 
-test("governance GET identifiers are exact and path segments are encoded", async () => {
+test("governance GET identifiers use canonical unreserved path segments", async () => {
   const capturedUrls = [];
   const fetchImpl = async (url) => {
     capturedUrls.push(url);
@@ -8294,14 +8292,14 @@ test("governance GET identifiers are exact and path segments are encoded", async
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   assert.equal(await client.getGovernanceProposal(GOVERNANCE_PROPOSAL_ID), null);
-  assert.equal(await client.getGovernanceReferendum("ref/one"), null);
-  assert.equal(await client.getGovernanceTally("ref/two"), null);
-  assert.equal(await client.getGovernanceLocks("ref/three"), null);
+  assert.equal(await client.getGovernanceReferendum("ref.one~1"), null);
+  assert.equal(await client.getGovernanceTally("ref_two-2"), null);
+  assert.equal(await client.getGovernanceLocks("Ref3"), null);
   assert.deepEqual(capturedUrls, [
     `${BASE_URL}/v1/gov/proposals/${GOVERNANCE_PROPOSAL_ID}`,
-    `${BASE_URL}/v1/gov/referenda/ref%2Fone`,
-    `${BASE_URL}/v1/gov/tally/ref%2Ftwo`,
-    `${BASE_URL}/v1/gov/locks/ref%2Fthree`,
+    `${BASE_URL}/v1/gov/referenda/ref.one~1`,
+    `${BASE_URL}/v1/gov/tally/ref_two-2`,
+    `${BASE_URL}/v1/gov/locks/Ref3`,
   ]);
 });
 
@@ -8320,13 +8318,78 @@ test("governance GET identifiers reject aliases before transport", async () => {
     () => client.getGovernanceProposal("proposal/segment"),
     () => client.getGovernanceReferendum(" ref-1"),
     () => client.getGovernanceReferendum("ref 1"),
+    () => client.getGovernanceReferendum("ref/1"),
+    () => client.getGovernanceReferendum(".hidden"),
+    () => client.getGovernanceReferendum("ref%31"),
+    () => client.getGovernanceReferendum("投票"),
     () => client.getGovernanceTally("ref\t1"),
+    () => client.getGovernanceTally("a".repeat(129)),
     () => client.getGovernanceLocks("ref\u00001"),
   ];
 
   for (const invoke of invalidCalls) {
     // eslint-disable-next-line no-await-in-loop
     await assert.rejects(invoke, ValidationError);
+  }
+  assert.equal(dispatched, false);
+});
+
+test("governance draft identifiers reject noncanonical selector aliases", async () => {
+  let dispatched = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      dispatched = true;
+      throw new Error("invalid governance selector reached transport");
+    },
+  });
+  const invalidSelectors = [
+    "ref/1",
+    ".hidden",
+    "ref%31",
+    "投票",
+    "a".repeat(129),
+  ];
+  for (const selector of invalidSelectors) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      () =>
+        client.governanceFinalizeReferendum({
+          referendumId: selector,
+          proposalId: "ab".repeat(32),
+        }),
+      /exact lowercase 32-byte hex string/u,
+    );
+    const calls = [
+      () =>
+        client.governanceSubmitPlainBallot({
+          authority: FIXTURE_ALICE_ID,
+          chainId: "chain-1",
+          referendumId: selector,
+          owner: FIXTURE_ALICE_ID,
+          amount: "1",
+          durationBlocks: 1,
+          direction: "Aye",
+        }),
+      () =>
+        client.governanceSubmitZkBallotV1({
+          authority: FIXTURE_ALICE_ID,
+          chainId: "chain-1",
+          electionId: selector,
+          backend: "halo2/ipa",
+          envelope: [1],
+        }),
+      () =>
+        client.governanceSubmitZkBallotProofV1({
+          authority: FIXTURE_ALICE_ID,
+          chainId: "chain-1",
+          electionId: selector,
+          ballot: { backend: "halo2/ipa", envelopeBytes: "AQ==" },
+        }),
+    ];
+    for (const invoke of calls) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(invoke, /RFC 3986/u);
+    }
   }
   assert.equal(dispatched, false);
 });
@@ -12450,7 +12513,7 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
-  assert.equal(status.protocol_version, 3);
+  assert.equal(status.protocol_version, 4);
   assert.equal(status.restart_required, false);
   assert.equal(status.height, 10);
   assert.equal(status.height_context.mode.mode, "permissioned");
@@ -12716,6 +12779,18 @@ test("getSumeragiStatusTyped accepts the local-control liveness blocker", async 
   assert.equal(status.liveness.blocker.blocker, "local_control_pending");
 });
 
+test("getSumeragiStatusTyped accepts the successor-activation liveness blocker", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.blocker = {
+    blocker: "successor_activation_pending",
+    details: null,
+  };
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.liveness.blocker.blocker, "successor_activation_pending");
+});
+
 test("getSumeragiStatusTyped accepts the unsafe-proposal ignore reason", async () => {
   const payload = createSumeragiV2StatusPayload();
   payload.liveness.ignore_counts = [
@@ -12776,7 +12851,7 @@ test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen con
   const wrongVersion = createSumeragiV2StatusPayload({ protocol_version: 1 });
   await assert.rejects(
     () => sumeragiClientForPayload(wrongVersion).getSumeragiStatusTyped(),
-    /protocol_version must equal 3/,
+    /protocol_version must equal 4/,
   );
 
   const missingRestartRequired = createSumeragiV2StatusPayload();
@@ -12972,6 +13047,23 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
   await assert.rejects(
     () => sumeragiClientForPayload(underpowered).getSumeragiStatusTyped(),
     /does not satisfy its frozen dual quorum/,
+  );
+
+  const weightedNpos = createSumeragiV2StatusPayload();
+  weightedNpos.height_context.mode = { mode: "npos", details: null };
+  weightedNpos.height_context.quorum.total_power = 5;
+  await assert.rejects(
+    () => sumeragiClientForPayload(weightedNpos).getSumeragiStatusTyped(),
+    /quorum is not canonical/,
+  );
+
+  const invalidGeometry = createSumeragiV2StatusPayload();
+  invalidGeometry.height_context.validator_count = 5;
+  invalidGeometry.height_context.quorum.min_signers = 4;
+  invalidGeometry.height_context.quorum.total_power = 5;
+  await assert.rejects(
+    () => sumeragiClientForPayload(invalidGeometry).getSumeragiStatusTyped(),
+    /quorum is not canonical/,
   );
 
   const missingQc = createSumeragiV2StatusPayload({ last_commit_qc: null });
@@ -15271,12 +15363,12 @@ test("governanceFinalizeReferendum and governanceEnactProposal emit closed canon
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const finalizeProposal = `0x${"ab".repeat(32)}`;
+  const finalizeProposal = "ab".repeat(32);
   const enactProposal = "cd".repeat(32);
   const finalizeHex = "ab".repeat(32);
   const enactHex = "cd".repeat(32);
   const finalizeResult = await client.governanceFinalizeReferendum({
-    referendumId: "ref-3",
+    referendumId: finalizeProposal,
     proposalId: finalizeProposal,
   });
   assert.equal(finalizeResult, null);
@@ -15294,7 +15386,7 @@ test("governanceFinalizeReferendum and governanceEnactProposal emit closed canon
   assert.equal(captures[1].url, `${BASE_URL}/v1/gov/enact`);
   const finalizeBody = JSON.parse(String(captures[0].init.body));
   assert.deepEqual(finalizeBody, {
-    referendum_id: "ref-3",
+    referendum_id: finalizeHex,
     proposal_id: finalizeHex,
   });
   const enactBody = JSON.parse(String(captures[1].init.body));
@@ -15321,9 +15413,10 @@ test("typed governance finalize/enact helpers always return drafts", async () =>
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const finalizeProposalId = "01".repeat(32);
   const finalizeDraft = await client.governanceFinalizeReferendumTyped({
-    referendumId: "ref-204",
-    proposalId: `0x${"01".repeat(32)}`,
+    referendumId: finalizeProposalId,
+    proposalId: finalizeProposalId,
   });
   assert.deepEqual(finalizeDraft, {
     ok: true,
@@ -16042,7 +16135,7 @@ test("governance mutations reject private-key aliases and unknown fields before 
     {
       name: "finalize",
       payload: {
-        referendumId: "ref-finalize",
+        referendumId: "44".repeat(32),
         proposalId: "44".repeat(32),
       },
       invoke: (payload) => client.governanceFinalizeReferendum(payload),
@@ -16994,7 +17087,7 @@ test("governanceFinalizeReferendum validates required fields", async () => {
   await assert.rejects(
     () =>
       client.governanceFinalizeReferendum({
-        referendumId: "ref-3",
+        referendumId: "aa".repeat(32),
         proposalId: "beef",
       }),
     (error) => {
@@ -17015,10 +17108,33 @@ test("governanceFinalizeReferendum validates required fields", async () => {
   await assert.rejects(
     () =>
       client.governanceFinalizeReferendum({
-        referendumId: "ref-3",
+        referendumId: "aa".repeat(32),
         proposalId: ` ${"aa".repeat(32)}`,
       }),
     /proposalId.*surrounding whitespace/u,
+  );
+  for (const proposalId of [
+    `0x${"aa".repeat(32)}`,
+    "AA".repeat(32),
+    `blake2b32:${"aa".repeat(32)}`,
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      () =>
+        client.governanceFinalizeReferendum({
+          referendumId: "aa".repeat(32),
+          proposalId,
+        }),
+      /proposalId must be an exact lowercase 32-byte hex string/u,
+    );
+  }
+  await assert.rejects(
+    () =>
+      client.governanceFinalizeReferendum({
+        referendumId: "aa".repeat(32),
+        proposalId: "bb".repeat(32),
+      }),
+    /referendumId must equal proposalId/u,
   );
   assert.equal(fetchCalls, 0);
 });
@@ -17091,7 +17207,7 @@ test("governance helpers surface structured hex validation", async () => {
       "governanceFinalizeReferendum",
       () =>
         client.governanceFinalizeReferendum({
-          referendumId: "ref-structured",
+          referendumId: "aa".repeat(32),
           proposalId: `zz${"aa".repeat(31)}`,
         }),
       "governanceFinalizeReferendum.proposalId",
@@ -17215,12 +17331,13 @@ test("listSumeragiEvidence encodes query parameters", async () => {
             height: 10,
             view: 2,
             epoch: 1,
-            signer: "alice@test",
-            block_hash_1: "aa",
-            block_hash_2: "bb",
+            signer: 0,
+            block_hash_1: "aa".repeat(32),
+            block_hash_2: "bb".repeat(32),
             recorded_height: 10,
             recorded_view: 2,
             recorded_ms: 123,
+            consensus_admitted_height: null,
           },
         ],
       },
@@ -17250,6 +17367,25 @@ test("listSumeragiEvidence rejects invalid kind", async () => {
   );
 });
 
+test("listSumeragiEvidence accepts the exact v2 equivocation kind filter", async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(
+      url,
+      `${BASE_URL}/v1/sumeragi/evidence?kind=SumeragiV2Equivocation`,
+    );
+    return createResponse({
+      status: 200,
+      jsonData: { total: 0, items: [] },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  assert.deepEqual(
+    await client.listSumeragiEvidence({ kind: "SumeragiV2Equivocation" }),
+    { total: 0, items: [] },
+  );
+});
+
 test("listSumeragiEvidence rejects unsupported options", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: { total: 0, items: [] } }),
@@ -17270,62 +17406,74 @@ test("listSumeragiEvidence normalizes evidence payloads", async () => {
     createResponse({
       status: 200,
       jsonData: {
-        total: 10,
+        total: 5,
         items: [
           {
             kind: "DoublePrepare",
             phase: "Prepare",
-            height: "42",
-            view: "7",
-            epoch: "3",
-            signer: "alice@test",
-            block_hash_1: "aa",
-            block_hash_2: "bb",
+            height: 42,
+            view: 7,
+            epoch: 3,
+            signer: 1,
+            block_hash_1: "aa".repeat(32),
+            block_hash_2: "bb".repeat(32),
             recorded_height: 80,
             recorded_view: 1,
             recorded_ms: 1234,
+            consensus_admitted_height: 79,
           },
           {
             kind: "Censorship",
-            tx_hash: "44",
-            receipt_count: 3,
-            min_height: 10,
-            max_height: 12,
+            tx_hash: "44".repeat(32),
+            receipt_count: 2,
+            submitted_at_height_min: 10,
+            submitted_at_height_max: 12,
             signers: ["alice@test", "bob@test"],
             recorded_height: 81,
             recorded_view: 3,
             recorded_ms: 1500,
+            consensus_admitted_height: null,
           },
           {
             kind: "InvalidQc",
             height: 2,
             view: 3,
             epoch: 4,
-            subject_block_hash: "11",
+            subject_block_hash: "11".repeat(32),
             phase: "Commit",
             reason: "bad qc",
             recorded_height: 82,
             recorded_view: 4,
             recorded_ms: 1600,
+            consensus_admitted_height: null,
           },
           {
             kind: "InvalidProposal",
             height: 6,
             view: 7,
             epoch: 8,
-            subject_block_hash: "22",
-            payload_hash: "33",
+            subject_block_hash: "22".repeat(32),
+            payload_hash: "33".repeat(32),
             reason: "bad payload",
             recorded_height: 83,
             recorded_view: 5,
             recorded_ms: 1700,
+            consensus_admitted_height: null,
           },
           {
-            kind: "UnknownEvidence",
-            detail: "unsupported",
+            kind: "SumeragiV2Equivocation",
+            class: "phase_vote",
+            height: 9,
+            view: 10,
+            epoch: 11,
+            signer: 2,
+            context_id: "55".repeat(32),
+            artifact_hash_1: "66".repeat(32),
+            artifact_hash_2: "77".repeat(32),
             recorded_height: 84,
             recorded_view: 6,
             recorded_ms: 1800,
+            consensus_admitted_height: 84,
           },
         ],
       },
@@ -17333,41 +17481,44 @@ test("listSumeragiEvidence normalizes evidence payloads", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.listSumeragiEvidence();
-  assert.equal(payload.total, 10);
+  assert.equal(payload.total, 5);
   assert.deepEqual(payload.items, [
     {
       kind: "DoublePrepare",
       recorded_height: 80,
       recorded_view: 1,
       recorded_ms: 1234,
+      consensus_admitted_height: 79,
       phase: "Prepare",
       height: 42,
       view: 7,
       epoch: 3,
-      signer: "alice@test",
-      block_hash_1: "aa",
-      block_hash_2: "bb",
+      signer: 1,
+      block_hash_1: "aa".repeat(32),
+      block_hash_2: "bb".repeat(32),
     },
     {
       kind: "Censorship",
       recorded_height: 81,
       recorded_view: 3,
       recorded_ms: 1500,
-      tx_hash: "44",
-      receipt_count: 3,
-      min_height: 10,
-      max_height: 12,
+      consensus_admitted_height: null,
+      tx_hash: "44".repeat(32),
+      receipt_count: 2,
       signers: ["alice@test", "bob@test"],
+      submitted_at_height_min: 10,
+      submitted_at_height_max: 12,
     },
     {
       kind: "InvalidQc",
       recorded_height: 82,
       recorded_view: 4,
       recorded_ms: 1600,
+      consensus_admitted_height: null,
       height: 2,
       view: 3,
       epoch: 4,
-      subject_block_hash: "11",
+      subject_block_hash: "11".repeat(32),
       phase: "Commit",
       reason: "bad qc",
     },
@@ -17376,19 +17527,28 @@ test("listSumeragiEvidence normalizes evidence payloads", async () => {
       recorded_height: 83,
       recorded_view: 5,
       recorded_ms: 1700,
+      consensus_admitted_height: null,
       height: 6,
       view: 7,
       epoch: 8,
-      subject_block_hash: "22",
-      payload_hash: "33",
+      subject_block_hash: "22".repeat(32),
+      payload_hash: "33".repeat(32),
       reason: "bad payload",
     },
     {
-      kind: "UnknownEvidence",
+      kind: "SumeragiV2Equivocation",
       recorded_height: 84,
       recorded_view: 6,
       recorded_ms: 1800,
-      detail: "unsupported",
+      consensus_admitted_height: 84,
+      class: "phase_vote",
+      height: 9,
+      view: 10,
+      epoch: 11,
+      signer: 2,
+      context_id: "55".repeat(32),
+      artifact_hash_1: "66".repeat(32),
+      artifact_hash_2: "77".repeat(32),
     },
   ]);
 });
@@ -17406,11 +17566,12 @@ test("listSumeragiEvidence rejects malformed payloads", async () => {
             height: 1,
             view: 0,
             epoch: 0,
-            signer: "alice@test",
-            block_hash_1: "aa",
-            block_hash_2: "bb",
+            signer: 0,
+            block_hash_1: "aa".repeat(32),
+            block_hash_2: "bb".repeat(32),
             recorded_view: 0,
             recorded_ms: 0,
+            consensus_admitted_height: null,
           },
         ],
       },
@@ -17418,6 +17579,122 @@ test("listSumeragiEvidence rejects malformed payloads", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(() => client.listSumeragiEvidence(), /recorded_height/);
+});
+
+test("listSumeragiEvidence rejects retired censorship height aliases", async () => {
+  const canonical = {
+    kind: "Censorship",
+    tx_hash: "44".repeat(32),
+    receipt_count: 1,
+    signers: ["alice@test"],
+    submitted_at_height_min: 10,
+    submitted_at_height_max: 10,
+    recorded_height: 11,
+    recorded_view: 0,
+    recorded_ms: 12,
+    consensus_admitted_height: null,
+  };
+  await Promise.all(
+    [
+      "min_height",
+      "max_height",
+      "minHeight",
+      "maxHeight",
+      "submittedAtHeightMin",
+      "submittedAtHeightMax",
+    ].map(async (alias) => {
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () =>
+          createResponse({
+            status: 200,
+            jsonData: { total: 1, items: [{ ...canonical, [alias]: 10 }] },
+            headers: { "content-type": "application/json" },
+          }),
+      });
+      await assert.rejects(() => client.listSumeragiEvidence(), /exact server fields/);
+    }),
+  );
+});
+
+test("listSumeragiEvidence rejects malformed exact evidence shapes", async () => {
+  const equivocation = {
+    kind: "SumeragiV2Equivocation",
+    class: "proposal",
+    height: 10,
+    view: 2,
+    epoch: 1,
+    signer: 3,
+    context_id: "11".repeat(32),
+    artifact_hash_1: "22".repeat(32),
+    artifact_hash_2: "33".repeat(32),
+    recorded_height: 12,
+    recorded_view: 0,
+    recorded_ms: 13,
+    consensus_admitted_height: null,
+  };
+  const missingContext = { ...equivocation };
+  delete missingContext.context_id;
+  const cases = [
+    [{ ...equivocation, class: "Prepare" }, /\.class must be one of/],
+    [{ ...equivocation, signer: "3" }, /\.signer must be a non-negative JSON safe integer/],
+    [{ ...equivocation, signer: 0x100000000 }, /\.signer must be a non-negative JSON safe integer/],
+    [{ ...equivocation, context_id: "AA".repeat(32) }, /exact lowercase 32-byte hex/],
+    [{ ...equivocation, artifact_hash_2: "22".repeat(32) }, /distinct artifacts/],
+    [missingContext, /missing context_id/],
+    [
+      {
+        kind: "UnknownEvidence",
+        recorded_height: 11,
+        recorded_view: 0,
+        recorded_ms: 12,
+        consensus_admitted_height: null,
+      },
+      /\.kind must be one of/,
+    ],
+    [
+      {
+        kind: "Censorship",
+        tx_hash: "44".repeat(32),
+        receipt_count: 2,
+        signers: ["alice@test"],
+        submitted_at_height_min: 10,
+        submitted_at_height_max: 9,
+        recorded_height: 11,
+        recorded_view: 0,
+        recorded_ms: 12,
+        consensus_admitted_height: null,
+      },
+      /receipt_count must equal signers\.length/,
+    ],
+    [
+      {
+        kind: "Censorship",
+        tx_hash: "44".repeat(32),
+        receipt_count: 1,
+        signers: ["alice@test"],
+        submitted_at_height_min: 10,
+        submitted_at_height_max: 9,
+        recorded_height: 11,
+        recorded_view: 0,
+        recorded_ms: 12,
+        consensus_admitted_height: null,
+      },
+      /submitted_at_height_min must be <= submitted_at_height_max/,
+    ],
+  ];
+  await Promise.all(
+    cases.map(async ([item, expected]) => {
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () =>
+          createResponse({
+            status: 200,
+            jsonData: { total: 1, items: [item] },
+            headers: { "content-type": "application/json" },
+          }),
+      });
+      await assert.rejects(() => client.listSumeragiEvidence(), expected);
+    }),
+  );
 });
 
 test("getSumeragiEvidenceCount returns count payload", async () => {
@@ -17430,27 +17707,6 @@ test("getSumeragiEvidenceCount returns count payload", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getSumeragiEvidenceCount();
   assert.deepEqual(result, { count: 7 });
-});
-
-test("submitSumeragiEvidence posts body and returns response", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 202,
-      jsonData: { status: "accepted", kind: "DoublePrepare" },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, allowInsecure: true });
-  const response = await client.submitSumeragiEvidence({
-    evidence_hex: "deadbeef",
-    apiToken: "s3cret",
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/sumeragi/evidence/submit`);
-  assert.equal(captured.init.headers["X-API-Token"], "s3cret");
-  assert.equal(JSON.parse(captured.init.body).evidence_hex, "deadbeef");
-  assert.deepEqual(response, { status: "accepted", kind: "DoublePrepare" });
 });
 
 test("getMetrics returns text when requested", async () => {

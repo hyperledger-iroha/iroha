@@ -396,6 +396,120 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
     }
 
+    func testGovernanceTransactionEncodersRejectNoncanonicalSelectorsBeforeNativeDispatch() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let owner = try canonicalOwnerLiteral()
+        let feePayment = FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
+
+        let plain = CastPlainBallotRequest(
+            chainId: "chain",
+            authority: authority,
+            referendumId: "invalid/referendum",
+            owner: owner,
+            amount: "1",
+            durationBlocks: 1,
+            direction: .aye,
+            feePayment: feePayment,
+            ttlMs: nil
+        )
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeCastPlainBallot(
+                request: plain,
+                signingKey: signingKey,
+                creationTimeMs: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? TransactionInputError,
+                .invalidGovernanceSelector(
+                    field: "referendum_id",
+                    value: "invalid/referendum"
+                )
+            )
+        }
+
+        let zk = CastZkBallotRequest(
+            chainId: "chain",
+            authority: authority,
+            electionId: ".hidden",
+            proofB64: "AAAA",
+            feePayment: feePayment,
+            ttlMs: nil
+        )
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeCastZkBallot(
+                request: zk,
+                signingKey: signingKey,
+                creationTimeMs: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? TransactionInputError,
+                .invalidGovernanceSelector(field: "election_id", value: ".hidden")
+            )
+        }
+    }
+
+    func testFinalizeReferendumRejectsAliasesAndMismatchBeforeNativeDispatch() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let feePayment = FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
+        let proposalId = String(repeating: "ab", count: 32)
+        let cases: [(String, String, TransactionInputError)] = [
+            (
+                "ref-1",
+                proposalId,
+                .invalidGovernanceFinalizationId(field: "referendum_id", value: "ref-1")
+            ),
+            (
+                proposalId.uppercased(),
+                proposalId,
+                .invalidGovernanceFinalizationId(
+                    field: "referendum_id",
+                    value: proposalId.uppercased()
+                )
+            ),
+            (
+                proposalId,
+                "0x\(proposalId)",
+                .invalidGovernanceFinalizationId(
+                    field: "proposal_id_hex",
+                    value: "0x\(proposalId)"
+                )
+            ),
+            (
+                proposalId,
+                proposalId.uppercased(),
+                .invalidGovernanceFinalizationId(
+                    field: "proposal_id_hex",
+                    value: proposalId.uppercased()
+                )
+            ),
+            (proposalId, String(repeating: "cd", count: 32), .mismatchedGovernanceFinalizationIds),
+        ]
+
+        for (referendumId, proposalIdHex, expectedError) in cases {
+            let request = FinalizeReferendumRequest(
+                chainId: "chain",
+                authority: authority,
+                referendumId: referendumId,
+                proposalIdHex: proposalIdHex,
+                feePayment: feePayment,
+                ttlMs: nil
+            )
+            XCTAssertThrowsError(
+                try SwiftTransactionEncoder.encodeFinalizeReferendum(
+                    request: request,
+                    signingKey: signingKey,
+                    creationTimeMs: 1
+                )
+            ) { error in
+                XCTAssertEqual(error as? TransactionInputError, expectedError)
+            }
+        }
+    }
+
     func testCastZkBallotRejectsInvalidRootHintHex() throws {
         let owner = try canonicalOwnerLiteral(
             networkPrefix: SccpV1.tairaI105DiscriminantV1

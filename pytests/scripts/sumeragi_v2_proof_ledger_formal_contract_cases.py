@@ -8,6 +8,43 @@ def test_ledger_is_canonical_json() -> None:
     assert source == json.dumps(parsed, indent=2, ensure_ascii=False) + "\n"
 
 
+def test_revision4_model_contract_is_registered() -> None:
+    module = load_checker()
+
+    assert "SumeragiV2Revision4" in module.REQUIRED_MODEL_MODULES
+    assert "SumeragiV2Revision4.cfg" in module.REQUIRED_TLC_CONFIGS
+    assert "SumeragiV2Revision4Liveness.cfg" in module.REQUIRED_TLC_CONFIGS
+    assert not module._revision4_model_contract_errors(module.FORMAL_DIR)
+
+
+def test_revision4_model_contract_rejects_output_repair_as_progress_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for filename in (
+        "SumeragiV2Revision4.tla",
+        "SumeragiV2Revision4.cfg",
+        "SumeragiV2Revision4Liveness.cfg",
+    ):
+        shutil.copy2(module.FORMAL_DIR / filename, formal_dir / filename)
+    model = formal_dir / "SumeragiV2Revision4.tla"
+    source = model.read_text(encoding="utf-8")
+    source = source.replace(
+        "    /\\ WF_vars(ActivateSuccessor)\n",
+        "    /\\ WF_vars(ActivateSuccessor)\n"
+        "    /\\ WF_vars(RepairFinalizedOutput)\n",
+        1,
+    )
+    model.write_text(source, encoding="utf-8")
+
+    errors = module._revision4_model_contract_errors(formal_dir)
+    assert any(
+        "finalized-output repair may not be" in error for error in errors
+    ), errors
+
+
 def copy_audited_rank_leaf_contract_fixture(tmp_path: Path, module) -> Path:
     """Install the reviewed Stage-4/5 contracts around the current proof source."""
 

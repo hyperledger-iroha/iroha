@@ -44,6 +44,14 @@ fn checked_connect_key_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random().expect("generate checked connect fixture keypair")
 }
 
+fn checked_connect_transport_key_fixture() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_from_seed(
+        b"iroha:torii:connect-gating:soranet-transport:v1".to_vec(),
+        iroha_crypto::Algorithm::Ed25519,
+    )
+    .expect("generate dedicated connect SoraNet transport fixture keypair")
+}
+
 #[test]
 fn connect_config_fixture_uses_checked_key_generation() {
     let key_pair = checked_connect_key_fixture();
@@ -53,6 +61,13 @@ fn connect_config_fixture_uses_checked_key_generation() {
         .expect("fixture connect public key has a valid algorithm");
 
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+
+    let transport_key_pair = checked_connect_transport_key_fixture();
+    assert_eq!(
+        transport_key_pair.algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
+    assert_ne!(transport_key_pair.public_key(), key_pair.public_key());
 }
 
 #[allow(clippy::too_many_lines)]
@@ -91,6 +106,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         common: A::Common {
             chain: ChainId::from("test-chain"),
             key_pair: checked_connect_key_fixture(),
+            soranet_transport_key_pair: checked_connect_transport_key_fixture(),
             peer: Peer::new(
                 socket_addr!(127.0.0.1:0),
                 checked_connect_key_fixture().public_key().clone(),

@@ -17,6 +17,9 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
     case malformedAssetId(String)
     case invalidGovernanceWindow(lower: UInt64, upper: UInt64)
     case invalidGovernanceAbiVersion(String)
+    case invalidGovernanceSelector(field: String, value: String)
+    case invalidGovernanceFinalizationId(field: String, value: String)
+    case mismatchedGovernanceFinalizationIds
     case invalidZkBallotPublicInputs(String)
 
     public var errorDescription: String? {
@@ -53,6 +56,12 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
             return "Governance window upper bound \(upper) must not precede lower bound \(lower)."
         case let .invalidGovernanceAbiVersion(value):
             return "Governance ABI version must be exactly '1' in the first release (received '\(value)')."
+        case let .invalidGovernanceSelector(field, value):
+            return "Governance selector for \(field) must be 1...128 RFC 3986 unreserved ASCII bytes and must not start with a dot (received '\(value)')."
+        case let .invalidGovernanceFinalizationId(field, value):
+            return "Governance finalization id for \(field) must be exactly 64 lowercase hexadecimal characters (received '\(value)')."
+        case .mismatchedGovernanceFinalizationIds:
+            return "Governance finalization referendum_id must equal proposal_id."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -87,6 +96,27 @@ struct TransactionInputValidator {
                             authorityId: sanitizedAuthority,
                             assetDefinitionId: sanitizedAssetDefinitionId,
                             accountIds: sanitizedAccounts)
+    }
+
+    static func sanitizeGovernanceSelector(_ value: String, field: String) throws -> String {
+        guard GovernanceSelectorV1.isValid(value) else {
+            throw TransactionInputError.invalidGovernanceSelector(field: field, value: value)
+        }
+        return value
+    }
+
+    static func sanitizeGovernanceFinalizationId(_ value: String, field: String) throws -> String {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 64,
+              bytes.allSatisfy({ byte in
+                  (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
+              }) else {
+            throw TransactionInputError.invalidGovernanceFinalizationId(
+                field: field,
+                value: value
+            )
+        }
+        return value
     }
 
     private static func sanitizeChainId(_ chainId: String) throws -> String {
@@ -938,117 +968,6 @@ struct SwiftTransactionEncoder {
         return try wrap(native: native)
     }
 
-    static func encodeShield(request: ShieldRequest,
-                             keypair: Keypair,
-                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeShield(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
-    }
-
-    static func encodeShield(request: ShieldRequest,
-                             signingKey: SigningKey,
-                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
-                                                         authorityId: request.authority,
-                                                         assetDefinitionId: request.assetDefinitionId,
-                                                         accountIds: [.init(field: "fromAccountId", value: request.fromAccountId)])
-        guard let assetDefinitionId = ids.assetDefinitionId else {
-            throw TransactionInputError.emptyAssetDefinitionId
-        }
-        let fromAccountId = ids.accountIds["fromAccountId"] ?? request.fromAccountId
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeShield(chainId: ids.chainId,
-                                                       authority: ids.authorityId,
-                                                       creationTimeMs: creationTimeMs,
-                                                       ttlMs: request.ttlMs,
-                                                       assetDefinitionId: assetDefinitionId,
-                                                       fromAccountId: fromAccountId,
-                                                       amount: request.amount,
-                                                       noteCommitment: request.noteCommitment,
-                                                       payloadEphemeral: request.payload.ephemeralPublicKey,
-                                                       payloadNonce: request.payload.nonce,
-                                                       payloadCiphertext: request.payload.ciphertext,
-                                                       feePaymentJSON: try request.feePayment.canonicalJSONData(),
-                                                       privateKey: privateKey,
-                                                       algorithm: signingKey.algorithm)
-        }
-        return try wrap(native: native)
-    }
-
-    static func encodeUnshield(request: UnshieldRequest,
-                               keypair: Keypair,
-                               creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeUnshield(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
-    }
-
-    static func encodeUnshield(request: UnshieldRequest,
-                               signingKey: SigningKey,
-                               creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
-                                                         authorityId: request.authority,
-                                                         assetDefinitionId: request.assetDefinitionId,
-                                                         accountIds: [.init(field: "toAccountId", value: request.toAccountId)])
-        guard let assetDefinitionId = ids.assetDefinitionId else {
-            throw TransactionInputError.emptyAssetDefinitionId
-        }
-        let destinationAccountId = ids.accountIds["toAccountId"] ?? request.toAccountId
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let proofJSON = try request.proof.encodedJSON()
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeUnshield(chainId: ids.chainId,
-                                                         authority: ids.authorityId,
-                                                         creationTimeMs: creationTimeMs,
-                                                         ttlMs: request.ttlMs,
-                                                         assetDefinitionId: assetDefinitionId,
-                                                         destinationAccountId: destinationAccountId,
-                                                         amount: request.publicAmount,
-                                                         inputs: request.flattenedInputs,
-                                                         proofJSON: proofJSON,
-                                                         rootHint: request.rootHint,
-                                                         feePaymentJSON: try request.feePayment.canonicalJSONData(),
-                                                         privateKey: privateKey,
-                                                         algorithm: signingKey.algorithm)
-        }
-        return try wrap(native: native)
-    }
-
-    static func encodeZkTransfer(request: ZkTransferRequest,
-                                 keypair: Keypair,
-                                 creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeZkTransfer(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
-    }
-
-    static func encodeZkTransfer(request: ZkTransferRequest,
-                                 signingKey: SigningKey,
-                                 creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
-                                                         authorityId: request.authority,
-                                                         assetDefinitionId: request.assetDefinitionId)
-        guard let assetDefinitionId = ids.assetDefinitionId else {
-            throw TransactionInputError.emptyAssetDefinitionId
-        }
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let proofJSON = try request.proof.encodedJSON()
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeZkTransfer(chainId: ids.chainId,
-                                                           authority: ids.authorityId,
-                                                           creationTimeMs: creationTimeMs,
-                                                           ttlMs: request.ttlMs,
-                                                           assetDefinitionId: assetDefinitionId,
-                                                           inputs: request.flattenedInputs,
-                                                           outputs: request.flattenedOutputs,
-                                                           proofJSON: proofJSON,
-                                                           rootHint: request.rootHint,
-                                                           feePaymentJSON: try request.feePayment.canonicalJSONData(),
-                                                           privateKey: privateKey,
-                                                           algorithm: signingKey.algorithm)
-        }
-        return try wrap(native: native)
-    }
-
     static func encodeRegisterZkAsset(request: RegisterZkAssetRequest,
                                       keypair: Keypair,
                                       creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
@@ -1311,6 +1230,10 @@ struct SwiftTransactionEncoder {
             accountIds: [.init(field: "owner", value: request.owner)]
         )
         let owner = ids.accountIds["owner"] ?? request.owner
+        let referendumId = try TransactionInputValidator.sanitizeGovernanceSelector(
+            request.referendumId,
+            field: "referendum_id"
+        )
         let amount = try KotodamaNumericV1Codec
             .decodeQuantityJSON(request.amount)
             .canonicalString
@@ -1321,7 +1244,7 @@ struct SwiftTransactionEncoder {
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
-                referendumId: request.referendumId,
+                referendumId: referendumId,
                 owner: owner,
                 amount: amount,
                 durationBlocks: request.durationBlocks,
@@ -1346,6 +1269,10 @@ struct SwiftTransactionEncoder {
                                    creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let ids = try TransactionInputValidator.validate(chainId: request.chainId,
                                                          authorityId: request.authority)
+        let electionId = try TransactionInputValidator.sanitizeGovernanceSelector(
+            request.electionId,
+            field: "election_id"
+        )
         let privateKey = try privateKeyBytes(from: signingKey)
         let publicInputs = try normalizeZkBallotPublicInputs(request.publicInputs)
         let native = try bridgeOrThrow {
@@ -1354,7 +1281,7 @@ struct SwiftTransactionEncoder {
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
-                electionId: request.electionId,
+                electionId: electionId,
                 proofB64: request.proofB64,
                 publicInputs: publicInputs,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
@@ -1474,6 +1401,17 @@ struct SwiftTransactionEncoder {
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let ids = try TransactionInputValidator.validate(chainId: request.chainId,
                                                          authorityId: request.authority)
+        let referendumId = try TransactionInputValidator.sanitizeGovernanceFinalizationId(
+            request.referendumId,
+            field: "referendum_id"
+        )
+        let proposalIdHex = try TransactionInputValidator.sanitizeGovernanceFinalizationId(
+            request.proposalIdHex,
+            field: "proposal_id_hex"
+        )
+        guard referendumId == proposalIdHex else {
+            throw TransactionInputError.mismatchedGovernanceFinalizationIds
+        }
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceFinalizeReferendum(
@@ -1481,8 +1419,8 @@ struct SwiftTransactionEncoder {
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
-                referendumId: request.referendumId,
-                proposalIdHex: request.proposalIdHex,
+                referendumId: referendumId,
+                proposalIdHex: proposalIdHex,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm

@@ -17,32 +17,36 @@
 
 use std::{
     error::Error,
-    fmt, fs,
+    fmt,
     io::Read,
     path::{Path, PathBuf},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+use std::fs;
+
 use iroha::{
     client::{
         Client, PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
     },
     config::{Config, resolve_account_chain_discriminant},
+    musubi_runtime::MusubiSeedIngressCarPlanV1,
 };
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
-    isi::{InstructionBox, musubi::PublishMusubiReleaseV1},
+    isi::InstructionBox,
     metadata::Metadata,
     musubi::{
         MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiAliasHistoryPageV1,
-        MusubiAliasQueryV1, MusubiAliasRecordV1, MusubiArchiveLocationIdV1,
-        MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1,
-        MusubiArchiveLocationV1, MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionPageV1,
-        MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
-        MusubiExactReleaseSnapshotV1, MusubiMaintainerPageV1, MusubiNamespaceBindingV1,
-        MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
-        MusubiPackageIdV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
+        MusubiAliasQueryV1, MusubiAliasRecordV1, MusubiArchiveCommitmentV1,
+        MusubiArchiveLocationIdV1, MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1,
+        MusubiArchiveLocationStateV1, MusubiArchiveLocationV1, MusubiArchiveRetentionDispositionV1,
+        MusubiArchiveRetentionPageV1, MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1,
+        MusubiExactReleaseQueryV1, MusubiExactReleaseSnapshotV1, MusubiMaintainerPageV1,
+        MusubiNamespaceBindingV1, MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1,
+        MusubiOrderedPrefixV1, MusubiPackageIdV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
         MusubiPackageSelectorV1, MusubiPageRequestV1, MusubiProviderBundleAttestationKeyV1,
         MusubiProviderBundleAttestationRecordV1, MusubiReleaseIdV1, MusubiResolverIndexPageV1,
         MusubiResolverIndexQueryV1, MusubiSearchPageV1, MusubiSearchQueryV1,
@@ -54,28 +58,35 @@ use iroha_data_model::{
 use norito::json::{JsonDeserialize, JsonSerialize};
 use url::Url;
 
-use crate::publish::{
-    PublicationAdvanceV1, PublicationAmxSubmissionV1, PublicationArchiveAbsenceEvidenceV1,
-    PublicationArchiveLocationAdvanceV1, PublicationArchiveLocationIntentV1,
-    PublicationArchiveLocationTerminalReasonV1, PublicationArchiveLocationTerminalV1,
-    PublicationArchiveRegistrationAdvanceV1, PublicationArchiveRegistrationIntentV1,
-    PublicationArchiveRegistrationTerminalV1, PublicationArchiveRegistrationV1, PublicationBackend,
-    PublicationBackendError, PublicationBackendFailureClass, PublicationCarSource,
-    PublicationEngine, PublicationError, PublicationFinalEvidenceV1, PublicationOperationIdV1,
-    PublicationProviderRegistrationCheckpointAdvanceV1,
-    PublicationProviderRegistrationCheckpointV1, PublicationReadbackEvidenceV1,
-    PublicationRegisteredArchiveV1, PublicationReleaseAbsenceEvidenceV1,
-    PublicationReleasePreparationFloorV1, PublicationReleaseSubmissionAdvanceV1,
-    PublicationReleaseSubmissionIntentV1, PublicationReleaseSubmissionTerminalV1,
-    PublicationReplicationAdvanceV1, PublicationReplicationCheckpointV1, PublicationRequestV1,
-    PublicationValidationEvidenceV1, archive_registration_intent_valid_until_ms,
-    release_submission_valid_until_ms,
+#[cfg(test)]
+use iroha_data_model::isi::musubi::PublishMusubiReleaseV1;
+
+use crate::{
+    publication_runtime::read_bounded_platform_config_v1,
+    publish::{
+        PublicationAdvanceV1, PublicationAmxSubmissionV1, PublicationArchiveAbsenceEvidenceV1,
+        PublicationArchiveLocationAdvanceV1, PublicationArchiveLocationIntentV1,
+        PublicationArchiveLocationTerminalReasonV1, PublicationArchiveLocationTerminalV1,
+        PublicationArchiveRegistrationAdvanceV1, PublicationArchiveRegistrationIntentV1,
+        PublicationArchiveRegistrationTerminalV1, PublicationArchiveRegistrationV1,
+        PublicationBackend, PublicationBackendError, PublicationBackendFailureClass,
+        PublicationCarSource, PublicationEngine, PublicationError, PublicationFinalEvidenceV1,
+        PublicationOperationIdV1, PublicationProviderRegistrationCheckpointAdvanceV1,
+        PublicationProviderRegistrationCheckpointV1, PublicationReadbackEvidenceV1,
+        PublicationRegisteredArchiveV1, PublicationReleaseAbsenceEvidenceV1,
+        PublicationReleasePreparationFloorV1, PublicationReleaseSubmissionAdvanceV1,
+        PublicationReleaseSubmissionIntentV1, PublicationReleaseSubmissionTerminalV1,
+        PublicationReplicationAdvanceV1, PublicationReplicationCheckpointV1, PublicationRequestV1,
+        PublicationValidationEvidenceV1, archive_registration_intent_valid_until_ms,
+        release_submission_valid_until_ms,
+    },
 };
 
 const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
-const MAX_PUBLIC_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_PUBLIC_CONFIG_BYTES_USIZE: usize = 1024 * 1024;
 const DEFAULT_PUBLIC_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+const PLATFORM_CONFIG_PROVENANCE_CONTEXT: &str =
+    "iroha:musubi:platform-client-config-provenance:v1";
 
 /// Retry classification for a redacted registry failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,8 +198,84 @@ pub struct RegistryReadClientV1 {
     account_chain_discriminant: u16,
 }
 
+/// One bounded platform configuration image shared by signer-free consumers in this process.
+pub(crate) struct RegistryPublicConfigImageV1 {
+    path: PathBuf,
+    bytes: Vec<u8>,
+}
+
+/// Transient commitment to one exact platform configuration image and its anchored path.
+///
+/// This value is deliberately crate-private and has no codec implementation. It may bridge two
+/// phases of one process, but must never enter a lockfile, publication journal, or diagnostic.
+pub(crate) struct PlatformConfigProvenanceV1 {
+    path: PathBuf,
+    digest: [u8; 32],
+}
+
+impl fmt::Debug for PlatformConfigProvenanceV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PlatformConfigProvenanceV1")
+            .field("bound", &true)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PlatformConfigProvenanceV1 {
+    /// Return the already-anchored path whose later image must match this commitment.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Return whether `bytes` are exactly the image committed by this provenance value.
+    pub(crate) fn matches(&self, bytes: &[u8]) -> bool {
+        self.digest == platform_config_provenance_digest(bytes)
+    }
+}
+
+impl fmt::Debug for RegistryPublicConfigImageV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryPublicConfigImageV1")
+            .field("byte_length", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl RegistryPublicConfigImageV1 {
+    /// Return the original path used to resolve relative platform-owned files.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Borrow the exact bounded bytes read from the selected configuration descriptor.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Commit this exact image without retaining its possibly secret-bearing bytes.
+    pub(crate) fn provenance(&self) -> PlatformConfigProvenanceV1 {
+        PlatformConfigProvenanceV1 {
+            path: self.path.clone(),
+            digest: platform_config_provenance_digest(&self.bytes),
+        }
+    }
+}
+
+fn platform_config_provenance_digest(bytes: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(PLATFORM_CONFIG_PROVENANCE_CONTEXT);
+    hasher.update(bytes);
+    *hasher.finalize().as_bytes()
+}
+
 impl RegistryReadClientV1 {
     /// Construct a signer-free client from an already validated public Torii URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the URL is not credential-free HTTP(S), the
+    /// timeout is zero or exceeds one minute, or the chain discriminant is zero.
     pub fn new(
         torii_url: Url,
         timeout: Duration,
@@ -219,10 +306,34 @@ impl RegistryReadClientV1 {
     /// Account identity, private-key, bearer-token, and basic-auth fields are neither parsed into
     /// typed forms nor retained. The default path is the same required `client.toml` used by the
     /// Iroha CLI; project manifests and command-line credential values are never consulted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bounded configuration cannot be read or its
+    /// public endpoint, timeout, profile, or chain discriminant is invalid.
     pub fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
-        let path = config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
-        let text = read_bounded_config(&path)?;
-        Self::load_from_config_bytes(text.as_bytes())
+        Self::load_with_config_image(config).map(|(reader, _image)| reader)
+    }
+
+    /// Load the public reader and retain the exact same bounded image for sibling parsers.
+    ///
+    /// The returned image is transient configuration provenance. Callers must parse any required
+    /// secret-free subtrees immediately and must not retain its raw bytes in resolver graphs.
+    pub(crate) fn load_with_config_image(
+        config: Option<&Path>,
+    ) -> Result<(Self, RegistryPublicConfigImageV1), RegistryErrorV1> {
+        let selected =
+            config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
+        let path = if selected.is_absolute() {
+            selected
+        } else {
+            std::env::current_dir()
+                .map_err(|_| invalid_public_config())?
+                .join(selected)
+        };
+        let bytes = read_bounded_config(&path)?;
+        let reader = Self::load_from_config_bytes(&bytes)?;
+        Ok((reader, RegistryPublicConfigImageV1 { path, bytes }))
     }
 
     /// Parse public endpoint and network context from one already-read `client.toml` image.
@@ -235,7 +346,7 @@ impl RegistryReadClientV1 {
             return Err(invalid_public_config());
         }
         let text = std::str::from_utf8(bytes).map_err(|_| invalid_public_config())?;
-        let document = text.parse::<toml::Value>().map_err(|_| {
+        let document = text.parse::<toml::Table>().map_err(|_| {
             RegistryErrorV1::new(
                 RegistryFailureClassV1::Permanent,
                 "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
@@ -260,8 +371,7 @@ impl RegistryReadClientV1 {
             .get("torii_request_timeout_ms")
             .and_then(toml::Value::as_integer)
             .and_then(|value| u64::try_from(value).ok())
-            .map(Duration::from_millis)
-            .unwrap_or(DEFAULT_PUBLIC_QUERY_TIMEOUT)
+            .map_or(DEFAULT_PUBLIC_QUERY_TIMEOUT, Duration::from_millis)
             .min(Duration::from_secs(60));
         let account = match document.get("account") {
             Some(value) => Some(value.as_table().ok_or_else(invalid_public_config)?),
@@ -298,6 +408,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Resolve canonical `namespace/package` text to its structural package identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the selector or authoritative prefix page is
+    /// invalid, the query fails, or the exact package does not exist.
     pub fn resolve_selector(
         &self,
         selector: &MusubiPackageSelectorV1,
@@ -323,6 +438,11 @@ impl RegistryReadClientV1 {
     /// Unlike [`Self::resolve_selector`], this queries the namespace directory prefix and does
     /// not require a package row to exist. This is the package/publication boundary for claiming
     /// a previously absent package under an already-registered namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the selector, namespace binding, or authoritative
+    /// prefix page is invalid, or when the registry query fails.
     pub fn bind_selector_namespace(
         &self,
         selector: &MusubiPackageSelectorV1,
@@ -338,6 +458,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one exact authoritative package record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or a returned record is
+    /// malformed or does not match the requested package.
     pub fn exact_package(
         &self,
         package: MusubiPackageIdV1,
@@ -357,6 +482,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one paired finalized home/universal release snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or a returned snapshot
+    /// is malformed or does not match the requested release.
     pub fn exact_release(
         &self,
         release: MusubiReleaseIdV1,
@@ -375,6 +505,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one immutable finalized provider bundle-attestation audit record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails, the record is malformed,
+    /// its signature is invalid, or its key differs from the requested key.
     pub fn provider_bundle_attestation(
         &self,
         key: MusubiProviderBundleAttestationKeyV1,
@@ -398,6 +533,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one finalized resolver-index page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or the page is not
+    /// canonical for the supplied request.
     pub fn resolver_index(
         &self,
         request: &MusubiResolverIndexQueryV1,
@@ -411,6 +551,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one finalized package-version page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or the page is not
+    /// canonical for the supplied request.
     pub fn versions(
         &self,
         request: &MusubiPackagePageQueryV1,
@@ -422,6 +567,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one finalized accepted-member and pending-invitation page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or the maintainer page is
+    /// malformed or inconsistent with the supplied request.
     pub fn maintainers(
         &self,
         request: &MusubiPackagePageQueryV1,
@@ -435,6 +585,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one finalized archive-location page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or a returned archive or
+    /// location record is malformed or belongs to another archive.
     pub fn archive_locations(
         &self,
         request: &MusubiArchiveLocationQueryV1,
@@ -459,6 +614,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate exact finalized cache-retention decisions for one bounded batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request is invalid, the registry query fails,
+    /// or the response snapshot or ordered decisions do not match the request.
     pub fn archive_retention(
         &self,
         request: &MusubiArchiveRetentionQueryV1,
@@ -489,6 +649,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and structurally validate one exact permanent alias record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or a returned alias record
+    /// is malformed or does not match the requested alias.
     pub fn alias(
         &self,
         request: &MusubiAliasQueryV1,
@@ -511,6 +676,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one finalized permanent-alias history page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or the page is not
+    /// canonical for the supplied alias request.
     pub fn alias_history(
         &self,
         request: &MusubiAliasQueryV1,
@@ -524,6 +694,11 @@ impl RegistryReadClientV1 {
     }
 
     /// Fetch and validate one finalized byte-ordered package-prefix page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry query fails or the page is not
+    /// canonical for the supplied ordered-prefix request.
     pub fn ordered_prefix(
         &self,
         request: &MusubiOrderedPrefixQueryV1,
@@ -540,6 +715,11 @@ impl RegistryReadClientV1 {
     ///
     /// This discovery API is intentionally separate from [`Self::resolver_index`]; callers
     /// must resolve a selected structural package through the universal sparse index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the search request is invalid, the registry query
+    /// fails, or the response is not canonical for the request.
     pub fn search(
         &self,
         request: &MusubiSearchQueryV1,
@@ -624,6 +804,10 @@ impl fmt::Debug for RegistrySigningClientV1 {
 
 impl RegistrySigningClientV1 {
     /// Load a required explicit `--config` or the platform `client.toml`, without env overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signing configuration cannot be loaded or is invalid.
     pub fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
         let path = config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
         let configuration = Config::load_file(path).map_err(|_| {
@@ -693,6 +877,11 @@ impl RegistrySigningClientV1 {
     ///
     /// Only the chain, account, and key pair are copied. Torii Basic Auth and configured
     /// headers are deliberately excluded from the private publication service boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the requested timeout or the signer's configured
+    /// publication-runtime endpoint cannot form a safe authenticated client.
     pub fn publication_runtime_client(
         &self,
         timeout: Duration,
@@ -710,6 +899,11 @@ impl RegistrySigningClientV1 {
     ///
     /// The scoped override is thread-local and is removed before returning. No key material is
     /// accepted, retained, or exposed by this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `input` is not a canonical encoded account for the
+    /// signer's configured chain discriminant.
     pub fn parse_account_id(
         &self,
         input: &str,
@@ -726,6 +920,12 @@ impl RegistrySigningClientV1 {
     }
 
     /// Sign, submit, and wait for commitment of one concrete V1 instruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when payload construction, fee quotation, signing,
+    /// submission, or authoritative status validation fails, or when the
+    /// transaction remains pending or reaches a terminal negative state.
     pub fn submit_v1<I>(&self, instruction: I) -> Result<[u8; 32], RegistryErrorV1>
     where
         I: Into<InstructionBox>,
@@ -807,6 +1007,11 @@ impl RegistrySigningClientV1 {
     }
 
     /// Prebuild one exact unsigned V1 mutation payload without contacting Torii.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the instruction cannot be converted into a valid
+    /// transaction payload under the signer's configured chain context.
     pub fn prebuild_v1<I>(&self, instruction: I) -> Result<TransactionPayload, RegistryErrorV1>
     where
         I: Into<InstructionBox>,
@@ -828,6 +1033,10 @@ impl RegistrySigningClientV1 {
     }
 
     /// Fee-quote and sign the exact prebuilt payload without submitting it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when fee quotation or local signing of the exact payload fails.
     pub fn quote_and_sign_v1(
         &self,
         payload: TransactionPayload,
@@ -844,6 +1053,10 @@ impl RegistrySigningClientV1 {
     }
 
     /// Submit and wait for the exact already-signed V1 transaction without rebuilding it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when submission or commitment waiting fails.
     pub fn submit_signed_v1(
         &self,
         transaction: &SignedTransaction,
@@ -897,7 +1110,7 @@ impl RegistrySigningClientV1 {
                     )
                 }),
             "Queued" | "Approved" | "Committed" => Ok(RegistryTransactionStateV1::Pending),
-            "Rejected" if response.resolved_from != "state" => {
+            "Rejected" | "Expired" if response.resolved_from != "state" => {
                 Ok(RegistryTransactionStateV1::Pending)
             }
             "Rejected" => response
@@ -914,9 +1127,6 @@ impl RegistrySigningClientV1 {
                         "MUSUBI_REGISTRY_TRANSACTION_STATUS_INVALID",
                     )
                 }),
-            "Expired" if response.resolved_from != "state" => {
-                Ok(RegistryTransactionStateV1::Pending)
-            }
             "Expired" => {
                 if response.status.block_height == Some(0) {
                     return Err(RegistryErrorV1::new(
@@ -953,6 +1163,11 @@ fn validate_mutation_submission_hash(
 /// Runtime-only production services whose authenticated server contracts are outside Torii reads.
 pub trait PublicationRuntimeServicesV1 {
     /// Parse, verify, resolve, and compiler-check the exact clean package CAR.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified backend error when the package cannot be read or
+    /// does not satisfy the exact validation and compiler-admission contract.
     fn validate_clean_package(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -961,14 +1176,26 @@ pub trait PublicationRuntimeServicesV1 {
     ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError>;
 
     /// Stage bytes through an admitted authenticated seed-ingress broker and return its receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified backend error when authenticated staging fails or
+    /// the returned receipt cannot be bound to the expected ingress transcript.
     fn stage_authenticated_seed_ingress(
         &mut self,
         operation_id: PublicationOperationIdV1,
         expected: &MusubiSeedIngressReceiptBindingV1,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &MusubiSeedIngressCarPlanV1,
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError>;
 
     /// Revalidate or append the durable provider-sidecar anchor before proof submission.
+    ///
+    /// # Errors
+    ///
+    /// Implementations return a classified backend error when provider
+    /// registration evidence cannot be recovered or advanced safely.
     fn checkpoint_archive_location_provider_registrations(
         &mut self,
         _operation_id: PublicationOperationIdV1,
@@ -985,6 +1212,11 @@ pub trait PublicationRuntimeServicesV1 {
     ///
     /// The caller journals the returned transaction before invoking
     /// [`Self::submit_or_recover_archive_location`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified backend error when an exact location transaction
+    /// cannot be coordinated, validated, or signed.
     fn prepare_archive_location_intent(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -995,6 +1227,11 @@ pub trait PublicationRuntimeServicesV1 {
     ) -> Result<PublicationArchiveLocationIntentV1, PublicationBackendError>;
 
     /// Submit or recover the exact journaled location transaction and finalized state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified backend error when the journaled transaction cannot
+    /// be submitted or reconciled with authoritative finalized state.
     fn submit_or_recover_archive_location(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1005,6 +1242,11 @@ pub trait PublicationRuntimeServicesV1 {
     ) -> Result<PublicationArchiveLocationAdvanceV1, PublicationBackendError>;
 
     /// Read, parse, and verify the complete archive through one finalized provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified backend error when provider readback fails or the
+    /// returned archive differs from the finalized commitment.
     fn readback_provider(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1034,6 +1276,8 @@ impl PublicationRuntimeServicesV1 for UnavailablePublicationRuntimeV1 {
         &mut self,
         _operation_id: PublicationOperationIdV1,
         _expected: &MusubiSeedIngressReceiptBindingV1,
+        _commitment: &MusubiArchiveCommitmentV1,
+        _plan: &MusubiSeedIngressCarPlanV1,
         _car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
         // This explicit fallback never probes Torii or the implemented private service. A
@@ -1094,6 +1338,11 @@ pub struct RegistryPublicationBackendV1<S> {
 
 impl<S> RegistryPublicationBackendV1<S> {
     /// Bind the backend to exactly one public request and operation id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the read and signing clients use different chain
+    /// profiles or the signing authority differs from the request publisher.
     pub fn new(
         read: RegistryReadClientV1,
         signing: RegistrySigningClientV1,
@@ -1152,7 +1401,9 @@ impl<S> RegistryPublicationBackendV1<S> {
     ) -> Result<Option<PublicationRegisteredArchiveV1>, PublicationBackendError> {
         let query = MusubiArchiveLocationQueryV1 {
             archive_id: request.archive_commitment.archive_id(),
-            page: first_page(MUSUBI_MAX_PAGE_SIZE_V1 as u32),
+            page: first_page(
+                u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("page maximum fits u32"),
+            ),
         };
         let Some(page) = self
             .read
@@ -1189,8 +1440,10 @@ impl<S> RegistryPublicationBackendV1<S> {
                 expected_snapshot: None,
             })
             .map_err(registry_backend_error)?;
+        let actual_genesis_hash = page.genesis_hash;
+        let expected_genesis_hash = request.genesis_block_hash;
         if page.chain_id != request.chain_id
-            || page.genesis_hash != request.genesis_block_hash
+            || actual_genesis_hash != expected_genesis_hash
             || minimum_finalized_height
                 .is_some_and(|height| page.snapshot.finalized_height < height)
         {
@@ -1436,13 +1689,13 @@ fn validate_finalized_idempotent_release(
         || exact_release.genesis_hash != request.genesis_block_hash
         || &home.manifest != manifest
         || home.release_digest != manifest.release_digest()
-        || &universal.release != &manifest.release
+        || universal.release != manifest.release
         || universal.release_digest != manifest.release_digest()
         || universal.archive_id != manifest.archive_id
         || universal.source_digest != request.archive_commitment.source_tree_digest
         || universal.interface_digest != manifest.interface_digest
         || universal.abi != manifest.abi
-        || &universal.dependencies != &manifest.dependencies
+        || universal.dependencies != manifest.dependencies
     {
         return Err(PublicationBackendError::permanent(
             "RELEASE_FINALIZED_COMMITMENT_CONFLICT",
@@ -1557,11 +1810,18 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         &mut self,
         operation_id: PublicationOperationIdV1,
         expected: &MusubiSeedIngressReceiptBindingV1,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &MusubiSeedIngressCarPlanV1,
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
         self.check_operation(operation_id)?;
-        self.services
-            .stage_authenticated_seed_ingress(operation_id, expected, car)
+        self.services.stage_authenticated_seed_ingress(
+            operation_id,
+            expected,
+            commitment,
+            plan,
+            car,
+        )
     }
 
     fn prepare_archive_registration_intent(
@@ -1745,7 +2005,9 @@ impl<S: PublicationRuntimeServicesV1> PublicationBackend for RegistryPublication
         self.check_request(request)?;
         let query = MusubiArchiveLocationQueryV1 {
             archive_id: request.archive_commitment.archive_id(),
-            page: first_page(MUSUBI_MAX_PAGE_SIZE_V1 as u32),
+            page: first_page(
+                u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("page maximum fits u32"),
+            ),
         };
         let Some(page) = self
             .read
@@ -2006,6 +2268,11 @@ impl Default for PublicationPollPolicyV1 {
 
 impl PublicationPollPolicyV1 {
     /// Validate non-zero bounded attempts and sub-minute delays.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the attempt count is zero, either delay is zero,
+    /// the maximum is shorter than the initial delay, or it exceeds 30 seconds.
     pub fn validate(self) -> Result<(), PublicationError> {
         if self.max_attempts == 0
             || self.initial_delay == Duration::ZERO
@@ -2021,6 +2288,12 @@ impl PublicationPollPolicyV1 {
 }
 
 /// Resume with bounded exponential backoff, preserving pending state when the budget expires.
+///
+/// # Errors
+///
+/// Returns an error when the polling policy is invalid, publication fails
+/// permanently, all attempts end in a retryable backend error, or no observable
+/// result is produced.
 pub fn resume_with_bounded_polling(
     engine: &PublicationEngine<'_>,
     operation_id: PublicationOperationIdV1,
@@ -2052,15 +2325,16 @@ pub fn resume_with_bounded_polling(
             delay = delay.saturating_mul(2).min(policy.max_delay);
         }
     }
-    if let Some(error) = last_retryable {
-        Err(PublicationError::Backend(error))
-    } else if let Some(pending) = last_pending {
-        Ok(pending)
-    } else {
-        Err(PublicationError::InvalidJournal(
-            "publication polling completed without an observable result".to_owned(),
-        ))
-    }
+    last_retryable.map_or_else(
+        || {
+            last_pending.ok_or_else(|| {
+                PublicationError::InvalidJournal(
+                    "publication polling completed without an observable result".to_owned(),
+                )
+            })
+        },
+        |error| Err(PublicationError::Backend(error)),
+    )
 }
 
 fn first_page(limit: u32) -> MusubiPageRequestV1 {
@@ -2118,46 +2392,14 @@ fn registry_backend_error(error: RegistryErrorV1) -> PublicationBackendError {
     }
 }
 
-fn read_bounded_config(path: &Path) -> Result<String, RegistryErrorV1> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| {
-        RegistryErrorV1::new(
-            RegistryFailureClassV1::Permanent,
-            "MUSUBI_REGISTRY_CONFIG_NOT_FOUND",
-        )
-    })?;
-    if !metadata.is_file() || metadata.len() > MAX_PUBLIC_CONFIG_BYTES {
-        return Err(RegistryErrorV1::new(
-            RegistryFailureClassV1::Permanent,
-            "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-        ));
-    }
-    let mut file = fs::File::open(path).map_err(|_| {
-        RegistryErrorV1::new(
-            RegistryFailureClassV1::Permanent,
-            "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-        )
-    })?;
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    file.by_ref()
-        .take(MAX_PUBLIC_CONFIG_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| {
-            RegistryErrorV1::new(
-                RegistryFailureClassV1::Permanent,
-                "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-            )
-        })?;
-    if bytes.len() as u64 > MAX_PUBLIC_CONFIG_BYTES {
-        return Err(RegistryErrorV1::new(
-            RegistryFailureClassV1::Permanent,
-            "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-        ));
-    }
-    String::from_utf8(bytes).map_err(|_| {
-        RegistryErrorV1::new(
-            RegistryFailureClassV1::Permanent,
-            "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-        )
+fn read_bounded_config(path: &Path) -> Result<Vec<u8>, RegistryErrorV1> {
+    read_bounded_platform_config_v1(path).map_err(|error| {
+        let code = if error.kind() == std::io::ErrorKind::NotFound {
+            "MUSUBI_REGISTRY_CONFIG_NOT_FOUND"
+        } else {
+            "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"
+        };
+        RegistryErrorV1::new(RegistryFailureClassV1::Permanent, code)
     })
 }
 
@@ -2457,7 +2699,8 @@ mod tests {
         )
         .expect("write public config fixture");
 
-        let client = RegistryReadClientV1::load(Some(&path)).expect("load URL only");
+        let (client, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
+            .expect("load URL and exact bounded image");
         assert_eq!(
             client.torii_url().as_str(),
             "https://registry.example/iroha/"
@@ -2465,6 +2708,24 @@ mod tests {
         assert_eq!(client.account_chain_discriminant(), 369);
 
         let same_bytes = fs::read(&path).expect("read the selected config image");
+        assert_eq!(image.path(), path.as_path());
+        assert_eq!(image.bytes(), same_bytes.as_slice());
+        let provenance = image.provenance();
+        assert_eq!(provenance.path(), path.as_path());
+        assert!(provenance.matches(&same_bytes));
+        let mut changed_bytes = same_bytes.clone();
+        changed_bytes.push(b'\n');
+        assert!(!provenance.matches(&changed_bytes));
+        let image_debug = format!("{image:?}");
+        assert!(!image_debug.contains("must-not-be-parsed"));
+        assert!(!image_debug.contains(path.to_string_lossy().as_ref()));
+        let provenance_debug = format!("{provenance:?}");
+        assert!(!provenance_debug.contains("must-not-be-parsed"));
+        assert!(!provenance_debug.contains(path.to_string_lossy().as_ref()));
+        assert!(
+            !provenance_debug
+                .contains(&hex::encode(platform_config_provenance_digest(&same_bytes)))
+        );
         let from_bytes = RegistryReadClientV1::load_from_config_bytes(&same_bytes)
             .expect("load public context from the already-read image");
         assert_eq!(from_bytes.torii_url(), client.torii_url());
@@ -2472,6 +2733,69 @@ mod tests {
             from_bytes.account_chain_discriminant(),
             client.account_chain_discriminant()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn public_config_image_rejects_symbolic_and_hard_links() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("client.toml");
+        fs::write(
+            &path,
+            r#"
+                torii_url = "https://registry.example/iroha/"
+                [account]
+                profile = "taira"
+            "#,
+        )
+        .expect("write public config fixture");
+
+        let symbolic = temporary.path().join("symbolic.toml");
+        symlink(&path, &symbolic).expect("create symbolic link");
+        assert_eq!(
+            RegistryReadClientV1::load_with_config_image(Some(&symbolic))
+                .expect_err("symbolic configuration must fail closed")
+                .code(),
+            "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"
+        );
+
+        let hard = temporary.path().join("hard.toml");
+        fs::hard_link(&path, &hard).expect("create hard link");
+        for linked in [&path, &hard] {
+            assert_eq!(
+                RegistryReadClientV1::load_with_config_image(Some(linked))
+                    .expect_err("multiply linked configuration must fail closed")
+                    .code(),
+                "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"
+            );
+        }
+    }
+
+    #[test]
+    fn public_config_image_anchors_a_relative_selection_once() {
+        let current = std::env::current_dir().expect("current directory");
+        let temporary =
+            tempfile::tempdir_in(&current).expect("workspace-local temporary directory");
+        let path = temporary.path().join("client.toml");
+        fs::write(
+            &path,
+            r#"
+                torii_url = "https://registry.example/iroha/"
+                [account]
+                profile = "taira"
+            "#,
+        )
+        .expect("write public config fixture");
+        let relative = path
+            .strip_prefix(&current)
+            .expect("temporary path is below current directory");
+
+        let (_, image) = RegistryReadClientV1::load_with_config_image(Some(relative))
+            .expect("load relative public configuration");
+        assert!(image.path().is_absolute());
+        assert_eq!(image.path(), path.as_path());
     }
 
     #[test]
@@ -2580,7 +2904,7 @@ mod tests {
         builder.sign(signer.private_key())
     }
 
-    fn transaction_status_body_for_hash(hash: String, kind: &str) -> Vec<u8> {
+    fn transaction_status_body_for_hash(hash: &str, kind: &str) -> Vec<u8> {
         norito::json::to_vec(&norito::json!({
             "hash": hash,
             "status": { "kind": kind, "block_height": 44 },
@@ -2591,7 +2915,7 @@ mod tests {
     }
 
     fn transaction_status_body(transaction: &SignedTransaction, kind: &str) -> Vec<u8> {
-        transaction_status_body_for_hash(transaction.hash().to_string(), kind)
+        transaction_status_body_for_hash(&transaction.hash().to_string(), kind)
     }
 
     #[test]
@@ -2725,8 +3049,10 @@ mod tests {
         let signer = KeyPair::try_from_seed(vec![96; 32], Algorithm::Ed25519)
             .expect("status signer fixture");
         let transaction = signed_status_probe(&signer);
-        let (url, server) =
-            serve_json_once(transaction_status_body_for_hash("ff".repeat(32), "Applied"));
+        let (url, server) = serve_json_once(transaction_status_body_for_hash(
+            &"ff".repeat(32),
+            "Applied",
+        ));
         let signing = signing_client_at(&url, &signer);
         let error = signing
             .transaction_application_state_v1(&transaction)
@@ -3002,10 +3328,24 @@ mod tests {
         let operation = "0101010101010101010101010101010101010101010101010101010101010101"
             .parse()
             .expect("operation id");
+        let commitment = publication_commitment();
+        let plan = MusubiSeedIngressCarPlanV1 {
+            version: 0,
+            payload_digest: [0; 32],
+            content_length: 0,
+            chunks: Vec::new(),
+            files: Vec::new(),
+        };
 
-        // The service does not inspect either the binding or the reader before refusing use.
+        // The service does not inspect the binding, commitment, plan, or reader before refusing.
         let error = runtime
-            .stage_authenticated_seed_ingress(operation, &binding(), &mut reader)
+            .stage_authenticated_seed_ingress(
+                operation,
+                &binding(),
+                &commitment,
+                &plan,
+                &mut reader,
+            )
             .expect_err("unconfigured ingress must fail closed");
         assert_eq!(error.code(), "SEED_INGRESS_SERVICE_NOT_CONFIGURED");
         assert_eq!(reads.get(), 0);
@@ -3034,6 +3374,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture constructs one cryptographically coherent publication request and intent"
+    )]
     fn publication_fixture() -> (
         PublicationRequestV1,
         KeyPair,

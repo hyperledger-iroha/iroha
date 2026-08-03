@@ -280,7 +280,8 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
         const val SEARCH_PATH = "/v1/musubi/queries/search"
 
         private const val REQUEST_MAX_BYTES = 64 * 1024
-        private const val RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+        // Exact-release JSON repeats the bounded dependency vector in both registry projections.
+        private const val RESPONSE_MAX_BYTES = 32 * 1024 * 1024
 
         @JvmStatic fun builder(): Builder = Builder()
 

@@ -1,0 +1,62 @@
+name: SoraFS Governance DAG Kubo conformance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/sorafs-governance-dag-kubo.yml"
+      - "crates/sorafs_node/**"
+      - "crates/sorafs_manifest/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fixed-unixfs-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KUBO_VERSION: v0.42.0
+      KUBO_LINUX_AMD64_SHA512: 054c38a0cf66f7d738e25085ad62cb3a42d03d4bac329b7dd25c1d71cf18e1ce87d55b1d1b705b04c65210dca9109973579e0eb1cd72f6341ecb3311d840d156
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: sorafs-governance-dag-kubo-v0.42.0
+      - name: Install checksum-pinned Kubo
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="kubo_${KUBO_VERSION}_linux-amd64.tar.gz"
+          download_dir="$RUNNER_TEMP/sorafs-kubo-download"
+          install_dir="$RUNNER_TEMP/sorafs-kubo"
+          mkdir -p "$download_dir" "$install_dir"
+          cd "$download_dir"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "$archive" \
+            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/${archive}"
+          printf '%s  %s\n' "$KUBO_LINUX_AMD64_SHA512" "$archive" \
+            | sha512sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$install_dir"
+          kubo_bin="$install_dir/kubo/ipfs"
+          test -x "$kubo_bin"
+          test "$("$kubo_bin" version --number)" = "${KUBO_VERSION#v}"
+          printf 'SORAFS_KUBO_BIN=%s\n' "$kubo_bin" >> "$GITHUB_ENV"
+      - name: Compare every fixed UnixFS boundary against Kubo
+        env:
+          SORAFS_RUN_KUBO_INTEGRATION: "1"
+        run: >-
+          cargo test --locked -p sorafs_node --lib
+          governance_service::tests::real_kubo_publication_signed_head_restart_and_tamper_lane
+          -- --ignored --exact --nocapture

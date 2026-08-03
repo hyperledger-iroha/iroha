@@ -12,6 +12,15 @@ import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 
+// Conservative finalized-cursor ceiling with headroom for the 8 KiB canonical account cap,
+// lowercase hex, the maintainer-state suffix, and one 32-byte invitation identity.
+internal const val MUSUBI_MAX_CURSOR_KEY_BYTES_V1 = 2 * 8_192 + 1 + 8 + 2 * 32
+// A namespace is at most 255 bytes and the portable package prefix is at most 64 bytes.
+internal const val MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1 = 255 + 1 + 64
+// The CAR plan covers source files plus three mandatory canonical bundle metadata entries.
+internal const val MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1 = 96L * 1024L * 1024L
+internal const val MUSUBI_MAX_CAR_BYTES_V1 = 96L * 1024L * 1024L
+
 /** Shared base for exact first-release Musubi Norito-JSON values. */
 abstract class MusubiWireValueV1 {
     internal abstract fun wireValue(): Any?
@@ -805,6 +814,10 @@ class MusubiVerificationNodeV1(
             this.dependencies.zipWithNext().all { (left, right) -> left < right }) {
             "Musubi verification-node dependencies must be bounded, sorted, and distinct"
         }
+        MusubiValidationV1.requireUniqueParentLocalAliases(
+            this.dependencies.map { it.alias },
+            "Musubi verification-node dependencies",
+        )
     }
 
     override fun wireValue(): Any = linkedMapOf(
@@ -847,6 +860,10 @@ class MusubiVerificationLockV1(
             this.rootDependencies.zipWithNext().all { (left, right) -> left < right }) {
             "Musubi root dependencies must be bounded, sorted, and distinct"
         }
+        MusubiValidationV1.requireUniqueParentLocalAliases(
+            this.rootDependencies.map { it.alias },
+            "Musubi root dependencies",
+        )
         require(this.nodes.size <= 1_024 &&
             this.nodes.zipWithNext().all { (left, right) -> left.release < right.release }) {
             "Musubi verification nodes must be bounded and sorted by distinct release"
@@ -930,6 +947,10 @@ class MusubiReleaseManifestV1(
             this.dependencies.zipWithNext().all { (left, right) -> left < right }) {
             "Musubi manifest dependencies must be bounded, sorted, and distinct"
         }
+        MusubiValidationV1.requireUniqueParentLocalAliases(
+            this.dependencies.map { it.alias },
+            "Musubi manifest dependencies",
+        )
         require(this.exports.size <= 1_024) { "Musubi manifest exceeds 1024 exports" }
         this.exports.forEach { MusubiValidationV1.requireName(it, "Musubi export") }
         require(this.exports.zipWithNext().all { (left, right) ->
@@ -1143,8 +1164,11 @@ class MusubiFinalizedCursorV1(
 ) : MusubiWireValueV1() {
     init {
         MusubiValidationV1.requireExactText(lastKey, "Musubi cursor last key")
-        require(lastKey.toByteArray(StandardCharsets.UTF_8).size <= 512) {
-            "Musubi cursor last key exceeds 512 UTF-8 bytes"
+        require(
+            lastKey.toByteArray(StandardCharsets.UTF_8).size <=
+                MUSUBI_MAX_CURSOR_KEY_BYTES_V1
+        ) {
+            "Musubi cursor last key exceeds $MUSUBI_MAX_CURSOR_KEY_BYTES_V1 UTF-8 bytes"
         }
         caller?.let { MusubiValidationV1.requireExactText(it, "Musubi cursor caller") }
         require(queryHash.bytes().any { it.toInt() != 0 }) {
@@ -1395,8 +1419,27 @@ class MusubiOrderedPrefixQueryV1(
 
     init {
         MusubiValidationV1.requireExactText(prefix, "Musubi ordered prefix")
-        require(prefix.toByteArray(StandardCharsets.UTF_8).size <= 512) {
-            "Musubi ordered prefix exceeds 512 UTF-8 bytes"
+        require(
+            prefix.toByteArray(StandardCharsets.UTF_8).size <=
+                MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1
+        ) {
+            "Musubi ordered prefix exceeds $MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1 UTF-8 bytes"
+        }
+        val separator = prefix.indexOf('/')
+        require(separator >= 0 && separator == prefix.lastIndexOf('/')) {
+            "Musubi ordered prefix must use exactly one namespace/package-prefix separator"
+        }
+        MusubiNamespaceV1(prefix.substring(0, separator))
+        val packagePrefix = prefix.substring(separator + 1)
+        require(
+            packagePrefix.toByteArray(StandardCharsets.UTF_8).size <= 64 &&
+                !packagePrefix.startsWith('-') &&
+                "--" !in packagePrefix &&
+                packagePrefix.all { character ->
+                    character in 'a'..'z' || character in '0'..'9' || character == '-'
+                }
+        ) {
+            "Musubi ordered package prefix is not portable canonical text"
         }
     }
 
@@ -1755,7 +1798,10 @@ class MusubiChunkerProfileHandleV1(
     )
 }
 
-/** Complete immutable source-archive commitment returned by the registry. */
+/**
+ * Complete immutable source-archive commitment returned by the registry.
+ * [contentLength] counts the concatenated canonical bundle payload, including mandatory metadata.
+ */
 class MusubiArchiveCommitmentV1(
     rootCid: ByteArray,
     @JvmField val chunker: MusubiChunkerProfileHandleV1,
@@ -1786,10 +1832,15 @@ class MusubiArchiveCommitmentV1(
                 descriptorDigest,
             ).none { digest -> digest.bytes().all { it.toInt() == 0 } },
         ) { "Musubi archive commitment digests must not be inert" }
-        require(contentLength > BigInteger.ZERO && contentLength <= BigInteger.valueOf(64L shl 20)) {
-            "Musubi archive source length is out of bounds"
+        require(
+            contentLength > BigInteger.ZERO &&
+                contentLength <= BigInteger.valueOf(MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1),
+        ) {
+            "Musubi archive bundle payload length is out of bounds"
         }
-        require(carSize > BigInteger.ZERO && carSize <= BigInteger.valueOf(96L shl 20)) {
+        require(
+            carSize > BigInteger.ZERO && carSize <= BigInteger.valueOf(MUSUBI_MAX_CAR_BYTES_V1),
+        ) {
             "Musubi archive CAR length is out of bounds"
         }
         require(fileCount in 1..4_096 && chunkCount in 1..16_384) {
@@ -2516,7 +2567,7 @@ class MusubiPageV1<T : MusubiWireValueV1> internal constructor(
         require(maintainers.all { MusubiValidationV1.maintainerPackageId(it) == request.packageId }) {
             "Musubi maintainer response contains another package"
         }
-        require(MusubiValidationV1.maintainerPageAdvances(request.page, maintainers.firstOrNull())) {
+        require(MusubiValidationV1.maintainerPageAdvances(request.page, maintainers)) {
             "Musubi maintainer response does not advance its structured cursor"
         }
         MusubiValidationV1.requireFinalizedPageMatches(
@@ -2607,6 +2658,7 @@ class MusubiResolverIndexPageV1 internal constructor(
             items.lastOrNull()?.release?.version?.canonicalText(),
             snapshot,
             nextCursor,
+            nextCursorRequiresFullPage = false,
         )
     }
 
@@ -2928,6 +2980,12 @@ internal object MusubiValidationV1 {
     fun compareDigests(left: MusubiDigest32V1, right: MusubiDigest32V1): Int =
         compareUnsignedBytes(left.bytes(), right.bytes())
 
+    fun requireUniqueParentLocalAliases(aliases: List<String>, field: String) {
+        require(aliases.toSet().size == aliases.size) {
+            "$field must use unique parent-local aliases"
+        }
+    }
+
     fun compareMaintainerEntries(
         left: MusubiMaintainerDirectoryEntryV1,
         right: MusubiMaintainerDirectoryEntryV1,
@@ -2974,43 +3032,36 @@ internal object MusubiValidationV1 {
 
     fun maintainerPageAdvances(
         request: MusubiPageRequestV1,
-        first: MusubiMaintainerDirectoryEntryV1?,
+        entries: List<MusubiMaintainerDirectoryEntryV1>,
     ): Boolean {
         val cursor = request.cursor ?: return true
-        val previous = parseMaintainerCursorBoundary(cursor.lastKey) ?: return false
-        first ?: return true
-        val firstAccount = canonicalAccountPayload(
-            maintainerAccount(first),
-            "maintainer cursor account",
-        )
-        val accountOrder = compareUnsignedBytes(previous.account, firstAccount)
-        if (accountOrder != 0) return accountOrder < 0
-        val firstInvitation = maintainerInvitation(first)?.bytes()
-        return when {
-            previous.invitation == null && firstInvitation != null -> true
-            previous.invitation == null || firstInvitation == null -> false
-            else -> compareUnsignedBytes(previous.invitation, firstInvitation) < 0
-        }
+        if (!parseMaintainerCursorBoundary(cursor.lastKey)) return false
+        return entries.none { maintainerCursorKey(it) == cursor.lastKey }
     }
 
-    private class MaintainerCursorBoundary(
-        val account: ByteArray,
-        val invitation: ByteArray?,
-    )
-
-    private fun parseMaintainerCursorBoundary(value: String): MaintainerCursorBoundary? {
+    private fun parseMaintainerCursorBoundary(value: String): Boolean {
         val separator = value.indexOf('|')
-        if (separator <= 0 || separator != value.lastIndexOf('|')) return null
-        val account = decodeLowerHex(value.substring(0, separator)) ?: return null
+        if (separator <= 0 || separator != value.lastIndexOf('|')) return false
+        if (separator > 16_384) return false
+        val account = decodeLowerHex(value.substring(0, separator)) ?: return false
+        if (!isCanonicalAccountCursorPayload(account)) return false
         val invitation = value.substring(separator + 1)
-        if (invitation == "accepted") return MaintainerCursorBoundary(account, null)
-        if (!invitation.startsWith("pending-")) return null
-        val invitationBytes = decodeLowerHex(invitation.substring("pending-".length)) ?: return null
-        return if (invitationBytes.size == 32) {
-            MaintainerCursorBoundary(account, invitationBytes)
-        } else {
-            null
-        }
+        if (invitation == "accepted") return true
+        if (!invitation.startsWith("pending-")) return false
+        val invitationBytes = decodeLowerHex(invitation.substring("pending-".length)) ?: return false
+        return invitationBytes.size == 32 && invitationBytes.any { it.toInt() != 0 }
+    }
+
+    private fun isCanonicalAccountCursorPayload(payload: ByteArray): Boolean = try {
+        // AccountId payloads are chain-independent; the discriminant is needed only to
+        // render a temporary canonical I105 literal for the existing encoder.
+        val account = TransferWirePayloadEncoder.decodeAccountIdPayload(
+            payload,
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+        )
+        TransferWirePayloadEncoder.encodeAccountIdPayload(account).contentEquals(payload)
+    } catch (_: RuntimeException) {
+        false
     }
 
     private fun lowerHex(bytes: ByteArray): String {
@@ -3178,6 +3229,7 @@ internal object MusubiValidationV1 {
         lastKey: String?,
         snapshot: MusubiRegistrySnapshotV1,
         nextCursor: MusubiFinalizedCursorV1?,
+        nextCursorRequiresFullPage: Boolean = true,
     ) {
         val effectiveLimit = effectivePageLimit(request.limit)
         require(itemCount <= effectiveLimit &&
@@ -3192,9 +3244,10 @@ internal object MusubiValidationV1 {
         }
         nextCursor?.let { cursor ->
             require(cursor.snapshot == snapshot && cursor.caller == null &&
-                itemCount == effectiveLimit && cursor.lastKey == lastKey &&
+                (!nextCursorRequiresFullPage || itemCount == effectiveLimit) &&
+                cursor.lastKey == lastKey &&
                 (request.cursor == null || request.cursor.queryHash == cursor.queryHash)) {
-                "Musubi next cursor does not bind its exact full page"
+                "Musubi next cursor does not bind its exact response page"
             }
         }
     }

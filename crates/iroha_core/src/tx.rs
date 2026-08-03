@@ -34,7 +34,6 @@ use iroha_data_model::{
             FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
             RemoveSmartContractBytes, UploadSmartContractCodeChunk,
         },
-        zk,
     },
     nexus::UniversalAccountId,
     proof::{ProofAttachment, ProofBox},
@@ -500,7 +499,54 @@ struct PrivateKaigiFeeBinding {
     fee_amount: Quantity,
 }
 
-const PRIVATE_KAIGI_FEE_PAYER_ACCOUNT_DOMAIN: &[u8] = b"iroha:private-kaigi:fee-payer-account:v1";
+/// Proof-checked confidential state transition admitted only by the private Kaigi fee path.
+///
+/// Its fields and constructor stay private to this module so callers cannot bypass the
+/// transaction binding and exact-fee checks performed before construction.
+pub(crate) struct VerifiedPrivateKaigiFeeTransfer {
+    asset_definition_id: AssetDefinitionId,
+    nullifiers: Vec<[u8; 32]>,
+    output_commitments: Vec<[u8; 32]>,
+    attachment: ProofAttachment,
+    root_hint: [u8; 32],
+}
+
+impl VerifiedPrivateKaigiFeeTransfer {
+    fn new(
+        asset_definition_id: AssetDefinitionId,
+        nullifiers: Vec<[u8; 32]>,
+        output_commitments: Vec<[u8; 32]>,
+        attachment: ProofAttachment,
+        root_hint: [u8; 32],
+    ) -> Self {
+        Self {
+            asset_definition_id,
+            nullifiers,
+            output_commitments,
+            attachment,
+            root_hint,
+        }
+    }
+
+    /// Consume the authorization and expose its proof-checked transition inputs internally.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        AssetDefinitionId,
+        Vec<[u8; 32]>,
+        Vec<[u8; 32]>,
+        ProofAttachment,
+        [u8; 32],
+    ) {
+        (
+            self.asset_definition_id,
+            self.nullifiers,
+            self.output_commitments,
+            self.attachment,
+            self.root_hint,
+        )
+    }
+}
 
 fn json_object_string(
     map: &norito::json::Map,
@@ -1024,17 +1070,15 @@ pub(crate) fn instructions_allow_multisig_envelope_authority(
 
 #[derive(Clone, Copy)]
 enum ConfidentialPolicyAdmissionAction {
-    Shield,
     Transfer,
-    Unshield,
+    Redeem,
 }
 
 impl ConfidentialPolicyAdmissionAction {
     const fn label(self) -> &'static str {
         match self {
-            Self::Shield => "shield",
             Self::Transfer => "transfer",
-            Self::Unshield => "unshield",
+            Self::Redeem => "confidential redemption",
         }
     }
 }
@@ -1084,23 +1128,6 @@ fn validate_confidential_policy_for_action(
     let policy_mode =
         effective_confidential_policy_mode_for_admission(world, asset_def_id, block_height)?;
     match action {
-        ConfidentialPolicyAdmissionAction::Shield => match policy_mode {
-            ConfidentialPolicyMode::TransparentOnly => {
-                Err(confidential_policy_admission_rejection(action))
-            }
-            ConfidentialPolicyMode::Convertible => {
-                let allowed = world
-                    .zk_assets()
-                    .get(asset_def_id)
-                    .is_some_and(|st| st.allow_shield);
-                if allowed {
-                    Ok(())
-                } else {
-                    Err(confidential_policy_admission_rejection(action))
-                }
-            }
-            ConfidentialPolicyMode::ShieldedOnly => Ok(()),
-        },
         ConfidentialPolicyAdmissionAction::Transfer => {
             if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
                 Err(confidential_policy_admission_rejection(action))
@@ -1108,7 +1135,7 @@ fn validate_confidential_policy_for_action(
                 Ok(())
             }
         }
-        ConfidentialPolicyAdmissionAction::Unshield => match policy_mode {
+        ConfidentialPolicyAdmissionAction::Redeem => match policy_mode {
             ConfidentialPolicyMode::TransparentOnly | ConfidentialPolicyMode::ShieldedOnly => {
                 Err(confidential_policy_admission_rejection(action))
             }
@@ -1134,21 +1161,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
 ) -> Result<(), TransactionRejectionReason> {
     for instruction in executable.explicit_instructions() {
         let any = instruction.as_any();
-        if let Some(shield) = any.downcast_ref::<zk::Shield>() {
-            validate_confidential_policy_for_action(
-                world,
-                shield.asset(),
-                block_height,
-                ConfidentialPolicyAdmissionAction::Shield,
-            )?;
-        } else if let Some(transfer) = any.downcast_ref::<zk::ZkTransfer>() {
-            validate_confidential_policy_for_action(
-                world,
-                transfer.asset(),
-                block_height,
-                ConfidentialPolicyAdmissionAction::Transfer,
-            )?;
-        } else if let Some(topup) =
+        if let Some(topup) =
             any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
         {
             validate_confidential_policy_for_action(
@@ -1164,14 +1177,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
                 world,
                 &redeem.request.bundle.statement.current_note.asset,
                 block_height,
-                ConfidentialPolicyAdmissionAction::Unshield,
-            )?;
-        } else if let Some(unshield) = any.downcast_ref::<zk::Unshield>() {
-            validate_confidential_policy_for_action(
-                world,
-                unshield.asset(),
-                block_height,
-                ConfidentialPolicyAdmissionAction::Unshield,
+                ConfidentialPolicyAdmissionAction::Redeem,
             )?;
         }
     }
@@ -2041,29 +2047,21 @@ impl<'tx> AcceptedTransaction<'tx> {
         );
         attachment.vk_commitment = Some(vk_binding.commitment);
 
-        let transfer = zk::ZkTransfer::new(
+        let transfer = VerifiedPrivateKaigiFeeTransfer::new(
             tx.fee_spend.asset_definition_id.clone(),
             tx.fee_spend.nullifiers.clone(),
             tx.fee_spend.output_commitments.clone(),
             attachment,
-            Some(tx.fee_spend.anchor_root.into()),
+            tx.fee_spend.anchor_root.into(),
         );
 
-        let fee_payer = Self::private_kaigi_fee_payer_account(tx);
-
-        transfer
-            .execute(&fee_payer, state_transaction)
-            .map_err(|error| {
-                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
-            })
-    }
-
-    fn private_kaigi_fee_payer_account(tx: &PrivateKaigiTransaction) -> AccountId {
-        let public_key = iroha_crypto::derive_non_signing_ed25519_public_key(
-            PRIVATE_KAIGI_FEE_PAYER_ACCOUNT_DOMAIN,
-            &[tx.action_hash().as_ref()],
-        );
-        AccountId::new(public_key)
+        crate::smartcontracts::isi::world::isi::apply_verified_private_kaigi_fee_transfer(
+            transfer,
+            state_transaction,
+        )
+        .map_err(|error| {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+        })
     }
 
     /// Validate a genesis transaction, including its individual authorization proof.
@@ -5893,75 +5891,6 @@ pub mod tests {
         (World::with([domain], [account], []), authority_id, key_pair)
     }
 
-    fn world_with_convertible_zk_asset(
-        allow_shield: bool,
-        allow_unshield: bool,
-    ) -> (World, AccountId, AssetDefinitionId) {
-        let (mut world, authority_id, _) = world_with_authority("wonderland");
-        let asset_def_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "zkpolicy".parse().expect("asset name"),
-        );
-        let asset_definition = AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "zkpolicy".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .confidential_policy(
-            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-        )
-        .build(&authority_id);
-        world
-            .asset_definitions
-            .insert(asset_def_id.clone(), asset_definition);
-        let mut zk_state = crate::state::ZkAssetState::default();
-        zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
-        zk_state.allow_shield = allow_shield;
-        zk_state.allow_unshield = allow_unshield;
-        world.zk_assets.insert(asset_def_id.clone(), zk_state);
-        (world, authority_id, asset_def_id)
-    }
-
-    #[test]
-    fn confidential_policy_admission_rejects_disabled_shield() {
-        let (world, authority_id, asset_def_id) = world_with_convertible_zk_asset(false, true);
-        let executable =
-            Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
-                asset_def_id,
-                authority_id,
-                10_u128,
-                [7; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-            ))]));
-
-        let err = validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
-            .expect_err("disabled shield must be rejected during admission");
-
-        match err {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
-                assert_eq!(reason, "shield not permitted by policy");
-            }
-            other => panic!("expected policy NotPermitted rejection, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn confidential_policy_admission_allows_enabled_shield() {
-        let (world, authority_id, asset_def_id) = world_with_convertible_zk_asset(true, true);
-        let executable =
-            Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
-                asset_def_id,
-                authority_id,
-                10_u128,
-                [9; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-            ))]));
-
-        validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
-            .expect("enabled shield should pass confidential policy admission");
-    }
-
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
         dataspace: TestDataSpaceId,
@@ -7627,23 +7556,17 @@ pub mod tests {
     fn decoded_versioned_signed_transaction_normalizes_adaptive_payload_metadata() {
         let chain: ChainId = "decoded-versioned-adaptive-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let asset_def_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "adaptivezk".parse().expect("asset name"),
-        );
         let signed = TransactionBuilder::new(
             chain.clone(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(
-            iroha_data_model::isi::zk::Shield::new(
-                asset_def_id,
-                authority,
-                200_u128,
-                [7; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-            ),
+            iroha_data_model::isi::zk::VerifyProof::new(ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![8; 192]),
+                VerifyingKeyId::new("halo2/ipa", "adaptive-zk-proof"),
+            )),
         )])
         .sign(keypair.private_key());
         let actual_payload_len = norito::codec::Encode::encode(&signed).len();
@@ -8079,6 +8002,76 @@ pub mod tests {
     }
 
     #[test]
+    fn private_kaigi_fee_transfer_rejects_duplicate_nullifiers_atomically() {
+        let (mut world, authority, _) = world_with_authority("wonderland");
+        let owning_domain = DomainId::try_new("wonderland", "universal").expect("owning domain id");
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            Name::from_str("kaigi_fee").expect("asset name"),
+        );
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "kaigi_fee".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(owning_domain),
+        )
+        .confidential_policy(
+            iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+        )
+        .build(&authority);
+        world
+            .asset_definitions
+            .insert(asset_definition_id.clone(), asset_definition);
+
+        let previously_spent = [0xA1; 32];
+        let repeated = [0xB2; 32];
+        let mut confidential_state = crate::state::ZkAssetState::default();
+        confidential_state.nullifiers.insert(previously_spent);
+        world
+            .zk_assets
+            .insert(asset_definition_id.clone(), confidential_state);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_transaction = block.transaction();
+        let attachment = ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+            VerifyingKeyId::new("halo2/ipa", "private-kaigi-fee-test"),
+        );
+        let authorization = super::VerifiedPrivateKaigiFeeTransfer::new(
+            asset_definition_id.clone(),
+            vec![repeated, repeated],
+            vec![[0xC3; 32]],
+            attachment,
+            [0xD4; 32],
+        );
+
+        let error =
+            crate::smartcontracts::isi::world::isi::apply_verified_private_kaigi_fee_transfer(
+                authorization,
+                &mut state_transaction,
+            )
+            .expect_err("repeated nullifiers must fail before confidential state is written back");
+        assert!(error.to_string().contains("duplicate nullifier"));
+
+        let confidential_state = state_transaction
+            .world
+            .zk_assets
+            .get(&asset_definition_id)
+            .expect("confidential state remains present");
+        assert_eq!(
+            confidential_state.nullifiers,
+            BTreeSet::from([previously_spent]),
+            "a failed transfer must neither consume the fresh nullifier nor disturb prior spends"
+        );
+        assert!(confidential_state.commitments.is_empty());
+    }
+
+    #[test]
     fn private_kaigi_fee_transfer_proof_canonicalization_strips_only_aux() {
         let aux = br#"{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"5"}"#;
         let envelope = OpenVerifyEnvelope {
@@ -8111,7 +8104,7 @@ pub mod tests {
         assert_eq!(decoded.proof_bytes, envelope.proof_bytes);
         assert!(
             decoded.aux.is_empty(),
-            "internal ZkTransfer proof must not carry fee-binding aux"
+            "internal confidential fee transfer proof must not carry fee-binding aux"
         );
 
         let err = super::decode_private_kaigi_fee_binding(&canonical)
@@ -8226,28 +8219,6 @@ pub mod tests {
                 other => panic!("unexpected error for `{amount}`: {other:?}"),
             }
         }
-    }
-
-    #[test]
-    fn private_kaigi_fee_payer_account_has_no_publicly_derived_signing_key() {
-        let tx = sample_private_kaigi_transaction("private-kaigi-chain".parse().expect("chain id"));
-        let fee_payer = AcceptedTransaction::private_kaigi_fee_payer_account(&tx);
-        let repeated = AcceptedTransaction::private_kaigi_fee_payer_account(&tx);
-        let seed = Hash::new(tx.action_hash().as_ref());
-        let legacy_keypair = KeyPair::try_from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519)
-            .expect("legacy public seed derives");
-
-        assert_eq!(fee_payer, repeated);
-        assert_eq!(
-            fee_payer.expect_single_signatory().algorithm(),
-            Algorithm::Ed25519,
-            "protocol account remains a valid Ed25519 account identity"
-        );
-        assert_ne!(
-            fee_payer,
-            AccountId::new(legacy_keypair.public_key().clone()),
-            "the public action hash must not yield a signing key for the protocol account"
-        );
     }
 
     #[test]

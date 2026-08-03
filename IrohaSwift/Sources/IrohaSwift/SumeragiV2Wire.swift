@@ -748,8 +748,7 @@ public enum SumeragiV2ProposalJustification: Equatable, Sendable {
 
 /// Deterministic data-availability payload encoding.
 public enum SumeragiV2PayloadEncoding: UInt32, Equatable, Sendable {
-    case plain = 0
-    case reedSolomon16 = 1
+    case reedSolomon16 = 0
 
     fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
 
@@ -778,7 +777,12 @@ public struct SumeragiV2DataAvailabilityLayout: Equatable, Sendable {
         parityShards: UInt16,
         maxPayloadSizeBytes: UInt64,
         maxChunkCount: UInt32
-    ) {
+    ) throws {
+        guard dataShards > 0, parityShards > 0 else {
+            throw SumeragiV2WireError.invalid(
+                "ReedSolomon16 data availability requires positive shard counts"
+            )
+        }
         self.encoding = encoding
         self.chunkSizeBytes = chunkSizeBytes
         self.dataShards = dataShards
@@ -1244,7 +1248,7 @@ public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
 
 /// Explicitly versioned live-consensus envelope.
 public struct SumeragiV2ConsensusMessage: Equatable, Sendable {
-    public static let protocolVersion: UInt16 = 3
+    public static let protocolVersion: UInt16 = 4
 
     public let version: UInt16
     public let payload: SumeragiV2ConsensusPayload
@@ -1811,9 +1815,9 @@ public struct SumeragiV2ProgressTransitionStatus: Equatable, Sendable {
 public enum SumeragiV2LivenessBlocker: UInt32, Equatable, Sendable {
     case missingProposal = 0, bodyUnavailable, prepareQuorumMissing, commitQuorumMissing
     case timeoutCertificateMissing, schedulerStarvation, applicationPending
-    case localControlPending = 7
+    case successorActivationPending, localControlPending
     fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
-    fileprivate static func decode(_ data: Data) throws -> Self {
+    static func decode(_ data: Data) throws -> Self {
         let tag = try sumeragiV2DecodeU32(data)
         guard let value = Self(rawValue: tag) else {
             throw SumeragiV2WireError.invalid("unknown liveness blocker \(tag)")

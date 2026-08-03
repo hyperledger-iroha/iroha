@@ -2610,13 +2610,14 @@ PROOF
         <4>5. [](gst => []gst)
           BY <1>1, <3>2
              DEF HistoricalCommitDecisionTailTemporalSupportProperty
-        <4>6. \A candidate \in AsyncCandidateSet, qc:
-                 (gst
-                   /\ HistoricalCommitDecisionExactCarrierOwned(
-                        candidate, qc, "DeliverQC"))
-                   ~> (NodeHasDecision(candidate.node)
-                        \/ HistoricalCommitDecisionExactLineageOwned(
-                             candidate, qc, "BeginDecision"))
+        <4>6. \A qc:
+                \A candidate \in AsyncCandidateSet:
+                  (gst
+                    /\ HistoricalCommitDecisionExactCarrierOwned(
+                         candidate, qc, "DeliverQC"))
+                    ~> (NodeHasDecision(candidate.node)
+                         \/ HistoricalCommitDecisionExactLineageOwned(
+                              candidate, qc, "BeginDecision"))
           <5>1. ASSUME NEW candidate \in AsyncCandidateSet, NEW qc
                  PROVE
                    (gst
@@ -2648,13 +2649,14 @@ PROOF
             <6> QED BY <6>1, <6>2, PTL
                  DEF HistoricalCommitDecisionExactCarrierOwned
           <5> QED BY <5>1
-        <4>7. \A candidate \in AsyncCandidateSet, qc:
-                 (gst
-                   /\ HistoricalCommitDecisionExactCarrierOwned(
-                        candidate, qc, "BeginDecision"))
-                   ~> (NodeHasDecision(candidate.node)
-                        \/ HistoricalCommitDecisionExactLineageOwned(
-                             candidate, qc, "PersistDecision"))
+        <4>7. \A qc:
+                \A candidate \in AsyncCandidateSet:
+                  (gst
+                    /\ HistoricalCommitDecisionExactCarrierOwned(
+                         candidate, qc, "BeginDecision"))
+                    ~> (NodeHasDecision(candidate.node)
+                         \/ HistoricalCommitDecisionExactLineageOwned(
+                              candidate, qc, "PersistDecision"))
           <5>1. ASSUME NEW candidate \in AsyncCandidateSet, NEW qc
                  PROVE
                    (gst
@@ -2686,11 +2688,12 @@ PROOF
             <6> QED BY <6>1, <6>2, PTL
                  DEF HistoricalCommitDecisionExactCarrierOwned
           <5> QED BY <5>1
-        <4>8. \A candidate \in AsyncCandidateSet, qc:
-                 (gst
-                   /\ HistoricalCommitDecisionExactCarrierOwned(
-                        candidate, qc, "PersistDecision"))
-                   ~> NodeHasDecision(candidate.node)
+        <4>8. \A qc:
+                \A candidate \in AsyncCandidateSet:
+                  (gst
+                    /\ HistoricalCommitDecisionExactCarrierOwned(
+                         candidate, qc, "PersistDecision"))
+                    ~> NodeHasDecision(candidate.node)
           <5>1. ASSUME NEW candidate \in AsyncCandidateSet, NEW qc
                  PROVE
                    (gst
@@ -2807,15 +2810,16 @@ HistoricalDecisionPipelineExactStageOutcome(
        [] OTHER -> FALSE
 
 THEOREM HistoricalDecisionPipelineOwnerHasExactCarrier ==
-  \A node \in Responsive, kind:
-    HistoricalDecisionPipelineKindOwned(node, kind)
-      <=> \E decision \in decisions,
-              candidate \in AsyncCandidateSet:
-            /\ HistoricalDecisionRecordMatches(node, decision)
-            /\ HistoricalDecisionPipelineExactCarrierOwned(
-                 node, decision.qc,
-                 AsyncRouteNeutralCandidateEvidence(candidate.evidence),
-                 candidate.causalOrigin, kind, candidate)
+  \A kind:
+    \A node \in Responsive:
+      HistoricalDecisionPipelineKindOwned(node, kind)
+        <=> \E decision \in decisions,
+                candidate \in AsyncCandidateSet:
+              /\ HistoricalDecisionRecordMatches(node, decision)
+              /\ HistoricalDecisionPipelineExactCarrierOwned(
+                   node, decision.qc,
+                   AsyncRouteNeutralCandidateEvidence(candidate.evidence),
+                   candidate.causalOrigin, kind, candidate)
 BY Isa
    DEF HistoricalDecisionPipelineKindOwned,
        HistoricalDecisionPipelineExactCarrierOwned,
@@ -3067,15 +3071,15 @@ HistoricalDecisionPipelineTemporalSupportProperty(specification) ==
 
 HistoricalDecisionPipelineExactCarrierHandoffProperty(specification) ==
   specification
-    => \A node \in Responsive,
-          kind \in DecisionPipelineKinds,
-          candidate \in AsyncCandidateSet,
-          qc, evidence, origin:
-         (gst
-           /\ HistoricalDecisionPipelineExactCarrierOwned(
-                node, qc, evidence, origin, kind, candidate))
-           ~> HistoricalDecisionPipelineExactStageOutcome(
-                node, qc, evidence, origin, kind)
+    => \A qc, evidence, origin:
+         \A node \in Responsive,
+            kind \in DecisionPipelineKinds,
+            candidate \in AsyncCandidateSet:
+           (gst
+             /\ HistoricalDecisionPipelineExactCarrierOwned(
+                  node, qc, evidence, origin, kind, candidate))
+             ~> HistoricalDecisionPipelineExactStageOutcome(
+                  node, qc, evidence, origin, kind)
 
 THEOREM HistoricalDecisionPipelineExactCarrierReachesExactHandoff ==
   \A specification:
@@ -3118,15 +3122,15 @@ PROOF
       <3>8. [](gst => []gst)
         BY <1>1, <2>2
            DEF HistoricalDecisionPipelineTemporalSupportProperty
-      <3>9. \A node \in Responsive,
-                kind \in DecisionPipelineKinds,
-                candidate \in AsyncCandidateSet,
-                qc, evidence, origin:
-               (gst
-                 /\ HistoricalDecisionPipelineExactCarrierOwned(
-                      node, qc, evidence, origin, kind, candidate))
-                 ~> HistoricalDecisionPipelineExactStageOutcome(
-                      node, qc, evidence, origin, kind)
+      <3>9. \A qc, evidence, origin:
+              \A node \in Responsive,
+                 kind \in DecisionPipelineKinds,
+                 candidate \in AsyncCandidateSet:
+                (gst
+                  /\ HistoricalDecisionPipelineExactCarrierOwned(
+                       node, qc, evidence, origin, kind, candidate))
+                  ~> HistoricalDecisionPipelineExactStageOutcome(
+                       node, qc, evidence, origin, kind)
         <4>1. ASSUME NEW node \in Responsive,
                       NEW kind \in DecisionPipelineKinds,
                       NEW candidate \in AsyncCandidateSet,

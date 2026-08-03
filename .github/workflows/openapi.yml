@@ -99,7 +99,7 @@ jobs:
           cache: npm
           cache-dependency-path: tools/openapi/package-lock.json
       - name: Provision the pinned ignored OpenAPI Cargo lock
-        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs
+        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs provision
       - name: Verify Cargo lock provisioning keeps the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Install the deterministic OpenAPI dependency graph
@@ -153,7 +153,7 @@ jobs:
         with:
           node-version: "24"
       - name: Provision the pinned ignored OpenAPI Cargo lock
-        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs
+        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs provision
       - name: Verify Cargo lock provisioning keeps the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32

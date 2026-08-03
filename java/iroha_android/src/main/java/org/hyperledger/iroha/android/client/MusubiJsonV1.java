@@ -821,9 +821,13 @@ final class MusubiJsonV1 {
     }
     parseAbi(root.get("abi"), field + ".abi");
     final List<Object> dependencies = list(root.get("dependencies"), field + ".dependencies");
+    final List<DependencyRequirement> parsedDependencies = new ArrayList<>();
     for (int index = 0; index < dependencies.size(); index++) {
-      parseDependency(dependencies.get(index), field + ".dependencies[" + index + "]");
+      parsedDependencies.add(
+          parseDependency(dependencies.get(index), field + ".dependencies[" + index + "]"));
     }
+    MusubiModelsV1.requireCanonicalDependencyRequirements(
+        parsedDependencies, field + ".dependencies");
     final BigInteger storageRevision =
         validateSelection(root.get("selection"), field + ".selection", release);
     final BigInteger revision = nonZeroU64(root.get("index_revision"), field + ".index_revision");

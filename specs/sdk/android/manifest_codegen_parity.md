@@ -14,7 +14,7 @@ builders can stay aligned with the Rust data model.
 
 ## 1. Inputs & Evidence
 
-- `target-codex/android_codegen/instruction_manifest.json` enumerates **113**
+- The generated Android manifest projection enumerates **110**
   `InstructionBox` entries with discriminants, schema hashes, enum layouts, and
   Rust type names exported by `norito_codegen_exporter`
   (`tools/norito_codegen_exporter/src/main.rs`). Each entry now carries a
@@ -35,7 +35,7 @@ builders can stay aligned with the Rust data model.
 
 ## 2. Instruction Coverage Snapshot
 
-- The 113 discriminants span 18 generator families sourced from
+- The 110 discriminants span 18 generator families sourced from
   `crates/iroha_data_model/src/isi/`, and every discriminant has a builder
   entry. The four boxed helpers use the short wire IDs `iroha.grant`,
   `iroha.revoke`, `iroha.set_key_value`, and `iroha.remove_key_value` while
@@ -48,7 +48,7 @@ builders can stay aligned with the Rust data model.
 |---|---:|---|
 | `transparent` | 23 | iroha.custom, iroha.execute_trigger |
 | `register` | 16 | iroha.register, iroha.unregister |
-| `zk` | 10 | CancelConfidentialPolicyTransition, CreateElection |
+| `zk` | 7 | CancelConfidentialPolicyTransition, CreateElection |
 | `sorafs` | 15 | ApprovePinManifest, BindManifestAlias |
 | `governance` | 6 | CastPlainBallot, ProposeDeployContract |
 | `kaigi` | 7 | CreateKaigi, EndKaigi |
@@ -65,10 +65,10 @@ builders can stay aligned with the Rust data model.
 | `RevokeBox` | 1 | iroha.revoke |
 | `SetKeyValueBox` | 1 | iroha.set_key_value |
 
-The confidential instruction row is the first-release H22 shape:
-`Unshield { asset, to, public_amount, inputs, proof, root_hint }`. There is no
-caller-supplied private-output field; any change commitment is authenticated by
-the verifier result before ledger insertion.
+The first-release Android projection intentionally omits the generic shield,
+shielded-transfer, and unshield discriminants. Confidential movement remains on
+the typed Kagemusha top-up/redemption lifecycle; its proof artifacts are not
+generic transaction builders.
 
 ## 3. Fees, Manifest & Governance Payloads
 

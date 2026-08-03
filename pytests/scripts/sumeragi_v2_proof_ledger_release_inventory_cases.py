@@ -6,17 +6,39 @@
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 808 tests",
+            "must contain exactly 826 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "  peer::shared_byte_budget_tests::authenticated_source_count_registry_bounds_identity_churn_and_capacity_drift\n",
             "production liveness inventory repeats tests",
         ),
+        *(
+            (
+                f"  {test_name}\n",
+                "",
+                f"production ownership regression {test_name} must be pinned exactly once; found 0",
+            )
+            for test_name in (
+                "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+                "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
+                "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
+                "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
+                "sumeragi::v2_runtime::tests::certified_body_pipeline_retains_statement_and_owner_across_stage_kinds",
+                "sumeragi::v2_runtime::tests::body_pipeline_acquires_commit_authority_monotonically_under_one_owner",
+                "sumeragi::v2_runtime::tests::applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome",
+                "sumeragi::v2_runtime::tests::applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation",
+                "sumeragi::v2_runtime::tests::drained_internal_ignore_uses_exact_durable_tombstone_before_readmission",
+                "sumeragi::v2_runtime::tests::queued_body_completion_coalesces_only_its_incumbent_owner",
+                "sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal",
+                "sumeragi::v2_runtime::tests::restored_serve_high_watermark_precedes_startup_runtime_owner",
+                "sumeragi::v2_runtime::tests::full_runtime_churn_cannot_cross_an_exact_serve_ordinal",
+            )
+        ),
         (
-            "readonly expected_production_liveness_test_count=808",
-            "readonly expected_production_liveness_test_count=807",
-            "production liveness source count must be sealed as 808",
+            "readonly expected_production_liveness_test_count=826",
+            "readonly expected_production_liveness_test_count=825",
+            "production liveness source count must be sealed as 826",
         ),
         (
             "readonly expected_typed_rollover_formal_mutation_count=45",
@@ -175,6 +197,7 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
     module = load_checker()
     for relative in (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
@@ -207,6 +230,7 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
     module = load_checker()
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
@@ -259,6 +283,7 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
     module = load_checker()
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
@@ -307,6 +332,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
     module = load_checker()
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
@@ -370,6 +396,7 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     module = load_checker()
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
@@ -423,27 +450,27 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 808 tests across 38 modules.\n"
+            "current inventory to 826 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 81 legs.",
-            "current inventory to 808 tests across 38 modules.\n"
+            "current inventory to 826 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 80 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 808-test,\n38-module inventory. The complete source-sealed\n"
+            "current 826-test,\n38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 81 legs",
-            "current 808-test,\n38-module inventory. The complete source-sealed\n"
+            "current 826-test,\n38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 80 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current source-bound inventory to 808 exact tests "
+            "current source-bound inventory to 826 exact tests "
             "across\n38 modules and 81 pre-network legs.",
-            "current source-bound inventory to 808 exact tests "
+            "current source-bound inventory to 826 exact tests "
             "across\n38 modules and 80 pre-network legs.",
         ),
     ),
@@ -457,6 +484,7 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     module = load_checker()
     for fixture_relative in (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("formal/sumeragi_v2/README.md"),
         Path("formal/sumeragi_v2/PROOF.md"),
@@ -493,9 +521,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 808",
-            "_PRODUCTION_TEST_COUNT = 807",
-            "production test count must equal the exact shell inventory count 808",
+            "_PRODUCTION_TEST_COUNT = 826",
+            "_PRODUCTION_TEST_COUNT = 825",
+            "production test count must equal the exact shell inventory count 826",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -515,8 +543,14 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),',
-            '("production-v2-runtime", "sumeragi::v2_runtime::tests", 56),',
+            '("production-v2-effects", "sumeragi::v2_effects::tests", 71),',
+            '("production-v2-effects", "sumeragi::v2_effects::tests", 70),',
+            "production module receipt tuple must equal the exact shell",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),',
+            '("production-v2-runtime", "sumeragi::v2_runtime::tests", 67),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -533,8 +567,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 129),',
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 128),',
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 131),',
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 130),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -583,6 +617,7 @@ def test_production_release_inventory_rejects_receipt_and_command_drift(
     module = load_checker()
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("formal/sumeragi_v2/README.md"),
         Path("formal/sumeragi_v2/PROOF.md"),

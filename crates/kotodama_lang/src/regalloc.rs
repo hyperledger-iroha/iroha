@@ -2486,24 +2486,6 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*proof);
             f(*vk);
         }
-        BuildUnshieldInline {
-            asset,
-            to,
-            amount,
-            inputs,
-            backend,
-            proof,
-            vk,
-            ..
-        } => {
-            f(*asset);
-            f(*to);
-            f(*amount);
-            f(*inputs);
-            f(*backend);
-            f(*proof);
-            f(*vk);
-        }
         PointerEq { left, right, .. } => {
             f(*left);
             f(*right);
@@ -2672,7 +2654,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::TuplePack { dest, .. } => Some(*dest),
         Instr::TupleGet { dest, .. } => Some(*dest),
         Instr::BuildSubmitBallotInline { dest, .. } => Some(*dest),
-        Instr::BuildUnshieldInline { dest, .. } => Some(*dest),
         Instr::VendorExecuteQuery { dest, .. } => Some(*dest),
         Instr::Call { dest, .. } | Instr::InvokeEntrypointAs { dest, .. } => dest.as_ref().copied(),
         Instr::GrantPermission { .. }

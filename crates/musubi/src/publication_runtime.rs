@@ -15,16 +15,17 @@ use std::{
     fs::OpenOptions,
     io::Read,
     path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use iroha::musubi_runtime::{
     AuthenticatedMusubiPublicationRuntimeClientV1, MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1,
     MusubiFinalizedArchiveRegistrationEvidenceV1, MusubiProviderReadbackRequestV1,
     MusubiPublicationRuntimeTransportErrorV1, MusubiPublicationRuntimeTransportFailureClassV1,
-    MusubiSeedIngressStageRequestV1, MusubiStorageCoordinationRequestV1,
-    MusubiStorageCoordinationResponseV1, MusubiStorageLocationDispositionV1,
-    publication_service_origin, validate_publication_service_base_url,
+    MusubiSeedIngressCarPlanV1, MusubiSeedIngressStageRequestV1,
+    MusubiStorageCoordinationRequestV1, MusubiStorageCoordinationResponseV1,
+    MusubiStorageLocationDispositionV1, publication_service_origin,
+    validate_publication_service_base_url,
 };
 use iroha_data_model::{
     isi::{
@@ -33,9 +34,9 @@ use iroha_data_model::{
     },
     musubi::{
         ArchiveId, MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_PAGE_SIZE_V1,
-        MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1, MusubiArchiveLocationPageV1,
-        MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1, MusubiNamespaceDelegationV1,
-        MusubiPageRequestV1, MusubiProviderBundleAttestationDigestV1,
+        MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1, MusubiArchiveCommitmentV1,
+        MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveLocationStateV1,
+        MusubiNamespaceDelegationV1, MusubiPageRequestV1, MusubiProviderBundleAttestationDigestV1,
         MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleAttestationRecordV1,
         MusubiProviderBundleAttestationRefV1, MusubiProviderBundleAttestationSetDigestV1,
         MusubiProviderBundleVerificationAttestationV1, MusubiSeedIngressReceiptBindingV1,
@@ -62,8 +63,9 @@ use crate::{
         validate_archive_location_page,
     },
     registry::{
-        PublicationRuntimeServicesV1, RegistryFailureClassV1, RegistryReadClientV1,
-        RegistrySigningClientV1, RegistryTerminalTransactionStateV1, RegistryTransactionStateV1,
+        PlatformConfigProvenanceV1, PublicationRuntimeServicesV1, RegistryFailureClassV1,
+        RegistryReadClientV1, RegistrySigningClientV1, RegistryTerminalTransactionStateV1,
+        RegistryTransactionStateV1,
     },
 };
 
@@ -87,10 +89,10 @@ const MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES: usize =
 const DELEGATION_DECODE_LIMITS: DecodeLimits =
     DecodeLimits::new(64, MAX_DELEGATION_BYTES_USIZE, 256, 512 * 1024, 16);
 const PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
-    256,
     MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES,
-    4_096,
+    MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES,
     MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES * 2,
+    MAX_PROVIDER_ATTESTATION_CHECKPOINT_BYTES * 4,
     64,
 );
 
@@ -322,6 +324,11 @@ impl std::error::Error for ProductionPublicationConfigurationErrorV1 {}
 /// Clean-package compiler validation injected by the packaging command.
 pub trait PublicationCleanPackageValidatorV1 {
     /// Validate the exact packaged CAR and return secret-free evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PublicationBackendError`] when the package cannot be validated or its evidence
+    /// cannot be produced.
     fn validate_clean_package(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -424,6 +431,11 @@ impl<V> ProductionPublicationRuntimeV1<V> {
     /// The journal store must already have created its private `publication-v1` directory. An
     /// identical root may be rebound idempotently; switching roots after a runtime was loaded is
     /// rejected so an operation can never split its replay evidence across directories.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProductionPublicationConfigurationErrorV1`] when the root is unsafe or conflicts
+    /// with a root already bound to this runtime.
     pub fn bind_publication_state_root(
         &mut self,
         user_state_root: &Path,
@@ -627,6 +639,10 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         Ok(installed)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "checkpoint loading binds every immutable publication and attestation coordinate explicitly"
+    )]
     fn load_anchored_provider_checkpoint(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -722,7 +738,9 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         if generation == 0
             || usize::from(generation) > MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1
             || prior_location_ids.len() + 1 != usize::from(generation)
-            || prior_location_ids.iter().any(|location| location.is_zero())
+            || prior_location_ids
+                .iter()
+                .any(iroha_data_model::musubi::MusubiArchiveLocationIdV1::is_zero)
         {
             return Err(PublicationBackendError::permanent(
                 "ARCHIVE_LOCATION_GENERATION_INVALID",
@@ -762,11 +780,7 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         };
         let response = self
             .http
-            .coordinate_storage(
-                &self.storage_coordinator_url,
-                &coordination_request,
-                current_time_ms()?,
-            )
+            .coordinate_storage(&self.storage_coordinator_url, &coordination_request)
             .map_err(map_transport_error)?;
         if response.archive.registration_projection()
             != registered.archive.registration_projection()
@@ -864,6 +878,10 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the append operation records every signed provider-registration coordinate explicitly"
+    )]
     fn append_provider_registration_transaction_checkpoint(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -943,7 +961,8 @@ impl<V> ProductionPublicationRuntimeV1<V> {
             .archive_locations(&MusubiArchiveLocationQueryV1 {
                 archive_id: request.archive_commitment.archive_id(),
                 page: MusubiPageRequestV1 {
-                    limit: MUSUBI_MAX_PAGE_SIZE_V1 as u32,
+                    limit: u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1)
+                        .expect("the fixed Musubi V1 page bound fits u32"),
                     cursor: None,
                 },
             })
@@ -979,48 +998,48 @@ impl<V> ProductionPublicationRuntimeV1<V> {
                 "ARCHIVE_LOCATION_FINALIZED_SNAPSHOT_STALE",
             ));
         }
-        match page
+        let Ok(index) = page
             .items
             .binary_search_by_key(&response.location_id, |location| location.location_id)
-        {
-            Ok(index) => {
-                let location = &page.items[index];
-                if location.state == MusubiArchiveLocationStateV1::Retired {
-                    return Err(PublicationBackendError::permanent(
-                        "ARCHIVE_LOCATION_ID_CONFLICT",
-                    ));
-                }
-                if !location_matches_coordination_response(location, response) {
-                    return Err(PublicationBackendError::permanent(
-                        "ARCHIVE_LOCATION_ID_CONFLICT",
-                    ));
-                }
-                Ok(FinalizedLocationStateV1::Exact { page })
+        else {
+            // A location present in the coordinator's finalized current archive but absent from
+            // the current non-retired directory was retired. Stable location identities are
+            // never reusable, so do not loop on a mutation Core must permanently reject.
+            if response
+                .archive
+                .location_ids
+                .binary_search(&response.location_id)
+                .is_ok()
+            {
+                return Err(PublicationBackendError::permanent(
+                    "ARCHIVE_LOCATION_ID_CONFLICT",
+                ));
             }
-            Err(_) => {
-                // A location present in the coordinator's finalized current archive but absent from
-                // the current non-retired directory was retired. Stable location identities are
-                // never reusable, so do not loop on a mutation Core must permanently reject.
-                if response
-                    .archive
-                    .location_ids
-                    .binary_search(&response.location_id)
-                    .is_ok()
-                {
-                    return Err(PublicationBackendError::permanent(
-                        "ARCHIVE_LOCATION_ID_CONFLICT",
-                    ));
-                }
-                if page.archive.location_revision == u64::MAX {
-                    return Err(PublicationBackendError::permanent(
-                        "ARCHIVE_LOCATION_REVISION_EXHAUSTED",
-                    ));
-                }
-                Ok(FinalizedLocationStateV1::Absent { page })
+            if page.archive.location_revision == u64::MAX {
+                return Err(PublicationBackendError::permanent(
+                    "ARCHIVE_LOCATION_REVISION_EXHAUSTED",
+                ));
             }
+            return Ok(FinalizedLocationStateV1::Absent { page });
+        };
+        let location = &page.items[index];
+        if location.state == MusubiArchiveLocationStateV1::Retired {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_ID_CONFLICT",
+            ));
         }
+        if !location_matches_coordination_response(location, response) {
+            return Err(PublicationBackendError::permanent(
+                "ARCHIVE_LOCATION_ID_CONFLICT",
+            ));
+        }
+        Ok(FinalizedLocationStateV1::Exact { page })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the finalized transaction state machine keeps all fail-closed archive-location checks adjacent"
+    )]
     fn location_transaction_advance(
         &self,
         request: &PublicationRequestV1,
@@ -1248,7 +1267,7 @@ fn coordination_provider_attestation_set_digest(
         } => {
             let references = provider_attestations
                 .iter()
-                .map(|attestation| attestation.reference())
+                .map(MusubiProviderBundleVerificationAttestationV1::reference)
                 .collect::<Vec<_>>();
             musubi_provider_bundle_attestation_set_digest_v1(
                 response.archive.archive_id,
@@ -1384,6 +1403,10 @@ fn next_provider_attestation_registration_attempt(
         })
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "this adapter is passed directly to Result::map_err and consumes its owned error value"
+)]
 fn map_provider_checkpoint_io(error: AtomicWriteError) -> PublicationBackendError {
     match error.code() {
         AtomicWriteErrorCode::ImmutableConflict => {
@@ -1411,6 +1434,8 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         &mut self,
         operation_id: PublicationOperationIdV1,
         expected: &MusubiSeedIngressReceiptBindingV1,
+        commitment: &MusubiArchiveCommitmentV1,
+        plan: &MusubiSeedIngressCarPlanV1,
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
         if expected.chain_id != *self.http.chain_id()
@@ -1422,16 +1447,26 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
                 "PUBLICATION_PLATFORM_BINDING_MISMATCH",
             ));
         }
+        let car_plan = plan
+            .to_car_build_plan(commitment)
+            .map_err(map_transport_error)?;
         let request = MusubiSeedIngressStageRequestV1 {
             version: 1,
             operation_id: *operation_id.as_bytes(),
             binding: expected.clone(),
+            commitment: commitment.clone(),
+            plan_digest: plan.canonical_digest().map_err(map_transport_error)?,
+            plan_length: plan.canonical_len().map_err(map_transport_error)?,
         };
         self.http
-            .stage_seed_ingress(&self.seed_ingress_url, &request, car, current_time_ms()?)
+            .stage_seed_ingress(&self.seed_ingress_url, &request, &car_plan, car)
             .map_err(map_transport_error)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "provider registration is an ordered checkpointed state machine whose evidence checks must remain adjacent"
+    )]
     fn checkpoint_archive_location_provider_registrations(
         &mut self,
         operation_id: PublicationOperationIdV1,
@@ -1683,12 +1718,12 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
             .map_err(map_registry_error)?;
         if initial_state == RegistryTransactionStateV1::Absent {
             let submission = self.signing.submit_signed_v1(&intent.signed_transaction);
-            if let Ok(transaction_hash) = submission {
-                if transaction_hash != intent.transaction_hash {
-                    return Err(PublicationBackendError::permanent(
-                        "ARCHIVE_LOCATION_TRANSACTION_HASH_MISMATCH",
-                    ));
-                }
+            if let Ok(transaction_hash) = submission
+                && transaction_hash != intent.transaction_hash
+            {
+                return Err(PublicationBackendError::permanent(
+                    "ARCHIVE_LOCATION_TRANSACTION_HASH_MISMATCH",
+                ));
             }
             let observed = self
                 .signing
@@ -1730,7 +1765,7 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         };
         let response = self
             .http
-            .readback_provider(gateway, &readback_request, current_time_ms()?)
+            .readback_provider(gateway, &readback_request)
             .map_err(map_transport_error)?;
         Ok(PublicationReadbackEvidenceV1 {
             provider: response.provider,
@@ -1767,6 +1802,11 @@ impl<V> LoadedProductionPublicationRuntimeV1<V> {
         &self.bindings
     }
 
+    /// Clone the signer-free reader built from the same image as this runtime and signer.
+    pub(crate) fn registry_reader(&self) -> RegistryReadClientV1 {
+        self.services.read.clone()
+    }
+
     /// Split the loaded boundary into signer, runtime services, and public bindings.
     #[must_use]
     pub fn into_parts(
@@ -1781,6 +1821,11 @@ impl<V> LoadedProductionPublicationRuntimeV1<V> {
 }
 
 /// Load the production runtime exclusively from an explicit or platform `client.toml`.
+///
+/// # Errors
+///
+/// Returns [`ProductionPublicationConfigurationErrorV1`] when configuration, signer, endpoint,
+/// gateway, or platform-binding validation fails.
 pub fn load_production_publication_runtime_v1<V>(
     config: Option<&Path>,
     validator: V,
@@ -1788,20 +1833,68 @@ pub fn load_production_publication_runtime_v1<V>(
 where
     V: PublicationCleanPackageValidatorV1,
 {
-    let config_path =
-        config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
-    let config_bytes =
-        read_bounded_regular(&config_path, MAX_CLIENT_CONFIG_BYTES).map_err(|_| {
-            ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
-        })?;
+    let selected = config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
+    let config_path = if selected.is_absolute() {
+        selected
+    } else {
+        std::env::current_dir()
+            .map_err(|_| {
+                ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
+            })?
+            .join(selected)
+    };
+    let config_bytes = read_bounded_platform_config_v1(&config_path).map_err(|_| {
+        ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
+    })?;
+    load_production_publication_runtime_from_bytes_v1(&config_path, &config_bytes, validator)
+}
+
+/// Load a production runtime only when the selected platform configuration still matches the
+/// exact image used by the preceding signer-free resolution phase.
+///
+/// The bounded file is read before any signer or runtime configuration is parsed. Its anchored
+/// path and domain-separated digest are process-local provenance and are never returned in an
+/// error or persisted.
+///
+/// # Errors
+///
+/// Returns [`ProductionPublicationConfigurationErrorV1`] when the configuration cannot be read,
+/// no longer matches `provenance`, or fails normal production-runtime validation.
+pub(crate) fn load_bound_production_publication_runtime_v1<V>(
+    provenance: &PlatformConfigProvenanceV1,
+    validator: V,
+) -> Result<LoadedProductionPublicationRuntimeV1<V>, ProductionPublicationConfigurationErrorV1>
+where
+    V: PublicationCleanPackageValidatorV1,
+{
+    let config_path = provenance.path();
+    let config_bytes = read_bounded_platform_config_v1(config_path).map_err(|_| {
+        ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
+    })?;
+    if !provenance.matches(&config_bytes) {
+        return Err(ProductionPublicationConfigurationErrorV1::new(
+            "MUSUBI_PUBLICATION_CONFIG_CHANGED",
+        ));
+    }
+    load_production_publication_runtime_from_bytes_v1(config_path, &config_bytes, validator)
+}
+
+fn load_production_publication_runtime_from_bytes_v1<V>(
+    config_path: &Path,
+    config_bytes: &[u8],
+    validator: V,
+) -> Result<LoadedProductionPublicationRuntimeV1<V>, ProductionPublicationConfigurationErrorV1>
+where
+    V: PublicationCleanPackageValidatorV1,
+{
     let (signing, publication) =
-        RegistrySigningClientV1::load_with_publication_config_bytes(&config_path, &config_bytes)
+        RegistrySigningClientV1::load_with_publication_config_bytes(config_path, config_bytes)
             .map_err(|_| {
                 ProductionPublicationConfigurationErrorV1::new(
                     "MUSUBI_PUBLICATION_SIGNER_CONFIG_INVALID",
                 )
             })?;
-    let read = RegistryReadClientV1::load_from_config_bytes(&config_bytes).map_err(|_| {
+    let read = RegistryReadClientV1::load_from_config_bytes(config_bytes).map_err(|_| {
         ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_PUBLIC_CONFIG_INVALID")
     })?;
     if read.account_chain_discriminant() != signing.account_chain_discriminant() {
@@ -1809,7 +1902,7 @@ where
             "MUSUBI_PUBLICATION_REGISTRY_PROFILE_MISMATCH",
         ));
     }
-    let parsed = parse_publication_config(&config_path, &signing, &publication)?;
+    let parsed = parse_publication_config(config_path, &signing, &publication)?;
     let http = signing
         .publication_runtime_client(parsed.request_timeout)
         .map_err(|_| {
@@ -2024,6 +2117,14 @@ const fn invalid_publication_config() -> ProductionPublicationConfigurationError
     ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
 }
 
+/// Read one exact bounded platform `client.toml` through a no-follow stable descriptor.
+///
+/// This is shared by publication, signer-free registry reads, and prepared archive fetching so
+/// all consumers preserve the same single-link and before/after identity checks.
+pub(crate) fn read_bounded_platform_config_v1(path: &Path) -> std::io::Result<Vec<u8>> {
+    read_bounded_regular(path, MAX_CLIENT_CONFIG_BYTES)
+}
+
 fn read_bounded_regular(path: &Path, maximum: u64) -> std::io::Result<Vec<u8>> {
     let path_before = fs::symlink_metadata(path)?;
     if metadata_is_link_or_reparse(&path_before) || !path_before.is_file() {
@@ -2164,7 +2265,9 @@ fn set_no_follow(options: &mut OpenOptions) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(platform_no_follow_flag());
+        // Nonblocking mode prevents a regular-file-to-FIFO/device substitution from hanging or
+        // triggering device semantics before the descriptor metadata check rejects it.
+        options.custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
     }
     #[cfg(windows)]
     {
@@ -2177,9 +2280,82 @@ fn set_no_follow(options: &mut OpenOptions) {
     let _ = options;
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(
+    target_os = "android",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))
+))]
+compile_error!(
+    "Musubi secure platform-config reads are not qualified for this Android architecture"
+);
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("Musubi secure platform-config reads are not qualified for this Unix target");
+
+#[cfg(all(target_os = "android", target_arch = "riscv64"))]
 const fn platform_no_follow_flag() -> i32 {
-    0o400000
+    0x400000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "aarch64", target_arch = "arm")
+))]
+const fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+const fn platform_no_follow_flag() -> i32 {
+    0x20000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+const fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    ))
+))]
+const fn platform_no_follow_flag() -> i32 {
+    0x20000
 }
 
 #[cfg(all(
@@ -2199,31 +2375,58 @@ const fn platform_no_follow_flag() -> i32 {
 }
 
 #[cfg(all(
-    unix,
-    not(any(
+    target_os = "linux",
+    any(
+        target_arch = "mips",
+        target_arch = "mips32r6",
+        target_arch = "mips64",
+        target_arch = "mips64r6"
+    )
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x80
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "sparc", target_arch = "sparc64")
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x4000
+}
+
+#[cfg(any(
+    target_os = "android",
+    all(
         target_os = "linux",
-        target_os = "android",
+        not(any(
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6",
+            target_arch = "sparc",
+            target_arch = "sparc64"
+        ))
+    )
+))]
+const fn platform_nonblocking_flag() -> i32 {
+    0x800
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
         target_os = "macos",
         target_os = "ios",
         target_os = "freebsd",
         target_os = "openbsd",
         target_os = "netbsd",
         target_os = "dragonfly"
-    ))
+    )
 ))]
-const fn platform_no_follow_flag() -> i32 {
-    // TODO: Add an atomic no-follow flag when the remaining Unix targets expose one through the
-    // existing platform API. These targets still reject symlink metadata and require the opened
-    // descriptor to match the pre-open path identity, but are outside the qualified production set.
-    0
-}
-
-fn current_time_ms() -> Result<u64, PublicationBackendError> {
-    let elapsed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| PublicationBackendError::permanent("SYSTEM_TIME_INVALID"))?;
-    u64::try_from(elapsed.as_millis())
-        .map_err(|_| PublicationBackendError::permanent("SYSTEM_TIME_INVALID"))
+const fn platform_nonblocking_flag() -> i32 {
+    0x4
 }
 
 fn map_transport_error(error: MusubiPublicationRuntimeTransportErrorV1) -> PublicationBackendError {
@@ -2252,17 +2455,18 @@ fn map_registry_error(error: crate::registry::RegistryErrorV1) -> PublicationBac
 mod tests {
     use std::{io::Write as _, net::TcpListener, thread};
 
-    use iroha::crypto::{Algorithm, ExposedPrivateKey, KeyPair, SignatureOf};
+    use iroha::crypto::{Algorithm, ExposedPrivateKey, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId,
-        account::address::ChainDiscriminantGuard,
+        account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard},
         musubi::{
-            MUSUBI_MIN_HEALTHY_REPLICAS_V1, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1,
-            MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationV1,
-            MusubiArchiveRecordV1, MusubiContentDigestV1, MusubiKotodamaEditionV1,
-            MusubiNamespaceBindingDigestV1, MusubiNamespaceDelegationApprovalV1,
-            MusubiNamespaceDelegationPayloadV1, MusubiNamespaceV1, MusubiPackageIdV1,
-            MusubiPackageScopeV1, MusubiProviderBundleVerificationApprovalV1,
+            MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+            MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveCommitmentV1,
+            MusubiArchiveLocationIdV1, MusubiArchiveLocationV1, MusubiArchiveRecordV1,
+            MusubiContentDigestV1, MusubiKotodamaEditionV1, MusubiNamespaceBindingDigestV1,
+            MusubiNamespaceDelegationApprovalV1, MusubiNamespaceDelegationPayloadV1,
+            MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageScopeV1,
+            MusubiProviderBundleVerificationApprovalV1,
             MusubiProviderBundleVerificationAttestationV1,
             MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
             MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
@@ -2424,6 +2628,10 @@ mod tests {
         page: MusubiArchiveLocationPageV1,
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture assembles one internally consistent publication rebase state"
+    )]
     fn rebase_fixture(torii_url: Url) -> RebaseFixture {
         let temporary = tempdir().expect("temporary directory");
         let config_path = temporary.path().join("client.toml");
@@ -2730,7 +2938,96 @@ mod tests {
         )
         .with_instructions([instruction]);
         builder.set_creation_time(Duration::from_millis(1_000));
-        builder.sign(signer.private_key())
+        let signature = Signature::try_new(signer.private_key(), &builder.payload_hash_bytes())
+            .expect("sign provider checkpoint transaction payload");
+        builder.build_with_signature(signature)
+    }
+
+    #[test]
+    fn provider_attestation_checkpoint_decode_limits_admit_maximum_approval_set() {
+        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let operation_id = fixture.request.operation_id();
+        let expected_location_revision = fixture.page.archive.location_revision;
+        let mut attestation = coordinator_provider_attestations(&fixture)[0].clone();
+        let mut signers = (0..MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1)
+            .map(|index| {
+                let seed = u8::try_from(index)
+                    .expect("approval index fits u8")
+                    .checked_add(0x80)
+                    .expect("approval seed remains in range");
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("maximum approval-set signer")
+            })
+            .collect::<Vec<_>>();
+        signers.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let members = signers
+            .iter()
+            .map(|signer| {
+                MultisigMember::new(signer.public_key().clone(), 1)
+                    .expect("maximum approval-set member")
+            })
+            .collect::<Vec<_>>();
+        let threshold = u16::try_from(MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1)
+            .expect("approval maximum fits u16");
+        let provider_owner = iroha_data_model::account::AccountId::new_multisig(
+            MultisigPolicy::new(threshold, members).expect("maximum approval-set policy"),
+        );
+        attestation.payload.binding.completed_by = provider_owner.clone();
+        attestation
+            .payload
+            .binding
+            .completion_authority
+            .provider_owner = provider_owner;
+        let signing_hash = attestation.payload.signing_hash();
+        attestation.approvals = signers
+            .iter()
+            .map(|signer| MusubiProviderBundleVerificationApprovalV1 {
+                public_key: signer.public_key().clone(),
+                signature: SignatureOf::try_from_hash(signer.private_key(), signing_hash)
+                    .expect("maximum approval-set signature"),
+            })
+            .collect();
+        attestation
+            .verify(&attestation.payload.binding)
+            .expect("maximum approval-set attestation");
+
+        let instruction = RegisterMusubiProviderBundleAttestationV1::new(
+            attestation.clone(),
+            expected_location_revision,
+        );
+        let signed_transaction =
+            signed_provider_attestation_transaction(&fixture.request, instruction, 0x51);
+        let checkpoint = PublicationProviderAttestationCheckpointV1::new(
+            operation_id,
+            1,
+            1,
+            expected_location_revision,
+            &attestation,
+            signed_transaction,
+        );
+        let encoded =
+            encode_provider_attestation_checkpoint(&checkpoint).expect("encode maximum checkpoint");
+        assert!(
+            encoded.len() > 256,
+            "the maximum checkpoint must exercise a framed sequence beyond the old decode limit"
+        );
+        let decoded: PublicationProviderAttestationCheckpointV1 =
+            norito::decode_canonical_with_limits(
+                &encoded,
+                PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS,
+            )
+            .expect("decode maximum checkpoint within its production budget");
+        assert_eq!(decoded, checkpoint);
+        decoded
+            .validate_for(
+                operation_id,
+                1,
+                1,
+                &fixture.request,
+                expected_location_revision,
+                &attestation,
+            )
+            .expect("decoded maximum checkpoint remains valid");
     }
 
     #[test]
@@ -2785,6 +3082,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the checkpoint substitution cases exercise one end-to-end signature binding contract"
+    )]
     fn provider_attestation_transaction_checkpoint_binds_exact_instruction_and_signature() {
         let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let operation_id = fixture.request.operation_id();
@@ -3368,7 +3669,10 @@ mod tests {
         let query: MusubiArchiveLocationQueryV1 =
             norito::json::from_slice(&request_body).expect("archive-location query");
         assert_eq!(query.archive_id, fixture.response.archive.archive_id);
-        assert_eq!(query.page.limit, MUSUBI_MAX_PAGE_SIZE_V1 as u32);
+        assert_eq!(
+            query.page.limit,
+            u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("page maximum fits u32")
+        );
         assert!(query.page.cursor.is_none());
     }
 
@@ -3534,9 +3838,23 @@ mod tests {
             match mutation {
                 ProjectionMutation::Chain => {
                     fixture.page.chain_id = ChainId::from("another-chain");
+                    fixture
+                        .page
+                        .archive
+                        .staging_receipt
+                        .payload
+                        .binding
+                        .chain_id = fixture.page.chain_id.clone();
                 }
                 ProjectionMutation::Genesis => {
                     fixture.page.genesis_hash = [0x91; 32];
+                    fixture
+                        .page
+                        .archive
+                        .staging_receipt
+                        .payload
+                        .binding
+                        .genesis_block_hash = fixture.page.genesis_hash;
                 }
                 ProjectionMutation::Commitment => {
                     fixture.page.archive.commitment.root_cid =
@@ -3702,6 +4020,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the cases jointly cover every terminal archive-location rebase outcome"
+    )]
     fn location_transaction_records_rebase_expiry_application_and_later_retirement() {
         let mut rejected = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
         let rejected_intent = rebase_location_intent(&rejected);
@@ -3845,6 +4167,95 @@ mod tests {
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("fixture key");
         let fixture_private = ExposedPrivateKey(fixture_key.private_key().clone()).to_string();
         assert!(!platform_debug.contains(&fixture_private));
+    }
+
+    #[test]
+    fn provenance_bound_loader_accepts_the_unchanged_image_and_reuses_its_reader() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("client.toml");
+        let (_signing, _publication) = write_client_config(&path, "");
+        let (initial_reader, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
+            .expect("load signer-free configuration image");
+        let provenance = image.provenance();
+        drop(image);
+
+        let loaded = load_bound_production_publication_runtime_v1(
+            &provenance,
+            UnavailablePublicationCleanPackageValidatorV1,
+        )
+        .expect("unchanged configuration image");
+        let runtime_reader = loaded.registry_reader();
+        assert_eq!(runtime_reader.torii_url(), initial_reader.torii_url());
+        assert_eq!(
+            runtime_reader.account_chain_discriminant(),
+            initial_reader.account_chain_discriminant()
+        );
+    }
+
+    #[test]
+    fn provenance_bound_loader_rejects_changed_bytes_before_signer_parsing() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("client.toml");
+        let (_signing, _publication) = write_client_config(&path, "");
+        let (_, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
+            .expect("load signer-free configuration image");
+        let provenance = image.provenance();
+        drop(image);
+
+        let fixture_key =
+            KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("fixture key");
+        let fixture_private = ExposedPrivateKey(fixture_key.private_key().clone()).to_string();
+        let original = fs::read_to_string(&path).expect("read original configuration");
+        let poisoned = original.replace(&fixture_private, "deliberately-not-a-private-key");
+        assert_ne!(poisoned, original);
+        fs::write(&path, poisoned).expect("replace configuration image");
+
+        let error = load_bound_production_publication_runtime_v1(
+            &provenance,
+            UnavailablePublicationCleanPackageValidatorV1,
+        )
+        .expect_err("changed configuration must fail before signer parsing");
+        assert_eq!(error.code(), "MUSUBI_PUBLICATION_CONFIG_CHANGED");
+        let error_debug = format!("{error:?}");
+        assert!(!error_debug.contains(path.to_string_lossy().as_ref()));
+        assert!(!error_debug.contains("deliberately-not-a-private-key"));
+
+        let unbound_error = load_production_publication_runtime_v1(
+            Some(&path),
+            UnavailablePublicationCleanPackageValidatorV1,
+        )
+        .expect_err("the replacement contains an invalid signer");
+        assert_eq!(
+            unbound_error.code(),
+            "MUSUBI_PUBLICATION_SIGNER_CONFIG_INVALID"
+        );
+    }
+
+    #[test]
+    fn provenance_bound_loader_rejects_a_different_valid_image() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("client.toml");
+        let (_signing, _publication) = write_client_config(&path, "");
+        let (_, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
+            .expect("load signer-free configuration image");
+        let provenance = image.provenance();
+        drop(image);
+
+        let mut alternate = fs::read_to_string(&path).expect("read original configuration");
+        alternate.push_str("\n# valid alternate configuration image\n");
+        fs::write(&path, alternate).expect("replace configuration with valid alternate bytes");
+        load_production_publication_runtime_v1(
+            Some(&path),
+            UnavailablePublicationCleanPackageValidatorV1,
+        )
+        .expect("the alternate image is independently valid");
+
+        let error = load_bound_production_publication_runtime_v1(
+            &provenance,
+            UnavailablePublicationCleanPackageValidatorV1,
+        )
+        .expect_err("a different valid image must not cross the resolution boundary");
+        assert_eq!(error.code(), "MUSUBI_PUBLICATION_CONFIG_CHANGED");
     }
 
     #[cfg(unix)]

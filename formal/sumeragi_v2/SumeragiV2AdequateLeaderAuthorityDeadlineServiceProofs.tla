@@ -643,9 +643,9 @@ BY ExpandENABLED, Isa
 THEOREM AdequateLeaderFixedSelectedOwnerUsesExactAsyncFairness ==
   \A initialContext, owner:
     owner \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext)
-      => AsyncSpecAt(initialContext)
-           => WF_AsyncAllVars(
-                AdequateLeaderFixedSelectedServiceOwnerAction(owner))
+      => (AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(
+                 AdequateLeaderFixedSelectedServiceOwnerAction(owner)))
 BY Isa, PTL
    DEF AdequateLeaderFixedSelectedServiceOwnerSet,
        AdequateLeaderFixedFairOwner,
@@ -660,7 +660,7 @@ BY Isa, PTL
 \* unrelated `AsyncSpecAt(initialContext)` behavior; it adds no fairness arm.
 AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) ==
   specification
-    => \A initialContext,
+    => \A initialContext \in ContextRecords,
           owner \in
             AdequateLeaderFixedSelectedServiceOwnerSet(initialContext):
          WF_AsyncAllVars(
@@ -980,13 +980,14 @@ AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes(
     target, leaderContext, leader, leaderView) ==
   {AdequateLeaderFixedPreAdmissionSubjectReplacementRouteIdentity(
      item, target, leaderContext, leader, leaderView):
-     item \in asyncRetainedControl,
-     item.source
-       \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
-     AdequateLeaderFixedSubjectReplacementOrigin(
-          AsyncLeaderWireLifecycleCausalOriginAt(
-            item, leaderContext),
-          target, leaderContext, leader, leaderView)}
+     item \in
+       {retainedItem \in asyncRetainedControl:
+          /\ retainedItem.source
+               \in AdequateLeaderFrozenResponsiveRoster(leaderContext)
+          /\ AdequateLeaderFixedSubjectReplacementOrigin(
+               AsyncLeaderWireLifecycleCausalOriginAt(
+                 retainedItem, leaderContext),
+               target, leaderContext, leader, leaderView)}}
 
 AdequateLeaderFixedPreAdmissionSubjectReplacementRouteCapacity ==
   N * AsyncRetainedControlBudget
@@ -1007,11 +1008,12 @@ AdequateLeaderFixedActiveWireSubjectReplacementOwners(
      target, leaderContext, leader, leaderView,
      record.recipient, record.causalOrigin, record.schedulerOrdinal,
      record.physicalAdmissionOrdinal):
-     record \in asyncLeaderWireLifecycles,
-     /\ AsyncLeaderWireLifecycleActive(record)
-     /\ AdequateLeaderFixedSubjectReplacementOrigin(
-          record.causalOrigin,
-          target, leaderContext, leader, leaderView)}
+     record
+       \in {activeRecord \in asyncLeaderWireLifecycles:
+              /\ AsyncLeaderWireLifecycleActive(activeRecord)
+              /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                   activeRecord.causalOrigin,
+                   target, leaderContext, leader, leaderView)}}
 
 AdequateLeaderFixedDormantWireSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
@@ -1019,11 +1021,12 @@ AdequateLeaderFixedDormantWireSubjectReplacementOwners(
      target, leaderContext, leader, leaderView,
      record.recipient, record.causalOrigin, record.schedulerOrdinal,
      record.physicalAdmissionOrdinal):
-     record \in asyncLeaderWireLifecycles,
-     /\ AsyncLeaderWireLifecycleDormant(record)
-     /\ AdequateLeaderFixedSubjectReplacementOrigin(
-          record.causalOrigin,
-          target, leaderContext, leader, leaderView)}
+     record
+       \in {dormantRecord \in asyncLeaderWireLifecycles:
+              /\ AsyncLeaderWireLifecycleDormant(dormantRecord)
+              /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                   dormantRecord.causalOrigin,
+                   target, leaderContext, leader, leaderView)}}
 
 AdequateLeaderFixedWireSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
@@ -1036,15 +1039,17 @@ AdequateLeaderFixedProducerSubjectReplacementOwners(
      target, leaderContext, leader, leaderView,
      record.node, record.causalOrigin, record.ordinal,
      lifecycle.physicalAdmissionOrdinal):
-     record \in AsyncCandidateProducerContinuations,
-     lifecycle \in asyncLeaderWireLifecycles,
-     /\ record.status \in {"Reserved", "Materialized"}
-     /\ lifecycle.recipient = record.node
-     /\ lifecycle.causalOrigin = record.causalOrigin
-     /\ lifecycle.schedulerOrdinal = record.ordinal
-     /\ AdequateLeaderFixedSubjectReplacementOrigin(
-          record.causalOrigin,
-          target, leaderContext, leader, leaderView)}
+     record
+       \in {producerRecord \in AsyncCandidateProducerContinuations:
+              producerRecord.status \in {"Reserved", "Materialized"}},
+     lifecycle
+       \in {wireLifecycle \in asyncLeaderWireLifecycles:
+              /\ wireLifecycle.recipient = record.node
+              /\ wireLifecycle.causalOrigin = record.causalOrigin
+              /\ wireLifecycle.schedulerOrdinal = record.ordinal
+              /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                   record.causalOrigin,
+                   target, leaderContext, leader, leaderView)}}
 
 AdequateLeaderFixedLiveSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
@@ -1441,20 +1446,26 @@ AdequateLeaderFixedDiscoveredPipelineOriginPairs(
   {<<node, origin>>:
      node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
      origin
-       \in AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
-            asyncControlServiceState, node),
-     AdequateLeaderFixedOriginIsExactPipelineEpisode(
-       origin, leaderContext, leader, leaderView, subject)}
+       \in
+         {pipelineOrigin \in
+            AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
+              asyncControlServiceState, node):
+            AdequateLeaderFixedOriginIsExactPipelineEpisode(
+              pipelineOrigin, leaderContext,
+              leader, leaderView, subject)}}
 
 AdequateLeaderFixedLivePipelineOriginPairs(
     leaderContext, leader, leaderView, subject) ==
   {<<node, origin>>:
      node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
      origin
-       \in AsyncCandidateLifecycleActiveOriginsForNodeIn(
-            asyncControlServiceState, node),
-     AdequateLeaderFixedOriginIsExactPipelineEpisode(
-       origin, leaderContext, leader, leaderView, subject)}
+       \in
+         {pipelineOrigin \in
+            AsyncCandidateLifecycleActiveOriginsForNodeIn(
+              asyncControlServiceState, node):
+            AdequateLeaderFixedOriginIsExactPipelineEpisode(
+              pipelineOrigin, leaderContext,
+              leader, leaderView, subject)}}
 
 AdequateLeaderFixedLivePipelineOriginsForToken(
     token, leaderContext, leader, leaderView, subject) ==
@@ -1786,7 +1797,7 @@ AdequateLeaderFixedPipelineRank(
       serviceSlack ==
         AdequateLeaderFixedCandidateSelectedServiceSlack(
           owner, packet, candidate)
-  IN <<windows, <<liveSlotDebt, <<actionDebt, serviceSlack>>>>
+  IN <<windows, <<liveSlotDebt, <<actionDebt, serviceSlack>>>>>>
 
 \* Each undiscovered or currently live slot owns one complete cross-node
 \* physical episode.  A newly discovered slot lowers `unknownBudget` before
@@ -3174,7 +3185,7 @@ AdequateLeaderFixedCandidateContinuesPreCandidateRoute(
             /\ candidate.node = route.node
             /\ candidate.node = route.identity.target
             /\ candidate.causalOrigin =
-                 route.identity.payload.causalOrigin
+                 route.causalOrigin
             /\ AsyncCandidateLifecycleOrdinal(candidate) = route.ordinal
             /\ AdequateLeaderFixedPreCandidateRouteOwnsCurrentCut(route)
        [] OTHER -> FALSE
@@ -3380,7 +3391,7 @@ AdequateLeaderFixedPreCandidateEntryRank(
     <<AdequateLeaderFixedPreCandidateReservedLiveSlotDebt(
         token, leaderContext, leader, leaderView, subject),
       <<entryDebt,
-        AdequateLeaderFixedEntryServiceSlack(owner, packet, leader)>>>>
+        AdequateLeaderFixedEntryServiceSlack(owner, packet, leader)>>>>>>
 
 AdequateLeaderFixedPreCandidateEntryRankCell(
     initialContext, target, leaderContext, leader, leaderView, receipt,
@@ -4150,7 +4161,7 @@ AdequateLeaderFixedPreCandidateRouteCarriesSubjectReplacementOrigin(
          AsyncLeaderWireLifecycleCausalOriginAt(
            route.identity, leaderContext) = origin
     [] route.kind = "Producer" ->
-         route.identity.payload.causalOrigin = origin
+         route.causalOrigin = origin
     [] OTHER -> FALSE
 
 AdequateLeaderFixedSubjectReplacementReceipt(sourceReceipt, subject) ==
@@ -6299,6 +6310,109 @@ BY AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,
        AdequateLeaderFixedSelectedServiceOwnerAction,
        AsyncCandidateServiceTombstoneLifecycleInvariant,
        AsyncCandidateServiceLifecycleInvariant,
+       AsyncNext, AsyncAllVars
+
+\* This is the one-step semantic boundary of the exact physical service
+\* classification above.  It applies only when the selected immutable
+\* occurrence actually reaches its retained completion/retirement record.
+\* A transport retry, Tick-only slack step, or other same-owner frame does
+\* not satisfy that postcondition; it remains in the already finite selected
+\* owner/producer episode and is not relabelled as protocol progress.
+\*
+\* Keeping the proposal-subject corridor in the post-state separates a real
+\* fixed-subject completion from the independently charged subject-switch
+\* episode.  Within that corridor, exact owner retirement leaves only the
+\* exhaustive semantic alternatives: Decision/lower occurrence, equal-count
+\* replacement, or count-increasing replenishment.  The last two alternatives
+\* are merely the entry actions for their finite discovery episode.
+THEOREM AdequateLeaderFixedSelectedServiceHasExhaustiveOutcome ==
+  \A initialContext \in ContextRecords,
+     target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
+     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
+     candidate \in AsyncCandidateSet,
+     cutoffOrdinal \in Nat,
+     semanticRank \in (1..4) \X (0..9),
+     serviceOwner
+       \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
+     packet \in AsyncPacketSet,
+     sourceRank \in AdequateLeaderFixedPipelineRankCarrier,
+     occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier,
+     occurrenceOwner
+       \in AdequateLeaderFrozenCandidateOwnerUniverse(
+            candidate.node, leaderContext, leader, leaderView,
+            receipt.subject):
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncStrongTypeInvariant'
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
+    /\ AsyncCandidateLifecycleSchedulerCoverageInvariant'
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
+         candidate, leaderContext, leader, leaderView, receipt.subject,
+         semanticRank, occurrenceRank, occurrenceOwner)
+    /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
+         initialContext, target, leaderContext,
+         leader, leaderView, receipt,
+         token, candidate, cutoffOrdinal, semanticRank,
+         serviceOwner, packet, sourceRank)
+    /\ AdequateLeaderTargetProtocolSubjectSource(
+         candidate.node, leaderContext,
+         leader, leaderView, receipt.subject)
+    /\ serviceOwner.ownerKind # "Tick"
+    /\ <<AdequateLeaderFixedSelectedServiceOwnerAction(
+            serviceOwner)>>_AsyncAllVars
+    /\ [AsyncNext]_AsyncAllVars
+    /\ (AdequateLeaderTargetProtocolSubjectSource(
+          candidate.node, leaderContext,
+          leader, leaderView, receipt.subject))'
+    /\ (AdequateLeaderTargetOccurrenceOwnerRetirementClosed(
+          candidate.node, leaderContext, leader, leaderView,
+          receipt.subject, occurrenceRank, occurrenceOwner))'
+      => AdequateLeaderTargetServiceOutcomeAction(
+           candidate.node, leaderContext, leader, leaderView,
+           receipt.subject, occurrenceRank)
+BY AdequateLeaderFixedSelectedActionsCarryPipelineRank,
+   AdequateLeaderFixedExactParentDepartureCarriesLifecycleCut,
+   AdequateLeaderFixedOwnedFinalRouteParentConsumesCumulativeDebt,
+   AsyncCandidateProducerContinuationHandoffRetainsExactLifecycle,
+   CandidateProducerContinuationFrozenOriginsCannotReplenish,
+   AsyncCandidateProducerSourceTransitionInstallsExactContinuation,
+   AsyncCandidateProducerContinuationPreservedOrTerminal,
+   AdequateLeaderNonDecisionDeclaredSuccessorStrictlyLowersStaticRank,
+   AdequateLeaderLiveOwnersStayInsideFrozenUniverse,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   FS_Image, FS_CardinalityType, SMT, IsaT(24000)
+   DEF AdequateLeaderFixedCutPerActionProvider,
+       AdequateLeaderFixedPipelineStrictRankGoal,
+       AdequateLeaderFixedPipelineOriginSlotsPreservedAction,
+       AdequateLeaderFixedPipelineOriginEqualCountReplacementAction,
+       AdequateLeaderFixedPipelineOriginCountIncreasingReplenishmentAction,
+       AdequateLeaderFixedPipelineProducerHandoffFrontier,
+       AdequateLeaderFixedSelectedOccurrenceProducerResidual,
+       AdequateLeaderTargetSameOrHigherOccurrenceFrontier,
+       AdequateLeaderTargetServiceOutcomeAction,
+       AdequateLeaderTargetDecisionOrStrictlyLowerOccurrenceAction,
+       AdequateLeaderTargetEqualCountOwnerReplacementAction,
+       AdequateLeaderTargetCountIncreasingReplenishmentAction,
+       AdequateLeaderTargetStrictOccurrenceDescentGoal,
+       AdequateLeaderTargetZeroOwnerProducerCell,
+       AdequateLeaderTargetOccurrenceRankFrontier,
+       AdequateLeaderTargetOccurrenceOwnerRetirementClosed,
+       AdequateLeaderTargetOccurrenceOwnerIdentitySet,
+       AdequateLeaderTargetRankOwnerCount,
+       AdequateLeaderTargetRankOwnerIdentitySet,
+       AdequateLeaderTargetProducerTransportResidual,
+       AdequateLeaderTargetProducerResidual,
+       AdequateLeaderTargetProtocolSubjectSource,
+       AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates,
+       AdequateLeaderFixedSelectedPipelineRankFrontier,
+       AdequateLeaderFixedSelectedServiceOwnerAction,
        AsyncNext, AsyncAllVars
 
 THEOREM AsyncLiveProvidesAdequateLeaderFixedCutPerAction ==

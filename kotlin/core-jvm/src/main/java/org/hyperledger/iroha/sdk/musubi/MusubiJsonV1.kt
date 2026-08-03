@@ -815,9 +815,18 @@ internal object MusubiJsonV1 {
             digest(root[it], "$field.$it")
         }
         parseAbi(root["abi"], "$field.abi")
-        list(root["dependencies"], "$field.dependencies").forEachIndexed { index, item ->
-            parseDependency(item, "$field.dependencies[$index]")
+        val dependencies =
+            list(root["dependencies"], "$field.dependencies").mapIndexed { index, item ->
+                parseDependency(item, "$field.dependencies[$index]")
+            }
+        require(dependencies.size <= 256 &&
+            dependencies.zipWithNext().all { (left, right) -> left < right }) {
+            "$field.dependencies must be bounded, sorted, and distinct"
         }
+        MusubiValidationV1.requireUniqueParentLocalAliases(
+            dependencies.map { it.alias },
+            "$field.dependencies",
+        )
         val storageRevision = validateSelection(root["selection"], "$field.selection", release)
         val revision = nonZeroU64(root["index_revision"], "$field.index_revision")
         return MusubiResolverReleaseRowV1(release, revision, storageRevision, root)

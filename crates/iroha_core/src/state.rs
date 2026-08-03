@@ -80,7 +80,7 @@ use iroha_data_model::{
             space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestExpired},
         },
         pipeline::{BlockEvent, MergeLedgerEvent, PipelineEventBox},
-        time::TimeEvent,
+        time::{ExecutionTime, TimeEvent, TimeEventFilter},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     executor::ExecutorDataModel,
@@ -115,8 +115,8 @@ use iroha_data_model::{
         MusubiPackageRecordV1, MusubiPackageRoleV1, MusubiPackageSelectorV1,
         MusubiPinLocationReferenceV1, MusubiProviderBundleAttestationKeyV1,
         MusubiProviderBundleAttestationRecordV1, MusubiProviderBundleAttestationRefV1,
-        MusubiProviderLocationKeyV1, MusubiRegistryPolicyV1, MusubiReleaseIdV1,
-        MusubiReleaseRecordV1, MusubiReplicationOrderLocationReferenceV1,
+        MusubiProviderLocationKeyV1, MusubiRegistryPolicyV1, MusubiRegistrySnapshotV1,
+        MusubiReleaseIdV1, MusubiReleaseRecordV1, MusubiReplicationOrderLocationReferenceV1,
         MusubiResolverReleaseRowV1, MusubiStorageAvailabilityV1,
         musubi_provider_bundle_attestation_set_digest_v1,
     },
@@ -994,6 +994,7 @@ macro_rules! build_world_block {
             musubi_archive_availability: $state.musubi_archive_availability.$method(),
             musubi_archive_reverse_references: $state.musubi_archive_reverse_references.$method(),
             musubi_resolver_index: $state.musubi_resolver_index.$method(),
+            musubi_resolver_index_checkpoints: $state.musubi_resolver_index_checkpoints.$method(),
             musubi_public_directory: $state.musubi_public_directory.$method(),
             musubi_aliases: $state.musubi_aliases.$method(),
             musubi_alias_history: $state.musubi_alias_history.$method(),
@@ -1279,6 +1280,9 @@ macro_rules! build_world_transaction {
                 .musubi_archive_reverse_references
                 .transaction(),
             musubi_resolver_index: $state.musubi_resolver_index.transaction(),
+            musubi_resolver_index_checkpoints: $state
+                .musubi_resolver_index_checkpoints
+                .transaction(),
             musubi_public_directory: $state.musubi_public_directory.transaction(),
             musubi_aliases: $state.musubi_aliases.transaction(),
             musubi_alias_history: $state.musubi_alias_history.transaction(),
@@ -4046,6 +4050,26 @@ impl Default for MusubiResolverIndexRevisionV1 {
     }
 }
 
+impl mv::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(&self.0.to_string(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let revision = encoded.parse::<u64>().map_err(|error| {
+            json::Error::Message(format!(
+                "invalid Musubi resolver-index revision key `{encoded}`: {error}"
+            ))
+        })?;
+        if revision.to_string() != encoded {
+            return Err(json::Error::Message(format!(
+                "noncanonical Musubi resolver-index revision key `{encoded}`"
+            )));
+        }
+        Self::new(revision).map_err(|error| json::Error::Message(error.to_string()))
+    }
+}
+
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
 #[derive(Default, JsonSerialize)]
@@ -4444,6 +4468,9 @@ pub struct World {
         Storage<ArchiveId, MusubiArchiveReverseReferencesV1>,
     /// Compact universal exact-resolution index keyed by exact release.
     pub(crate) musubi_resolver_index: Storage<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Block-final activation anchors for every historical resolver-index revision.
+    pub(crate) musubi_resolver_index_checkpoints:
+        Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered directory keyed by canonical structural or paid-alias selector.
     pub(crate) musubi_public_directory:
         Storage<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
@@ -5126,6 +5153,9 @@ pub struct WorldBlock<'world> {
     /// Compact universal exact-resolution index.
     pub(crate) musubi_resolver_index:
         StorageBlock<'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Block-final resolver-index revision activation anchors.
+    pub(crate) musubi_resolver_index_checkpoints:
+        StorageBlock<'world, MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered package directory.
     pub(crate) musubi_public_directory:
         StorageBlock<'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
@@ -5807,6 +5837,7 @@ impl<'world> WorldBlock<'world> {
             musubi_archive_availability,
             musubi_archive_reverse_references,
             musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
             musubi_public_directory,
             musubi_aliases,
             musubi_alias_history,
@@ -6379,6 +6410,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Compact universal exact-resolution index.
     pub(crate) musubi_resolver_index:
         StorageTransaction<'block, 'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Block-final resolver-index revision activation anchors.
+    pub(crate) musubi_resolver_index_checkpoints:
+        StorageTransaction<'block, 'world, MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered package directory.
     pub(crate) musubi_public_directory:
         StorageTransaction<'block, 'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
@@ -8515,6 +8549,9 @@ pub struct WorldView<'world> {
     /// Compact universal exact-resolution index.
     pub(crate) musubi_resolver_index:
         StorageView<'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Block-final resolver-index revision activation anchors.
+    pub(crate) musubi_resolver_index_checkpoints:
+        StorageView<'world, MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered package directory.
     pub(crate) musubi_public_directory:
         StorageView<'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
@@ -8870,16 +8907,37 @@ pub struct FrontierCheckpointUpdate {
     pub evicted: u64,
 }
 
+mod zk_asset_tree_frontier_json {
+    pub(super) fn serialize(
+        frontier: &crate::zk::confidential_v2::ConfidentialTreeFrontierV2,
+        out: &mut String,
+    ) {
+        out.push('[');
+        for (index, node) in frontier.iter().enumerate() {
+            if index != 0 {
+                out.push(',');
+            }
+            norito::json::JsonSerialize::json_serialize(node, out);
+        }
+        out.push(']');
+    }
+}
+
 /// Canonical shielded asset ledger snapshot persisted within the world state.
 #[derive(Clone, Debug, JsonSerialize, NoritoSerialize, NoritoDeserialize)]
 pub struct ZkAssetState {
     /// Authenticated commitment-tree construction for this asset.
     pub tree_profile: ConfidentialTreeProfile,
+    /// Fixed-size incremental frontier authenticated by `commitments`.
+    #[norito(with = "zk_asset_tree_frontier_json")]
+    pub tree_frontier: crate::zk::confidential_v2::ConfidentialTreeFrontierV2,
+    /// Current root authenticated by the incremental frontier and retained history.
+    pub persisted_root: [u8; 32],
     /// Shielded asset policy: `ZkNative` mints/burns via ZK only; Hybrid allows public+shielded.
     pub mode: iroha_data_model::isi::zk::ZkAssetMode,
-    /// Whether Shield operations are permitted for this asset definition.
+    /// Whether authenticated public-to-confidential top-ups are permitted.
     pub allow_shield: bool,
-    /// Whether Unshield operations are permitted for this asset definition.
+    /// Whether authenticated confidential-to-public redemption is permitted for this asset.
     pub allow_unshield: bool,
     /// Append‑only list of note commitments (leaves of the Merkle tree).
     pub commitments: Vec<[u8; 32]>,
@@ -8891,7 +8949,7 @@ pub struct ZkAssetState {
     pub vk_transfer: Option<ZkAssetVerifierBinding>,
     /// Required verifying key for unshield proofs (if configured).
     pub vk_unshield: Option<ZkAssetVerifierBinding>,
-    /// Required verifying key for shield proofs (if configured).
+    /// Required canonical Kagemusha top-up shield verifying key (if configured).
     pub vk_shield: Option<ZkAssetVerifierBinding>,
     /// Rolling set of frontier checkpoints (height, commitment count, root).
     pub frontier_checkpoints: Vec<FrontierCheckpoint>,
@@ -8899,8 +8957,11 @@ pub struct ZkAssetState {
 
 impl Default for ZkAssetState {
     fn default() -> Self {
+        let tree_profile = ConfidentialTreeProfile::default();
         Self {
-            tree_profile: ConfidentialTreeProfile::default(),
+            tree_profile,
+            tree_frontier: [None; crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2],
+            persisted_root: tree_profile.empty_root(),
             mode: iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
             allow_shield: false,
             allow_unshield: false,
@@ -8916,25 +8977,104 @@ impl Default for ZkAssetState {
 }
 
 impl ZkAssetState {
-    /// Compute the current canonical root, including the profile-defined empty root.
+    /// Read the persisted current root after checking constant-size tree metadata.
     pub fn current_root(&self) -> Result<[u8; 32], String> {
-        self.tree_profile.compute_root(&self.commitments)
+        self.validate_tree_metadata()?;
+        Ok(self.persisted_root)
     }
 
-    /// Validate persisted roots and checkpoints against the authenticated profile.
-    pub fn validate_tree_integrity(&self) -> Result<(), String> {
-        let prefix_roots = self.tree_profile.compute_prefix_roots(&self.commitments)?;
+    /// Validate the constant-size metadata needed by hot mutation and root reads.
+    ///
+    /// Complete retained-history and checkpoint validation belongs to
+    /// [`Self::validate_tree_integrity`] at decode, recovery, or admitted audit
+    /// boundaries. Previously validated history is append-only, so hot writes
+    /// need only recheck its current authenticated tail.
+    pub fn validate_tree_metadata(&self) -> Result<(), String> {
+        if self.frontier_checkpoints.len()
+            > crate::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2
+        {
+            return Err(
+                "confidential frontier checkpoint history exceeds its fixed bound".to_owned(),
+            );
+        }
+        crate::zk::confidential_v2::validate_confidential_tree_frontier_v2(
+            self.commitments.len(),
+            &self.tree_frontier,
+            self.persisted_root,
+        )?;
         if self.commitments.is_empty() {
             if !self.root_history.is_empty() {
                 return Err(
                     "empty confidential tree must not contain commitment root history".to_owned(),
                 );
             }
+            if self.persisted_root != self.tree_profile.empty_root() {
+                return Err(
+                    "empty confidential tree must retain its profile-defined root".to_owned(),
+                );
+            }
         } else if self.root_history.is_empty() {
             return Err("non-empty confidential tree must retain its current root".to_owned());
         } else if self.root_history.len() > self.commitments.len() {
             return Err("confidential root history cannot exceed the commitment count".to_owned());
-        } else {
+        } else if self.root_history.last().copied() != Some(self.persisted_root) {
+            return Err(
+                "confidential root history tail does not match the persisted current root"
+                    .to_owned(),
+            );
+        }
+
+        if let Some(checkpoint) = self.frontier_checkpoints.last() {
+            let commitment_count = usize::try_from(checkpoint.commitment_count).map_err(|_| {
+                "frontier checkpoint commitment count does not fit usize".to_owned()
+            })?;
+            if commitment_count > self.commitments.len() {
+                return Err("frontier checkpoint exceeds the persisted commitment count".to_owned());
+            }
+            if !crate::zk::confidential_v2::confidential_tree_node_is_canonical_v2(checkpoint.root)
+            {
+                return Err("frontier checkpoint root is not canonical".to_owned());
+            }
+            if commitment_count == 0 && checkpoint.root != self.tree_profile.empty_root() {
+                return Err(
+                    "empty frontier checkpoint root does not match the tree profile".to_owned(),
+                );
+            }
+            if commitment_count == self.commitments.len() && checkpoint.root != self.persisted_root
+            {
+                return Err(
+                    "current frontier checkpoint root does not match the persisted current root"
+                        .to_owned(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Fully rebuild and validate persisted roots, frontier, and checkpoints.
+    ///
+    /// This linear audit is intentionally reserved for decode, recovery, and
+    /// explicitly admitted audit paths. Hot appends use
+    /// [`Self::validate_tree_metadata`] and the persisted incremental frontier.
+    pub fn validate_tree_integrity(&self) -> Result<(), String> {
+        self.validate_tree_metadata()?;
+        let projection =
+            crate::zk::confidential_v2::ConfidentialTreeProjectionV2::build(&self.commitments)?;
+        if projection.root() != self.persisted_root {
+            return Err(
+                "persisted confidential current root does not match the commitment projection"
+                    .to_owned(),
+            );
+        }
+        if projection.frontier()? != self.tree_frontier {
+            return Err(
+                "persisted confidential frontier does not match the commitment projection"
+                    .to_owned(),
+            );
+        }
+
+        let prefix_roots = self.tree_profile.compute_prefix_roots(&self.commitments)?;
+        if !self.commitments.is_empty() {
             let retained_start = self.commitments.len() - self.root_history.len();
             let expected_history = prefix_roots
                 .get(retained_start..)
@@ -8946,7 +9086,20 @@ impl ZkAssetState {
                 );
             }
         }
+
+        let mut previous_height = None;
+        let mut previous_commitment_count = None;
         for checkpoint in &self.frontier_checkpoints {
+            if previous_height.is_some_and(|height| checkpoint.height <= height) {
+                return Err("frontier checkpoint heights must be strictly increasing".to_owned());
+            }
+            previous_height = Some(checkpoint.height);
+            if previous_commitment_count.is_some_and(|count| checkpoint.commitment_count < count) {
+                return Err(
+                    "frontier checkpoint commitment counts must be non-decreasing".to_owned(),
+                );
+            }
+            previous_commitment_count = Some(checkpoint.commitment_count);
             let commitment_count = usize::try_from(checkpoint.commitment_count).map_err(|_| {
                 "frontier checkpoint commitment count does not fit usize".to_owned()
             })?;
@@ -8982,17 +9135,13 @@ impl ZkAssetState {
     /// Atomically append an ordered commitment batch and return each resulting root.
     ///
     /// The complete batch is validated before either commitments or retained roots
-    /// are changed, so a malformed leaf or capacity overflow leaves state byte-for-byte
-    /// unchanged.
+    /// are changed, so a malformed leaf or capacity overflow leaves all persisted
+    /// values unchanged.
     pub fn push_commitments(
         &mut self,
         commitments: &[[u8; 32]],
         cap: NonZeroUsize,
     ) -> Result<Vec<[u8; 32]>, String> {
-        if commitments.is_empty() {
-            self.validate_tree_integrity()?;
-            return Ok(Vec::new());
-        }
         let previous_len = self.commitments.len();
         let next_len = previous_len
             .checked_add(commitments.len())
@@ -9003,26 +9152,38 @@ impl ZkAssetState {
                 self.tree_profile.capacity(),
             ));
         }
-        self.validate_tree_integrity()?;
-        let mut next_commitments = self.commitments.clone();
-        next_commitments.extend_from_slice(commitments);
-        let prefix_roots = self.tree_profile.compute_prefix_roots(&next_commitments)?;
-        let appended_roots = prefix_roots
-            .get(previous_len..)
-            .ok_or_else(|| "confidential prefix-root computation truncated state".to_owned())?
-            .to_vec();
-        let mut next_root_history = self.root_history.clone();
-        next_root_history.extend_from_slice(&appended_roots);
+        self.validate_tree_metadata()?;
+        if commitments.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let append = crate::zk::confidential_v2::append_confidential_tree_frontier_v2(
+            previous_len,
+            self.tree_frontier,
+            self.persisted_root,
+            commitments,
+        )?;
+        self.commitments
+            .try_reserve(commitments.len())
+            .map_err(|error| {
+                format!("failed to reserve confidential commitment storage: {error}")
+            })?;
+        self.root_history
+            .try_reserve(append.appended_roots.len())
+            .map_err(|error| format!("failed to reserve confidential root history: {error}"))?;
+
+        self.commitments.extend_from_slice(commitments);
+        self.root_history.extend_from_slice(&append.appended_roots);
         // Bound retained roots by the sole confidential tree-history policy.
         let max_keep = cap.get();
-        let len = next_root_history.len();
+        let len = self.root_history.len();
         if len > max_keep {
             let surplus = len - max_keep;
-            next_root_history.drain(0..surplus);
+            self.root_history.drain(0..surplus);
         }
-        self.commitments = next_commitments;
-        self.root_history = next_root_history;
-        Ok(appended_roots)
+        self.tree_frontier = append.frontier;
+        self.persisted_root = append.current_root;
+        Ok(append.appended_roots)
     }
 
     /// Record a frontier checkpoint for reorg recovery, enforcing interval and depth bounds.
@@ -9032,7 +9193,7 @@ impl ZkAssetState {
         interval: u64,
         depth_bound: u64,
     ) -> Result<FrontierCheckpointUpdate, String> {
-        self.validate_tree_integrity()?;
+        self.validate_tree_metadata()?;
         let mut update = FrontierCheckpointUpdate::default();
         if interval == 0 {
             return Ok(update);
@@ -9043,11 +9204,10 @@ impl ZkAssetState {
             .last()
             .is_none_or(|last| height.saturating_sub(last.height) >= interval);
         if should_record {
-            let root = self.current_root()?;
             self.frontier_checkpoints.push(FrontierCheckpoint {
                 height,
                 commitment_count: self.commitments.len() as u64,
-                root,
+                root: self.persisted_root,
             });
             update.recorded = true;
         }
@@ -9065,17 +9225,27 @@ impl ZkAssetState {
             return Ok(update);
         }
 
-        while self.frontier_checkpoints.len() > 1 {
-            let oldest_height = match self.frontier_checkpoints.first() {
-                Some(cp) => cp.height,
-                None => break,
-            };
-            if height.saturating_sub(oldest_height) > depth_bound {
-                self.frontier_checkpoints.remove(0);
-                update.evicted += 1;
-            } else {
-                break;
-            }
+        let evict = self
+            .frontier_checkpoints
+            .iter()
+            .take(self.frontier_checkpoints.len().saturating_sub(1))
+            .take_while(|checkpoint| height.saturating_sub(checkpoint.height) > depth_bound)
+            .count();
+        if evict != 0 {
+            self.frontier_checkpoints.drain(..evict);
+            update.evicted = update
+                .evicted
+                .saturating_add(u64::try_from(evict).unwrap_or(u64::MAX));
+        }
+        let hard_excess = self
+            .frontier_checkpoints
+            .len()
+            .saturating_sub(crate::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2);
+        if hard_excess != 0 {
+            self.frontier_checkpoints.drain(..hard_excess);
+            update.evicted = update
+                .evicted
+                .saturating_add(u64::try_from(hard_excess).unwrap_or(u64::MAX));
         }
         Ok(update)
     }
@@ -9196,11 +9366,14 @@ mod zk_asset_state_tests {
     }
 
     #[test]
-    fn tree_integrity_rejects_tampered_retained_root() {
+    fn hot_append_rejects_tampered_current_root_history_tail() {
         let mut state = ZkAssetState::default();
         push_dummy_root(&mut state, 1);
         push_dummy_root(&mut state, 2);
-        state.root_history[0][0] ^= 0x80;
+        state
+            .root_history
+            .last_mut()
+            .expect("retained current root")[0] ^= 0x80;
         let before = state.commitments.clone();
 
         let error = state
@@ -9210,6 +9383,38 @@ mod zk_asset_state_tests {
             )
             .expect_err("tampered retained roots must fail closed");
         assert!(error.contains("root history"));
+        assert_eq!(state.commitments, before);
+    }
+
+    #[test]
+    fn full_integrity_rejects_tampered_older_retained_root() {
+        let mut state = ZkAssetState::default();
+        push_dummy_root(&mut state, 1);
+        push_dummy_root(&mut state, 2);
+        state.root_history[0][0] ^= 0x01;
+
+        let error = state
+            .validate_tree_integrity()
+            .expect_err("recovery audit must reject an older retained-root mismatch");
+        assert!(error.contains("root history"));
+    }
+
+    #[test]
+    fn hot_append_rejects_tampered_incremental_frontier() {
+        let mut state = ZkAssetState::default();
+        push_dummy_root(&mut state, 1);
+        state.tree_frontier[0]
+            .as_mut()
+            .expect("one-leaf frontier slot")[0] ^= 0x01;
+        let before = state.commitments.clone();
+
+        let error = state
+            .push_commitment(
+                [2; 32],
+                NonZeroUsize::new(64).expect("non-zero root history cap"),
+            )
+            .expect_err("tampered incremental frontier must fail closed");
+        assert!(error.contains("frontier") || error.contains("current root"));
         assert_eq!(state.commitments, before);
     }
 
@@ -9248,6 +9453,8 @@ mod zk_asset_state_tests {
         push_dummy_root(&mut state, 1);
         let before_commitments = state.commitments.clone();
         let before_roots = state.root_history.clone();
+        let before_frontier = state.tree_frontier;
+        let before_current_root = state.persisted_root;
 
         let error = state
             .push_commitments(
@@ -9258,6 +9465,8 @@ mod zk_asset_state_tests {
         assert!(error.contains("non-zero and canonical"));
         assert_eq!(state.commitments, before_commitments);
         assert_eq!(state.root_history, before_roots);
+        assert_eq!(state.tree_frontier, before_frontier);
+        assert_eq!(state.persisted_root, before_current_root);
     }
 
     #[test]
@@ -9276,6 +9485,68 @@ mod zk_asset_state_tests {
         assert!(error.contains("tree capacity"));
         assert_eq!(state.commitments, before_commitments);
         assert_eq!(state.root_history, before_roots);
+    }
+
+    #[test]
+    fn tree_frontier_json_roundtrips_and_rejects_wrong_cardinality() {
+        let mut state = ZkAssetState::default();
+        push_dummy_root(&mut state, 1);
+
+        let encoded = norito::json::to_json(&state).expect("encode ZK asset JSON state");
+        let decoded: ZkAssetState =
+            norito::json::from_str(&encoded).expect("decode ZK asset JSON state");
+        assert_eq!(decoded.tree_frontier, state.tree_frontier);
+
+        let value = norito::json::to_value(&state).expect("encode ZK asset JSON value");
+        let frontier = value
+            .as_object()
+            .and_then(|object| object.get("tree_frontier"))
+            .and_then(norito::json::Value::as_array)
+            .expect("tree frontier JSON array");
+        assert_eq!(
+            frontier.len(),
+            crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2
+        );
+        assert!(
+            frontier[0].as_str().is_some(),
+            "present frontier nodes use canonical hex strings"
+        );
+        assert!(
+            frontier.iter().any(norito::json::Value::is_null),
+            "unused frontier slots remain explicit null values"
+        );
+
+        let mut short = value.clone();
+        short
+            .as_object_mut()
+            .and_then(|object| object.get_mut("tree_frontier"))
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("mutable tree frontier JSON array")
+            .pop();
+        let error = norito::json::from_value::<ZkAssetState>(short)
+            .expect_err("a 15-entry tree frontier must be rejected");
+        assert!(error.to_string().contains("expected exactly 16"));
+
+        let mut malformed = value.clone();
+        malformed
+            .as_object_mut()
+            .and_then(|object| object.get_mut("tree_frontier"))
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("mutable tree frontier JSON array")[0] =
+            norito::json::Value::String("GG".repeat(32));
+        let error = norito::json::from_value::<ZkAssetState>(malformed)
+            .expect_err("a malformed frontier digest must be rejected");
+        assert!(error.to_string().contains("invalid hex digit"));
+
+        let mut long = value;
+        long.as_object_mut()
+            .and_then(|object| object.get_mut("tree_frontier"))
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("mutable tree frontier JSON array")
+            .push(norito::json::Value::Null);
+        let error = norito::json::from_value::<ZkAssetState>(long)
+            .expect_err("a 17-entry tree frontier must be rejected");
+        assert!(error.to_string().contains("expected exactly 16"));
     }
 
     #[test]
@@ -9305,6 +9576,8 @@ mod zk_asset_state_tests {
             decoded.tree_profile,
             ConfidentialTreeProfile::PoseidonPastaV1
         );
+        assert_eq!(decoded.tree_frontier, state.tree_frontier);
+        assert_eq!(decoded.persisted_root, state.persisted_root);
         decoded
             .validate_tree_integrity()
             .expect("decoded profile state remains canonical");
@@ -9318,6 +9591,28 @@ mod zk_asset_state_tests {
         assert!(
             norito::json::from_value::<ZkAssetState>(missing_profile).is_err(),
             "first-release snapshots must explicitly persist the tree profile"
+        );
+
+        let mut missing_frontier =
+            norito::json::to_value(&state).expect("encode ZK asset JSON state");
+        missing_frontier
+            .as_object_mut()
+            .expect("ZK asset state object")
+            .remove("tree_frontier");
+        assert!(
+            norito::json::from_value::<ZkAssetState>(missing_frontier).is_err(),
+            "first-release snapshots must explicitly persist the incremental frontier"
+        );
+
+        let mut missing_current_root =
+            norito::json::to_value(&state).expect("encode ZK asset JSON state");
+        missing_current_root
+            .as_object_mut()
+            .expect("ZK asset state object")
+            .remove("persisted_root");
+        assert!(
+            norito::json::from_value::<ZkAssetState>(missing_current_root).is_err(),
+            "first-release snapshots must explicitly persist the current root"
         );
 
         let mut unknown_profile_field =
@@ -9343,13 +9638,11 @@ mod zk_asset_state_tests {
             )
             .expect("canonical commitment");
         push_dummy_root(&mut state, 2);
-        state.frontier_checkpoints.push(FrontierCheckpoint {
-            height: 10,
-            commitment_count: 1,
-            root: [2; 32],
-        });
+        state
+            .record_frontier_checkpoint(10, 1, 4)
+            .expect("canonical checkpoint");
         let telemetry_snapshot = state.telemetry_stats(3, 1);
-        assert_eq!(telemetry_snapshot.commitments, 1);
+        assert_eq!(telemetry_snapshot.commitments, 2);
         assert!(
             telemetry_snapshot.tree_depth >= 1,
             "tree depth should reflect inserted commitment"
@@ -9357,7 +9650,7 @@ mod zk_asset_state_tests {
         assert_eq!(telemetry_snapshot.root_history, 2);
         assert_eq!(telemetry_snapshot.frontier_checkpoints, 1);
         assert_eq!(telemetry_snapshot.last_checkpoint_height, 10);
-        assert_eq!(telemetry_snapshot.last_checkpoint_commitments, 1);
+        assert_eq!(telemetry_snapshot.last_checkpoint_commitments, 2);
         assert_eq!(telemetry_snapshot.root_evictions, 3);
         assert_eq!(telemetry_snapshot.frontier_evictions, 1);
     }
@@ -9367,6 +9660,8 @@ impl json::JsonDeserialize for ZkAssetState {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
         let mut tree_profile = None;
+        let mut tree_frontier = None;
+        let mut persisted_root = None;
         let mut mode = None;
         let mut allow_shield = None;
         let mut allow_unshield = None;
@@ -9381,6 +9676,18 @@ impl json::JsonDeserialize for ZkAssetState {
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "tree_profile" => tree_profile = Some(visitor.parse_value()?),
+                "tree_frontier" => {
+                    let values: Vec<Option<[u8; 32]>> = visitor.parse_value()?;
+                    tree_frontier =
+                        Some(values.try_into().map_err(|values: Vec<Option<[u8; 32]>>| {
+                            json::Error::Message(format!(
+                                "expected exactly {} confidential tree frontier entries, got {}",
+                                crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2,
+                                values.len()
+                            ))
+                        })?);
+                }
+                "persisted_root" => persisted_root = Some(visitor.parse_value()?),
                 "mode" => mode = Some(visitor.parse_value()?),
                 "allow_shield" => allow_shield = Some(visitor.parse_value()?),
                 "allow_unshield" => allow_unshield = Some(visitor.parse_value()?),
@@ -9402,6 +9709,10 @@ impl json::JsonDeserialize for ZkAssetState {
         let state = Self {
             tree_profile: tree_profile
                 .ok_or_else(|| json::MapVisitor::missing_field("tree_profile"))?,
+            tree_frontier: tree_frontier
+                .ok_or_else(|| json::MapVisitor::missing_field("tree_frontier"))?,
+            persisted_root: persisted_root
+                .ok_or_else(|| json::MapVisitor::missing_field("persisted_root"))?,
             mode: mode.ok_or_else(|| json::MapVisitor::missing_field("mode"))?,
             allow_shield: allow_shield
                 .ok_or_else(|| json::MapVisitor::missing_field("allow_shield"))?,
@@ -13482,8 +13793,6 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_nullifiers_in_tx: u32,
     /// Total confidential commitments created so far in this transaction.
     pub zk_commitments_in_tx: u32,
-    /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
-    pub(crate) native_anonymous_escrow_transfer_depth: u32,
     /// Number of synchronously nested trigger entrypoints currently executing.
     ///
     /// This counter is deliberately wider than the `u8` on-chain limit so the
@@ -13839,6 +14148,26 @@ pub struct StateQueryView<'state> {
     pub chain_id: iroha_data_model::ChainId,
 }
 
+fn time_trigger_action_requires_clock_progress(
+    action: &LoadedAction<TimeEventFilter>,
+    parent_creation_time: Duration,
+) -> bool {
+    if action.repeats.is_depleted() || !trigger_is_enabled(action.metadata()) {
+        return false;
+    }
+    if action.retry_state.is_some() {
+        return true;
+    }
+
+    match action.filter.0 {
+        ExecutionTime::PreCommit => true,
+        ExecutionTime::Schedule(schedule) => match schedule.period_ms {
+            Some(period_ms) => period_ms != 0,
+            None => u128::from(schedule.start_ms) >= parent_creation_time.as_millis(),
+        },
+    }
+}
+
 impl<'state> StateView<'state> {
     /// Returns the world view for this read-only snapshot.
     #[inline]
@@ -13893,14 +14222,15 @@ impl<'state> StateView<'state> {
         StateReadOnly::latest_block_hash(self)
     }
 
-    /// Return whether an enabled, non-depleted time trigger needs ledger-clock progress.
-    pub fn time_trigger_clock_progress_required(&self) -> bool {
+    /// Return whether an enabled, non-depleted time trigger remains reachable after
+    /// `parent_creation_time` and therefore needs ledger-clock progress.
+    pub fn time_trigger_clock_progress_required(&self, parent_creation_time: Duration) -> bool {
         self.world
             .triggers()
             .time_triggers()
             .iter()
             .any(|(_, action)| {
-                !action.repeats.is_depleted() && trigger_is_enabled(action.metadata())
+                time_trigger_action_requires_clock_progress(action, parent_creation_time)
             })
     }
 
@@ -14576,11 +14906,77 @@ where
 /// Stake-snapshot trait: provides an epoch-specific validator roster snapshot.
 ///
 /// Implementations should return the ordered validator `PeerIds` that form the roster
-/// for the given `epoch`. The exact policy is a WSV concern (e.g., stake-weighted
-/// selection and sorting). Callers must translate `PeerIds` into `ValidatorIndex` space.
+/// for the given `epoch`. Stake controls eligibility; deterministic finalized
+/// randomness selects committee seats and every selected peer receives one
+/// consensus vote. Callers translate `PeerIds` into `ValidatorIndex` space.
 pub trait StakeSnapshot {
     /// Return ordered validator `PeerIds` for the given `epoch`, or `None` if unavailable.
     fn epoch_validator_peer_ids(&self, epoch: u64) -> Option<Vec<PeerId>>;
+}
+
+fn bounded_global_committee_size(
+    world: &impl WorldReadOnly,
+    available_candidates: usize,
+) -> Option<usize> {
+    let configured = world
+        .sumeragi_npos_parameters()
+        .and_then(|params| usize::try_from(params.max_validators()).ok())
+        .unwrap_or(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT);
+    let capped = available_candidates
+        .min(configured)
+        .min(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT);
+    if capped < iroha_data_model::block::consensus_v2::MIN_VALIDATORS_PER_HEIGHT {
+        return None;
+    }
+    let committee_size = capped - (capped - 1) % 3;
+    iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
+        .then_some(committee_size)
+}
+
+fn npos_epoch_selection_seed(world: &impl WorldReadOnly, epoch: u64) -> [u8; 32] {
+    world.vrf_epochs().get(&epoch).map_or_else(
+        || {
+            world
+                .sumeragi_npos_parameters()
+                .map_or([0; 32], |params| params.epoch_seed)
+        },
+        |record| record.seed,
+    )
+}
+
+fn npos_peer_prf_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
+    let epoch_bytes = epoch.to_le_bytes();
+    let peer_bytes = peer.encode();
+    Hash::new_from_chunks(&[
+        b"sumeragi-v2:npos-committee-seat:v1\0",
+        seed.as_slice(),
+        epoch_bytes.as_slice(),
+        peer_bytes.as_slice(),
+    ])
+}
+
+fn select_prf_committee(
+    world: &impl WorldReadOnly,
+    epoch: u64,
+    mut candidates: Vec<PeerId>,
+) -> Option<Vec<PeerId>> {
+    candidates.sort();
+    candidates.dedup();
+    let committee_size = bounded_global_committee_size(world, candidates.len())?;
+    let seed = npos_epoch_selection_seed(world, epoch);
+    let mut scored = candidates
+        .into_iter()
+        .map(|peer| (npos_peer_prf_score(seed, epoch, &peer), peer))
+        .collect::<Vec<_>>();
+    scored.sort_by(|(left_score, left_peer), (right_score, right_peer)| {
+        left_score
+            .cmp(right_score)
+            .then_with(|| left_peer.cmp(right_peer))
+    });
+    scored.truncate(committee_size);
+    let mut committee = scored.into_iter().map(|(_, peer)| peer).collect::<Vec<_>>();
+    committee.sort();
+    Some(committee)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -14731,11 +15127,11 @@ where
                 Some(peer_id)
             })
             .collect();
-        if !ids.is_empty() {
-            return Some(ids);
+        if let Some(committee) = select_prf_committee(world, epoch, ids) {
+            return Some(committee);
         }
     }
-    let mut candidates: Vec<(PeerId, Quantity, AccountId)> = world
+    let mut candidates: Vec<PeerId> = world
         .public_lane_validators()
         .iter()
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
@@ -14769,31 +15165,15 @@ where
             if enforce_topology_membership && !topology_peers.contains(&pid) {
                 return None;
             }
-            Some((pid, record.total_stake.clone(), record.validator.clone()))
+            Some(pid)
         })
         .collect();
 
-    candidates.retain(|(pid, _, _)| peer_has_live_consensus_key(world, pid, block_height));
+    candidates.retain(|peer| peer_has_live_consensus_key(world, peer, block_height));
+    candidates.sort();
+    candidates.dedup();
 
-    // One peer may be registered on several active lanes. Canonicalize those
-    // rows before ranking so the peer occupies one roster slot and receives
-    // its maximum eligible stake. Equal-stake rows use the smallest account
-    // identity as a deterministic secondary ranking key.
-    let mut candidates_by_peer: BTreeMap<PeerId, (Quantity, AccountId)> = BTreeMap::new();
-    for (peer, stake, account) in candidates {
-        let should_replace =
-            candidates_by_peer
-                .get(&peer)
-                .is_none_or(|(current_stake, current_account)| {
-                    stake > *current_stake
-                        || (stake == *current_stake && account < *current_account)
-                });
-        if should_replace {
-            candidates_by_peer.insert(peer, (stake, account));
-        }
-    }
-
-    if candidates_by_peer.is_empty() {
+    if candidates.is_empty() {
         let peers: Vec<PeerId> = world
             .peers()
             .iter()
@@ -14801,29 +15181,10 @@ where
             .filter(|peer| !enforce_topology_membership || topology_peers.contains(peer))
             .cloned()
             .collect();
-        return if peers.is_empty() { None } else { Some(peers) };
+        return select_prf_committee(world, epoch, peers);
     }
 
-    let mut candidates: Vec<(PeerId, Quantity, AccountId)> = candidates_by_peer
-        .into_iter()
-        .map(|(peer, (stake, account))| (peer, stake, account))
-        .collect();
-    candidates.sort_by(|lhs, rhs| {
-        rhs.1
-            .cmp(&lhs.1)
-            .then_with(|| lhs.2.cmp(&rhs.2))
-            .then_with(|| lhs.0.cmp(&rhs.0))
-    });
-
-    let max = usize::try_from(nexus.staking.max_validators.get())
-        .unwrap_or(usize::MAX)
-        .min(candidates.len());
-    let peers: Vec<PeerId> = candidates
-        .into_iter()
-        .take(max)
-        .map(|(peer, _, _)| peer)
-        .collect();
-    if peers.is_empty() { None } else { Some(peers) }
+    select_prf_committee(world, epoch, candidates)
 }
 
 impl StakeSnapshot for StateView<'_> {
@@ -14888,6 +15249,35 @@ mod stake_snapshot_tests {
             by_pk.push(record.id.clone());
             world_block.consensus_keys_by_pk.insert(pk, by_pk);
         }
+    }
+
+    fn seed_active_public_lane_validator(
+        world_block: &mut WorldBlock<'_>,
+        keypair: &KeyPair,
+        lane_id: LaneId,
+        stake: u32,
+    ) -> PeerId {
+        let peer = PeerId::from(keypair.public_key().clone());
+        let validator = DMAccountId::of(keypair.public_key().clone());
+        let _ = world_block.peers.get_mut().push(peer.clone());
+        seed_consensus_key(world_block, &peer, ConsensusKeyStatus::Active, 0);
+        world_block.public_lane_validators.insert(
+            (lane_id, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id,
+                validator: validator.clone(),
+                peer_id: peer.clone(),
+                stake_account: validator,
+                total_stake: iroha_primitives::numeric::Quantity::from(stake),
+                self_stake: iroha_primitives::numeric::Quantity::from(stake),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        peer
     }
 
     #[test]
@@ -15623,37 +16013,23 @@ mod stake_snapshot_tests {
             nexus.lane_config = DerivedLaneConfig::from_catalog(&stale_geometry_catalog);
         }
 
-        let live_kp = crate::state::checked_keypair();
+        let live_keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let stale_kp = crate::state::checked_keypair();
-        let live_peer = PeerId::from(live_kp.public_key().clone());
         let stale_peer = PeerId::from(stale_kp.public_key().clone());
-        let live_validator = DMAccountId::of(live_kp.public_key().clone());
         let stale_validator = DMAccountId::of(stale_kp.public_key().clone());
 
         let mut wb = state.world.block();
-        {
-            let peers = wb.peers.get_mut();
-            let _ = peers.push(live_peer.clone());
-            let _ = peers.push(stale_peer.clone());
+        let mut live_peers = Vec::with_capacity(live_keypairs.len());
+        for keypair in &live_keypairs {
+            live_peers.push(seed_active_public_lane_validator(
+                &mut wb,
+                keypair,
+                LaneId::SINGLE,
+                10,
+            ));
         }
-        seed_consensus_key(&mut wb, &live_peer, ConsensusKeyStatus::Active, 0);
+        let _ = wb.peers.get_mut().push(stale_peer.clone());
         seed_consensus_key(&mut wb, &stale_peer, ConsensusKeyStatus::Active, 0);
-        wb.public_lane_validators.insert(
-            (LaneId::SINGLE, live_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: live_validator.clone(),
-                peer_id: live_peer.clone(),
-                stake_account: live_validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
         wb.public_lane_validators.insert(
             (stale_lane, stale_validator.clone()),
             PublicLaneValidatorRecord {
@@ -15675,9 +16051,9 @@ mod stake_snapshot_tests {
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        live_peers.sort();
         assert_eq!(
-            roster,
-            vec![live_peer],
+            roster, live_peers,
             "stale derived geometry must not let a removed catalog lane influence NPoS roster selection"
         );
         assert!(
@@ -15841,14 +16217,27 @@ mod stake_snapshot_tests {
     }
 
     #[test]
+    fn npos_committee_prf_score_binds_seed_epoch_and_peer() {
+        let first = PeerId::from(crate::state::checked_keypair().public_key().clone());
+        let second = PeerId::from(crate::state::checked_keypair().public_key().clone());
+        let seed = [0x5A; 32];
+        let score = npos_peer_prf_score(seed, 7, &first);
+
+        assert_eq!(score, npos_peer_prf_score(seed, 7, &first));
+        assert_ne!(score, npos_peer_prf_score([0xA5; 32], 7, &first));
+        assert_ne!(score, npos_peer_prf_score(seed, 8, &first));
+        assert_ne!(score, npos_peer_prf_score(seed, 7, &second));
+    }
+
+    #[test]
     fn council_members_map_to_peer_ids_in_epoch_roster() {
         // Build a minimal state with blank Kura/query
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
 
-        // Generate three peer keypairs and set them as world peers
-        let kp: Vec<KeyPair> = (0..3).map(|_| crate::state::checked_keypair()).collect();
+        // Generate one exact 3f+1 committee and set it as the world peers.
+        let kp: Vec<KeyPair> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
         let peers_vec: UniqueVec<PeerId> = {
             let mut uv = UniqueVec::new();
@@ -15862,15 +16251,18 @@ mod stake_snapshot_tests {
         for peer in peers {
             seed_consensus_key(&mut wb, &peer, ConsensusKeyStatus::Active, 0);
         }
-        // Build a council state with member accounts whose signatories match peers [1,0]
+        // Build a council state whose account signatories map to the same peers
+        // in a deliberately different order.
         let members = vec![
             DMAccountId::of(kp[1].public_key().clone()),
             DMAccountId::of(kp[0].public_key().clone()),
+            DMAccountId::of(kp[3].public_key().clone()),
+            DMAccountId::of(kp[2].public_key().clone()),
         ];
         let council = CouncilState {
             epoch: 0,
             members,
-            candidate_count: 3,
+            candidate_count: 4,
             ..CouncilState::default()
         };
         wb.council.insert(0, council);
@@ -15882,9 +16274,12 @@ mod stake_snapshot_tests {
         let fast = state
             .epoch_validator_peer_ids_fast(0)
             .expect("fast epoch roster should exist");
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0], PeerId::from(kp[1].public_key().clone()));
-        assert_eq!(out[1], PeerId::from(kp[0].public_key().clone()));
+        let mut expected: Vec<_> = kp
+            .iter()
+            .map(|keypair| PeerId::from(keypair.public_key().clone()))
+            .collect();
+        expected.sort();
+        assert_eq!(out, expected);
         assert_eq!(fast, out);
     }
 
@@ -15917,9 +16312,10 @@ mod stake_snapshot_tests {
         );
         world.commit();
 
-        let roster = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0)
-            .expect("single-key council member remains eligible");
-        assert_eq!(roster, vec![peer]);
+        assert!(
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0).is_none(),
+            "ignoring the multisig member leaves an underfilled committee"
+        );
     }
 
     #[test]
@@ -15933,29 +16329,33 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 1_u64.into();
         }
 
-        let old_account_key = crate::state::checked_keypair();
-        let new_account_key = crate::state::checked_keypair();
-        let old_peer_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let new_peer_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let old_account = DMAccountId::of(old_account_key.public_key().clone());
-        let new_account = DMAccountId::of(new_account_key.public_key().clone());
-        let old_peer = PeerId::from(old_peer_key.public_key().clone());
-        let new_peer = PeerId::from(new_peer_key.public_key().clone());
-        assert_ne!(old_peer.public_key(), old_account.expect_single_signatory());
-        assert_ne!(new_peer.public_key(), new_account.expect_single_signatory());
+        let account_keys: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
+        let peer_keys: Vec<_> = (0..4)
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let accounts: Vec<_> = account_keys
+            .iter()
+            .map(|keypair| DMAccountId::of(keypair.public_key().clone()))
+            .collect();
+        let peers: Vec<_> = peer_keys
+            .iter()
+            .map(|keypair| PeerId::from(keypair.public_key().clone()))
+            .collect();
+        for (account, peer) in accounts.iter().zip(&peers) {
+            assert_ne!(peer.public_key(), account.expect_single_signatory());
+        }
 
         let mut wb = state.world.block();
         {
-            let peers = wb.peers.get_mut();
-            let _ = peers.push(old_peer.clone());
-            let _ = peers.push(new_peer.clone());
+            let world_peers = wb.peers.get_mut();
+            for peer in &peers {
+                let _ = world_peers.push(peer.clone());
+            }
         }
-        seed_consensus_key(&mut wb, &old_peer, ConsensusKeyStatus::Active, 0);
-        seed_consensus_key(&mut wb, &new_peer, ConsensusKeyStatus::Active, 0);
-        for (account, peer) in [
-            (old_account.clone(), old_peer.clone()),
-            (new_account.clone(), new_peer.clone()),
-        ] {
+        for peer in &peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
+        for (account, peer) in accounts.iter().cloned().zip(peers.iter().cloned()) {
             wb.public_lane_validators.insert(
                 (LaneId::SINGLE, account.clone()),
                 PublicLaneValidatorRecord {
@@ -15977,8 +16377,8 @@ mod stake_snapshot_tests {
             0,
             CouncilState {
                 epoch: 0,
-                members: vec![old_account, new_account],
-                candidate_count: 2,
+                members: accounts,
+                candidate_count: 4,
                 ..CouncilState::default()
             },
         );
@@ -15986,16 +16386,17 @@ mod stake_snapshot_tests {
 
         {
             let mut topo_block = state.commit_topology.block();
-            topo_block.mutate_vec(|peers| *peers = vec![old_peer.clone()]);
+            topo_block.mutate_vec(|topology| *topology = vec![peers[0].clone()]);
             topo_block.commit();
         }
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        let mut expected = peers;
+        expected.sort();
         assert_eq!(
-            roster,
-            vec![old_peer, new_peer],
+            roster, expected,
             "the newly widened explicit peer binding must not be dropped from the council roster"
         );
     }
@@ -16012,6 +16413,8 @@ mod stake_snapshot_tests {
 
         let active_kp = crate::state::checked_keypair();
         let jailed_kp = crate::state::checked_keypair();
+        let extra_active_keypairs: Vec<_> =
+            (0..3).map(|_| crate::state::checked_keypair()).collect();
         let active_validator = DMAccountId::of(active_kp.public_key().clone());
         let jailed_validator = DMAccountId::of(jailed_kp.public_key().clone());
 
@@ -16057,12 +16460,16 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_active_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).unwrap();
-        assert_eq!(roster.len(), 1);
-        assert_eq!(roster[0], PeerId::from(active_kp.public_key().clone()));
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&PeerId::from(active_kp.public_key().clone())));
+        assert!(!roster.contains(&PeerId::from(jailed_kp.public_key().clone())));
     }
 
     #[test]
@@ -16077,6 +16484,8 @@ mod stake_snapshot_tests {
 
         let active_kp = crate::state::checked_keypair();
         let stale_kp = crate::state::checked_keypair();
+        let extra_active_keypairs: Vec<_> =
+            (0..3).map(|_| crate::state::checked_keypair()).collect();
         let active_validator = DMAccountId::of(active_kp.public_key().clone());
         let stale_validator = DMAccountId::of(stale_kp.public_key().clone());
         let active_peer = PeerId::from(active_kp.public_key().clone());
@@ -16123,12 +16532,16 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_active_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster, vec![active_peer]);
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&active_peer));
         assert!(
             !roster.contains(&stale_peer),
             "active validator records for lanes absent from active Nexus config must be ignored"
@@ -16147,6 +16560,8 @@ mod stake_snapshot_tests {
 
         let present_kp = crate::state::checked_keypair();
         let missing_kp = crate::state::checked_keypair();
+        let extra_present_keypairs: Vec<_> =
+            (0..3).map(|_| crate::state::checked_keypair()).collect();
         let present_validator = DMAccountId::of(present_kp.public_key().clone());
         let missing_validator = DMAccountId::of(missing_kp.public_key().clone());
 
@@ -16191,13 +16606,17 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_present_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster.len(), 1);
-        assert_eq!(roster[0], PeerId::from(present_kp.public_key().clone()));
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&PeerId::from(present_kp.public_key().clone())));
+        assert!(!roster.contains(&PeerId::from(missing_kp.public_key().clone())));
     }
 
     #[test]
@@ -16210,7 +16629,7 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 100_u64.into();
         }
 
-        let keypairs: Vec<KeyPair> = (0..3).map(|_| crate::state::checked_keypair()).collect();
+        let keypairs: Vec<KeyPair> = (0..4).map(|_| crate::state::checked_keypair()).collect();
 
         let mut wb = state.world.block();
         {
@@ -16291,7 +16710,7 @@ mod stake_snapshot_tests {
         }
 
         let public_keypairs: Vec<KeyPair> =
-            (0..2).map(|_| crate::state::checked_keypair()).collect();
+            (0..4).map(|_| crate::state::checked_keypair()).collect();
         let restricted_keypairs: Vec<KeyPair> =
             (0..2).map(|_| crate::state::checked_keypair()).collect();
 
@@ -16374,7 +16793,7 @@ mod stake_snapshot_tests {
     }
 
     #[test]
-    fn multi_lane_duplicate_peer_uses_maximum_stake_once() {
+    fn multi_lane_duplicate_peer_occupies_one_equal_vote_committee_seat() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
@@ -16399,11 +16818,12 @@ mod stake_snapshot_tests {
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
             nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.max_validators = NonZeroU32::new(3).expect("nonzero validator limit");
+            nexus.staking.max_validators = NonZeroU32::new(4).expect("nonzero validator limit");
         }
 
         let peer_a_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer_b_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let extra_peer_keys: Vec<_> = (0..2).map(|_| crate::state::checked_keypair()).collect();
         let peer_a = PeerId::from(peer_a_key.public_key().clone());
         let peer_b = PeerId::from(peer_b_key.public_key().clone());
         let account_a_high = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
@@ -16466,16 +16886,23 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        let extra_peers: Vec<_> = extra_peer_keys
+            .iter()
+            .map(|keypair| seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 3))
+            .collect();
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        assert_eq!(roster.len(), 4);
         assert_eq!(
-            roster,
-            vec![peer_a.clone(), peer_b.clone()],
-            "peer A must rank by its maximum stake and occupy exactly one roster slot"
+            roster.iter().filter(|peer| *peer == &peer_a).count(),
+            1,
+            "peer A must occupy exactly one roster slot despite being registered on two lanes"
         );
+        assert!(roster.contains(&peer_b));
+        assert!(extra_peers.iter().all(|peer| roster.contains(peer)));
 
         let active_lane_ids = BTreeSet::from([LaneId::SINGLE, secondary_lane]);
         let powers = crate::sumeragi::stake_snapshot::strict_v2_voting_roster(
@@ -16484,20 +16911,10 @@ mod stake_snapshot_tests {
             Some(&active_lane_ids),
         )
         .expect("strict voting powers");
-        assert_eq!(powers.len(), 2);
-        assert_eq!(
-            powers
-                .iter()
-                .find(|entry| entry.validator == peer_a)
-                .map(|entry| entry.power),
-            Some(10)
-        );
-        assert_eq!(
-            powers
-                .iter()
-                .find(|entry| entry.validator == peer_b)
-                .map(|entry| entry.power),
-            Some(5)
+        assert_eq!(powers.len(), 4);
+        assert!(
+            powers.iter().all(|entry| entry.power == 1),
+            "stake elects committee members but every selected validator has one consensus vote"
         );
     }
 
@@ -16513,6 +16930,7 @@ mod stake_snapshot_tests {
 
         let live_kp = crate::state::checked_keypair();
         let expired_kp = crate::state::checked_keypair();
+        let extra_live_keypairs: Vec<_> = (0..3).map(|_| crate::state::checked_keypair()).collect();
         let live_validator = DMAccountId::of(live_kp.public_key().clone());
         let expired_validator = DMAccountId::of(expired_kp.public_key().clone());
 
@@ -16575,13 +16993,17 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_live_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster.len(), 1);
-        assert_eq!(roster[0], live_peer);
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&live_peer));
+        assert!(!roster.contains(&expired_peer));
     }
 
     #[test]
@@ -16662,6 +17084,8 @@ mod stake_snapshot_tests {
 
         let stake_kp = crate::state::checked_keypair();
         let admin_kp = crate::state::checked_keypair();
+        let extra_stake_keypairs: Vec<_> =
+            (0..3).map(|_| crate::state::checked_keypair()).collect();
         let stake_validator = DMAccountId::of(stake_kp.public_key().clone());
         let admin_validator = DMAccountId::of(admin_kp.public_key().clone());
 
@@ -16708,12 +17132,17 @@ mod stake_snapshot_tests {
                 last_reward_epoch: None,
             },
         );
+        for keypair in &extra_stake_keypairs {
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
+        }
         wb.commit();
 
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster, vec![stake_peer]);
+        assert_eq!(roster.len(), 4);
+        assert!(roster.contains(&stake_peer));
+        assert!(!roster.contains(&admin_peer));
     }
 
     #[test]
@@ -16740,17 +17169,28 @@ mod stake_snapshot_tests {
 
         let kp_a = crate::state::checked_keypair();
         let kp_b = crate::state::checked_keypair();
+        let extra_keypairs: Vec<_> = (0..2).map(|_| crate::state::checked_keypair()).collect();
         let peer_a = PeerId::from(kp_a.public_key().clone());
         let peer_b = PeerId::from(kp_b.public_key().clone());
+        let extra_peers: Vec<_> = extra_keypairs
+            .iter()
+            .map(|keypair| PeerId::from(keypair.public_key().clone()))
+            .collect();
 
         let mut wb = state.world.block();
         {
             let peers = wb.peers.get_mut();
             let _ = peers.push(peer_a.clone());
             let _ = peers.push(peer_b.clone());
+            for peer in &extra_peers {
+                let _ = peers.push(peer.clone());
+            }
         }
         seed_consensus_key(&mut wb, &peer_a, ConsensusKeyStatus::Active, 0);
         seed_consensus_key(&mut wb, &peer_b, ConsensusKeyStatus::Active, 0);
+        for peer in &extra_peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
         // Stray validator entry should not affect admin-managed rosters.
         let validator_id = DMAccountId::of(kp_a.public_key().clone());
         wb.public_lane_validators.insert(
@@ -16774,7 +17214,10 @@ mod stake_snapshot_tests {
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
-        assert_eq!(roster, vec![peer_a, peer_b]);
+        let mut expected = vec![peer_a, peer_b];
+        expected.extend(extra_peers);
+        expected.sort();
+        assert_eq!(roster, expected);
     }
 
     #[test]
@@ -16784,7 +17227,7 @@ mod stake_snapshot_tests {
         let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
 
         let mut wb = state.world.block();
-        let keypairs: Vec<_> = (0..3).map(|_| crate::state::checked_keypair()).collect();
+        let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut peers_vec = UniqueVec::new();
         for kp in &keypairs {
             let _ = peers_vec.push(PeerId::from(kp.public_key().clone()));
@@ -16799,8 +17242,10 @@ mod stake_snapshot_tests {
         let sv = state.view();
         let roster =
             <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        let mut expected = peers;
+        expected.sort();
         assert_eq!(
-            roster, peers,
+            roster, expected,
             "genesis peers should populate the roster when no public-lane stake exists"
         );
     }
@@ -17856,7 +18301,7 @@ mod custom_parameter_tests {
     #[test]
     fn npos_parameters_reject_retired_fields_and_zero_seed() {
         let mut params = Parameters::default();
-        let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
+        let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":31,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
         let custom = iroha_data_model::parameter::CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -20715,6 +21160,7 @@ impl World {
             musubi_archive_availability: self.musubi_archive_availability.view(),
             musubi_archive_reverse_references: self.musubi_archive_reverse_references.view(),
             musubi_resolver_index: self.musubi_resolver_index.view(),
+            musubi_resolver_index_checkpoints: self.musubi_resolver_index_checkpoints.view(),
             musubi_public_directory: self.musubi_public_directory.view(),
             musubi_aliases: self.musubi_aliases.view(),
             musubi_alias_history: self.musubi_alias_history.view(),
@@ -21534,6 +21980,10 @@ pub trait WorldReadOnly {
     fn musubi_resolver_index(
         &self,
     ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>;
+    /// Historical block-final activation anchors for Musubi resolver-index revisions.
+    fn musubi_resolver_index_checkpoints(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>;
     /// Public ordered package directory.
     fn musubi_public_directory(
         &self,
@@ -23164,6 +23614,12 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiResolverReleaseRowV1> {
                 &self.musubi_resolver_index
             }
+            fn musubi_resolver_index_checkpoints(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>
+            {
+                &self.musubi_resolver_index_checkpoints
+            }
             fn musubi_public_directory(
                 &self,
             ) -> &impl StorageReadOnly<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1> {
@@ -24055,6 +24511,7 @@ impl<'world> WorldBlock<'world> {
             musubi_archive_availability,
             musubi_archive_reverse_references,
             musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
             musubi_public_directory,
             musubi_aliases,
             musubi_alias_history,
@@ -24202,6 +24659,7 @@ impl<'world> WorldBlock<'world> {
         musubi_archive_availability.commit();
         musubi_archive_reverse_references.commit();
         musubi_resolver_index.commit();
+        musubi_resolver_index_checkpoints.commit();
         musubi_public_directory.commit();
         musubi_aliases.commit();
         musubi_alias_history.commit();
@@ -25645,6 +26103,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             musubi_archive_availability,
             musubi_archive_reverse_references,
             musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
             musubi_public_directory,
             musubi_aliases,
             musubi_alias_history,
@@ -25804,6 +26263,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         musubi_archive_availability.apply();
         musubi_archive_reverse_references.apply();
         musubi_resolver_index.apply();
+        musubi_resolver_index_checkpoints.apply();
         musubi_public_directory.apply();
         musubi_aliases.apply();
         musubi_alias_history.apply();
@@ -31892,15 +32352,19 @@ impl State {
         block_proofs_for_entry_from_kura(&self.kura, block_height, entry_hash)
     }
 
-    /// Return whether an enabled, non-depleted time trigger needs ledger-clock progress.
+    /// Return whether an enabled, non-depleted time trigger remains reachable after
+    /// `parent_creation_time` and therefore needs ledger-clock progress.
     ///
     /// This avoids acquiring a full [`StateView`] on consensus hot paths that only need
     /// to decide whether an otherwise idle block is required for trigger scheduling.
     #[track_caller]
-    pub fn time_trigger_clock_progress_required_fast(&self) -> bool {
+    pub fn time_trigger_clock_progress_required_fast(
+        &self,
+        parent_creation_time: Duration,
+    ) -> bool {
         let world = self.world_view();
         world.triggers().time_triggers().iter().any(|(_, action)| {
-            !action.repeats.is_depleted() && trigger_is_enabled(action.metadata())
+            time_trigger_action_requires_clock_progress(action, parent_creation_time)
         })
     }
 
@@ -50929,7 +51393,6 @@ impl<'state> StateBlock<'state> {
             block_privacy_budget: &mut self.privacy_budget_in_block,
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
-            native_anonymous_escrow_transfer_depth: 0,
             active_trigger_execution_depth: 0,
             multisig_deferred_execution_stack: Vec::new(),
             implicit_account_creations_in_tx: 0,
@@ -52276,6 +52739,83 @@ impl<'state> StateBlock<'state> {
         )
     }
 
+    fn stage_musubi_resolver_index_checkpoint(
+        &mut self,
+        finalized_height: u64,
+        finalized_block_hash: HashOf<BlockHeader>,
+    ) {
+        let visible_height = u64::try_from(self.block_hashes.len())
+            .expect("Musubi finalized block height must fit u64");
+        assert_eq!(
+            visible_height, finalized_height,
+            "Musubi resolver checkpoint height must match the visible block-hash log"
+        );
+        assert_eq!(
+            self.block_hashes.last().copied(),
+            Some(finalized_block_hash),
+            "Musubi resolver checkpoint hash must match the canonical block-hash log"
+        );
+
+        let revision = *self.world.musubi_resolver_index_revision.get();
+        let has_future_checkpoint = self
+            .world
+            .musubi_resolver_index_checkpoints
+            .range((
+                std::ops::Bound::Excluded(revision),
+                std::ops::Bound::Unbounded,
+            ))
+            .next()
+            .is_some();
+        assert!(
+            !has_future_checkpoint,
+            "Musubi resolver checkpoint history cannot contain a future revision"
+        );
+        if let Some(existing) = self.world.musubi_resolver_index_checkpoints.get(&revision) {
+            assert_eq!(
+                existing.index_revision,
+                revision.get(),
+                "Musubi resolver checkpoint key must match its embedded revision"
+            );
+            assert!(
+                existing.finalized_height <= finalized_height,
+                "Musubi resolver checkpoint activation cannot be in the future"
+            );
+            if existing.finalized_height == finalized_height {
+                assert_eq!(
+                    existing.finalized_block_hash,
+                    *finalized_block_hash.as_ref(),
+                    "a resolver revision cannot activate at two blocks of the same height"
+                );
+            }
+            return;
+        }
+
+        let history_is_empty = self.world.musubi_resolver_index_checkpoints.is_empty();
+        if finalized_height == 1 {
+            assert!(
+                history_is_empty,
+                "Musubi resolver checkpoint history must have only one genesis activation"
+            );
+        } else {
+            assert!(
+                !history_is_empty,
+                "Musubi resolver checkpoint history must begin at genesis"
+            );
+        }
+
+        let checkpoint = MusubiRegistrySnapshotV1 {
+            finalized_height,
+            finalized_block_hash: *finalized_block_hash.as_ref(),
+            index_revision: revision.get(),
+        };
+        checkpoint
+            .validate()
+            .expect("block-final Musubi resolver checkpoint must be canonical");
+        self.world
+            .musubi_resolver_index_checkpoints
+            .insert(revision, checkpoint);
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::needless_pass_by_value)]
     #[iroha_logger::log(
@@ -52401,6 +52941,10 @@ impl<'state> StateBlock<'state> {
         }
 
         self.block_hashes.push(block_hash);
+        self.stage_musubi_resolver_index_checkpoint(
+            signed_block.header().height().get(),
+            block_hash,
+        );
         // A globally carried merge entry was staged before start-of-block
         // effects. Its metadata is already part of this overlay, while the
         // rolling State cache is intentionally published only after this
@@ -67530,6 +68074,7 @@ pub(crate) mod deserialize {
                     field: "state.block_hashes".to_owned(),
                     message: "committed height does not fit u64".to_owned(),
                 })?;
+            validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes_vec)?;
             world
                 .privacy_consensus_policy
                 .view()
@@ -68236,6 +68781,12 @@ pub(crate) mod deserialize {
         Ok(revision)
     }
 
+    fn take_musubi_resolver_index_checkpoints(
+        map: &mut json::native::Map,
+    ) -> Result<Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>, json::Error> {
+        take_required(map, "musubi_resolver_index_checkpoints")
+    }
+
     fn take_musubi_replication_shortfall_releases(
         map: &mut json::native::Map,
     ) -> Result<Cell<u64>, json::Error> {
@@ -68695,6 +69246,92 @@ pub(crate) mod deserialize {
         }
     }
 
+    fn validate_musubi_resolver_checkpoint_structure(
+        checkpoints: &Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
+        current_revision: u64,
+    ) -> Result<(), json::Error> {
+        let checkpoints = checkpoints.view();
+        let mut previous_height = None;
+        let mut latest_revision = None;
+        for (revision, checkpoint) in checkpoints.iter() {
+            checkpoint.validate().map_err(|error| {
+                invalid_musubi_state("musubi_resolver_index_checkpoints", error.to_string())
+            })?;
+            if revision.get() != checkpoint.index_revision {
+                return Err(invalid_musubi_state(
+                    "musubi_resolver_index_checkpoints",
+                    "resolver checkpoint key does not match its embedded revision",
+                ));
+            }
+            if previous_height.is_none() && checkpoint.finalized_height != 1 {
+                return Err(invalid_musubi_state(
+                    "musubi_resolver_index_checkpoints",
+                    "resolver checkpoint history must begin at genesis",
+                ));
+            }
+            if previous_height.is_some_and(|height| height >= checkpoint.finalized_height) {
+                return Err(invalid_musubi_state(
+                    "musubi_resolver_index_checkpoints",
+                    "resolver checkpoint activation heights must increase strictly",
+                ));
+            }
+            previous_height = Some(checkpoint.finalized_height);
+            latest_revision = Some(revision.get());
+        }
+        if latest_revision.is_some_and(|revision| revision != current_revision) {
+            return Err(invalid_musubi_state(
+                "musubi_resolver_index_checkpoints",
+                "latest resolver checkpoint does not match the current resolver-index revision",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_musubi_resolver_checkpoint_anchors(
+        world: &World,
+        block_hashes: &[HashOf<BlockHeader>],
+    ) -> Result<(), json::Error> {
+        let current_revision = world.musubi_resolver_index_revision.view().get().get();
+        validate_musubi_resolver_checkpoint_structure(
+            &world.musubi_resolver_index_checkpoints,
+            current_revision,
+        )?;
+
+        let checkpoints = world.musubi_resolver_index_checkpoints.view();
+        let history_is_empty = checkpoints.is_empty();
+        if block_hashes.is_empty() {
+            if !history_is_empty {
+                return Err(invalid_musubi_state(
+                    "musubi_resolver_index_checkpoints",
+                    "pregenesis state cannot contain resolver checkpoints",
+                ));
+            }
+            return Ok(());
+        }
+        if history_is_empty {
+            return Err(invalid_musubi_state(
+                "musubi_resolver_index_checkpoints",
+                "committed state must retain the genesis resolver checkpoint",
+            ));
+        }
+        for (_, checkpoint) in checkpoints.iter() {
+            let index = checkpoint
+                .finalized_height
+                .checked_sub(1)
+                .and_then(|index| usize::try_from(index).ok());
+            let canonical_hash = index
+                .and_then(|index| block_hashes.get(index))
+                .map(|hash| *hash.as_ref());
+            if canonical_hash != Some(checkpoint.finalized_block_hash) {
+                return Err(invalid_musubi_state(
+                    "musubi_resolver_index_checkpoints",
+                    "resolver checkpoint is not anchored to its canonical finalized block",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     struct MusubiPersistedState<'a> {
         namespace_bindings: &'a Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>,
         packages: &'a Storage<MusubiPackageIdV1, MusubiPackageRecordV1>,
@@ -68713,6 +69350,8 @@ pub(crate) mod deserialize {
         archive_availability: &'a Storage<ArchiveId, MusubiArchiveAvailabilityV1>,
         archive_reverse_references: &'a Storage<ArchiveId, MusubiArchiveReverseReferencesV1>,
         resolver_index: &'a Storage<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+        resolver_index_checkpoints:
+            &'a Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
         public_directory: &'a Storage<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
         aliases: &'a Storage<MusubiAliasNameV1, MusubiAliasRecordV1>,
         alias_history: &'a Storage<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
@@ -68737,6 +69376,10 @@ pub(crate) mod deserialize {
             let archive_availability = self.archive_availability.view();
             let archive_reverse_references = self.archive_reverse_references.view();
             let resolver_index = self.resolver_index.view();
+            validate_musubi_resolver_checkpoint_structure(
+                self.resolver_index_checkpoints,
+                self.resolver_index_revision,
+            )?;
             let public_directory = self.public_directory.view();
             let aliases = self.aliases.view();
             let alias_history = self.alias_history.view();
@@ -70079,6 +70722,7 @@ pub(crate) mod deserialize {
         let musubi_archive_reverse_references =
             take_required(&mut map, "musubi_archive_reverse_references")?;
         let musubi_resolver_index = take_required(&mut map, "musubi_resolver_index")?;
+        let musubi_resolver_index_checkpoints = take_musubi_resolver_index_checkpoints(&mut map)?;
         let musubi_public_directory = take_required(&mut map, "musubi_public_directory")?;
         let musubi_aliases = take_required(&mut map, "musubi_aliases")?;
         let musubi_alias_history = take_required(&mut map, "musubi_alias_history")?;
@@ -70328,6 +70972,7 @@ pub(crate) mod deserialize {
             musubi_archive_availability,
             musubi_archive_reverse_references,
             musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
             musubi_public_directory,
             musubi_aliases,
             musubi_alias_history,
@@ -70443,6 +71088,7 @@ pub(crate) mod deserialize {
             archive_availability: &world.musubi_archive_availability,
             archive_reverse_references: &world.musubi_archive_reverse_references,
             resolver_index: &world.musubi_resolver_index,
+            resolver_index_checkpoints: &world.musubi_resolver_index_checkpoints,
             public_directory: &world.musubi_public_directory,
             aliases: &world.musubi_aliases,
             alias_history: &world.musubi_alias_history,
@@ -71255,6 +71901,7 @@ pub(crate) mod deserialize {
                 archive_availability: &world.musubi_archive_availability,
                 archive_reverse_references: &world.musubi_archive_reverse_references,
                 resolver_index: &world.musubi_resolver_index,
+                resolver_index_checkpoints: &world.musubi_resolver_index_checkpoints,
                 public_directory: &world.musubi_public_directory,
                 aliases: &world.musubi_aliases,
                 alias_history: &world.musubi_alias_history,
@@ -72237,6 +72884,86 @@ pub(crate) mod deserialize {
                     .to_string()
                     .contains("musubi_replication_shortfall_releases"),
                 "unexpected missing-shortfall error: {error}"
+            );
+        }
+
+        #[test]
+        fn musubi_resolver_checkpoint_keys_use_canonical_nonzero_decimal() {
+            use mv::json::JsonKeyCodec;
+
+            let revision = MusubiResolverIndexRevisionV1::new(42).expect("revision forty-two");
+            let mut encoded = String::new();
+            revision.encode_json_key(&mut encoded);
+            assert_eq!(encoded, "\"42\"");
+            assert_eq!(
+                MusubiResolverIndexRevisionV1::decode_json_key("42")
+                    .expect("canonical revision key"),
+                revision
+            );
+            for invalid in ["0", "00", "01", "+1", " 1", "1 "] {
+                assert!(
+                    MusubiResolverIndexRevisionV1::decode_json_key(invalid).is_err(),
+                    "noncanonical revision key must fail: {invalid:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn musubi_resolver_checkpoints_are_required_and_canonically_anchored() {
+            let revision = MusubiResolverIndexRevisionV1::new(1).expect("revision one");
+            let checkpoint = MusubiRegistrySnapshotV1 {
+                finalized_height: 1,
+                finalized_block_hash: [0xA1; 32],
+                index_revision: 1,
+            };
+            let mut checkpoints = Storage::default();
+            checkpoints.insert(revision, checkpoint.clone());
+
+            let mut map = json::native::Map::new();
+            map.insert(
+                "musubi_resolver_index_checkpoints".to_owned(),
+                json::to_value(&checkpoints).expect("serialize resolver checkpoints"),
+            );
+            let decoded = take_musubi_resolver_index_checkpoints(&mut map)
+                .expect("checkpoint store is required and decodable");
+            validate_musubi_resolver_checkpoint_structure(&decoded, 1)
+                .expect("canonical sparse checkpoint structure");
+            assert!(
+                take_musubi_resolver_index_checkpoints(&mut json::native::Map::new()).is_err(),
+                "the clean schema must reject snapshots without checkpoint history"
+            );
+
+            let mut mismatched = Storage::default();
+            mismatched.insert(
+                MusubiResolverIndexRevisionV1::new(2).expect("revision two"),
+                checkpoint,
+            );
+            assert!(
+                validate_musubi_resolver_checkpoint_structure(&mismatched, 2).is_err(),
+                "checkpoint keys must match embedded revisions"
+            );
+
+            let mut world = World::default();
+            world.musubi_resolver_index_checkpoints = decoded;
+            let canonical_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0xA1; Hash::LENGTH],
+            ));
+            validate_musubi_resolver_checkpoint_anchors(
+                &world,
+                std::slice::from_ref(&canonical_hash),
+            )
+            .expect("checkpoint binds its canonical finalized block");
+
+            let fabricated_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0xB2; Hash::LENGTH],
+            ));
+            assert!(
+                validate_musubi_resolver_checkpoint_anchors(
+                    &world,
+                    std::slice::from_ref(&fabricated_hash)
+                )
+                .is_err(),
+                "a fabricated checkpoint tuple must fail restoration"
             );
         }
 

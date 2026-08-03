@@ -1519,7 +1519,9 @@ where
                         resolve,
                     )?;
                 }
-                MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => {}
+                MultisigInstructionBox::Register(_)
+                | MultisigInstructionBox::Cancel(_)
+                | MultisigInstructionBox::InvalidateOutstanding(_) => {}
             }
         }
 
@@ -3144,7 +3146,9 @@ fn native_instruction_ds_effect_disposition(
             MultisigInstructionBox::Approve(_) => {
                 NativeInstructionDsEffectDisposition::GuardedDeferredEffect
             }
-            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => {
+            MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_)
+            | MultisigInstructionBox::InvalidateOutstanding(_) => {
                 NativeInstructionDsEffectDisposition::AuditedNoDsEffect
             }
         };
@@ -3354,9 +3358,6 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::zk::RegisterZkAsset,
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
         iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
-        iroha_data_model::isi::zk::Shield,
-        iroha_data_model::isi::zk::ZkTransfer,
-        iroha_data_model::isi::zk::Unshield,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
         iroha_data_model::isi::governance::RecordCitizenServiceOutcome,

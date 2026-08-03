@@ -62,7 +62,7 @@ use super::{
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
         EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
-        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor,
+        PostFinalityCleanupTarget, V2EffectExecutor,
     },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
@@ -86,7 +86,7 @@ use super::{
     },
 };
 use crate::{
-    kura::Kura,
+    kura::{Kura, KuraV2CommitReceipt},
     merge_sidecar::{
         CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage, MergeSidecarLimits,
         MergeSigningGuardLimits,
@@ -746,6 +746,95 @@ impl Drop for LeaderWireIngressBinding {
     }
 }
 
+/// Joint per-height ownership of the fair-ingress durable gates.
+///
+/// Once both gates are live they must retire in one queue transaction: the
+/// Serve binding and leader-wire binding describe carriers in the same lanes.
+struct HeightIngressBindings {
+    certified_serve: CertifiedServeIngressBinding,
+    leader_wire: LeaderWireIngressBinding,
+}
+
+impl HeightIngressBindings {
+    fn new(
+        certified_serve: CertifiedServeIngressBinding,
+        leader_wire: LeaderWireIngressBinding,
+    ) -> Self {
+        Self {
+            certified_serve,
+            leader_wire,
+        }
+    }
+
+    fn retire(&mut self) -> Result<(), V2RunnerError> {
+        match (
+            self.certified_serve.gate.as_ref(),
+            self.leader_wire.gate.as_ref(),
+        ) {
+            (None, None) => return Ok(()),
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(V2RunnerError::Service(
+                    "per-height ingress gates changed joint ownership".to_owned(),
+                ));
+            }
+            (Some(_), Some(_)) => {}
+        }
+        if !Arc::ptr_eq(
+            &self.certified_serve.ingress_ready,
+            &self.leader_wire.ingress_ready,
+        ) || !Arc::ptr_eq(
+            &self.certified_serve.block_ingress,
+            &self.leader_wire.block_ingress,
+        ) {
+            return Err(V2RunnerError::Service(
+                "per-height ingress gates changed their shared queue".to_owned(),
+            ));
+        }
+
+        close_ingress_for_rollover(
+            &self.certified_serve.ingress_ready,
+            &self.certified_serve.block_ingress,
+        );
+        self.certified_serve
+            .block_ingress
+            .unbind_height_ingress_gates(
+                self.certified_serve
+                    .gate
+                    .as_ref()
+                    .expect("joint binding retains the certified Serve gate"),
+                self.leader_wire
+                    .gate
+                    .as_ref()
+                    .expect("joint binding retains the leader-wire gate"),
+            )
+            .map_err(V2RunnerError::Service)?;
+        self.certified_serve.gate = None;
+        self.leader_wire.gate = None;
+        Ok(())
+    }
+}
+
+impl Drop for HeightIngressBindings {
+    fn drop(&mut self) {
+        if let Err(error) = self.retire() {
+            // Joint validation failed before mutation. Keep the shared queue
+            // fail-closed and disarm the child guards: retrying their former
+            // split teardown would recreate the carrierless-Ingress cut this
+            // owner exists to prevent.
+            close_ingress_for_rollover(
+                &self.certified_serve.ingress_ready,
+                &self.certified_serve.block_ingress,
+            );
+            self.certified_serve.gate = None;
+            self.leader_wire.gate = None;
+            iroha_logger::error!(
+                %error,
+                "failed to atomically retire the per-height ingress gates"
+            );
+        }
+    }
+}
+
 struct V2StatusClearGuard {
     clear_on_drop: bool,
 }
@@ -959,7 +1048,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let retransmit_interval = Duration::from_millis(retransmit_interval_ms);
     validate_deadline_duration(round_timeout)?;
     validate_deadline_duration(retransmit_interval)?;
-    let post_finality_cleanup_timeout = round_timeout;
     let mut cleanup_supervisor = V2CleanupSupervisor::default();
     let mut pending_successor_activation = recovered_successor_activation
         .map(PendingSuccessorActivation::recovered)
@@ -1143,7 +1231,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         lifecycle_ordinals
             .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())
             .map_err(V2RunnerError::Service)?;
-        let mut leader_wire_ingress_binding = LeaderWireIngressBinding::bind(
+        let leader_wire_ingress_binding = LeaderWireIngressBinding::bind(
             Arc::clone(&ingress_ready),
             Arc::clone(&block_rx),
             Arc::clone(&leader_wire_gate),
@@ -1238,13 +1326,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             exact_output_service_owner,
         )
         .map_err(V2RunnerError::Service)?;
-        let mut certified_serve_ingress_binding = CertifiedServeIngressBinding::bind(
+        let certified_serve_ingress_binding = CertifiedServeIngressBinding::bind(
             Arc::clone(&ingress_ready),
             Arc::clone(&block_rx),
             services
                 .certified_serve_ingress_gate()
                 .map_err(V2RunnerError::Service)?,
         )?;
+        let mut height_ingress_bindings = HeightIngressBindings::new(
+            certified_serve_ingress_binding,
+            leader_wire_ingress_binding,
+        );
 
         // A Native receipt at the durable tip may have crossed its
         // finality/manifest/receipt boundary before WSV checkpoint and commit
@@ -1273,8 +1365,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     return Err(V2RunnerError::RestartRequired);
                 }
                 if shutdown_signal.is_sent() {
-                    certified_serve_ingress_binding.retire()?;
-                    leader_wire_ingress_binding.retire()?;
+                    height_ingress_bindings.retire()?;
                     services.allow_clean_shutdown();
                     return Ok(());
                 }
@@ -1334,7 +1425,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     context.clone(),
                     local_peer.clone(),
                     common_config.key_pair.clone(),
-                    local_validator.is_some(),
+                    config.role == NodeRole::Validator,
                     Arc::clone(&state),
                     Arc::clone(&kura),
                     lane_work_limits,
@@ -1437,8 +1528,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 return Err(V2RunnerError::RestartRequired);
             }
             if shutdown_signal.is_sent() {
-                certified_serve_ingress_binding.retire()?;
-                leader_wire_ingress_binding.retire()?;
+                height_ingress_bindings.retire()?;
                 services.allow_clean_shutdown();
                 return Ok(());
             }
@@ -1740,6 +1830,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
+                    let _ = service_historical_recovery_tick(&mut lane_work)?;
                     lane_work.service_next_native_participant_recovery_request()?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
@@ -1784,6 +1875,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
+                    let _ = service_historical_recovery_tick(&mut lane_work)?;
                     lane_work.service_next_native_participant_recovery_request()?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
@@ -1854,25 +1946,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
 
             committed_lane_status_publisher.publish_if_changed(&lane_work);
             if executor.ready_to_finish() {
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    &mut lane_work,
-                    &services,
-                    control_queue_capacity,
-                )?;
-                let historical_recovery = lane_work.service_next_historical_recovery()?;
-                if lane_work.has_pending_historical_recovery() {
-                    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-                    committed_lane_status_publisher.publish_if_changed(&lane_work);
-                    let retry_delay = match historical_recovery {
-                        HistoricalRecoveryServiceOutcome::Waiting(wait) => {
-                            wait.retry_delay(IDLE_POLL, retransmit_interval)
-                        }
-                        HistoricalRecoveryServiceOutcome::Idle
-                        | HistoricalRecoveryServiceOutcome::Complete(_) => IDLE_POLL,
-                    };
-                    let _ = wake_rx.recv_timeout(retry_delay);
-                    continue;
-                }
                 let (durable_receipt, durable_artifact) = executor
                     .durable_finality()
                     .map(|(receipt, artifact)| (receipt.clone(), artifact.clone()))
@@ -1882,93 +1955,32 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 .to_owned(),
                         )
                     })?;
-                let _ = lane_work
-                    .recover_decided_canonical_lane_body(&durable_receipt, &durable_artifact)?;
-                lane_work.persist_anchored_sessions()?;
-                let Some(durable_lane_authority) =
-                    lane_work.durable_lane_rollover_authority(&durable_artifact)?
-                else {
-                    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-                    committed_lane_status_publisher.publish_if_changed(&lane_work);
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
-                    continue;
-                };
-                certified_serve_ingress_binding.retire()?;
-                leader_wire_ingress_binding.retire()?;
-                lane_work.prune_finalized_merge_sidecars()?;
-                services
-                    .handoff_applied_height_output_to_durable_reconstruction(
-                        &durable_receipt,
-                        &durable_artifact,
-                        &durable_lane_authority,
-                    )
-                    .map_err(V2RunnerError::Service)?;
-                dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    &mut lane_work,
-                    &services,
-                    control_queue_capacity,
-                )?;
-                services
-                    .handoff_applied_height_output_to_durable_reconstruction(
-                        &durable_receipt,
-                        &durable_artifact,
-                        &durable_lane_authority,
-                    )
-                    .map_err(V2RunnerError::Service)?;
-                if lane_work.has_pending_committed_output_handoff() {
-                    committed_lane_status_publisher.publish_if_changed(&lane_work);
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
-                    continue;
-                }
-                if lane_work.effect_count() != 0 {
-                    committed_lane_status_publisher.publish_if_changed(&lane_work);
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
-                    continue;
-                }
-                if services
-                    .has_pending_exact_output()
-                    .map_err(V2RunnerError::Service)?
-                {
-                    return Err(V2RunnerError::Service(
-                        "applied-height output remained after durable reconstruction handoff"
-                            .to_owned(),
-                    ));
-                }
-                let exact_output_handoff = services
-                    .seal_applied_height_output_handoff(
-                        &durable_receipt,
-                        &durable_artifact,
-                        &durable_lane_authority,
-                    )
-                    .map_err(V2RunnerError::Service)?;
+                height_ingress_bindings.retire()?;
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
                 let wal_retirement = output_guard
                     .begin_fail_stop_operation()
                     .ok_or(V2RunnerError::RestartRequired)?;
                 let finalized = runtime.into_driver().finish_height(&receipt, &artifact)?;
                 wal_retirement.complete();
-                let mut cleanup = PostFinalityCleanupOutcome::default();
                 if let Some(warning) = finalized.wal_retirement_warning() {
-                    cleanup.record(PostFinalityCleanupTarget::SafetyWal, warning);
-                }
-                cleanup.append(services.finish_height(
-                    receipt.clone(),
-                    post_finality_cleanup_timeout,
-                    &mut cleanup_supervisor,
-                ));
-                for warning in cleanup.warnings() {
                     iroha_logger::warn!(
                         height = receipt.height(),
                         context_id = ?receipt.context_id(),
                         block_hash = %receipt.block_hash(),
-                        cleanup_target = warning.target().as_str(),
-                        reason = warning.reason(),
+                        cleanup_target = PostFinalityCleanupTarget::SafetyWal.as_str(),
+                        reason = warning,
                         "Sumeragi v2 finalized with retained local cleanup state"
                     );
                 }
                 committed_lane_status_publisher.publish_if_changed(&lane_work);
-                break (receipt, artifact, exact_output_handoff);
+                debug_assert_eq!(durable_receipt.height(), receipt.height());
+                debug_assert_eq!(durable_receipt.context_id(), receipt.context_id());
+                debug_assert_eq!(durable_receipt.block_hash(), receipt.block_hash());
+                debug_assert_eq!(durable_receipt.subject(), receipt.subject());
+                debug_assert_eq!(durable_receipt.certificate(), receipt.certificate());
+                debug_assert_eq!(durable_receipt.artifact_hash(), receipt.artifact_hash());
+                debug_assert_eq!(durable_artifact, artifact);
+                break (receipt, artifact, lane_work, services);
             }
 
             if recovering_interrupted_tip {
@@ -2007,7 +2019,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             let _ = wake_rx.recv_timeout(IDLE_POLL);
         };
 
-        let (receipt, artifact, exact_output_handoff) = finality;
+        let (receipt, artifact, lane_work, mut finalized_services) = finality;
         eager_block_sync =
             retain_eager_block_sync(recovering_interrupted_tip, admitted_discovered_commit_qc);
         let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?;
@@ -2049,11 +2061,31 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             build_verified_successor(state.as_ref(), &context_store, &artifact, &receipt)?;
         successor_construction.complete();
         let (next_verified_context, successor_authority) = successor.into_parts();
-        retained_merge_sidecars = Some(lane_work.into_retained_merge_sidecars(
-            exact_output_handoff,
+        let next_context = next_verified_context.context().clone();
+        retained_merge_sidecars = Some(rollover_finalized_height_outputs(
+            lane_work,
+            &finalized_services,
+            &receipt,
             &artifact,
-            next_verified_context.context(),
+            &next_context,
+            control_queue_capacity,
         )?);
+        finalized_services.allow_clean_shutdown();
+        let cleanup = finalized_services.finish_height(
+            receipt.clone(),
+            Duration::ZERO,
+            &mut cleanup_supervisor,
+        );
+        for warning in cleanup.warnings() {
+            iroha_logger::warn!(
+                height = receipt.height(),
+                context_id = ?receipt.context_id(),
+                block_hash = %receipt.block_hash(),
+                cleanup_target = warning.target().as_str(),
+                reason = warning.reason(),
+                "Sumeragi v2 finalized with retained local cleanup state"
+            );
+        }
         pending_successor_activation = Some(activation.bind(successor_authority)?);
         verified_context = next_verified_context;
         signature_policy = BlockSignaturePolicy::RotatingLeader;
@@ -2144,6 +2176,24 @@ fn locked_body_recovery_plan(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LocalConsensusDuties {
+    autonomous_lane_view: Option<wire::View>,
+    global_validator: Option<wire::ValidatorIndex>,
+}
+
+fn local_consensus_duties(
+    directive: LocalProposalDirective,
+    global_validator: Option<wire::ValidatorIndex>,
+) -> LocalConsensusDuties {
+    LocalConsensusDuties {
+        autonomous_lane_view: (directive.decided_subject().is_none()
+            && directive.locked_body().is_none())
+        .then_some(directive.tag().view()),
+        global_validator,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn schedule_local_proposal(
     candidate_limits: CandidateLimits,
@@ -2164,10 +2214,18 @@ fn schedule_local_proposal(
     npos_vrf: &V2NposVrfLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
-    let Some(local_validator) = local_validator else {
+    let directive = executor.local_proposal_directive()?;
+    let duties = local_consensus_duties(directive, local_validator);
+    // Lane authority is frozen independently from the successor global
+    // roster. A configured validator removed from that roster must still
+    // produce a lane payload when the exact current lane descriptor selects
+    // it as author. The adapter rechecks voting role, route, and slot author.
+    if let Some(active_view) = duties.autonomous_lane_view {
+        lane_work.schedule_autonomous_lane_production(active_view, candidate_limits)?;
+    }
+    let Some(local_validator) = duties.global_validator else {
         return Ok(());
     };
-    let directive = executor.local_proposal_directive()?;
     let owner = proposal_state.reconcile(LocalProposalOwner::from(directive));
     let recovery_plan = locked_body_recovery_plan(
         directive,
@@ -2261,12 +2319,6 @@ fn schedule_local_proposal(
     }
     if directive.decided_subject().is_some() {
         return Ok(());
-    }
-    // Every validator drives its independently selected lane-author slots.
-    // Once a global lock exists, this height instead waits for the exact
-    // immutable body so its current leader can re-propose it unchanged.
-    if directive.locked_body().is_none() {
-        lane_work.schedule_autonomous_lane_production(directive.tag().view(), candidate_limits)?;
     }
     if directive.leader() != local_validator
         || proposal_state.attempted == Some(owner)
@@ -4130,7 +4182,12 @@ fn local_validator_index(
     match (role, index) {
         (NodeRole::Observer, _) => Ok(None),
         (NodeRole::Validator, Some(index)) => Ok(Some(index)),
-        (NodeRole::Validator, None) => Err(V2RunnerError::ValidatorAbsent),
+        // Roster changes are authenticated height transitions, not process
+        // role changes. A configured validator absent from this height runs
+        // the global protocol as an observer while retaining authority to
+        // serve any independently frozen lane descriptor that still names
+        // its key, including unfinished predecessor work.
+        (NodeRole::Validator, None) => Ok(None),
     }
 }
 
@@ -4317,8 +4374,15 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
+    let parent_creation_time = match parent {
+        CandidateParent::Block(parent) => parent.header().creation_time(),
+        CandidateParent::Snapshot(anchor) => {
+            Duration::from_millis(anchor.snapshot_block_creation_time_ms)
+        }
+    };
     Ok(CandidateAttachments {
-        time_trigger_clock_progress_required: state.time_trigger_clock_progress_required_fast(),
+        time_trigger_clock_progress_required: state
+            .time_trigger_clock_progress_required_fast(parent_creation_time),
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()
@@ -4413,6 +4477,93 @@ fn retry_exact_output_and_apply_sidecar_admissions(
         .map_err(V2RunnerError::Service)?;
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     Ok(pending)
+}
+
+fn rollover_finalized_height_outputs(
+    mut lane_work: V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+    receipt: &KuraV2CommitReceipt,
+    artifact: &wire::finality::V2FinalityArtifact,
+    successor: &wire::HeightContext,
+    control_queue_capacity: usize,
+) -> Result<RetainedMergeSidecars, V2RunnerError> {
+    // Finality makes every current-height global/lane output either
+    // Kura-reconstructible or explicitly superseded. Move those owners across
+    // one local durable boundary before the successor opens the merge journal;
+    // no predecessor thread survives this function.
+    let _ = retry_exact_output_and_apply_sidecar_admissions(
+        &mut lane_work,
+        services,
+        control_queue_capacity,
+    )?;
+    let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
+    lane_work.persist_anchored_sessions()?;
+    lane_work.prepare_canonical_lane_rollover(artifact)?;
+    let durable_lane_authority = lane_work
+        .durable_lane_rollover_authority(artifact)?
+        .ok_or_else(|| {
+            V2RunnerError::Service(
+                "finalized lane output has not crossed its local durable reconstruction boundary"
+                    .to_owned(),
+            )
+        })?;
+    lane_work.prune_finalized_merge_sidecars()?;
+    lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;
+
+    loop {
+        apply_certified_merge_sidecar_closed_prefixes(&mut lane_work, services)?;
+        apply_certified_merge_sidecar_chunk_admissions(
+            &mut lane_work,
+            services,
+            control_queue_capacity,
+        )?;
+        let retired = services
+            .handoff_applied_height_output_to_durable_reconstruction(
+                receipt,
+                artifact,
+                &durable_lane_authority,
+            )
+            .map_err(V2RunnerError::Service)?;
+        apply_certified_merge_sidecar_chunk_admissions(
+            &mut lane_work,
+            services,
+            control_queue_capacity,
+        )?;
+        if !services
+            .has_pending_exact_output()
+            .map_err(V2RunnerError::Service)?
+        {
+            break;
+        }
+        if retired == 0 {
+            return Err(V2RunnerError::Service(
+                "finalized exact output has no durable or move-only successor source".to_owned(),
+            ));
+        }
+    }
+
+    let _ = services
+        .handoff_applied_height_output_to_durable_reconstruction(
+            receipt,
+            artifact,
+            &durable_lane_authority,
+        )
+        .map_err(V2RunnerError::Service)?;
+    if lane_work.has_pending_committed_output_handoff()
+        || services
+            .has_pending_exact_output()
+            .map_err(V2RunnerError::Service)?
+    {
+        return Err(V2RunnerError::Service(
+            "finalized output remained owned after durable handoff".to_owned(),
+        ));
+    }
+    let exact_output_handoff = services
+        .seal_applied_height_output_handoff(receipt, artifact, &durable_lane_authority)
+        .map_err(V2RunnerError::Service)?;
+    lane_work
+        .into_retained_merge_sidecars(exact_output_handoff, artifact, successor)
+        .map_err(V2RunnerError::from)
 }
 
 fn apply_certified_merge_sidecar_closed_prefixes(
@@ -4786,6 +4937,16 @@ fn drain_lane_relay_ingress(
     Ok(())
 }
 
+/// Advance one retained historical lane owner on the ordinary retransmission
+/// cadence, even when no lane or relay ingress arrives to trigger recovery.
+fn service_historical_recovery_tick(
+    lane_work: &mut V2LaneWorkAdapter,
+) -> Result<HistoricalRecoveryServiceOutcome, V2RunnerError> {
+    lane_work
+        .service_next_historical_recovery()
+        .map_err(V2RunnerError::from)
+}
+
 /// Fail-closed live-runner error.
 #[derive(Debug, Error)]
 pub(super) enum V2RunnerError {
@@ -4844,9 +5005,6 @@ pub(super) enum V2RunnerError {
     /// Production service failed.
     #[error("Sumeragi v2 production service failed: {0}")]
     Service(String),
-    /// Local validator role is absent from the frozen voting roster.
-    #[error("Sumeragi v2 node is configured as validator but absent from the frozen roster")]
-    ValidatorAbsent,
     /// Fresh genesis leader no longer has the signed genesis body.
     #[error("Sumeragi v2 height one is missing its signed genesis body")]
     MissingGenesisBody,
@@ -5126,6 +5284,27 @@ mod tests {
     }
 
     #[test]
+    fn quiet_retransmission_tick_services_one_retained_historical_session() {
+        let mut lane_work = super::super::v2_lane_work::tests::quiet_historical_recovery_fixture();
+        assert!(lane_work.has_pending_historical_recovery());
+
+        let outcome = service_historical_recovery_tick(&mut lane_work)
+            .expect("quiet retransmission tick advances retained history");
+        let HistoricalRecoveryServiceOutcome::Waiting(wait) = outcome else {
+            panic!("missing canonical body must remain a typed quiet-network retry: {outcome:?}");
+        };
+        assert_eq!(
+            wait.reason(),
+            super::super::v2_lane_work::HistoricalRecoveryWaitReason::CanonicalBlockPending
+        );
+        assert!(wait.first_observation());
+        assert!(
+            lane_work.has_pending_historical_recovery(),
+            "one bounded wait turn must retain the exact historical owner"
+        );
+    }
+
+    #[test]
     fn empty_drain_after_peek_is_restart_required_without_panicking() {
         assert!(matches!(
             require_peeked_lane_work_effect(None),
@@ -5164,12 +5343,12 @@ mod tests {
                 nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::Plain,
+                    encoding: wire::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0x42; 32],
             },
@@ -5682,14 +5861,10 @@ mod tests {
             )),
             payload_hash: Hash::new(&body),
         };
-        let manifest = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject,
-            u64::try_from(body.len()).expect("small runner fixture body"),
-            std::slice::from_ref(&body),
-        )
-        .expect("runner leader-wire fixture manifest");
+        let manifest = encode_payload(&context, round, subject, &body)
+            .expect("encode runner leader-wire fixture payload")
+            .manifest()
+            .clone();
         let proposer = context.leader(round.view);
         let mut proposal = wire::Proposal {
             round,
@@ -7344,14 +7519,23 @@ mod tests {
     }
 
     #[test]
-    fn explicit_observer_never_votes_even_when_present_in_roster() {
+    fn global_voting_role_tracks_each_frozen_roster_without_losing_validator_processes() {
         let (context, keys) = context();
         let peer = PeerId::new(keys[0].public_key().clone());
         assert_eq!(
             local_validator_index(&context, &peer, NodeRole::Observer).expect("observer"),
             None
         );
-        assert!(
+        assert_eq!(
+            local_validator_index(&context, &peer, NodeRole::Validator)
+                .expect("roster member remains a global validator"),
+            context
+                .roster
+                .iter()
+                .position(|entry| entry.validator == peer)
+                .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
+        );
+        assert_eq!(
             local_validator_index(
                 &context,
                 &PeerId::new(
@@ -7362,7 +7546,8 @@ mod tests {
                 ),
                 NodeRole::Validator
             )
-            .is_err()
+            .expect("a removed validator continues as a global observer"),
+            None
         );
     }
 
@@ -7546,6 +7731,55 @@ mod tests {
                 request: None,
                 may_repropose: false,
             }
+        );
+    }
+
+    #[test]
+    fn lane_production_duty_survives_successor_global_roster_removal() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 4, Generation::new(23));
+        let directive =
+            LocalProposalDirective::for_test(tag, context.leader(tag.view()), None, None, None);
+
+        assert_eq!(
+            local_consensus_duties(directive, None),
+            LocalConsensusDuties {
+                autonomous_lane_view: Some(tag.view()),
+                global_validator: None,
+            },
+            "successor-global observer status must not suppress independently frozen lane-author work"
+        );
+
+        let subject = proposal_subject(b"lane production duty lock");
+        let locked_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 2,
+        };
+        let locked = LocalProposalDirective::for_test(
+            tag,
+            context.leader(tag.view()),
+            Some(locked_round),
+            Some(subject),
+            None,
+        );
+        assert_eq!(
+            local_consensus_duties(locked, None).autonomous_lane_view,
+            None,
+            "a global lock still suppresses fresh lane payload production"
+        );
+
+        let decided = LocalProposalDirective::for_test(
+            tag,
+            context.leader(tag.view()),
+            None,
+            None,
+            Some(subject),
+        );
+        assert_eq!(
+            local_consensus_duties(decided, None).autonomous_lane_view,
+            None,
+            "a terminal global decision retires fresh lane payload production"
         );
     }
 
@@ -7917,14 +8151,16 @@ mod tests {
             height: context.height,
             view: tag.view(),
         };
+        let body = b"replayed proposal payload";
         let subject = wire::BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replayed proposal block")),
-            payload_hash: Hash::new(b"replayed proposal payload"),
+            payload_hash: Hash::new(body),
         };
-        let manifest =
-            wire::PayloadManifest::derive(&context, round, subject, 5, &[b"chunk".to_vec()])
-                .expect("fixture manifest");
+        let manifest = encode_payload(&context, round, subject, body)
+            .expect("encode replayed proposal fixture payload")
+            .manifest()
+            .clone();
         let proposal = wire::Proposal {
             round,
             proposer: context.leader(round.view),
@@ -8079,14 +8315,10 @@ mod tests {
         );
         assert!(v2_payload_is_terminal_reducer_control(&response));
 
-        let manifest = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject,
-            u64::try_from(body.len()).expect("fixture body length fits u64"),
-            std::slice::from_ref(&body),
-        )
-        .expect("terminal body manifest");
+        let manifest = encode_payload(&context, round, subject, &body)
+            .expect("encode terminal body fixture payload")
+            .manifest()
+            .clone();
         assert!(!v2_payload_is_terminal_reducer_control(
             &wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
         ));

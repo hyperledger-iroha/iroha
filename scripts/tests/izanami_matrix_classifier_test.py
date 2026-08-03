@@ -129,7 +129,7 @@ def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Pat
         "final_quorum_min_height=Some(1) final_strict_min_height=Some(1) "
         "final_max_peer_height_skew=Some(0) "
         "sumeragi_status_delta=Some(SumeragiStatusDigest { "
-        "protocol_version: 3, height: 2, view: 5, phase: \"Prepare\", "
+        "protocol_version: 4, height: 2, view: 5, phase: \"Prepare\", "
         "body_state: \"Missing\", last_committed_height: 1, "
         "committed_height_advance: 0, mode: \"Permissioned\", epoch: 0, "
         "epoch_end_height: 100, validator_count: 4, min_signers: 3, "
@@ -185,7 +185,7 @@ def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Pat
     assert "status=driver-saturated" in evidence
     assert "driver-saturated,consensus-stalled,overload-admission" in evidence
     assert "\tbusy-deferral\t" in evidence
-    assert row[header.index("protocol_version")] == "3"
+    assert row[header.index("protocol_version")] == "4"
     assert row[header.index("commit_qc_present")] == "true"
     assert row[header.index("tx_queue_saturated_by_bytes")] == "true"
     assert "view_change_cause_total" not in header

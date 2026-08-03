@@ -77,7 +77,7 @@ use error_stack::{Report, ResultExt};
 use eyre::Result as EyreResult;
 use fastpq_prover::MetalOverrides;
 use iroha_config::{
-    base::{WithOrigin, read::ConfigReader, util::Emitter},
+    base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Emitter},
     parameters::{
         actual::{
             FastpqExecutionMode, FastpqPoseidonMode, NexusStorageBudgetComponent,
@@ -1201,6 +1201,13 @@ pub struct StartupArgs {
     /// Might be useful for configuration troubleshooting.
     #[arg(long, env)]
     pub trace_config: bool,
+    /// Require the configuration file bytes to match this lowercase or uppercase
+    /// 64-digit BLAKE3 digest.
+    ///
+    /// Integrity-bound files are parsed from the exact bytes that were hashed
+    /// and must be flattened (the `extends` directive is not accepted).
+    #[arg(long, value_name = "HEX", requires = "config")]
+    pub config_blake3: Option<String>,
 }
 
 /// Complete command-line arguments for the Iroha server.
@@ -1658,7 +1665,7 @@ impl IrohaRuntimeDeps {
         self
     }
 
-    /// Attach the production Kubo/IPFS/IPNS request authenticator for the
+    /// Attach the production Kubo/IPFS request authenticator for the
     /// supervised Governance DAG service.
     #[must_use]
     pub fn with_sorafs_governance_dag_ipfs_authenticator(
@@ -9913,6 +9920,10 @@ impl Iroha {
             require_sm_handshake_match: config.network.require_sm_handshake_match,
             require_sm_openssl_preview_match: config.network.require_sm_openssl_preview_match,
         };
+        let configured_validator_dial_roster: BTreeSet<_> =
+            filter_validators_from_trusted(config.common.trusted_peers.value())
+                .into_iter()
+                .collect();
         let initial_trusted_sources = config
             .common
             .trusted_peers
@@ -9921,14 +9932,21 @@ impl Iroha {
             .iter()
             .map(|peer| peer.id().clone())
             .collect();
-        let (network, child) = IrohaNetwork::start_with_crypto_and_initial_trusted_sources(
+        let p2p_identity_keys = iroha_p2p::P2pIdentityKeys::new(
             config.common.key_pair.clone(),
+            config.common.soranet_transport_key_pair.clone(),
+        )
+        .attach_with(|| config.network.address.clone().into_attachment())
+        .change_context(StartError::StartP2p)?;
+        let (network, child) = IrohaNetwork::start_with_crypto_and_initial_authorities(
+            p2p_identity_keys,
             config.network.clone(),
             config.common.chain.clone(),
             Some(consensus_caps.clone()),
             Some(confidential_caps),
             Some(crypto_caps),
             initial_trusted_sources,
+            configured_validator_dial_roster.iter().cloned().collect(),
             supervisor.shutdown_signal(),
         )
         .await
@@ -10348,6 +10366,7 @@ impl Iroha {
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
             config.common.trusted_peers.value().clone(),
+            configured_validator_dial_roster,
             config.common.key_pair.clone(),
             config.network.peer_gossip_period,
             config.network.peer_gossip_max_period,
@@ -10904,7 +10923,7 @@ impl Iroha {
             } else {
                 sorafs_runtime_deps
             };
-        let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
+        let mut sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
             sorafs_storage_config,
             sorafs_repair_config,
             sorafs_gc_config,
@@ -10921,6 +10940,13 @@ impl Iroha {
                 .map_err(|error| {
                     Report::new(StartError::StartTorii).attach(format!(
                         "failed to prepare the supervised Governance DAG service: {error}"
+                    ))
+                })?;
+            sorafs_node
+                .install_governance_dag_mirror_read_handle(runner.mirror_read_handle())
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to install the supervised Governance DAG mirror reader: {error}"
                     ))
                 })?;
             let service_shutdown = supervisor.shutdown_signal();
@@ -12597,9 +12623,50 @@ pub fn read_config_and_genesis(
     let mut config = ConfigReader::new();
 
     if let Some(path) = &args.config {
-        config = config
-            .read_toml_with_extends(path)
-            .change_context(ConfigError::ReadConfig)?;
+        config = if let Some(expected) = args.startup.config_blake3.as_deref() {
+            if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(Report::new(ConfigError::ReadConfig)
+                    .attach("`--config-blake3` must contain exactly 64 hexadecimal digits"));
+            }
+            let raw = fs::read(path)
+                .change_context(ConfigError::ReadConfig)
+                .attach_with(|| {
+                    format!(
+                        "failed to read integrity-bound configuration {}",
+                        path.display()
+                    )
+                })?;
+            let observed = blake3::hash(&raw).to_hex().to_string();
+            if !expected.eq_ignore_ascii_case(&observed) {
+                return Err(Report::new(ConfigError::ReadConfig).attach(format!(
+                    "integrity-bound configuration {} has BLAKE3 {observed}, expected {expected}",
+                    path.display()
+                )));
+            }
+            let raw = std::str::from_utf8(&raw).map_err(|error| {
+                Report::new(ConfigError::ReadConfig).attach(format!(
+                    "integrity-bound configuration {} is not UTF-8: {error}",
+                    path.display()
+                ))
+            })?;
+            let table = raw.parse::<toml::Table>().map_err(|error| {
+                Report::new(ConfigError::ReadConfig).attach(format!(
+                    "failed to parse integrity-bound configuration {}: {error}",
+                    path.display()
+                ))
+            })?;
+            if table.contains_key("extends") {
+                return Err(Report::new(ConfigError::ReadConfig).attach(format!(
+                    "integrity-bound configuration {} must be flattened and cannot use `extends`",
+                    path.display()
+                )));
+            }
+            config.with_toml_source(TomlSource::new(path.clone(), table))
+        } else {
+            config
+                .read_toml_with_extends(path)
+                .change_context(ConfigError::ReadConfig)?
+        };
     }
 
     let sorafs_storage_enabled_is_explicit =
@@ -12610,6 +12677,9 @@ pub fn read_config_and_genesis(
         .change_context(ConfigError::ReadConfig)?
         .parse()
         .change_context(ConfigError::ParseConfig)?;
+    if let Some(path) = args.genesis_manifest_json.as_ref() {
+        config.genesis.manifest_json = Some(WithOrigin::inline(path.clone()));
+    }
 
     if args.sora {
         let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
@@ -17990,12 +18060,39 @@ mod tests {
         let supervisor = compact_source
             .find("sorafs_node::prepare_governance_dag_service_from_view(view,providers)")
             .expect("launcher prepares the Governance DAG service");
+        let install = compact_source
+            .find("sorafs_node.install_governance_dag_mirror_read_handle(runner.mirror_read_handle())")
+            .expect("launcher installs the service-owned Governance DAG mirror reader");
+        let service_spawn = compact_source[install..]
+            .find("tokio::spawn(asyncmove")
+            .map(|offset| install + offset)
+            .expect("launcher spawns the prepared Governance DAG service");
+        let node_construction = compact_source
+            .find(
+                "letmutsorafs_node=sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(",
+            )
+            .expect("launcher constructs the embedded SoraFS node");
+        let first_node_clone = compact_source[node_construction..]
+            .find("sorafs_node.clone()")
+            .map(|offset| node_construction + offset)
+            .expect("launcher eventually shares the embedded SoraFS node");
         let state_open = compact_source
             .find("Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(")
             .expect("launcher contains the persistent-state startup corridor");
         assert!(
-            qualification < state_open && state_open < supervisor,
-            "provider and publisher qualification must precede state access, while service preparation remains a startup-fatal step"
+            qualification < state_open
+                && state_open < supervisor
+                && supervisor < install
+                && install < service_spawn
+                && install < first_node_clone,
+            "provider qualification, state opening, service preparation, mirror-reader installation, service spawn, and first node sharing must retain their startup-fatal order"
+        );
+        assert_eq!(
+            compact_source[node_construction..first_node_clone]
+                .matches("install_governance_dag_mirror_read_handle(")
+                .count(),
+            1,
+            "the service-owned mirror reader must be installed exactly once"
         );
         assert!(
             compact_source
@@ -21172,6 +21269,7 @@ mod tests {
                     check_config: false,
                     write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
+                    config_blake3: None,
                 },
                 terminal_colors: false,
                 language: None,
@@ -21217,6 +21315,14 @@ mod tests {
                 // the redacted placeholder provided by `PrivateKey::Display`.
                 .write("private_key", ExposedPrivateKey(privkey).to_string())
                 .write(
+                    "soranet_transport_public_key",
+                    "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B",
+                )
+                .write(
+                    "soranet_transport_private_key",
+                    "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89",
+                )
+                .write(
                     ["network", "address"],
                     socket_addr!(127.0.0.1:1337).to_literal(),
                 )
@@ -21250,6 +21356,80 @@ mod tests {
                 toml::Value::Array(vec![toml::Value::Table(pop_entry)]),
             );
             table
+        }
+
+        fn config_test_args(
+            config_path: PathBuf,
+            genesis_manifest_json: Option<PathBuf>,
+        ) -> Args {
+            Args {
+                config: Some(config_path),
+                genesis_manifest_json,
+                startup: StartupArgs {
+                    check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
+                    trace_config: false,
+                    config_blake3: None,
+                },
+                terminal_colors: false,
+                language: None,
+                sora: false,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            }
+        }
+
+        #[test]
+        fn integrity_bound_config_is_hashed_and_parsed_from_one_buffer() -> eyre::Result<()> {
+            let genesis_key_pair = KeyPair::random();
+            let config = config_factory(genesis_key_pair.public_key());
+            let raw = toml::to_string(&config)?;
+            let dir = tempfile::tempdir()?;
+            let config_path = dir.path().join("config.toml");
+            std::fs::write(&config_path, raw.as_bytes())?;
+            let expected = blake3::hash(raw.as_bytes()).to_hex().to_string();
+            let mut args = config_test_args(config_path.clone(), None);
+            args.startup.config_blake3 = Some(expected);
+
+            read_config_and_genesis(&args)
+                .map_err(|report| eyre::eyre!("valid integrity-bound config failed: {report:?}"))?;
+
+            std::fs::write(&config_path, format!("{raw}\n# changed after admission\n"))?;
+            let error = read_config_and_genesis(&args)
+                .expect_err("changed integrity-bound config must fail closed");
+            assert!(
+                format!("{error:?}").contains("has BLAKE3"),
+                "unexpected integrity error: {error:?}"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn integrity_bound_config_rejects_extends() -> eyre::Result<()> {
+            let genesis_key_pair = KeyPair::random();
+            let mut config = config_factory(genesis_key_pair.public_key());
+            config.insert(
+                "extends".to_owned(),
+                toml::Value::String("base.toml".to_owned()),
+            );
+            let raw = toml::to_string(&config)?;
+            let dir = tempfile::tempdir()?;
+            let config_path = dir.path().join("config.toml");
+            std::fs::write(&config_path, raw.as_bytes())?;
+            let mut args = config_test_args(config_path, None);
+            args.startup.config_blake3 =
+                Some(blake3::hash(raw.as_bytes()).to_hex().to_string());
+
+            let error = read_config_and_genesis(&args)
+                .expect_err("integrity-bound config must not resolve external extends");
+            assert!(
+                format!("{error:?}").contains("must be flattened"),
+                "unexpected extends error: {error:?}"
+            );
+            Ok(())
         }
 
         fn load_config_with_overrides<F>(
@@ -21287,26 +21467,38 @@ mod tests {
             std::fs::write(&genesis_path, genesis.0.encode_wire()?)?;
             std::fs::write(&executor_path, "")?;
 
-            let (config, _genesis) = read_config_and_genesis(&Args {
-                config: Some(config_path.clone()),
-                genesis_manifest_json: None,
-                startup: StartupArgs {
-                    check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    trace_config: false,
-                },
-                terminal_colors: false,
-                language: None,
-                sora: false,
-                fastpq_execution_mode: None,
-                fastpq_poseidon_mode: None,
-                fastpq_device_class: None,
-                fastpq_chip_family: None,
-                fastpq_gpu_kind: None,
-            })
+            let (config, _genesis) =
+                read_config_and_genesis(&config_test_args(config_path.clone(), None))
             .map_err(|report| eyre::eyre!("{report:?}"))?;
 
             Ok((config, dir, config_path))
+        }
+
+        #[test]
+        fn cli_genesis_manifest_path_overrides_config() -> eyre::Result<()> {
+            let (_config, dir, config_path) = load_config_with_overrides(|table, _| {
+                iroha_config::base::toml::Writer::new(table)
+                    .write(["genesis", "manifest_json"], "./stale-manifest.json");
+            })?;
+            let manifest_path = dir.path().join("bound-genesis.json");
+            std::fs::write(&manifest_path, b"{}")?;
+
+            let (config, _genesis) = read_config_and_genesis(&config_test_args(
+                config_path,
+                Some(manifest_path.clone()),
+            ))
+            .map_err(|report| eyre::eyre!("{report:?}"))?;
+
+            assert_eq!(
+                config
+                    .genesis
+                    .manifest_json
+                    .as_ref()
+                    .expect("CLI manifest override should be retained")
+                    .resolve_relative_path(),
+                manifest_path
+            );
+            Ok(())
         }
 
         fn parse_config_with_overrides<F>(
@@ -21383,6 +21575,7 @@ mod tests {
                     check_config: false,
                     write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
+                    config_blake3: None,
                 },
                 terminal_colors: false,
                 language: None,
@@ -21498,6 +21691,7 @@ mod tests {
                     check_config: false,
                     write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
+                    config_blake3: None,
                 },
                 terminal_colors: false,
                 language: None,

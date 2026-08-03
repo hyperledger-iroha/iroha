@@ -86,7 +86,7 @@ def _healthy_status() -> dict[str, object]:
     prepare_qc = _prepare_qc()
     committed_subject = _subject(0x41)
     return {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
@@ -247,7 +247,7 @@ def _healthy_diagnostics() -> dict[str, object]:
 def test_status_parses_authoritative_reducer_state() -> None:
     status = SumeragiStatusSnapshot.from_payload(_healthy_status())
 
-    assert status.protocol_version == 3
+    assert status.protocol_version == 4
     assert status.restart_required is False
     assert status.height_context_id.hash == _canonical_hash(0x14)
     assert status.height == 15
@@ -568,7 +568,7 @@ def test_retained_rbc_store_telemetry_models_parse_snapshot() -> None:
 @pytest.mark.parametrize(
     ("mutate", "error"),
     [
-        (lambda payload: payload.update(protocol_version=1), "must equal 3"),
+        (lambda payload: payload.update(protocol_version=1), "must equal 4"),
         (
             lambda payload: payload.pop("restart_required"),
             "restart_required must be a boolean",

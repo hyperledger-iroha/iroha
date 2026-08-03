@@ -53,6 +53,11 @@ pub struct BootleLanternIssuanceCredentialV1 {
 
 impl BootleLanternIssuanceCredentialV1 {
     /// Copy and validate an opaque bearer credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BootleLanternIssuanceClientErrorV1::InvalidCredential`] when
+    /// the credential is empty or exceeds the protocol limit.
     pub fn from_opaque_bytes(bytes: &[u8]) -> Result<Self, BootleLanternIssuanceClientErrorV1> {
         validate_credential_length_v1(bytes.len())?;
         Ok(Self {
@@ -61,6 +66,11 @@ impl BootleLanternIssuanceCredentialV1 {
     }
 
     /// Decode one canonical, unpadded base64url credential without a `Bearer` prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BootleLanternIssuanceClientErrorV1::InvalidCredential`] when
+    /// the input is empty, oversized, malformed, padded, or non-canonical.
     pub fn from_canonical_base64_url(
         encoded: &str,
     ) -> Result<Self, BootleLanternIssuanceClientErrorV1> {
@@ -76,13 +86,10 @@ impl BootleLanternIssuanceCredentialV1 {
         }
 
         let mut bytes = vec![0_u8; BOOTLE_LANTERN_ISSUANCE_AUTHENTICATION_MAX_BYTES_V1];
-        let written = match URL_SAFE_NO_PAD.decode_slice(encoded, &mut bytes) {
-            Ok(written) => written,
-            Err(_) => {
-                bytes.fill(0);
-                black_box(bytes.as_slice());
-                return Err(BootleLanternIssuanceClientErrorV1::InvalidCredential);
-            }
+        let Ok(written) = URL_SAFE_NO_PAD.decode_slice(encoded, &mut bytes) else {
+            bytes.fill(0);
+            black_box(bytes.as_slice());
+            return Err(BootleLanternIssuanceClientErrorV1::InvalidCredential);
         };
         bytes.truncate(written);
         let result = (|| {
@@ -212,11 +219,21 @@ impl fmt::Debug for BootleLanternIssuanceClientV1 {
 
 impl BootleLanternIssuanceClientV1 {
     /// Build a dedicated client with a 15-second per-request timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `origin` is not an origin-only absolute HTTPS URL
+    /// or the hardened HTTP transport cannot be constructed.
     pub fn new(origin: Url) -> Result<Self, BootleLanternIssuanceClientErrorV1> {
         Self::with_timeout(origin, DEFAULT_REQUEST_TIMEOUT_V1)
     }
 
     /// Build a dedicated client with an exact non-zero per-request timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `origin` is not an origin-only absolute HTTPS URL,
+    /// `timeout` is zero, or the hardened HTTP transport cannot be constructed.
     pub fn with_timeout(
         origin: Url,
         timeout: Duration,
@@ -241,6 +258,11 @@ impl BootleLanternIssuanceClientV1 {
     }
 
     /// Submit exactly one empty authorization request and return the 320-byte `ILA1` body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when request construction or the single network attempt
+    /// fails, or when Torii returns a non-canonical response or protocol error.
     pub fn authorize(
         &self,
         credential: &BootleLanternIssuanceCredentialV1,
@@ -254,6 +276,12 @@ impl BootleLanternIssuanceClientV1 {
     }
 
     /// Submit exactly one `ILA1 || ILQ1` request and return the 3,176-byte `ILR1` body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request has the wrong length or magic, request
+    /// construction or the single network attempt fails, or Torii returns a
+    /// non-canonical response or protocol error.
     pub fn issue(
         &self,
         credential: &BootleLanternIssuanceCredentialV1,
@@ -459,12 +487,11 @@ fn validate_success_response_metadata_v1(
     }
 
     let mut content_lengths = headers.get_all(CONTENT_LENGTH).iter();
-    if let Some(value) = content_lengths.next() {
-        if content_lengths.next().is_some()
-            || !canonical_content_length_v1(value.as_bytes(), expected_bytes)
-        {
-            return Err(BootleLanternIssuanceClientErrorV1::InvalidContentLength);
-        }
+    if let Some(value) = content_lengths.next()
+        && (content_lengths.next().is_some()
+            || !canonical_content_length_v1(value.as_bytes(), expected_bytes))
+    {
+        return Err(BootleLanternIssuanceClientErrorV1::InvalidContentLength);
     }
     Ok(())
 }

@@ -182,7 +182,7 @@ test(
     assert.notEqual(metricsText.length, 0);
 
     const sumeragiStatus = await client.getSumeragiStatusTyped();
-    assert.equal(sumeragiStatus.protocol_version, 3);
+    assert.equal(sumeragiStatus.protocol_version, 4);
     assert.ok(sumeragiStatus.leader < sumeragiStatus.height_context.validator_count);
     assert.ok(Array.isArray(sumeragiStatus.committed_lane_blocks));
 
@@ -4895,7 +4895,7 @@ function assertSumeragiStatusEvent(event) {
     "sumeragi status event must expose a JSON payload",
   );
   const snapshot = event.data;
-  assert.equal(snapshot.protocol_version, 3, "sumeragi status event must use wire revision 3");
+  assert.equal(snapshot.protocol_version, 4, "sumeragi status event must use wire revision 4");
   assert.ok(
     snapshot.height_context && typeof snapshot.height_context === "object",
     "sumeragi status event must include height_context",
@@ -5942,6 +5942,12 @@ function assertEvidenceRecord(entry) {
     "evidence entry recorded_view must be non-negative",
   );
   assertNonNegativeInteger(entry.recorded_ms, "evidence entry recorded_ms must be non-negative");
+  if (entry.consensus_admitted_height !== null) {
+    assertNonNegativeInteger(
+      entry.consensus_admitted_height,
+      "evidence entry consensus_admitted_height must be null or non-negative",
+    );
+  }
   switch (entry.kind) {
     case "DoublePrepare":
     case "DoubleCommit":
@@ -5949,7 +5955,7 @@ function assertEvidenceRecord(entry) {
       assertNonNegativeInteger(entry.height, "double vote evidence height must be non-negative");
       assertNonNegativeInteger(entry.view, "double vote evidence view must be non-negative");
       assertNonNegativeInteger(entry.epoch, "double vote evidence epoch must be non-negative");
-      assert.equal(typeof entry.signer, "string", "double vote evidence signer must be a string");
+      assertNonNegativeInteger(entry.signer, "double vote evidence signer must be non-negative");
       assertHexString(entry.block_hash_1, "double vote evidence block_hash_1");
       assertHexString(entry.block_hash_2, "double vote evidence block_hash_2");
       break;
@@ -5972,18 +5978,48 @@ function assertEvidenceRecord(entry) {
     case "Censorship":
       assertHexString(entry.tx_hash, "censorship tx_hash");
       assertNonNegativeInteger(entry.receipt_count, "censorship receipt_count must be non-negative");
-      assertNonNegativeInteger(entry.min_height, "censorship min_height must be non-negative");
-      assertNonNegativeInteger(entry.max_height, "censorship max_height must be non-negative");
       assert.ok(Array.isArray(entry.signers), "censorship signers must be an array");
+      assert.equal(
+        entry.receipt_count,
+        entry.signers.length,
+        "censorship receipt_count must match signers",
+      );
       entry.signers.forEach((signer) => {
         assert.equal(typeof signer, "string", "censorship signer must be a string");
       });
+      if (entry.receipt_count === 0) {
+        assert.ok(!("submitted_at_height_min" in entry));
+        assert.ok(!("submitted_at_height_max" in entry));
+      } else {
+        assertNonNegativeInteger(
+          entry.submitted_at_height_min,
+          "censorship submitted_at_height_min must be non-negative",
+        );
+        assertNonNegativeInteger(
+          entry.submitted_at_height_max,
+          "censorship submitted_at_height_max must be non-negative",
+        );
+        assert.ok(entry.submitted_at_height_min <= entry.submitted_at_height_max);
+      }
+      assert.ok(!("min_height" in entry), "retired min_height alias must be absent");
+      assert.ok(!("max_height" in entry), "retired max_height alias must be absent");
+      break;
+    case "SumeragiV2Equivocation":
+      assert.ok(
+        ["proposal", "phase_vote", "timeout_vote"].includes(entry.class),
+        "v2 equivocation class must be canonical",
+      );
+      assertNonNegativeInteger(entry.height, "v2 equivocation height must be non-negative");
+      assertNonNegativeInteger(entry.view, "v2 equivocation view must be non-negative");
+      assertNonNegativeInteger(entry.epoch, "v2 equivocation epoch must be non-negative");
+      assertNonNegativeInteger(entry.signer, "v2 equivocation signer must be non-negative");
+      assert.match(entry.context_id, /^[0-9a-f]{64}$/u);
+      assert.match(entry.artifact_hash_1, /^[0-9a-f]{64}$/u);
+      assert.match(entry.artifact_hash_2, /^[0-9a-f]{64}$/u);
+      assert.notEqual(entry.artifact_hash_1, entry.artifact_hash_2);
       break;
     default:
-      if ("detail" in entry && entry.detail !== undefined && entry.detail !== null) {
-        assert.equal(typeof entry.detail, "string", "unknown evidence detail must be a string");
-      }
-      break;
+      assert.fail(`unexpected evidence kind: ${entry.kind}`);
   }
 }
 

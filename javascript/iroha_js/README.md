@@ -1948,17 +1948,14 @@ it with other SDKs.
 Reliable broadcast remains an internal Sumeragi v2 protocol mechanism. Torii
 exposes aggregate RBC backlog and collector observations through
 `getSumeragiTelemetryTyped()`; it does not expose global per-session RBC,
-sampling, or collector-plan routes. Consensus evidence uses the supported
-evidence endpoints:
+sampling, collector-plan, or evidence-mutation routes. Consensus evidence is
+available through the supported read-only endpoints:
 
 ```js
 const evidence = await torii.listSumeragiEvidence({ limit: 20, kind: "DoublePrepare" });
 console.log(`Observed ${evidence.total} evidence entries`);
 const count = await torii.getSumeragiEvidenceCount();
-await torii.submitSumeragiEvidence({
-  evidence_hex: "deadbeef",
-  apiToken: process.env.SUMERAGI_API_TOKEN,
-});
+console.log(`Node retains ${count.count} evidence entries`);
 ```
 
 ## SoraFS Storage Helpers
@@ -3057,19 +3054,14 @@ part of the portable registry tarball.
 
 ## Confidential Asset Helpers
 
-The confidential ISIs ship in parity with the Rust builders so Node.js clients
-can register shielded assets, schedule policy transitions, and issue
-shield/transfer/unshield transactions without hand-writing Norito payloads.
-Inputs accept byte arrays, Buffers, or base64 strings for commitments/nullifiers
-and reuse the `ProofAttachmentInput` structure to describe verifier references.
+Node.js clients can register confidential assets and schedule policy
+transitions without hand-writing Norito payloads. ABI V1 does not expose
+generic shield, transfer, or unshield instructions: wallets use the typed,
+proof-bound Kagemusha top-up and redemption routes described above. The
+underlying confidential proof helpers remain available for those typed flows.
 
 ```js
-import {
-  buildRegisterZkAssetTransaction,
-  buildShieldTransaction,
-  buildUnshieldTransaction,
-  buildZkTransferTransaction,
-} from "@iroha/iroha-js";
+import { buildRegisterZkAssetTransaction } from "@iroha/iroha-js";
 
 const registerTx = buildRegisterZkAssetTransaction({
   chainId: "test-chain",
@@ -3084,67 +3076,7 @@ const registerTx = buildRegisterZkAssetTransaction({
   privateKey,
 });
 
-const encryptedPayload = {
-  version: 1,
-  ephemeralPublicKey: crypto.getRandomValues(new Uint8Array(32)),
-  nonce: crypto.getRandomValues(new Uint8Array(24)),
-  ciphertext: Buffer.from("sealed note bytes"),
-};
-
-const shieldTx = buildShieldTransaction({
-  chainId: "test-chain",
-  authority,
-  feePayment,
-  shield: {
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    fromAccountId: authority,
-    amount: "10",
-    noteCommitment: Buffer.alloc(32, 0xaa),
-    encryptedPayload,
-  },
-  privateKey,
-});
-
-const transferTx = buildZkTransferTransaction({
-  chainId: "test-chain",
-  authority,
-  feePayment,
-  transfer: {
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    inputs: [Buffer.alloc(32, 0x01)],
-    outputs: [Buffer.alloc(32, 0x02)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof-bytes", "base64"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-    },
-  },
-  privateKey,
-});
-
-const unshieldTx = buildUnshieldTransaction({
-  chainId: "test-chain",
-  authority,
-  feePayment,
-  unshield: {
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    destinationAccountId: authority,
-    publicAmount: "3",
-    inputs: [Buffer.alloc(32, 0x03)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof-bytes", "base64"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-    },
-  },
-  privateKey,
-});
 ```
-
-`UnshieldInstructionInput` has no caller-supplied output commitments. The
-verified statement determines every private output; an `outputs` property is a
-retired pre-release shape and is rejected by both the builder and the canonical
-Norito codec rather than ignored.
 
 `ProofAttachmentInput` requires the exact `{ backend, name }`
 `verifyingKeyRef` shape; string shorthands, aliases, and embedded key bytes are
@@ -3739,8 +3671,10 @@ node --test javascript/iroha_js/test/integrationTorii.test.js
 
 ### Dockerised harness (`npm run test:integration`)
 
-Use the bundled integration harness to spin up the single-node Docker Compose
-topology, wait for `/status`, and run the mutation-enabled smoke suite:
+Use the bundled integration harness to spin up the four-validator Docker
+Compose topology, wait for `/status`, and run the mutation-enabled smoke suite.
+The `docker-compose.single.yml` filename is retained for compatibility; it no
+longer denotes a one-validator network.
 
 ```bash
 export IROHA_GENESIS_SIGNED_FILE="$PWD/target/js-integration-genesis/genesis.signed.nrt"
@@ -3759,8 +3693,9 @@ and embed validated artifact paths directly.
 `scripts/run_integration.mjs` performs the following steps:
 
 1. Runs `npm ci` (skip via `JS_TORII_SKIP_INSTALL=1`) and rebuilds the native binding.
-2. Starts `docker compose -f defaults/docker-compose.single.yml up -d irohad0`
-   unless `--no-start` (or `JS_TORII_START=0`) is supplied.
+2. Starts all four validators in
+   `defaults/docker-compose.single.yml` unless `--no-start` (or
+   `JS_TORII_START=0`) is supplied.
 3. Waits up to 90 s for `http://127.0.0.1:8080/status` (override via
    `--torii-url`/`--wait-seconds`/`IROHA_TORII_INTEGRATION_URL`).
 4. Sets the mutation env vars (chain id, account id, private key) and runs
@@ -3770,7 +3705,8 @@ and embed validated artifact paths directly.
 Flags/environment variables:
 
 - `--compose-file` (or `JS_TORII_COMPOSE_FILE`) to point at a custom compose manifest.
-- `--service` / `COMPOSE_SERVICE` to target a different service name.
+- `--service` / `COMPOSE_SERVICE` to start only one explicitly selected
+  service instead of the full validator stack.
 - `--compose-bin` / `JS_TORII_COMPOSE_BIN` to use a non-default compose command.
 - `IROHA_GENESIS_SIGNED_FILE`, `IROHA_GENESIS_PUBLIC_KEY_FILE`, and
   `IROHA_GENESIS_EXPECTED_HASH_FILE` supply the runtime-only trust-root bundle
@@ -4105,7 +4041,8 @@ console.log(
 );
 
 // Governance read helpers accept an AbortSignal so long-running requests can be cancelled.
-// Proposal ids are canonical lowercase 32-byte hashes; opaque referendum ids are exact tokens.
+// Proposal ids are canonical lowercase 32-byte hashes. First-release referendum/election
+// selectors are 1-128 RFC 3986 unreserved ASCII bytes and may not start with a dot.
 const controller = new AbortController();
 const proposal = await torii.getGovernanceProposal("ab".repeat(32), {
   signal: controller.signal,
@@ -4194,8 +4131,9 @@ await torii.governanceSubmitZkBallotV1({
 // nesting depth; sign the returned transaction draft in the caller's wallet or
 // key store. Plain-ballot durations are sent as canonical u64 decimal strings,
 // including "0". Parliament decisions use only the exact lowercase labels
-// "approve", "reject", and "abstain". Finalize accepts the shared governance
-// hash grammar; enact requires the exact 64-character lowercase proposal id.
+// "approve", "reject", and "abstain". Finalize requires referendumId and
+// proposalId to be the same exact 64-character lowercase proposal fingerprint;
+// enact uses that proposal-id grammar as well.
 // Protected namespace labels are exact printable-ASCII tokens and are never
 // trimmed.
 
@@ -4212,8 +4150,8 @@ const protectedNamespaces = await torii.getProtectedNamespaces({
 console.log(protectedNamespaces.namespaces); // ["apps", "system"]
 
 const finalizeDraft = await torii.governanceFinalizeReferendumTyped({
-  referendumId: "ref-mainnet-001",
-  proposalId: `BLAKE2B32:0X${"01".repeat(32)}`,
+  referendumId: "01".repeat(32),
+  proposalId: "01".repeat(32),
 });
 console.log(`finalize instructions=${finalizeDraft.tx_instructions.length}`);
 const enactDraft = await torii.governanceEnactProposalTyped({

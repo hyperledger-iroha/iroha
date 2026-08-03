@@ -326,7 +326,7 @@ mod model {
         pub vrf_commit_window_blocks: u64,
         /// VRF reveal window length in blocks.
         pub vrf_reveal_window_blocks: u64,
-        /// Maximum validators to elect for the next epoch (0 = unlimited).
+        /// Exact bounded `3f + 1` ceiling for the next epoch committee.
         pub max_validators: u32,
         /// Minimum self-bond required for validator eligibility.
         pub min_self_bond: Quantity,
@@ -391,7 +391,7 @@ mod model {
             self.vrf_reveal_window_blocks
         }
 
-        /// Maximum validators to elect for the next epoch (0 = unlimited).
+        /// Exact bounded `3f + 1` ceiling for the next epoch committee.
         #[must_use]
         pub fn max_validators(&self) -> u32 {
             self.max_validators
@@ -481,6 +481,12 @@ mod model {
             }
             if self.vrf_commit_window_blocks == 0 || self.vrf_reveal_window_blocks == 0 {
                 return Err("VRF commit and reveal windows must be greater than zero");
+            }
+            if usize::try_from(self.max_validators)
+                .ok()
+                .is_none_or(|count| !crate::block::consensus_v2::is_valid_committee_size(count))
+            {
+                return Err("max_validators must be a bounded 3f + 1 committee size (4..=31)");
             }
             if self
                 .vrf_commit_window_blocks
@@ -1175,7 +1181,7 @@ mod defaults {
                 40
             }
             pub const fn max_validators() -> u32 {
-                128
+                31
             }
             pub fn min_self_bond() -> Quantity {
                 Quantity::from(1_000_u64)
@@ -2364,7 +2370,7 @@ mod tests {
 
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
-        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":"1000","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":31,"min_self_bond":"1000","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -2495,7 +2501,7 @@ mod tests {
 
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
-        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
         assert!(
             Json::from_raw_json(payload.to_owned()).is_err(),
             "invalid JSON must be rejected before it can enter a custom parameter"

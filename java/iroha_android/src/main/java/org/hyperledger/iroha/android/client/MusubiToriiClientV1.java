@@ -54,7 +54,8 @@ public final class MusubiToriiClientV1 {
   public static final String SEARCH_PATH = "/v1/musubi/queries/search";
 
   private static final int REQUEST_MAX_BYTES = 64 * 1024;
-  private static final int RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+  // Exact-release JSON repeats the bounded dependency vector in both registry projections.
+  private static final int RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;

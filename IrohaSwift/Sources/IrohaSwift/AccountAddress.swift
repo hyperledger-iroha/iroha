@@ -1424,6 +1424,253 @@ extension AccountAddress {
         return writer.data
     }
 
+    /// Returns whether `payload` is one exact compact-Norito `AccountId`
+    /// controller encoding supported by this SDK build.
+    static func isCanonicalCompactNoritoAccountControllerPayload(_ payload: Data) -> Bool {
+        do {
+            let (controller, addressClass) = try Self.decodeCompactNoritoAccountControllerPayload(
+                payload
+            )
+            let address = AccountAddress(
+                header: try AddressHeader.new(
+                    version: 0,
+                    classId: addressClass,
+                    normVersion: 1
+                ),
+                domain: .default,
+                controller: controller,
+                rawCanonicalBytes: nil
+            )
+            return try address.compactNoritoAccountControllerPayload() == payload
+        } catch {
+            return false
+        }
+    }
+
+    private static func decodeCompactNoritoAccountControllerPayload(
+        _ payload: Data
+    ) throws -> (ControllerPayload, AddressClass) {
+        var reader = CanonicalNoritoReader(data: payload)
+        let discriminant = try reader.readUInt32LE()
+        let body = try reader.readCompactField()
+        guard reader.remaining() == 0 else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId contains trailing bytes"
+            )
+        }
+        switch discriminant {
+        case 0:
+            let key = try decodeCompactNoritoPublicKeyPayload(body)
+            return (
+                .singleKey(curve: key.curve, publicKey: key.publicKey),
+                .singleKey
+            )
+        case 1:
+            return (
+                try decodeCompactNoritoMultisigPolicyPayload(body),
+                .multiSig
+            )
+        default:
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId controller discriminant is unknown"
+            )
+        }
+    }
+
+    private static func decodeCompactNoritoPublicKeyPayload(
+        _ payload: Data
+    ) throws -> (curve: CurveId, publicKey: Data) {
+        var reader = CanonicalNoritoReader(data: payload)
+        let count = try reader.readUInt64LE()
+        guard count > 1,
+              count <= UInt64(UInt16.max) + 1,
+              count <= UInt64(reader.remaining() / 2) else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId public key length is invalid"
+            )
+        }
+        var bytes = Data()
+        bytes.reserveCapacity(Int(count))
+        for _ in 0..<count {
+            let element = try reader.readCompactField()
+            guard element.count == 1 else {
+                throw CanonicalNoritoDecodingError.invalidField(
+                    "compact AccountId public key element is not canonical"
+                )
+            }
+            bytes.append(element[0])
+        }
+        guard reader.remaining() == 0,
+              let algorithmByte = bytes.first,
+              let algorithm = SigningAlgorithm(noritoDiscriminant: algorithmByte),
+              let curve = try? CurveId.from(algorithm: algorithm.wireName) else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId public key is unsupported"
+            )
+        }
+        let publicKey = Data(bytes.dropFirst())
+        try validateCompactNoritoPublicKey(curve: curve, publicKey: publicKey)
+        return (curve, publicKey)
+    }
+
+    private static func validateCompactNoritoPublicKey(
+        curve: CurveId,
+        publicKey: Data
+    ) throws {
+        let isValid: Bool
+        switch curve {
+        case .ed25519:
+            isValid = Ed25519PublicKeyAdmission.isValidPublicKey(publicKey)
+        #if IROHASWIFT_ENABLE_SECP256K1
+        case .secp256k1:
+            isValid = publicKey.count == 33
+                && (publicKey.first == 0x02 || publicKey.first == 0x03)
+                && publicKey.dropFirst().contains(where: { $0 != 0 })
+        #endif
+        #if IROHASWIFT_ENABLE_MLDSA
+        case .mldsa:
+            // Iroha's `ml-dsa` algorithm is the protocol-fixed ML-DSA-65 suite.
+            isValid = publicKey.count == 1_952
+                && publicKey.contains(where: { $0 != 0 })
+        #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            isValid = publicKey.count == 48
+                && publicKey.contains(where: { $0 != 0 })
+        case .blsSmall:
+            isValid = publicKey.count == 96
+                && publicKey.contains(where: { $0 != 0 })
+        #endif
+        #if IROHASWIFT_ENABLE_GOST
+        case .gost256A, .gost256B, .gost256C:
+            isValid = publicKey.count == 64
+                && publicKey.contains(where: { $0 != 0 })
+        case .gost512A, .gost512B:
+            isValid = publicKey.count == 128
+                && publicKey.contains(where: { $0 != 0 })
+        #endif
+        #if IROHASWIFT_ENABLE_SM
+        case .sm2:
+            isValid = isCanonicalSm2PublicKeyEnvelope(publicKey)
+        #endif
+        }
+        guard isValid else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId public key material is invalid"
+            )
+        }
+    }
+
+    #if IROHASWIFT_ENABLE_SM
+    private static func isCanonicalSm2PublicKeyEnvelope(_ payload: Data) -> Bool {
+        guard payload.count >= 2 + Sm2Keypair.publicKeyLength else {
+            return false
+        }
+        let distidLength = (Int(payload[payload.startIndex]) << 8)
+            | Int(payload[payload.index(after: payload.startIndex)])
+        guard distidLength <= Int(UInt16.max) / 8,
+              payload.count == 2 + distidLength + Sm2Keypair.publicKeyLength else {
+            return false
+        }
+        let distidStart = payload.index(payload.startIndex, offsetBy: 2)
+        let distidEnd = payload.index(distidStart, offsetBy: distidLength)
+        guard String(data: payload[distidStart..<distidEnd], encoding: .utf8) != nil else {
+            return false
+        }
+        let sec1 = payload[distidEnd...]
+        return sec1.first == 0x04
+            && sec1.dropFirst().contains(where: { $0 != 0 })
+    }
+    #endif
+
+    private static func compactNoritoMultisigMemberSortKey(
+        curve: CurveId,
+        publicKey: Data
+    ) throws -> Data {
+        guard let algorithm = curve.signingAlgorithm else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId multisig member algorithm is unsupported"
+            )
+        }
+        var key = Data(algorithm.wireName.utf8)
+        key.append(0)
+        key.append(publicKey)
+        return key
+    }
+
+    private static func decodeCompactNoritoMultisigPolicyPayload(
+        _ payload: Data
+    ) throws -> ControllerPayload {
+        var policy = CanonicalNoritoReader(data: payload)
+
+        var version = CanonicalNoritoReader(data: try policy.readCompactField())
+        let versionValue = try version.readUInt8()
+        guard versionValue == 1, version.remaining() == 0 else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId multisig version is not canonical"
+            )
+        }
+
+        var threshold = CanonicalNoritoReader(data: try policy.readCompactField())
+        let thresholdValue = try threshold.readUInt16LE()
+        guard thresholdValue > 0, threshold.remaining() == 0 else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId multisig threshold is invalid"
+            )
+        }
+
+        var members = CanonicalNoritoReader(data: try policy.readCompactField())
+        let memberCount = try members.readUInt64LE()
+        guard memberCount > 0,
+              memberCount <= UInt64(multisigMemberMax),
+              memberCount <= UInt64(members.remaining()) else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId multisig member count is invalid"
+            )
+        }
+        var decodedMembers: [ControllerPayload.MultisigMember] = []
+        decodedMembers.reserveCapacity(Int(memberCount))
+        var totalWeight: UInt64 = 0
+        var previousSortKey: Data?
+        for _ in 0..<memberCount {
+            var member = CanonicalNoritoReader(data: try members.readCompactField())
+            let key = try decodeCompactNoritoPublicKeyPayload(member.readCompactField())
+            var weight = CanonicalNoritoReader(data: try member.readCompactField())
+            let weightValue = try weight.readUInt16LE()
+            let sortKey = try compactNoritoMultisigMemberSortKey(
+                curve: key.curve,
+                publicKey: key.publicKey
+            )
+            guard weightValue > 0,
+                  weight.remaining() == 0,
+                  member.remaining() == 0,
+                  previousSortKey.map({ $0.lexicographicallyPrecedes(sortKey) }) ?? true else {
+                throw CanonicalNoritoDecodingError.invalidField(
+                    "compact AccountId multisig member is not canonical"
+                )
+            }
+            totalWeight += UInt64(weightValue)
+            previousSortKey = sortKey
+            decodedMembers.append(ControllerPayload.MultisigMember(
+                curve: key.curve,
+                weight: weightValue,
+                publicKey: key.publicKey
+            ))
+        }
+        guard members.remaining() == 0,
+              policy.remaining() == 0,
+              UInt64(thresholdValue) <= totalWeight else {
+            throw CanonicalNoritoDecodingError.invalidField(
+                "compact AccountId multisig policy is invalid"
+            )
+        }
+        return .multiSig(
+            version: versionValue,
+            threshold: thresholdValue,
+            members: decodedMembers
+        )
+    }
+
     private func noritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
         let algorithm = try noritoSigningAlgorithm(for: curve)
         var bytes = Data([algorithm.noritoDiscriminant])

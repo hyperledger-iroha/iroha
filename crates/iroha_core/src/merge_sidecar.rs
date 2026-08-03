@@ -160,15 +160,20 @@ const SIGNING_CONTEXT_DOMAIN: &[u8] = b"iroha:merge:signing-context:v2\0";
 const RESERVED_DECIDED_INBOUND_SESSIONS: usize = 1;
 const RESERVED_DECIDED_INBOUND_BYTES: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
 const RESERVED_DECIDED_DEFERRED_BLOCKS: usize = 1;
-/// Maximum live semantic-stream working set in either requester direction.
+/// Maximum live requester-side semantic-stream working set.
 ///
 /// The table is validator-scoped rather than connection-scoped. Requester
-/// streams use globally monotonic local epochs; responder tables are compacted
-/// only by advancing a durable global service generation for a certified
-/// changed roster. Ordinary capacity pressure never advances that fence.
-/// Delayed traffic from a prior roster generation is answered statelessly with
-/// the current fence and can never recreate an evicted per-peer tombstone.
+/// streams use globally monotonic local epochs.
 const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize = MAX_VALIDATORS_PER_HEIGHT;
+/// Maximum responder-side semantic-stream working set.
+///
+/// Production reserves one complete committee in addition to the current
+/// roster.  The extra corridor lets an exact predecessor committee finish
+/// historical recovery without consuming any current-roster slot.  Adapter
+/// admission separately caps identities outside the current frozen roster at
+/// [`MAX_VALIDATORS_PER_HEIGHT`]; the transport keeps the aggregate hard bound
+/// and durable lifecycle geometry.
+const MAX_CERTIFIED_MERGE_SERVER_STREAMS: usize = 2 * MAX_VALIDATORS_PER_HEIGHT;
 
 #[cfg(test)]
 const DEFAULT_REPLY_SOURCE_CAPACITY: usize = 8;
@@ -4546,7 +4551,7 @@ impl MergeSidecarTransport {
         server_stream_capacity: usize,
     ) -> Result<(usize, usize), MergeSidecarError> {
         if server_stream_capacity == 0
-            || server_stream_capacity > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+            || server_stream_capacity > MAX_CERTIFIED_MERGE_SERVER_STREAMS
         {
             return Err(MergeSidecarError::Capacity(
                 "server semantic requester geometry",
@@ -4645,10 +4650,10 @@ impl MergeSidecarTransport {
             .ok_or(MergeSidecarError::Capacity(
                 "lifecycle journal gate byte geometry",
             ))?;
-        // Requester and responder semantic-stream records are independently
-        // bounded; each record includes its durable non-zero stream epoch.
+        // Requester and responder semantic-stream records have distinct hard
+        // bounds; each record includes its durable non-zero stream epoch.
         let stream_bytes = MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
-            .checked_mul(2)
+            .checked_add(MAX_CERTIFIED_MERGE_SERVER_STREAMS)
             .and_then(|count| count.checked_mul(LIFECYCLE_JOURNAL_STREAM_BYTES))
             .ok_or(MergeSidecarError::Capacity(
                 "lifecycle journal stream byte geometry",
@@ -4665,7 +4670,7 @@ impl MergeSidecarTransport {
         let (_, attempts) = Self::derive_server_request_capacities(
             self.reply_source_capacity,
             self.limits,
-            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS,
+            MAX_CERTIFIED_MERGE_SERVER_STREAMS,
         )?;
         Self::lifecycle_max_snapshot_bytes_for_attempt_capacity(attempts)
     }
@@ -5346,8 +5351,22 @@ impl MergeSidecarTransport {
         &mut self,
         server_roster: &[PeerId],
     ) -> Result<(), MergeSidecarError> {
-        self.transition_server_service_generation(
+        self.transition_server_service_generation_with_capacity_for_test(
             server_roster.len(),
+            server_roster,
+        )
+    }
+
+    /// Advance a quiescent responder fence with explicit test-only reserved
+    /// stream geometry.
+    #[cfg(test)]
+    pub(crate) fn transition_server_service_generation_with_capacity_for_test(
+        &mut self,
+        server_stream_capacity: usize,
+        server_roster: &[PeerId],
+    ) -> Result<(), MergeSidecarError> {
+        self.transition_server_service_generation(
+            server_stream_capacity,
             canonical_merge_sidecar_roster_digest(server_roster),
         )
     }
@@ -5440,10 +5459,20 @@ impl MergeSidecarTransport {
             )?;
             return Ok(self);
         }
-        if self.server_stream_capacity != server_stream_capacity {
+        if server_stream_capacity < self.server_stream_capacity {
             return Err(MergeSidecarError::Capacity(
                 "merge-sidecar retained-height roster capacity drift",
             ));
+        }
+        if server_stream_capacity > self.server_stream_capacity {
+            // A validated restart fence has already made every process-local
+            // writer unreachable.  Expanding the aggregate responder bound
+            // for the exact same canonical roster therefore preserves every
+            // semantic stream and generation while adding only empty slots.
+            // The caller persists the expanded V3 geometry before returning
+            // the transport.  A crash before that commit safely replays this
+            // monotonic migration from the predecessor snapshot.
+            self.configure_server_roster_geometry(server_stream_capacity, server_roster_digest)?;
         }
         self.requeue_retained_outbound_after_height_rollover();
         Ok(self)
@@ -6879,6 +6908,50 @@ impl MergeSidecarTransport {
         Err(MergeSidecarError::Capacity(
             "server semantic requester geometry",
         ))
+    }
+
+    /// Return whether the current responder generation already owns this
+    /// requester's bounded semantic stream.
+    ///
+    /// Callers may use this to authenticate a cumulative close from a peer
+    /// whose historical request was admitted after a roster change.  Merely
+    /// naming an earlier generation or requester never creates authority.
+    pub(crate) fn owns_current_server_stream(
+        &self,
+        requester: &PeerId,
+        service_generation: CertifiedMergeSidecarServiceGenerationV1,
+    ) -> bool {
+        service_generation == self.server_service_generation
+            && self.server_streams.contains_key(requester)
+    }
+
+    /// Return whether a current-generation request would create a new
+    /// responder stream.
+    ///
+    /// Lower-generation requests are stateless generation probes and future
+    /// generations fail before allocation, so neither belongs to a reserved
+    /// identity corridor.
+    pub(crate) fn would_allocate_current_server_stream(
+        &self,
+        requester: &PeerId,
+        service_generation: CertifiedMergeSidecarServiceGenerationV1,
+    ) -> bool {
+        service_generation == self.server_service_generation
+            && !self.server_streams.contains_key(requester)
+    }
+
+    /// Count responder identities selected by an allocation-free classifier.
+    ///
+    /// The adapter uses this allocation-free projection to preserve every
+    /// current-roster slot while admitting a bounded predecessor committee.
+    pub(crate) fn server_stream_count_matching(
+        &self,
+        mut predicate: impl FnMut(&PeerId) -> bool,
+    ) -> usize {
+        self.server_streams
+            .keys()
+            .filter(|requester| predicate(requester))
+            .count()
     }
 
     fn supersede_server_stream(
@@ -10025,7 +10098,7 @@ mod tests {
             MergeSidecarTransport::with_limits_and_server_stream_capacity(
                 source_capacity,
                 limits,
-                MAX_CERTIFIED_MERGE_SEMANTIC_PEERS + 1,
+                MAX_CERTIFIED_MERGE_SERVER_STREAMS + 1,
                 unbound_test_merge_sidecar_roster_digest(),
             )
             .is_err()
@@ -10957,7 +11030,7 @@ mod tests {
         let (_, protocol_max_attempts) = MergeSidecarTransport::derive_server_request_capacities(
             source_capacity,
             limits,
-            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS,
+            MAX_CERTIFIED_MERGE_SERVER_STREAMS,
         )
         .expect("derive the protocol-maximum request geometry");
         assert_eq!(
@@ -11022,6 +11095,147 @@ mod tests {
                 .payload
                 .request_streams,
             requester_streams_before
+        );
+    }
+
+    #[test]
+    fn durable_same_roster_capacity_upgrade_is_monotonic_and_preserves_state() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let now = Instant::now();
+        let source_capacity = 2;
+        let limits = MergeSidecarLimits::defaults();
+        let (_, requester, _, request, _) = start_session(1, 1);
+        let responder = request.responder.clone();
+        let roster = vec![
+            requester.clone(),
+            peer(b"capacity-upgrade roster second"),
+            peer(b"capacity-upgrade roster third"),
+            peer(b"capacity-upgrade roster fourth"),
+        ];
+        let roster_digest = canonical_merge_sidecar_roster_digest(&roster);
+        let predecessor_capacity = roster.len();
+        let upgraded_capacity = predecessor_capacity
+            .checked_add(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)
+            .expect("two-committee responder geometry is representable");
+        let mut predecessor = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            source_capacity,
+            limits,
+            predecessor_capacity,
+            roster_digest.clone(),
+        )
+        .expect("open the predecessor V3 roster geometry");
+        assert!(matches!(
+            predecessor
+                .admit_server_request(&requester, &request, None, &responder, now)
+                .expect("persist one predecessor responder stream"),
+            ServerRequestAdmission::Materialize
+        ));
+        predecessor
+            .persist_lifecycle_state()
+            .expect("persist the predecessor V3 snapshot");
+        let predecessor_snapshot = predecessor
+            .lifecycle_snapshot()
+            .expect("snapshot the predecessor geometry");
+        assert_eq!(
+            predecessor_snapshot.payload.geometry.server_stream_capacity,
+            u64::try_from(predecessor_capacity).expect("test capacity fits u64")
+        );
+        drop(predecessor);
+
+        let upgraded = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            source_capacity,
+            limits,
+            upgraded_capacity,
+            roster_digest.clone(),
+        )
+        .expect("same-roster restart monotonically expands the V3 geometry");
+        assert_eq!(
+            upgraded.server_service_generation,
+            CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+            "a capacity-only migration must not create a responder generation"
+        );
+        assert_eq!(upgraded.server_roster_digest, roster_digest.clone());
+        assert_eq!(upgraded.server_stream_capacity, upgraded_capacity);
+        assert_eq!(
+            upgraded.server_request_gate_capacity,
+            upgraded_capacity * limits.inbound_sessions_per_peer
+        );
+        assert_eq!(
+            upgraded.server_request_attempt_capacity,
+            upgraded_capacity * limits.inbound_sessions_per_peer * source_capacity
+        );
+        assert_eq!(upgraded.server_streams.len(), 1);
+        assert!(upgraded.server_streams.contains_key(&requester));
+        assert_eq!(upgraded.server_request_gates.len(), 1);
+        assert!(
+            upgraded
+                .server_request_gates
+                .contains_key(&(requester.clone(), request.request_id))
+        );
+        let upgraded_snapshot = upgraded
+            .lifecycle_snapshot()
+            .expect("snapshot the upgraded geometry");
+        assert_eq!(
+            upgraded_snapshot.payload.root_generation,
+            predecessor_snapshot
+                .payload
+                .root_generation
+                .checked_add(1)
+                .expect("test lifecycle generation remains representable")
+        );
+        assert_eq!(
+            upgraded_snapshot.payload.geometry.server_stream_capacity,
+            u64::try_from(upgraded_capacity).expect("test capacity fits u64")
+        );
+        assert_eq!(
+            upgraded_snapshot.payload.server_streams, predecessor_snapshot.payload.server_streams,
+            "monotonic expansion preserves semantic responder ownership"
+        );
+        assert_eq!(
+            upgraded_snapshot.payload.server_request_gates,
+            predecessor_snapshot.payload.server_request_gates,
+            "monotonic expansion preserves exact request ownership"
+        );
+        assert_eq!(
+            upgraded
+                .lifecycle_journal
+                .as_ref()
+                .expect("upgraded transport retains its journal")
+                .load()
+                .expect("load the upgraded V3 pair")
+                .expect("the upgraded V3 snapshot is durable"),
+            upgraded_snapshot
+        );
+        drop(upgraded);
+
+        assert!(matches!(
+            MergeSidecarTransport::open_durable_with_server_stream_capacity(
+                temp.path(),
+                source_capacity,
+                limits,
+                predecessor_capacity,
+                roster_digest.clone(),
+            ),
+            Err(MergeSidecarError::Capacity(
+                "merge-sidecar retained-height roster capacity drift"
+            ))
+        ));
+        let reopened = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            source_capacity,
+            limits,
+            upgraded_capacity,
+            roster_digest,
+        )
+        .expect("reopen the durable upgraded geometry after rejected shrink");
+        assert_eq!(
+            reopened
+                .lifecycle_snapshot()
+                .expect("snapshot the reopened upgraded geometry"),
+            upgraded_snapshot,
+            "a rejected shrink must not rewrite the durable upgraded snapshot"
         );
     }
 

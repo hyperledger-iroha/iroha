@@ -1582,8 +1582,8 @@ def test_transport_geometry_source_fidelity_rejects_shortened_default_cap(
         ),
         (
             Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
-            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;",
-            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 127;",
+            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;",
+            "pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT;",
             "first-release maximum validator geometry",
         ),
         (

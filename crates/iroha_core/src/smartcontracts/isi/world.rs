@@ -81,10 +81,7 @@ pub mod isi {
         da::pin_intent::DaPinIntentWithLocation,
         escrow::AssetEscrowStatus,
         events::data::{
-            confidential::{
-                ConfidentialEvent, ConfidentialShielded, ConfidentialTransferred,
-                ConfidentialUnshielded,
-            },
+            confidential::{ConfidentialEvent, ConfidentialTransferred},
             governance::{
                 GovernanceEvent, GovernanceParliamentApprovalRecorded,
                 GovernanceParliamentBallotRecorded, GovernanceReferendumClosed,
@@ -1840,11 +1837,14 @@ pub mod isi {
     }
 
     fn validate_confidential_transfer_v2_public_inputs(
-        transfer: &zk::ZkTransfer,
+        asset_definition: &AssetDefinitionId,
+        nullifiers: &[[u8; 32]],
+        output_commitments: &[[u8; 32]],
+        root_hint: Option<[u8; 32]>,
         attachment: &iroha_data_model::proof::ProofAttachment,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: &VerifyingKeyRecord,
-    ) -> Result<(), Error> {
+    ) -> Result<[[u8; 32]; 2], Error> {
         if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
             &vk_record.circuit_id,
         ) {
@@ -1875,23 +1875,23 @@ pub mod isi {
             vk_record,
             crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
         )?;
-        if transfer.inputs().is_empty()
-            || transfer.inputs().len() > 2
-            || transfer.outputs().is_empty()
-            || transfer.outputs().len() > 2
+        if nullifiers.is_empty()
+            || nullifiers.len() > 2
+            || output_commitments.is_empty()
+            || output_commitments.len() > 2
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "confidential transfer v2 requires 1-2 inputs and 1-2 outputs".into(),
             ));
         }
-        let (_input_commitments, proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag) =
+        let (input_commitments, proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag) =
             crate::zk::confidential_v2::parse_transfer_public_inputs(&attachment.proof.bytes)
                 .map_err(|err| {
                     InstructionExecutionError::InvariantViolation(
                         format!("invalid confidential transfer v2 public inputs: {err}").into(),
                     )
                 })?;
-        let root_hint = (*transfer.root_hint()).ok_or_else(|| {
+        let root_hint = root_hint.ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "confidential transfer v2 requires root_hint".into(),
             )
@@ -1903,13 +1903,13 @@ pub mod isi {
         }
         let zero = [0u8; 32];
         for index in 0..2 {
-            let expected_nullifier = transfer.inputs().get(index).copied().unwrap_or(zero);
+            let expected_nullifier = nullifiers.get(index).copied().unwrap_or(zero);
             if proof_nullifiers[index] != expected_nullifier {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "confidential transfer v2 nullifier mismatch".into(),
                 ));
             }
-            let expected_output = transfer.outputs().get(index).copied().unwrap_or(zero);
+            let expected_output = output_commitments.get(index).copied().unwrap_or(zero);
             if proof_outputs[index] != expected_output {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "confidential transfer v2 output commitment mismatch".into(),
@@ -1917,7 +1917,7 @@ pub mod isi {
             }
         }
         let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
-            &transfer.asset().to_string(),
+            &asset_definition.to_string(),
         );
         if asset_tag != expected_asset_tag {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1932,289 +1932,7 @@ pub mod isi {
                 "confidential transfer v2 chain tag mismatch".into(),
             ));
         }
-        Ok(())
-    }
-
-    fn protect_anonymous_escrow_commitments_from_generic_transfer(
-        transfer: &zk::ZkTransfer,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-        state_transaction: &StateTransaction<'_, '_>,
-        vk_record: &VerifyingKeyRecord,
-    ) -> Result<(), Error> {
-        if state_transaction.native_anonymous_escrow_transfer_depth > 0 {
-            return Ok(());
-        }
-
-        let active_commitments = state_transaction
-            .world
-            .anonymous_asset_escrows
-            .iter()
-            .filter_map(|(_, record)| {
-                (record.asset_definition == *transfer.asset()
-                    && matches!(
-                        record.status,
-                        AssetEscrowStatus::Open
-                            | AssetEscrowStatus::Accepted
-                            | AssetEscrowStatus::PaymentSent
-                            | AssetEscrowStatus::Disputed
-                    ))
-                .then_some(record.escrow_commitment)
-            })
-            .collect::<BTreeSet<_>>();
-        if active_commitments.is_empty() {
-            return Ok(());
-        }
-
-        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
-            &vk_record.circuit_id,
-        ) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "anonymous escrow custody requires confidential transfer v2 public inputs".into(),
-            ));
-        }
-
-        let (input_commitments, _nullifiers, _outputs, _root, _asset_tag, _chain_tag) =
-            crate::zk::confidential_v2::parse_transfer_public_inputs(&attachment.proof.bytes)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid confidential transfer v2 public inputs: {err}").into(),
-                    )
-                })?;
-        let zero = [0u8; 32];
-        if input_commitments
-            .iter()
-            .copied()
-            .filter(|commitment| commitment != &zero)
-            .any(|commitment| active_commitments.contains(&commitment))
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "anonymous escrow custody can only be spent by native escrow ISIs".into(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    fn validate_confidential_unshield_v2_public_inputs(
-        unshield: &zk::Unshield,
-        proof_public_amount: u128,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-        state_transaction: &StateTransaction<'_, '_>,
-        vk_record: &VerifyingKeyRecord,
-    ) -> Result<Vec<[u8; 32]>, Error> {
-        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v2 requires halo2/ipa backend".into(),
-            ));
-        }
-        validate_confidential_v2_open_verify_envelope_metadata(
-            "confidential unshield v2",
-            attachment,
-            state_transaction,
-            vk_record,
-            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
-        )?;
-        if unshield.inputs().is_empty() || unshield.inputs().len() > 2 {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v2 requires 1-2 inputs".into(),
-            ));
-        }
-        let (_input_commitments, proof_nullifiers, proof_root, public_amount, asset_tag, chain_tag) =
-            crate::zk::confidential_v2::parse_unshield_public_inputs(&attachment.proof.bytes)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid confidential unshield v2 public inputs: {err}").into(),
-                    )
-                })?;
-        let root_hint = (*unshield.root_hint()).ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "confidential unshield v2 requires root_hint".into(),
-            )
-        })?;
-        if proof_root != root_hint {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v2 root_hint mismatch".into(),
-            ));
-        }
-        let expected_public_amount =
-            crate::zk::confidential_v2::encode_confidential_amount_v2(proof_public_amount);
-        if public_amount != expected_public_amount {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v2 public amount mismatch".into(),
-            ));
-        }
-        let zero = [0u8; 32];
-        for index in 0..2 {
-            let expected_nullifier = unshield.inputs().get(index).copied().unwrap_or(zero);
-            if proof_nullifiers[index] != expected_nullifier {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "confidential unshield v2 nullifier mismatch".into(),
-                ));
-            }
-        }
-        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
-            &unshield.asset().to_string(),
-        );
-        if asset_tag != expected_asset_tag {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v2 asset tag mismatch".into(),
-            ));
-        }
-        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-            state_transaction.chain_id.as_str(),
-        );
-        if chain_tag != expected_chain_tag {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v2 chain tag mismatch".into(),
-            ));
-        }
-        // The full-unshield circuit has no authenticated private output column.
-        Ok(Vec::new())
-    }
-
-    fn validate_confidential_unshield_v3_public_inputs(
-        unshield: &zk::Unshield,
-        proof_public_amount: u128,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-        state_transaction: &StateTransaction<'_, '_>,
-        vk_record: &VerifyingKeyRecord,
-    ) -> Result<Vec<[u8; 32]>, Error> {
-        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 requires halo2/ipa backend".into(),
-            ));
-        }
-        validate_confidential_v2_open_verify_envelope_metadata(
-            "confidential unshield v3",
-            attachment,
-            state_transaction,
-            vk_record,
-            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
-        )?;
-        if unshield.inputs().is_empty() || unshield.inputs().len() > 2 {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 requires 1-2 inputs".into(),
-            ));
-        }
-        let (
-            _input_commitments,
-            proof_nullifiers,
-            proof_outputs,
-            proof_root,
-            public_amount,
-            asset_tag,
-            chain_tag,
-        ) = crate::zk::confidential_v2::parse_unshield_public_inputs_v3(&attachment.proof.bytes)
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid confidential unshield v3 public inputs: {err}").into(),
-                )
-            })?;
-        let root_hint = (*unshield.root_hint()).ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 requires root_hint".into(),
-            )
-        })?;
-        if proof_root != root_hint {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 root_hint mismatch".into(),
-            ));
-        }
-        let expected_public_amount =
-            crate::zk::confidential_v2::encode_confidential_amount_v2(proof_public_amount);
-        if public_amount != expected_public_amount {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 public amount mismatch".into(),
-            ));
-        }
-        let zero = [0u8; 32];
-        for index in 0..2 {
-            let expected_nullifier = unshield.inputs().get(index).copied().unwrap_or(zero);
-            if proof_nullifiers[index] != expected_nullifier {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "confidential unshield v3 nullifier mismatch".into(),
-                ));
-            }
-        }
-        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
-            &unshield.asset().to_string(),
-        );
-        if asset_tag != expected_asset_tag {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 asset tag mismatch".into(),
-            ));
-        }
-        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-            state_transaction.chain_id.as_str(),
-        );
-        if chain_tag != expected_chain_tag {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield v3 chain tag mismatch".into(),
-            ));
-        }
-        // A zero public column denotes no change note; otherwise the proof itself
-        // authenticates the sole commitment that execution must append.
-        Ok(if proof_outputs == zero {
-            Vec::new()
-        } else {
-            vec![proof_outputs]
-        })
-    }
-
-    fn validate_confidential_unshield_public_inputs(
-        unshield: &zk::Unshield,
-        proof_public_amount: u128,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-        state_transaction: &StateTransaction<'_, '_>,
-        vk_record: &VerifyingKeyRecord,
-    ) -> Result<Vec<[u8; 32]>, Error> {
-        if crate::zk::confidential_v2::is_confidential_unshield_v2_circuit_id(&vk_record.circuit_id)
-        {
-            let vk_box = vk_record.key.as_ref().ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "confidential unshield verifying key bytes are missing".into(),
-                )
-            })?;
-            crate::zk::confidential_v2::ensure_confidential_unshield_v2_canonical_vk_box(vk_box)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid confidential-unshield-v2 verifying key: {err}").into(),
-                    )
-                })?;
-            validate_confidential_unshield_v2_public_inputs(
-                unshield,
-                proof_public_amount,
-                attachment,
-                state_transaction,
-                vk_record,
-            )
-        } else if crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
-            &vk_record.circuit_id,
-        ) {
-            let vk_box = vk_record.key.as_ref().ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "confidential unshield verifying key bytes are missing".into(),
-                )
-            })?;
-            crate::zk::confidential_v2::ensure_confidential_unshield_v3_canonical_vk_box(vk_box)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid confidential-unshield-v3 verifying key: {err}").into(),
-                    )
-                })?;
-            validate_confidential_unshield_v3_public_inputs(
-                unshield,
-                proof_public_amount,
-                attachment,
-                state_transaction,
-                vk_record,
-            )
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                "confidential unshield requires a confidential-unshield-v2 or confidential-unshield-v3 circuit"
-                    .into(),
-            ))
-        }
+        Ok(input_commitments)
     }
 
     fn extract_vote_public_inputs(
@@ -2379,74 +2097,6 @@ pub mod isi {
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest[..32]);
         out
-    }
-
-    /// Convert a public economic quantity to the fixed-width scalar used by a
-    /// versioned proof circuit.
-    ///
-    /// This boundary is intentionally exact: proof circuits cannot silently
-    /// round fractional quantities or truncate values wider than `u128`.
-    fn quantity_to_u128_proof_scalar(
-        quantity: &Quantity,
-        field: &'static str,
-    ) -> Result<u128, Error> {
-        if quantity.scale() != 0 {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    format!("{field} must have scale 0 at the proof boundary").into(),
-                ),
-            ));
-        }
-        quantity.as_numeric().try_mantissa_u128().ok_or_else(|| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                format!("{field} exceeds the u128 proof-scalar range").into(),
-            ))
-            .into()
-        })
-    }
-
-    fn validate_asset_quantity(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        asset_definition: &AssetDefinitionId,
-        quantity: &Quantity,
-    ) -> Result<(), Error> {
-        let spec = state_transaction.numeric_spec_for(asset_definition)?;
-        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
-            quantity.as_numeric(),
-            spec,
-        )?;
-        Ok(())
-    }
-
-    fn unshield_audit_summary(
-        input_count: usize,
-        public_amount: &Quantity,
-        proof_hash_hex: String,
-        envelope_hash_hex: String,
-        call_hash_hex: String,
-    ) -> Json {
-        let mut summary = norito::json::native::Map::new();
-        summary.insert(
-            "inputs".into(),
-            norito::json::native::Value::from(input_count as u64),
-        );
-        summary.insert(
-            "public_amount".into(),
-            norito::json::native::Value::from(public_amount.to_string()),
-        );
-        summary.insert(
-            "proof_hash".into(),
-            norito::json::native::Value::from(proof_hash_hex),
-        );
-        summary.insert(
-            "envelope_hash".into(),
-            norito::json::native::Value::from(envelope_hash_hex),
-        );
-        summary.insert(
-            "call_hash".into(),
-            norito::json::native::Value::from(call_hash_hex),
-        );
-        Json::from(norito::json::native::Value::Object(summary))
     }
 
     fn reset_citizen_epoch(record: &mut crate::state::CitizenshipRecord, epoch: u64) {
@@ -2801,11 +2451,22 @@ pub mod isi {
         ))
     }
 
+    fn ensure_valid_governance_selector_v1(field: &str, value: &str) -> Result<(), Error> {
+        if !iroha_data_model::governance::is_valid_governance_selector_v1(value) {
+            return Err(invalid_smart_contract_parameter(format!(
+                "{field} must match {}",
+                iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
+            )));
+        }
+        Ok(())
+    }
+
     fn ensure_exact_governance_ballot_permission(
         authority: &AccountId,
         referendum_id: &str,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        ensure_valid_governance_selector_v1("referendum_id", referendum_id)?;
         let required: Permission = CanSubmitGovernanceBallot {
             referendum_id: referendum_id.to_owned(),
         }
@@ -6233,6 +5894,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_valid_governance_selector_v1("referendum_id", &self.referendum_id)?;
             let required: Permission = CanSlashGovernanceLock {
                 referendum_id: self.referendum_id.clone(),
             }
@@ -6266,6 +5928,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_valid_governance_selector_v1("referendum_id", &self.referendum_id)?;
             let required: Permission = CanRestituteGovernanceLock {
                 referendum_id: self.referendum_id.clone(),
             }
@@ -15135,7 +14798,7 @@ pub mod isi {
                 .cloned();
             let already_registered = existing_state.is_some();
             let mut st = existing_state.unwrap_or_default();
-            st.validate_tree_integrity().map_err(|err| {
+            st.validate_tree_metadata().map_err(|err| {
                 InstructionExecutionError::InvariantViolation(
                     format!("invalid persisted confidential tree state: {err}").into(),
                 )
@@ -15306,639 +14969,618 @@ pub mod isi {
         }
     }
 
-    pub(crate) fn privacy_public_asset_id(
-        state_transaction: &StateTransaction<'_, '_>,
-        asset_def_id: &AssetDefinitionId,
-        account_id: &AccountId,
-    ) -> Result<AssetId, Error> {
-        let asset_definition = state_transaction
-            .world
-            .asset_definition(asset_def_id)
-            .map_err(Error::from)?;
-        let scope = match asset_definition.balance_scope_policy() {
-            AssetBalancePolicy::Global => AssetBalanceScope::Global,
-            AssetBalancePolicy::DataspaceRestricted => {
-                let route_dataspace = state_transaction
-                    .current_dataspace_id
-                    .or(state_transaction.world.current_dataspace_id);
-                let dataspace = if let Some(dataspace) = route_dataspace
-                    .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
-                {
-                    Some(dataspace)
-                } else if let Some(dataspace) =
-                    asset_definition_declared_home_dataspace_id(state_transaction, &asset_definition)
-                {
-                    Some(dataspace)
-                } else {
-                    crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
-                        state_transaction,
-                        account_id,
-                    )?
-                }
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "dataspace-restricted shield requires a non-universal execution dataspace or a single account dataspace binding"
-                            .into(),
-                    )
-                })?;
-                AssetBalanceScope::Dataspace(dataspace)
-            }
-        };
-        let asset_id = AssetId::with_scope(asset_def_id.clone(), account_id.clone(), scope);
-        state_transaction
-            .world
-            .resolve_asset_id_for_current_scope(&asset_id)
+    pub(in crate::smartcontracts::isi) fn emit_verified_native_confidential_transfer_event(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        asset_definition: AssetDefinitionId,
+        nullifiers: Vec<[u8; 32]>,
+        outputs: Vec<[u8; 32]>,
+        root_before: Option<[u8; 32]>,
+        root_after: [u8; 32],
+        proof_hash: [u8; 32],
+        envelope_hash: Option<[u8; 32]>,
+    ) {
+        let call_hash = state_transaction.tx_call_hash.as_ref().map(|hash| {
+            let mut bytes = [0_u8; 32];
+            bytes.copy_from_slice(hash.as_ref());
+            bytes
+        });
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::events::data::DataEvent::Confidential(
+                ConfidentialEvent::Transferred(ConfidentialTransferred {
+                    asset_definition,
+                    nullifiers,
+                    outputs,
+                    root_before,
+                    root_after,
+                    proof_hash,
+                    envelope_hash,
+                    call_hash,
+                }),
+            ),
+        ));
     }
 
-    fn asset_definition_declared_home_dataspace_id(
-        state_transaction: &StateTransaction<'_, '_>,
-        asset_definition: &iroha_data_model::asset::AssetDefinition,
-    ) -> Option<DataSpaceId> {
-        let dataspace_alias = state_transaction
+    /// Apply one confidential transfer admitted by the private Kaigi fee binding checks.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn apply_verified_private_kaigi_fee_transfer(
+        authorization: crate::tx::VerifiedPrivateKaigiFeeTransfer,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let (asset_def_id, nullifiers, output_commitments, attachment, root_hint) =
+            authorization.into_parts();
+        let mut st = state_transaction
             .world
-            .asset_definition_domains
-            .get(asset_definition.id())
-            .map(|domain| domain.dataspace().as_ref().to_owned())
-            .or_else(|| {
-                state_transaction
-                    .world
-                    .asset_definition_alias_bindings
-                    .get(asset_definition.id())
-                    .map(|binding| binding.alias.dataspace_segment().to_owned())
-            })
-            .or_else(|| {
-                asset_definition
-                    .alias()
-                    .as_ref()
-                    .map(|alias| alias.dataspace_segment().to_owned())
+            .zk_assets
+            .get(&asset_def_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "private Kaigi fee asset has no confidential state".into(),
+                )
             })?;
-
-        if dataspace_alias.eq_ignore_ascii_case("universal") {
-            return None;
+        state_transaction.register_nullifiers(nullifiers.len())?;
+        state_transaction.register_commitments(output_commitments.len())?;
+        if attachment.backend != attachment.proof.backend {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "proof backend mismatch".into(),
+            ));
+        }
+        let policy_mode = apply_policy_if_due(state_transaction, &asset_def_id)?.mode();
+        if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private Kaigi fee transfer not permitted by policy".into(),
+            ));
         }
 
-        state_transaction
-            .nexus
-            .dataspace_catalog
-            .by_alias(&dataspace_alias)
-            .or_else(|| {
-                state_transaction
-                    .world
-                    .dataspace_catalog
-                    .by_alias(&dataspace_alias)
-            })
-            .map(|entry| entry.id)
-            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
-    }
-
-    impl Execute for zk::Shield {
-        #[allow(clippy::too_many_lines)]
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            // Plan the complete tree transition before debiting the public balance.
-            // Policy: ZkNative always ok; Hybrid requires allow_shield.
-            let def_id = self.asset().clone();
-            validate_asset_quantity(state_transaction, &def_id, self.amount())?;
-            let policy_mode = apply_policy_if_due(state_transaction, &def_id)?.mode();
-            match policy_mode {
-                ConfidentialPolicyMode::TransparentOnly => {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "shield not permitted by policy".into(),
-                    ));
-                }
-                ConfidentialPolicyMode::Convertible => {
-                    if let Some(st) = state_transaction.world.zk_assets.get(&def_id) {
-                        if !st.allow_shield {
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "shield not permitted by policy".into(),
-                            ));
-                        }
-                    } else {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "shield not permitted by policy".into(),
-                        ));
-                    }
-                }
-                ConfidentialPolicyMode::ShieldedOnly => {}
+        let mut seen_nullifiers = BTreeSet::new();
+        for &nullifier in &nullifiers {
+            if !seen_nullifiers.insert(nullifier) || st.nullifiers.contains(&nullifier) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "duplicate nullifier".into(),
+                ));
             }
-            let asset_id = privacy_public_asset_id(state_transaction, &def_id, self.from())?;
-            self.enc_payload().validate().map_err(|err| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.to_string(),
-                ))
-            })?;
-            state_transaction.register_commitments(1)?;
-            // Append commitment and update root; emit audit metadata with roots and commitment.
-            let mut st = state_transaction
-                .world
-                .zk_assets
-                .get(&def_id)
-                .cloned()
-                .unwrap_or_default();
-            let root_before = st.root_history.last().copied();
-            let root_before_hex = root_before.map_or_else(|| hex::encode([0u8; 32]), hex::encode);
-            #[cfg(feature = "telemetry")]
-            let root_history_before = st.root_history.len();
-            let new_root = push_confidential_commitment_for_asset(
-                &mut st,
-                *self.note_commitment(),
-                state_transaction,
-            )?;
-            let frontier_update = st
-                .record_frontier_checkpoint(
-                    state_transaction.block_height(),
-                    state_transaction.zk.tree_frontier_checkpoint_interval,
-                    state_transaction.zk.reorg_depth_bound,
-                )
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("failed to checkpoint canonical confidential tree: {err}").into(),
-                    )
-                })?;
-            #[cfg(feature = "telemetry")]
-            let frontier_evictions = frontier_update.evicted;
-            #[cfg(not(feature = "telemetry"))]
-            let _ = frontier_update;
-            let root_after_hex = hex::encode(new_root);
-            #[cfg(feature = "telemetry")]
-            let telemetry_stats = {
-                let root_evictions =
-                    root_evictions_since(root_history_before, 1, st.root_history.len());
-                st.telemetry_stats(root_evictions, frontier_evictions)
-            };
-            let burn = Burn::asset_quantity(self.amount().clone(), asset_id);
-            burn.execute(authority, state_transaction)?;
-            state_transaction.world.zk_assets.remove(def_id.clone());
-            state_transaction.world.zk_assets.insert(def_id.clone(), st);
-            #[cfg(feature = "telemetry")]
-            state_transaction
-                .telemetry
-                .record_confidential_tree_stats(&def_id, telemetry_stats);
-            // Emit audit metadata pulse under `zk.shield.last`
-            let key: Name = "zk.shield.last".parse().unwrap();
-            let mut last_map = BTreeMap::new();
-            last_map.insert(
-                "commitment".into(),
-                norito::json::native::Value::from(hex::encode(self.note_commitment())),
-            );
-            last_map.insert(
-                "root_before".into(),
-                norito::json::native::Value::from(root_before_hex),
-            );
-            last_map.insert(
-                "root_after".into(),
-                norito::json::native::Value::from(root_after_hex),
-            );
-            let summary =
-                iroha_primitives::json::Json::from(norito::json::native::Value::Object(last_map));
-            state_transaction
-                .world
-                .asset_definition_mut(&def_id)
-                .map_err(Error::from)
-                .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
-                    iroha_data_model::prelude::MetadataChanged {
-                        target: def_id.clone(),
-                        key,
-                        value: summary,
-                    },
-                ),
-            ));
-            let call_hash = state_transaction.tx_call_hash.as_ref().map(|h| {
-                let mut bytes = [0u8; 32];
-                bytes.copy_from_slice(h.as_ref());
-                bytes
-            });
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::DataEvent::Confidential(
-                    ConfidentialEvent::Shielded(ConfidentialShielded {
-                        asset_definition: def_id,
-                        account: self.from().clone(),
-                        commitment: *self.note_commitment(),
-                        root_before,
-                        root_after: new_root,
-                        call_hash,
-                    }),
-                ),
-            ));
-            Ok(())
         }
-    }
+        if !st.root_history.iter().any(|root| root == &root_hint) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "stale or unknown Merkle root".into(),
+            ));
+        }
 
-    impl Execute for zk::ZkTransfer {
-        #[allow(clippy::too_many_lines)]
-        fn execute(
-            self,
-            _authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            // Consume nullifiers and append outputs in shielded ledger; no public balance change here.
-            // Emit a metadata pulse for observability under a reserved transient key.
-            let asset_def_id = self.asset().clone();
-            let mut st = state_transaction
-                .world
-                .zk_assets
-                .get(&asset_def_id)
-                .cloned()
-                .unwrap_or_default();
-            state_transaction.register_nullifiers(self.inputs().len())?;
-            state_transaction.register_commitments(self.outputs().len())?;
-            let attachment = self.proof();
-            if attachment.backend != attachment.proof.backend {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "proof backend mismatch".into(),
-                ));
-            }
-            let policy_mode = apply_policy_if_due(state_transaction, &asset_def_id)?.mode();
-            if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "transfer not permitted by policy".into(),
-                ));
-            }
-            // Reject both previously spent nullifiers and repeated inputs within this transfer.
-            let mut seen_nullifiers = std::collections::BTreeSet::new();
-            for &nullifier in self.inputs() {
-                if !seen_nullifiers.insert(nullifier) || st.nullifiers.contains(&nullifier) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "duplicate nullifier".into(),
-                    ));
-                }
-            }
-            let root_hint = (*self.root_hint()).ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "confidential transfer requires root_hint".into(),
-                )
-            })?;
-            if !st.root_history.iter().any(|root| root == &root_hint) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "stale or unknown Merkle root".into(),
-                ));
-            }
-            let (vk_box, vk_record) = resolve_bound_asset_vk(
-                "confidential transfer",
-                state_transaction,
-                st.vk_transfer.as_ref(),
-                attachment,
-            )?;
-            validate_confidential_transfer_v2_public_inputs(
-                &self,
-                attachment,
-                state_transaction,
-                &vk_record,
-            )?;
-            protect_anonymous_escrow_commitments_from_generic_transfer(
-                &self,
-                attachment,
-                state_transaction,
-                &vk_record,
-            )?;
-            let proof_len = attachment.proof.bytes.len();
-            enforce_vk_max_proof_bytes("transfer", &vk_record, proof_len)?;
-            state_transaction.register_confidential_proof(proof_len)?;
-            let report = crate::zk::verify_backend_with_timing_checked(
-                attachment.backend.as_str(),
-                &attachment.proof,
-                Some(&vk_box),
-                &state_transaction.zk,
-            );
-            if !report.ok {
-                if state_transaction.trust_committed_execution_results {
-                    iroha_logger::warn!(
-                        backend = attachment.backend.as_str(),
-                        proof_len,
-                        "replay rejected committed ZK transfer result after local proof verifier rejection"
-                    );
-                }
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "invalid transfer proof".into(),
-                ));
-            }
-            for &nullifier in self.inputs() {
-                st.nullifiers.insert(nullifier);
-            }
-            let root_before = st.root_history.last().copied();
-            let root_before_hex = root_before.map_or_else(|| hex::encode([0u8; 32]), hex::encode);
-            // Proof public inputs authenticate this exact order; append it unchanged.
-            let authenticated_outputs = self.outputs().clone();
-            #[cfg(feature = "telemetry")]
-            let root_history_before = st.root_history.len();
-            #[cfg(feature = "telemetry")]
-            let appended_outputs = authenticated_outputs.len();
-            let _ = push_confidential_commitments_for_asset(
-                &mut st,
-                &authenticated_outputs,
-                state_transaction,
-            )?;
-            let frontier_update = st
-                .record_frontier_checkpoint(
-                    state_transaction.block_height(),
-                    state_transaction.zk.tree_frontier_checkpoint_interval,
-                    state_transaction.zk.reorg_depth_bound,
-                )
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("failed to checkpoint canonical confidential tree: {err}").into(),
+        let (vk_box, vk_record) = resolve_bound_asset_vk(
+            "private Kaigi fee transfer",
+            state_transaction,
+            st.vk_transfer.as_ref(),
+            &attachment,
+        )?;
+        let proof_input_commitments = validate_confidential_transfer_v2_public_inputs(
+            &asset_def_id,
+            &nullifiers,
+            &output_commitments,
+            Some(root_hint),
+            &attachment,
+            state_transaction,
+            &vk_record,
+        )?;
+        let zero = [0_u8; 32];
+        let proof_inputs = proof_input_commitments
+            .iter()
+            .copied()
+            .filter(|commitment| commitment != &zero)
+            .collect::<Vec<_>>();
+        let consumes_active_escrow = state_transaction
+            .world
+            .anonymous_asset_escrows
+            .iter()
+            .filter(|(_, record)| {
+                record.asset_definition == asset_def_id
+                    && matches!(
+                        record.status,
+                        AssetEscrowStatus::Open
+                            | AssetEscrowStatus::Accepted
+                            | AssetEscrowStatus::PaymentSent
+                            | AssetEscrowStatus::Disputed
                     )
-                })?;
-            #[cfg(feature = "telemetry")]
-            let frontier_evictions = frontier_update.evicted;
-            #[cfg(not(feature = "telemetry"))]
-            let _ = frontier_update;
-            let root_after = st.current_root().map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("failed to read canonical confidential root: {err}").into(),
-                )
-            })?;
-            let root_after_hex = hex::encode(root_after);
-            #[cfg(feature = "telemetry")]
-            let telemetry_stats = {
-                let root_evictions = root_evictions_since(
-                    root_history_before,
-                    appended_outputs,
-                    st.root_history.len(),
+            })
+            .any(|(_, record)| proof_inputs.contains(&record.escrow_commitment));
+        if consumes_active_escrow {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private Kaigi fee transfer cannot spend active anonymous escrow custody".into(),
+            ));
+        }
+
+        let proof_len = attachment.proof.bytes.len();
+        enforce_vk_max_proof_bytes("private Kaigi fee transfer", &vk_record, proof_len)?;
+        state_transaction.register_confidential_proof(proof_len)?;
+        let report = crate::zk::verify_backend_with_timing_checked(
+            attachment.backend.as_str(),
+            &attachment.proof,
+            Some(&vk_box),
+            &state_transaction.zk,
+        );
+        if !report.ok {
+            if state_transaction.trust_committed_execution_results {
+                iroha_logger::warn!(
+                    backend = attachment.backend.as_str(),
+                    proof_len,
+                    "replay rejected committed private Kaigi fee transfer after local proof verifier rejection"
                 );
-                st.telemetry_stats(root_evictions, frontier_evictions)
-            };
-            let key: Name = "zk.transfer.last".parse().unwrap();
-            // Include envelope/proof hash for auditability
-            let proof_hash = crate::zk::hash_proof(&self.proof().proof);
-            let proof_hash_hex = hex::encode(proof_hash);
-            let call_hash_hex = state_transaction
-                .tx_call_hash
-                .as_ref()
-                .map(|h| hex::encode(h.as_ref()))
-                .unwrap_or_default();
-            let env_hash_hex = self
-                .proof()
-                .envelope_hash
-                .as_ref()
-                .map(hex::encode)
-                .unwrap_or_default();
-            let mut summary_map = norito::json::native::Map::new();
-            summary_map.insert(
-                "inputs".into(),
-                norito::json::native::Value::from(self.inputs().len() as u64),
-            );
-            summary_map.insert(
-                "outputs".into(),
-                norito::json::native::Value::from(authenticated_outputs.len() as u64),
-            );
-            summary_map.insert(
-                "proof_hash".into(),
-                norito::json::native::Value::from(proof_hash_hex),
-            );
-            summary_map.insert(
-                "envelope_hash".into(),
-                norito::json::native::Value::from(env_hash_hex),
-            );
-            summary_map.insert(
-                "call_hash".into(),
-                norito::json::native::Value::from(call_hash_hex),
-            );
-            summary_map.insert(
-                "root_before".into(),
-                norito::json::native::Value::from(root_before_hex),
-            );
-            summary_map.insert(
-                "root_after".into(),
-                norito::json::native::Value::from(root_after_hex),
-            );
-            let outputs_value = authenticated_outputs
-                .iter()
-                .map(|commitment| norito::json::native::Value::from(hex::encode(commitment)))
-                .collect();
-            summary_map.insert(
-                "outputs_commitments".into(),
-                norito::json::native::Value::Array(outputs_value),
-            );
-            let summary = iroha_primitives::json::Json::from(norito::json::native::Value::Object(
-                summary_map,
+            }
+            return Err(InstructionExecutionError::InvariantViolation(
+                "invalid private Kaigi fee transfer proof".into(),
             ));
-            state_transaction
-                .world
-                .asset_definition_mut(&asset_def_id)
-                .map_err(Error::from)
-                .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
-                    iroha_data_model::prelude::MetadataChanged {
-                        target: asset_def_id.clone(),
-                        key,
-                        value: summary,
-                    },
-                ),
-            ));
-            // Write back updated ZK state
-            state_transaction
-                .world
-                .zk_assets
-                .remove(asset_def_id.clone());
-            state_transaction
-                .world
-                .zk_assets
-                .insert(asset_def_id.clone(), st);
-            #[cfg(feature = "telemetry")]
-            state_transaction
-                .telemetry
-                .record_confidential_tree_stats(&asset_def_id, telemetry_stats);
-            let call_hash = state_transaction.tx_call_hash.as_ref().map(|h| {
-                let mut bytes = [0u8; 32];
-                bytes.copy_from_slice(h.as_ref());
-                bytes
-            });
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::DataEvent::Confidential(
-                    ConfidentialEvent::Transferred(ConfidentialTransferred {
-                        asset_definition: asset_def_id,
-                        nullifiers: self.inputs().clone(),
-                        outputs: authenticated_outputs,
-                        root_before,
-                        root_after,
-                        proof_hash,
-                        envelope_hash: self.proof().envelope_hash,
-                        call_hash,
-                    }),
-                ),
-            ));
-            Ok(())
         }
-    }
 
-    impl Execute for zk::Unshield {
-        #[allow(clippy::too_many_lines)]
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            // Consume nullifiers and credit public balance by minting.
-            let proof_public_amount =
-                quantity_to_u128_proof_scalar(self.public_amount(), "unshield public amount")?;
-            validate_asset_quantity(state_transaction, self.asset(), self.public_amount())?;
-            let asset_id = AssetId::of(self.asset().clone(), self.to().clone());
-            let def_id = self.asset().clone();
-            let policy_mode = apply_policy_if_due(state_transaction, &def_id)?.mode();
-            match policy_mode {
-                ConfidentialPolicyMode::TransparentOnly | ConfidentialPolicyMode::ShieldedOnly => {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "unshield not permitted by policy".into(),
-                    ));
-                }
-                ConfidentialPolicyMode::Convertible => {
-                    if let Some(st) = state_transaction.world.zk_assets.get(&def_id) {
-                        if !st.allow_unshield {
-                            return Err(InstructionExecutionError::InvariantViolation(
-                                "unshield not permitted by policy".into(),
-                            ));
-                        }
-                    } else {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "unshield not permitted by policy".into(),
-                        ));
-                    }
-                }
-            }
-            let mut st = state_transaction
-                .world
-                .zk_assets
-                .get(&def_id)
-                .cloned()
-                .unwrap_or_default();
-            state_transaction.register_nullifiers(self.inputs().len())?;
-            let attachment = self.proof();
-            if attachment.backend != attachment.proof.backend {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "proof backend mismatch".into(),
-                ));
-            }
-            let root_hint = (*self.root_hint()).ok_or_else(|| {
+        for &nullifier in &nullifiers {
+            st.nullifiers.insert(nullifier);
+        }
+        let root_before = st.root_history.last().copied();
+        let root_before_hex = root_before.map_or_else(|| hex::encode([0_u8; 32]), hex::encode);
+        let authenticated_outputs = output_commitments;
+        #[cfg(feature = "telemetry")]
+        let root_history_before = st.root_history.len();
+        #[cfg(feature = "telemetry")]
+        let appended_outputs = authenticated_outputs.len();
+        let _ = push_confidential_commitments_for_asset(
+            &mut st,
+            &authenticated_outputs,
+            state_transaction,
+        )?;
+        let frontier_update = st
+            .record_frontier_checkpoint(
+                state_transaction.block_height(),
+                state_transaction.zk.tree_frontier_checkpoint_interval,
+                state_transaction.zk.reorg_depth_bound,
+            )
+            .map_err(|err| {
                 InstructionExecutionError::InvariantViolation(
-                    "confidential unshield requires root_hint".into(),
+                    format!("failed to checkpoint canonical confidential tree: {err}").into(),
                 )
             })?;
-            if !st.root_history.iter().any(|root| root == &root_hint) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "stale or unknown Merkle root".into(),
-                ));
-            }
-            let (vk_box, vk_record) = resolve_bound_asset_vk(
-                "confidential unshield",
-                state_transaction,
-                st.vk_unshield.as_ref(),
-                attachment,
-            )?;
-            let authenticated_outputs = validate_confidential_unshield_public_inputs(
-                &self,
-                proof_public_amount,
-                attachment,
-                state_transaction,
-                &vk_record,
-            )?;
-            state_transaction.register_commitments(authenticated_outputs.len())?;
-            let proof_len = attachment.proof.bytes.len();
-            enforce_vk_max_proof_bytes("unshield", &vk_record, proof_len)?;
-            state_transaction.register_confidential_proof(proof_len)?;
-            let report = crate::zk::verify_backend_with_timing_checked(
-                attachment.backend.as_str(),
-                &attachment.proof,
-                Some(&vk_box),
-                &state_transaction.zk,
-            );
-            if !report.ok {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "invalid unshield proof".into(),
-                ));
-            }
-            for &nullifier in self.inputs() {
-                if !st.nullifiers.insert(nullifier) {
+        #[cfg(feature = "telemetry")]
+        let frontier_evictions = frontier_update.evicted;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = frontier_update;
+        let root_after = st.current_root().map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to read canonical confidential root: {err}").into(),
+            )
+        })?;
+        let root_after_hex = hex::encode(root_after);
+        #[cfg(feature = "telemetry")]
+        let telemetry_stats = {
+            let root_evictions =
+                root_evictions_since(root_history_before, appended_outputs, st.root_history.len());
+            st.telemetry_stats(root_evictions, frontier_evictions)
+        };
+
+        let key: Name = "zk.transfer.last".parse().expect("static metadata key");
+        let proof_hash = crate::zk::hash_proof(&attachment.proof);
+        let call_hash_hex = state_transaction
+            .tx_call_hash
+            .as_ref()
+            .map(|hash| hex::encode(hash.as_ref()))
+            .unwrap_or_default();
+        let envelope_hash_hex = attachment
+            .envelope_hash
+            .as_ref()
+            .map(hex::encode)
+            .unwrap_or_default();
+        let mut summary_map = norito::json::native::Map::new();
+        summary_map.insert(
+            "inputs".into(),
+            norito::json::native::Value::from(nullifiers.len() as u64),
+        );
+        summary_map.insert(
+            "outputs".into(),
+            norito::json::native::Value::from(authenticated_outputs.len() as u64),
+        );
+        summary_map.insert(
+            "proof_hash".into(),
+            norito::json::native::Value::from(hex::encode(proof_hash)),
+        );
+        summary_map.insert(
+            "envelope_hash".into(),
+            norito::json::native::Value::from(envelope_hash_hex),
+        );
+        summary_map.insert(
+            "call_hash".into(),
+            norito::json::native::Value::from(call_hash_hex),
+        );
+        summary_map.insert(
+            "root_before".into(),
+            norito::json::native::Value::from(root_before_hex),
+        );
+        summary_map.insert(
+            "root_after".into(),
+            norito::json::native::Value::from(root_after_hex),
+        );
+        summary_map.insert(
+            "outputs_commitments".into(),
+            norito::json::native::Value::Array(
+                authenticated_outputs
+                    .iter()
+                    .map(|commitment| norito::json::native::Value::from(hex::encode(commitment)))
+                    .collect(),
+            ),
+        );
+        let summary =
+            iroha_primitives::json::Json::from(norito::json::native::Value::Object(summary_map));
+        state_transaction
+            .world
+            .asset_definition_mut(&asset_def_id)
+            .map_err(Error::from)
+            .map(|definition| {
+                definition
+                    .metadata_mut()
+                    .insert(key.clone(), summary.clone())
+            })?;
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
+                iroha_data_model::prelude::MetadataChanged {
+                    target: asset_def_id.clone(),
+                    key,
+                    value: summary,
+                },
+            ),
+        ));
+        state_transaction
+            .world
+            .zk_assets
+            .remove(asset_def_id.clone());
+        state_transaction
+            .world
+            .zk_assets
+            .insert(asset_def_id.clone(), st);
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .telemetry
+            .record_confidential_tree_stats(&asset_def_id, telemetry_stats);
+        emit_verified_native_confidential_transfer_event(
+            state_transaction,
+            asset_def_id,
+            nullifiers,
+            authenticated_outputs,
+            root_before,
+            root_after,
+            proof_hash,
+            attachment.envelope_hash,
+        );
+        Ok(())
+    }
+
+    /// Apply one transfer authorized by a sealed native anonymous-escrow capability.
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::smartcontracts::isi) fn apply_verified_native_anonymous_escrow_transfer(
+        authorization: crate::smartcontracts::isi::escrow::VerifiedNativeAnonymousEscrowTransfer,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::isi::escrow::VerifiedNativeAnonymousEscrowPurpose;
+
+        let (
+            purpose,
+            authority,
+            asset_def_id,
+            nullifiers,
+            output_commitments,
+            attachment,
+            root_hint,
+        ) = authorization.into_parts();
+
+        match &purpose {
+            VerifiedNativeAnonymousEscrowPurpose::Funding {
+                escrow_id,
+                escrow_commitment,
+            } => {
+                if state_transaction
+                    .world
+                    .asset_escrows
+                    .get(escrow_id)
+                    .is_some()
+                    || state_transaction
+                        .world
+                        .anonymous_asset_escrows
+                        .get(escrow_id)
+                        .is_some()
+                {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "duplicate nullifier".into(),
+                        "native anonymous escrow funding context already exists".into(),
+                    ));
+                }
+                if output_commitments.as_slice() != [*escrow_commitment] {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native anonymous escrow funding must create its exact custody commitment"
+                            .into(),
+                    ));
+                }
+                state_transaction.world.account(&authority)?;
+            }
+            VerifiedNativeAnonymousEscrowPurpose::Closing {
+                escrow_id,
+                escrow_commitment,
+                expected_status,
+            } => {
+                let record = state_transaction
+                    .world
+                    .anonymous_asset_escrows
+                    .get(escrow_id)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "native anonymous escrow close context is missing".into(),
+                        )
+                    })?;
+                if record.asset_definition != asset_def_id
+                    || record.escrow_commitment != *escrow_commitment
+                    || record.status != *expected_status
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native anonymous escrow close context changed before application".into(),
+                    ));
+                }
+                if !matches!(
+                    expected_status,
+                    AssetEscrowStatus::Open
+                        | AssetEscrowStatus::Accepted
+                        | AssetEscrowStatus::PaymentSent
+                        | AssetEscrowStatus::Disputed
+                ) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native anonymous escrow close requires an active lifecycle state".into(),
+                    ));
+                }
+                if !matches!(expected_status, AssetEscrowStatus::Disputed)
+                    && record.seller != authority
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native anonymous escrow close authority changed before application".into(),
+                    ));
+                }
+                if nullifiers.len() != 1 {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native anonymous escrow close requires exactly one nullifier".into(),
                     ));
                 }
             }
-            let root_before = st.root_history.last().copied();
-            let _ = push_confidential_commitments_for_asset(
-                &mut st,
-                &authenticated_outputs,
-                state_transaction,
-            )?;
-            let _frontier_update = st
-                .record_frontier_checkpoint(
-                    state_transaction.block_height(),
-                    state_transaction.zk.tree_frontier_checkpoint_interval,
-                    state_transaction.zk.reorg_depth_bound,
-                )
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("failed to checkpoint canonical confidential tree: {err}").into(),
-                    )
-                })?;
-            let mint = Mint::asset_quantity(self.public_amount().clone(), asset_id);
-            mint.execute(authority, state_transaction)?;
-            // Emit an audit pulse with latest unshield info, including proof hash
-            let key: Name = "zk.unshield.last".parse().unwrap();
-            let proof_hash = crate::zk::hash_proof(&self.proof().proof);
-            let proof_hash_hex = hex::encode(proof_hash);
-            let call_hash_hex = state_transaction
-                .tx_call_hash
-                .as_ref()
-                .map(|h| hex::encode(h.as_ref()))
-                .unwrap_or_default();
-            let env_hash_hex = self
-                .proof()
-                .envelope_hash
-                .as_ref()
-                .map(hex::encode)
-                .unwrap_or_default();
-            let summary = unshield_audit_summary(
-                self.inputs().len(),
-                self.public_amount(),
-                proof_hash_hex,
-                env_hash_hex,
-                call_hash_hex,
-            );
-            state_transaction
-                .world
-                .asset_definition_mut(&def_id)
-                .map_err(Error::from)
-                .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
-                    iroha_data_model::prelude::MetadataChanged {
-                        target: def_id.clone(),
-                        key,
-                        value: summary,
-                    },
-                ),
-            ));
-            state_transaction.world.zk_assets.remove(def_id.clone());
-            state_transaction.world.zk_assets.insert(def_id.clone(), st);
-            let call_hash = state_transaction.tx_call_hash.as_ref().map(|h| {
-                let mut bytes = [0u8; 32];
-                bytes.copy_from_slice(h.as_ref());
-                bytes
-            });
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::DataEvent::Confidential(
-                    ConfidentialEvent::Unshielded(ConfidentialUnshielded {
-                        asset_definition: def_id,
-                        account: self.to().clone(),
-                        public_amount: self.public_amount().clone(),
-                        nullifiers: self.inputs().clone(),
-                        root_hint: *self.root_hint(),
-                        proof_hash,
-                        envelope_hash: self.proof().envelope_hash,
-                        call_hash,
-                    }),
-                ),
-            ));
-            let _ = root_before;
-            Ok(())
         }
+
+        // Consume nullifiers and append outputs in shielded ledger; no public balance change here.
+        // Emit a metadata pulse for observability under a reserved transient key.
+        let mut st = state_transaction
+            .world
+            .zk_assets
+            .get(&asset_def_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "native anonymous escrow asset has no confidential state".into(),
+                )
+            })?;
+        state_transaction.register_nullifiers(nullifiers.len())?;
+        state_transaction.register_commitments(output_commitments.len())?;
+        if attachment.backend != attachment.proof.backend {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "proof backend mismatch".into(),
+            ));
+        }
+        let policy_mode = apply_policy_if_due(state_transaction, &asset_def_id)?.mode();
+        if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "transfer not permitted by policy".into(),
+            ));
+        }
+        // Reject both previously spent nullifiers and repeated inputs within this transfer.
+        let mut seen_nullifiers = std::collections::BTreeSet::new();
+        for &nullifier in &nullifiers {
+            if !seen_nullifiers.insert(nullifier) || st.nullifiers.contains(&nullifier) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "duplicate nullifier".into(),
+                ));
+            }
+        }
+        let root_hint = root_hint.ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "confidential transfer requires root_hint".into(),
+            )
+        })?;
+        if !st.root_history.iter().any(|root| root == &root_hint) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "stale or unknown Merkle root".into(),
+            ));
+        }
+        let (vk_box, vk_record) = resolve_bound_asset_vk(
+            "confidential transfer",
+            state_transaction,
+            st.vk_transfer.as_ref(),
+            &attachment,
+        )?;
+        let proof_input_commitments = validate_confidential_transfer_v2_public_inputs(
+            &asset_def_id,
+            &nullifiers,
+            &output_commitments,
+            Some(root_hint),
+            &attachment,
+            state_transaction,
+            &vk_record,
+        )?;
+        let zero = [0_u8; 32];
+        let proof_inputs = proof_input_commitments
+            .iter()
+            .copied()
+            .filter(|commitment| commitment != &zero)
+            .collect::<Vec<_>>();
+        match &purpose {
+            VerifiedNativeAnonymousEscrowPurpose::Funding { .. } => {
+                super::escrow::ensure_anonymous_escrow_funding_inputs_are_unreserved(
+                    &state_transaction.world,
+                    &asset_def_id,
+                    &proof_inputs,
+                )?;
+            }
+            VerifiedNativeAnonymousEscrowPurpose::Closing {
+                escrow_commitment, ..
+            } => {
+                if proof_inputs.as_slice() != [*escrow_commitment] {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                            "native anonymous escrow close proof must spend only its exact custody commitment"
+                                .into(),
+                        ));
+                }
+            }
+        }
+        let proof_len = attachment.proof.bytes.len();
+        enforce_vk_max_proof_bytes("native anonymous escrow transfer", &vk_record, proof_len)?;
+        state_transaction.register_confidential_proof(proof_len)?;
+        let report = crate::zk::verify_backend_with_timing_checked(
+            attachment.backend.as_str(),
+            &attachment.proof,
+            Some(&vk_box),
+            &state_transaction.zk,
+        );
+        if !report.ok {
+            if state_transaction.trust_committed_execution_results {
+                iroha_logger::warn!(
+                    backend = attachment.backend.as_str(),
+                    proof_len,
+                    "replay rejected committed native anonymous escrow transfer after local proof verifier rejection"
+                );
+            }
+            return Err(InstructionExecutionError::InvariantViolation(
+                "invalid native anonymous escrow transfer proof".into(),
+            ));
+        }
+        for &nullifier in &nullifiers {
+            st.nullifiers.insert(nullifier);
+        }
+        let root_before = st.root_history.last().copied();
+        let root_before_hex = root_before.map_or_else(|| hex::encode([0u8; 32]), hex::encode);
+        // Proof public inputs authenticate this exact order; append it unchanged.
+        let authenticated_outputs = output_commitments;
+        #[cfg(feature = "telemetry")]
+        let root_history_before = st.root_history.len();
+        #[cfg(feature = "telemetry")]
+        let appended_outputs = authenticated_outputs.len();
+        let _ = push_confidential_commitments_for_asset(
+            &mut st,
+            &authenticated_outputs,
+            state_transaction,
+        )?;
+        let frontier_update = st
+            .record_frontier_checkpoint(
+                state_transaction.block_height(),
+                state_transaction.zk.tree_frontier_checkpoint_interval,
+                state_transaction.zk.reorg_depth_bound,
+            )
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("failed to checkpoint canonical confidential tree: {err}").into(),
+                )
+            })?;
+        #[cfg(feature = "telemetry")]
+        let frontier_evictions = frontier_update.evicted;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = frontier_update;
+        let root_after = st.current_root().map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to read canonical confidential root: {err}").into(),
+            )
+        })?;
+        let root_after_hex = hex::encode(root_after);
+        #[cfg(feature = "telemetry")]
+        let telemetry_stats = {
+            let root_evictions =
+                root_evictions_since(root_history_before, appended_outputs, st.root_history.len());
+            st.telemetry_stats(root_evictions, frontier_evictions)
+        };
+        let key: Name = "zk.anonymous_escrow_transfer.last".parse().unwrap();
+        // Include envelope/proof hash for auditability
+        let proof_hash = crate::zk::hash_proof(&attachment.proof);
+        let proof_hash_hex = hex::encode(proof_hash);
+        let call_hash_hex = state_transaction
+            .tx_call_hash
+            .as_ref()
+            .map(|h| hex::encode(h.as_ref()))
+            .unwrap_or_default();
+        let env_hash_hex = attachment
+            .envelope_hash
+            .as_ref()
+            .map(hex::encode)
+            .unwrap_or_default();
+        let mut summary_map = norito::json::native::Map::new();
+        summary_map.insert(
+            "inputs".into(),
+            norito::json::native::Value::from(nullifiers.len() as u64),
+        );
+        summary_map.insert(
+            "outputs".into(),
+            norito::json::native::Value::from(authenticated_outputs.len() as u64),
+        );
+        summary_map.insert(
+            "proof_hash".into(),
+            norito::json::native::Value::from(proof_hash_hex),
+        );
+        summary_map.insert(
+            "envelope_hash".into(),
+            norito::json::native::Value::from(env_hash_hex),
+        );
+        summary_map.insert(
+            "call_hash".into(),
+            norito::json::native::Value::from(call_hash_hex),
+        );
+        summary_map.insert(
+            "root_before".into(),
+            norito::json::native::Value::from(root_before_hex),
+        );
+        summary_map.insert(
+            "root_after".into(),
+            norito::json::native::Value::from(root_after_hex),
+        );
+        let outputs_value = authenticated_outputs
+            .iter()
+            .map(|commitment| norito::json::native::Value::from(hex::encode(commitment)))
+            .collect();
+        summary_map.insert(
+            "outputs_commitments".into(),
+            norito::json::native::Value::Array(outputs_value),
+        );
+        let summary =
+            iroha_primitives::json::Json::from(norito::json::native::Value::Object(summary_map));
+        state_transaction
+            .world
+            .asset_definition_mut(&asset_def_id)
+            .map_err(Error::from)
+            .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
+        state_transaction.world.emit_events(Some(
+            iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
+                iroha_data_model::prelude::MetadataChanged {
+                    target: asset_def_id.clone(),
+                    key,
+                    value: summary,
+                },
+            ),
+        ));
+        // Write back updated ZK state
+        state_transaction
+            .world
+            .zk_assets
+            .remove(asset_def_id.clone());
+        state_transaction
+            .world
+            .zk_assets
+            .insert(asset_def_id.clone(), st);
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .telemetry
+            .record_confidential_tree_stats(&asset_def_id, telemetry_stats);
+        emit_verified_native_confidential_transfer_event(
+            state_transaction,
+            asset_def_id,
+            nullifiers,
+            authenticated_outputs,
+            root_before,
+            root_after,
+            proof_hash,
+            attachment.envelope_hash,
+        );
+        Ok(())
     }
 
     // --- ZK Voting ---
@@ -16157,6 +15799,7 @@ pub mod isi {
                     "not permitted: CanManageParliament".into(),
                 ));
             }
+            ensure_valid_governance_selector_v1("election_id", self.election_id())?;
             let options = *self.options();
             let tally_slots = zk::validate_election_options_v1(options)
                 .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
@@ -16386,6 +16029,7 @@ pub mod isi {
                     "not permitted: CanEnactGovernance".into(),
                 ));
             }
+            ensure_valid_governance_selector_v1("election_id", self.election_id())?;
             let id = self.election_id().clone();
             let now_ms = u64::try_from(state_transaction._curr_block.creation_time().as_millis())
                 .unwrap_or(u64::MAX);
@@ -22866,6 +22510,204 @@ pub mod isi {
         }
 
         #[test]
+        fn create_election_rejects_noncanonical_selector_before_mutating_governance_state() {
+            use iroha_executor_data_model::permission::governance::CanManageParliament;
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanManageParliament)]),
+            );
+            let instruction = zk::CreateElection {
+                election_id: "invalid/election".to_owned(),
+                options: 2,
+                eligible_root: [0; 32],
+                start_ts: 0,
+                end_ts: 1,
+                vk_ballot: VerifyingKeyId::new("halo2/ipa", "ballot-v1"),
+                vk_tally: VerifyingKeyId::new("halo2/ipa", "tally-v1"),
+                domain_tag: "selector-regression".to_owned(),
+            };
+
+            let error = instruction
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("a noncanonical election selector must fail closed");
+            assert!(
+                format!("{error:?}").contains("election_id must match"),
+                "unexpected selector rejection: {error:?}"
+            );
+            assert!(state_transaction.world.elections.iter().next().is_none());
+            assert!(
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+        }
+
+        #[test]
+        fn ballot_permission_rejects_noncanonical_selector_before_permission_lookup() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let referendum_id = "invalid/referendum";
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.to_owned(),
+                })]),
+            );
+
+            let error = ensure_exact_governance_ballot_permission(
+                &ALICE_ID,
+                referendum_id,
+                &state_transaction,
+            )
+            .expect_err("noncanonical selectors must fail before exact permission admission");
+            assert!(
+                format!("{error:?}").contains("referendum_id must match"),
+                "unexpected selector rejection: {error:?}"
+            );
+        }
+
+        #[test]
+        fn finalize_election_rejects_noncanonical_selector_before_state_lookup() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanEnactGovernance)]),
+            );
+            let backend = "halo2/ipa";
+            let tally_proof = iroha_data_model::proof::ProofAttachment::new_ref(
+                backend.into(),
+                iroha_data_model::proof::ProofBox::new(backend.into(), vec![0x01]),
+                iroha_data_model::proof::VerifyingKeyId::new(backend, "tally-v1"),
+            );
+
+            let error = zk::FinalizeElection {
+                election_id: "invalid/election".to_owned(),
+                tally: vec![0, 0],
+                tally_proof,
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a noncanonical selector must fail before election lookup");
+            assert!(
+                format!("{error:?}").contains("election_id must match"),
+                "unexpected selector rejection: {error:?}"
+            );
+            assert!(state_transaction.world.elections.iter().next().is_none());
+        }
+
+        #[test]
+        fn slash_and_restitution_reject_noncanonical_selectors_before_permission_lookup() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let referendum_id = "invalid/referendum";
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([
+                    Permission::from(CanSlashGovernanceLock {
+                        referendum_id: referendum_id.to_owned(),
+                    }),
+                    Permission::from(CanRestituteGovernanceLock {
+                        referendum_id: referendum_id.to_owned(),
+                    }),
+                ]),
+            );
+
+            let slash_error = gov::SlashGovernanceLock {
+                referendum_id: referendum_id.to_owned(),
+                owner: BOB_ID.clone(),
+                amount: Quantity::from(1_u64),
+                reason: "selector regression".to_owned(),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("noncanonical slash selectors must fail before permission lookup");
+            assert!(format!("{slash_error:?}").contains("referendum_id must match"));
+
+            let restitution_error = gov::RestituteGovernanceLock {
+                referendum_id: referendum_id.to_owned(),
+                owner: BOB_ID.clone(),
+                amount: Quantity::from(1_u64),
+                reason: "selector regression".to_owned(),
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("noncanonical restitution selectors must fail before permission lookup");
+            assert!(format!("{restitution_error:?}").contains("referendum_id must match"));
+            assert!(
+                state_transaction
+                    .world
+                    .governance_locks
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_slashes
+                    .iter()
+                    .next()
+                    .is_none()
+            );
+        }
+
+        #[test]
         fn scoped_governance_mutation_isis_reject_wrong_targets_without_state_changes() {
             let state = State::new_for_testing(
                 World::default(),
@@ -23127,99 +22969,6 @@ pub mod isi {
                     .mode(),
                 ConfidentialPolicyMode::Convertible
             );
-        }
-
-        #[test]
-        fn public_quantity_proof_scalar_boundary_is_exact() {
-            let maximum = Quantity::from(u128::MAX);
-            assert_eq!(
-                quantity_to_u128_proof_scalar(&maximum, "test amount")
-                    .expect("u128::MAX is a valid V1 proof scalar"),
-                u128::MAX
-            );
-
-            for (literal, expected_message) in [
-                ("0.1", "must have scale 0"),
-                (
-                    "340282366920938463463374607431768211456",
-                    "exceeds the u128 proof-scalar range",
-                ),
-            ] {
-                let amount: Quantity = literal.parse().expect("valid public quantity");
-                let error = quantity_to_u128_proof_scalar(&amount, "test amount")
-                    .expect_err("quantity outside the proof scalar domain must fail");
-                assert!(
-                    smart_contract_instruction_error_message(error).contains(expected_message),
-                    "unexpected proof-boundary error for {literal}"
-                );
-            }
-        }
-
-        #[test]
-        fn unshield_audit_summary_preserves_quantity_above_u64() {
-            let amount: Quantity = "18446744073709551616"
-                .parse()
-                .expect("quantity immediately above u64::MAX");
-            let summary = unshield_audit_summary(
-                2,
-                &amount,
-                "proof".to_owned(),
-                "envelope".to_owned(),
-                "call".to_owned(),
-            );
-            assert_eq!(
-                summary.as_ref(),
-                r#"{"call_hash":"call","envelope_hash":"envelope","inputs":2,"proof_hash":"proof","public_amount":"18446744073709551616"}"#
-            );
-        }
-
-        #[test]
-        fn invalid_public_proof_quantities_fail_before_world_effects() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let asset = AssetDefinitionId::derive_from_components(
-                DomainId::try_new("missing", "universal").expect("valid domain"),
-                "asset".parse().expect("valid asset name"),
-            );
-            let proof = ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0xA5]),
-                VerifyingKeyId::new("halo2/ipa", "missing"),
-            );
-
-            for (literal, expected_message) in [
-                ("1.5", "must have scale 0"),
-                (
-                    "340282366920938463463374607431768211456",
-                    "exceeds the u128 proof-scalar range",
-                ),
-            ] {
-                let amount: Quantity = literal.parse().expect("valid public quantity");
-                let unshield = iroha_data_model::isi::zk::Unshield::new(
-                    asset.clone(),
-                    ALICE_ID.clone(),
-                    amount.clone(),
-                    vec![[0x11; 32]],
-                    proof.clone(),
-                    None,
-                );
-                let error = unshield
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("invalid proof scalar must reject unshield");
-                assert!(
-                    smart_contract_instruction_error_message(error).contains(expected_message),
-                    "unexpected unshield proof-boundary error for {literal}"
-                );
-            }
-
-            assert!(stx.world.asset_definitions.is_empty());
-            assert!(stx.world.assets.is_empty());
-            assert!(stx.world.zk_assets.is_empty());
-            assert!(stx.world.take_external_events().is_empty());
         }
 
         #[test]
@@ -27864,516 +27613,6 @@ seiyaku GovernanceLifecycle {
                     .expect("fund SCCP custody fixture");
             }
             (asset, custody)
-        }
-
-        fn restricted_shield_fixture(
-            account_uaid: Option<UniversalAccountId>,
-            bindings: &[(UniversalAccountId, DataSpaceId)],
-            balances: &[(AssetBalanceScope, u64)],
-        ) -> (State, AssetDefinitionId, Vec<AssetId>) {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = new_account_in_domain(&ALICE_ID)
-                .with_uaid(account_uaid)
-                .build(&ALICE_ID);
-            let asset_def_id = AssetDefinitionId::derive_from_components(
-                domain_id.clone(),
-                "ticket".parse().expect("asset name"),
-            );
-            let mut asset_definition = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "ticket",
-                AssetBalancePolicy::DataspaceRestricted,
-                Some(domain_id.clone()),
-            )
-            .with_confidential_policy(AssetConfidentialPolicy::convertible())
-            .build(&ALICE_ID);
-            asset_definition.total_quantity =
-                balances
-                    .iter()
-                    .fold(Quantity::zero(), |total, (_, amount)| {
-                        total
-                            .checked_add(&Quantity::from(*amount))
-                            .expect("restricted shield fixture total must not overflow")
-                    });
-            let asset_ids: Vec<_> = balances
-                .iter()
-                .map(|(scope, _)| {
-                    AssetId::with_scope(asset_def_id.clone(), ALICE_ID.clone(), *scope)
-                })
-                .collect();
-            let assets: Vec<_> = asset_ids
-                .iter()
-                .zip(balances.iter())
-                .map(|(asset_id, (_, amount))| {
-                    Asset::new(asset_id.clone(), Quantity::from(*amount))
-                })
-                .collect();
-            let mut world = World::with_assets([domain], [account], [asset_definition], assets, []);
-            world.zk_assets.insert(asset_def_id.clone(), {
-                let mut state = crate::state::ZkAssetState::default();
-                state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
-                state.allow_shield = true;
-                state
-            });
-
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(world, kura, query_handle);
-            let mut grouped: BTreeMap<
-                UniversalAccountId,
-                crate::nexus::space_directory::UaidDataspaceBindings,
-            > = BTreeMap::new();
-            for (uaid, dataspace) in bindings {
-                grouped
-                    .entry(*uaid)
-                    .or_default()
-                    .bind_account(*dataspace, ALICE_ID.clone());
-            }
-            for (uaid, bindings) in grouped {
-                state.world.uaid_accounts.insert(uaid, ALICE_ID.clone());
-                state.world.uaid_dataspaces.insert(uaid, bindings);
-            }
-            (state, asset_def_id, asset_ids)
-        }
-
-        fn shield_amount(
-            stx: &mut StateTransaction<'_, '_>,
-            asset_def_id: &AssetDefinitionId,
-            amount: u128,
-        ) -> Result<(), InstructionExecutionError> {
-            shield_amount_with_payload(
-                stx,
-                asset_def_id,
-                amount,
-                valid_confidential_encrypted_payload_for_tests(),
-            )
-        }
-
-        fn shield_amount_with_payload(
-            stx: &mut StateTransaction<'_, '_>,
-            asset_def_id: &AssetDefinitionId,
-            amount: u128,
-            enc_payload: iroha_data_model::confidential::ConfidentialEncryptedPayload,
-        ) -> Result<(), InstructionExecutionError> {
-            iroha_data_model::isi::zk::Shield::new(
-                asset_def_id.clone(),
-                ALICE_ID.clone(),
-                amount,
-                [3; 32],
-                enc_payload,
-            )
-            .execute(&ALICE_ID, stx)
-        }
-
-        fn valid_confidential_encrypted_payload_for_tests()
-        -> iroha_data_model::confidential::ConfidentialEncryptedPayload {
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
-                [0x07; 32],
-                [0x08; 24],
-                vec![0x09, 0x0A],
-            )
-        }
-
-        fn quantity_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Quantity {
-            stx.world
-                .assets
-                .get(asset_id)
-                .expect("asset balance exists")
-                .as_ref()
-                .clone()
-        }
-
-        fn commitment_count(
-            stx: &StateTransaction<'_, '_>,
-            asset_def_id: &AssetDefinitionId,
-        ) -> usize {
-            stx.world
-                .zk_assets
-                .get(asset_def_id)
-                .map_or(0, |state| state.commitments.len())
-        }
-
-        #[test]
-        fn shield_rejects_invalid_confidential_payload_before_state_change() {
-            let dataspace = DataSpaceId::new(7);
-            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
-                None,
-                &[],
-                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(dataspace);
-            stx.world.current_dataspace_id = Some(dataspace);
-
-            for (payload, expected) in [
-                (
-                    iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
-                        [0u8; 32],
-                        [0x08; 24],
-                        vec![0x09],
-                    ),
-                    "low-order",
-                ),
-                (
-                    iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
-                        [0x07; 32],
-                        [0x08; 24],
-                        Vec::new(),
-                    ),
-                    "ciphertext must not be empty",
-                ),
-            ] {
-                let err = shield_amount_with_payload(&mut stx, &asset_def_id, 3, payload)
-                    .expect_err("invalid confidential payload must fail closed");
-                let msg = smart_contract_instruction_error_message(err);
-                assert!(msg.contains(expected), "expected `{expected}` in `{msg}`");
-                assert_eq!(
-                    quantity_balance(&stx, &asset_ids[0]),
-                    Quantity::from(10_u32)
-                );
-                assert_eq!(commitment_count(&stx, &asset_def_id), 0);
-            }
-        }
-
-        #[test]
-        fn shield_restricted_asset_uses_unique_account_dataspace_on_universal_route() {
-            let dataspace = DataSpaceId::new(7);
-            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::shield-source"));
-            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
-                Some(uaid),
-                &[(uaid, dataspace)],
-                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
-            );
-            let scoped_asset_id = asset_ids[0].clone();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            assert!(
-                stx.world
-                    .uaid_dataspaces
-                    .iter()
-                    .any(|(_, bindings)| bindings.is_bound_to(dataspace, &ALICE_ID)),
-                "fixture must expose the account dataspace binding"
-            );
-            assert_eq!(
-                crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
-                    &stx, &ALICE_ID
-                )
-                .expect("dataspace hint resolves"),
-                Some(dataspace)
-            );
-
-            shield_amount(&mut stx, &asset_def_id, 3)
-                .expect("shield must debit the account's scoped transparent balance");
-
-            assert_eq!(
-                quantity_balance(&stx, &scoped_asset_id),
-                Quantity::from(7_u32)
-            );
-            let universal_asset_id = AssetId::with_scope(
-                asset_def_id.clone(),
-                ALICE_ID.clone(),
-                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
-            );
-            assert!(
-                stx.world.assets.get(&universal_asset_id).is_none(),
-                "universal route must not debit a universal bucket when the account has one private dataspace binding"
-            );
-            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
-        }
-
-        #[test]
-        fn shield_restricted_asset_uses_definition_home_dataspace_on_universal_route() {
-            let home_dataspace = DataSpaceId::new(8);
-            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
-                None,
-                &[],
-                &[(AssetBalanceScope::Dataspace(home_dataspace), 10)],
-            );
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let dataspace_catalog = DataSpaceCatalog::new(vec![
-                DataSpaceMetadata::default(),
-                DataSpaceMetadata {
-                    id: home_dataspace,
-                    alias: "paynet".to_owned(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
-            .expect("dataspace catalog");
-            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
-            stx.world.dataspace_catalog = dataspace_catalog;
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world
-                .bind_asset_definition_alias(
-                    &asset_def_id,
-                    "ticket#paynet".parse().expect("asset alias"),
-                    None,
-                    None,
-                    0,
-                )
-                .expect("bind asset definition alias");
-
-            shield_amount(&mut stx, &asset_def_id, 3)
-                .expect("universal route should use the asset definition home dataspace");
-
-            assert_eq!(quantity_balance(&stx, &asset_ids[0]), Quantity::from(7_u32));
-            let universal_asset_id = AssetId::with_scope(
-                asset_def_id.clone(),
-                ALICE_ID.clone(),
-                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
-            );
-            assert!(
-                stx.world.assets.get(&universal_asset_id).is_none(),
-                "definition-home routing must not fall back to a universal bucket"
-            );
-            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
-        }
-
-        #[test]
-        fn shield_restricted_asset_uses_non_universal_route_without_account_binding() {
-            let dataspace = DataSpaceId::new(7);
-            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
-                None,
-                &[],
-                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(dataspace);
-            stx.world.current_dataspace_id = Some(dataspace);
-
-            shield_amount(&mut stx, &asset_def_id, 4)
-                .expect("non-universal route determines the restricted public bucket");
-
-            assert_eq!(quantity_balance(&stx, &asset_ids[0]), Quantity::from(6_u32));
-            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
-        }
-
-        #[test]
-        fn shield_restricted_asset_non_universal_route_overrides_ambiguous_bindings() {
-            let first_dataspace = DataSpaceId::new(7);
-            let route_dataspace = DataSpaceId::new(8);
-            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::route-shield"));
-            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
-                Some(uaid),
-                &[(uaid, first_dataspace), (uaid, route_dataspace)],
-                &[
-                    (AssetBalanceScope::Dataspace(first_dataspace), 10),
-                    (AssetBalanceScope::Dataspace(route_dataspace), 11),
-                ],
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(route_dataspace);
-            stx.world.current_dataspace_id = Some(route_dataspace);
-
-            shield_amount(&mut stx, &asset_def_id, 4)
-                .expect("non-universal route must select the route bucket directly");
-
-            assert_eq!(
-                quantity_balance(&stx, &asset_ids[0]),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(quantity_balance(&stx, &asset_ids[1]), Quantity::from(7_u32));
-            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
-        }
-
-        #[test]
-        fn shield_restricted_asset_rejects_universal_route_without_account_dataspace() {
-            let universal_asset_id = AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL);
-            let (state, asset_def_id, asset_ids) =
-                restricted_shield_fixture(None, &[], &[(universal_asset_id, 10)]);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
-            let err = shield_amount(&mut stx, &asset_def_id, 3)
-                .expect_err("universal route without a unique binding must not choose a bucket");
-
-            match err {
-                InstructionExecutionError::InvariantViolation(message) => assert!(
-                    message.contains("dataspace-restricted shield requires"),
-                    "unexpected invariant message: {message}"
-                ),
-                other => panic!("unexpected error: {other:?}"),
-            }
-            assert_eq!(
-                quantity_balance(&stx, &asset_ids[0]),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
-        }
-
-        #[test]
-        fn shield_restricted_asset_rejects_ambiguous_universal_route_bindings() {
-            let first_dataspace = DataSpaceId::new(7);
-            let second_dataspace = DataSpaceId::new(8);
-            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::ambiguous-shield"));
-            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
-                Some(uaid),
-                &[(uaid, first_dataspace), (uaid, second_dataspace)],
-                &[
-                    (AssetBalanceScope::Dataspace(first_dataspace), 10),
-                    (AssetBalanceScope::Dataspace(second_dataspace), 11),
-                ],
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
-            let err = shield_amount(&mut stx, &asset_def_id, 3)
-                .expect_err("ambiguous account bindings must not be guessed");
-
-            match err {
-                InstructionExecutionError::InvariantViolation(message) => assert!(
-                    message.contains("multiple dataspaces"),
-                    "unexpected invariant message: {message}"
-                ),
-                other => panic!("unexpected error: {other:?}"),
-            }
-            assert_eq!(
-                quantity_balance(&stx, &asset_ids[0]),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(
-                quantity_balance(&stx, &asset_ids[1]),
-                Quantity::from(11_u32)
-            );
-            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
-        }
-
-        #[test]
-        fn shield_restricted_asset_ignores_stale_unrelated_uaid_binding() {
-            let dataspace = DataSpaceId::new(7);
-            let account_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::shield-account"));
-            let stale_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-shield"));
-            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
-                Some(account_uaid),
-                &[(stale_uaid, dataspace)],
-                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
-            let err = shield_amount(&mut stx, &asset_def_id, 3)
-                .expect_err("stale bindings for another UAID must not select a shield bucket");
-
-            match err {
-                InstructionExecutionError::InvariantViolation(message) => assert!(
-                    message.contains("dataspace-restricted shield requires"),
-                    "unexpected invariant message: {message}"
-                ),
-                other => panic!("unexpected error: {other:?}"),
-            }
-            assert_eq!(
-                quantity_balance(&stx, &asset_ids[0]),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
-        }
-
-        #[test]
-        fn shield_restricted_asset_does_not_fall_back_to_universal_bucket() {
-            let dataspace = DataSpaceId::new(7);
-            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::no-fallback-shield"));
-            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
-                Some(uaid),
-                &[(uaid, dataspace)],
-                &[(AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL), 10)],
-            );
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
-            let err = shield_amount(&mut stx, &asset_def_id, 3)
-                .expect_err("missing private bucket must not debit a universal bucket");
-
-            assert!(
-                matches!(err, InstructionExecutionError::Find(FindError::Asset(_)))
-                    || err.to_string().contains("NotEnoughQuantity"),
-                "unexpected error: {err:?}"
-            );
-            assert_eq!(
-                quantity_balance(&stx, &asset_ids[0]),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(commitment_count(&stx, &asset_def_id), 0);
-        }
-
-        #[test]
-        fn shield_global_asset_still_uses_global_bucket_on_universal_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
-            let asset_def_id = AssetDefinitionId::derive_from_components(
-                domain_id.clone(),
-                "coupon".parse().expect("asset name"),
-            );
-            let mut asset_definition = AssetDefinition::numeric(
-                asset_def_id.clone(),
-                "coupon",
-                AssetBalancePolicy::Global,
-                None,
-            )
-            .with_confidential_policy(AssetConfidentialPolicy::convertible())
-            .build(&ALICE_ID);
-            asset_definition.total_quantity = Quantity::from(10_u32);
-            let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(10_u32));
-            let mut world =
-                World::with_assets([domain], [account], [asset_definition], [asset], []);
-            world.zk_assets.insert(asset_def_id.clone(), {
-                let mut state = crate::state::ZkAssetState::default();
-                state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
-                state.allow_shield = true;
-                state
-            });
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
-            shield_amount(&mut stx, &asset_def_id, 3)
-                .expect("global assets must keep using the global public bucket");
-
-            assert_eq!(quantity_balance(&stx, &asset_id), Quantity::from(7_u32));
-            let universal_asset_id = AssetId::with_scope(
-                asset_def_id.clone(),
-                ALICE_ID.clone(),
-                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
-            );
-            assert!(
-                stx.world.assets.get(&universal_asset_id).is_none(),
-                "global shield must not move balances into a dataspace bucket"
-            );
-            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
         }
 
         fn seed_manifest_record(
@@ -33650,226 +32889,6 @@ seiyaku GovernanceLifecycle {
             } else {
                 (BackendTag::Halo2IpaPasta, "pallas", "halo2_default")
             }
-        }
-
-        fn fail_closed_confidential_fixture(domain_name: &str) -> (State, AssetDefinitionId) {
-            let domain_id = DomainId::try_new(domain_name, "universal").expect("domain id parses");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
-            let asset_definition_id = AssetDefinitionId::derive_from_components(
-                domain_id,
-                "token".parse().expect("asset name"),
-            );
-            let asset_definition = AssetDefinition::numeric(
-                asset_definition_id.clone(),
-                "token",
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .with_confidential_policy(AssetConfidentialPolicy::convertible())
-            .build(&ALICE_ID);
-            let mut world = World::with_assets([domain], [account], [asset_definition], [], []);
-            world.zk_assets.insert(asset_definition_id.clone(), {
-                let mut state = crate::state::ZkAssetState::default();
-                state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
-                state.allow_shield = true;
-                state.allow_unshield = true;
-                state.root_history.push([0u8; 32]);
-                state
-            });
-            (
-                State::new(
-                    world,
-                    Kura::blank_kura_for_testing(),
-                    LiveQueryStore::start_test(),
-                ),
-                asset_definition_id,
-            )
-        }
-
-        fn fail_closed_proof_attachment(vk_id: VerifyingKeyId) -> ProofAttachment {
-            ProofAttachment::new_ref(
-                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
-                ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), vec![0xCA, 0xFE]),
-                vk_id,
-            )
-        }
-
-        fn confidential_state_snapshot(
-            state_transaction: &StateTransaction<'_, '_>,
-            asset_definition_id: &AssetDefinitionId,
-        ) -> (Vec<[u8; 32]>, BTreeSet<[u8; 32]>, Vec<[u8; 32]>) {
-            let state = state_transaction
-                .world
-                .zk_assets
-                .get(asset_definition_id)
-                .expect("confidential state");
-            (
-                state.commitments.clone(),
-                state.nullifiers.clone(),
-                state.root_history.clone(),
-            )
-        }
-
-        #[test]
-        fn confidential_transfer_missing_bound_verifier_cannot_mutate_state() {
-            let (state, asset_definition_id) = fail_closed_confidential_fixture("cfmissingvk");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let before = confidential_state_snapshot(&stx, &asset_definition_id);
-            let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
-                asset_definition_id.clone(),
-                vec![[0x11; 32]],
-                vec![[0x22; 32]],
-                fail_closed_proof_attachment(VerifyingKeyId::new(
-                    crate::zk::ZK_BACKEND_HALO2_IPA,
-                    "unbound-transfer",
-                )),
-                Some([0u8; 32]),
-            );
-
-            let error = transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("an unbound transfer verifier must fail closed");
-            assert!(
-                smart_contract_instruction_error_message(error)
-                    .contains("confidential transfer verifying key is not configured")
-            );
-            assert_eq!(
-                confidential_state_snapshot(&stx, &asset_definition_id),
-                before
-            );
-        }
-
-        #[cfg(feature = "zk-halo2-ipa")]
-        #[test]
-        fn confidential_transfer_arbitrary_key_claiming_v2_cannot_mutate_state() {
-            let (state, asset_definition_id) = fail_closed_confidential_fixture("cfarbitraryvk");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_id =
-                VerifyingKeyId::new(crate::zk::ZK_BACKEND_HALO2_IPA, "arbitrary-transfer-v2");
-            let vk_box =
-                VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), vec![1, 2, 3, 4]);
-            let commitment = hash_vk(&vk_box);
-            let mut record = VerifyingKeyRecord::new_with_owner(
-                1,
-                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
-                None,
-                "test",
-                BackendTag::Halo2IpaPasta,
-                "pallas",
-                CryptoHash::new(
-                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-                )
-                .into(),
-                commitment,
-            );
-            record.status = ConfidentialStatus::Active;
-            record.vk_len = 4;
-            record.key = Some(vk_box);
-            stx.world.verifying_keys.insert(vk_id.clone(), record);
-            let mut confidential_state = stx
-                .world
-                .zk_assets
-                .get(&asset_definition_id)
-                .cloned()
-                .expect("confidential state");
-            confidential_state.vk_transfer = Some(crate::state::ZkAssetVerifierBinding {
-                id: vk_id.clone(),
-                commitment,
-            });
-            stx.world.zk_assets.remove(asset_definition_id.clone());
-            stx.world
-                .zk_assets
-                .insert(asset_definition_id.clone(), confidential_state);
-            let before = confidential_state_snapshot(&stx, &asset_definition_id);
-            let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
-                asset_definition_id.clone(),
-                vec![[0x31; 32]],
-                vec![[0x32; 32]],
-                fail_closed_proof_attachment(vk_id),
-                Some([0u8; 32]),
-            );
-
-            let error = transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("an arbitrary key claiming transfer v2 must fail closed");
-            assert!(
-                smart_contract_instruction_error_message(error)
-                    .contains("invalid confidential-transfer-v2 verifying key")
-            );
-            assert_eq!(
-                confidential_state_snapshot(&stx, &asset_definition_id),
-                before
-            );
-        }
-
-        #[test]
-        fn confidential_unshield_wrong_circuit_cannot_mutate_state_or_mint() {
-            let (state, asset_definition_id) = fail_closed_confidential_fixture("cfwrongcircuit");
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_id =
-                VerifyingKeyId::new(crate::zk::ZK_BACKEND_HALO2_IPA, "wrong-unshield-circuit");
-            let vk_box =
-                VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), vec![4, 3, 2, 1]);
-            let commitment = hash_vk(&vk_box);
-            let mut record = VerifyingKeyRecord::new_with_owner(
-                1,
-                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
-                None,
-                "test",
-                BackendTag::Halo2IpaPasta,
-                "pallas",
-                [0u8; 32],
-                commitment,
-            );
-            record.status = ConfidentialStatus::Active;
-            record.vk_len = 4;
-            record.key = Some(vk_box);
-            stx.world.verifying_keys.insert(vk_id.clone(), record);
-            let mut confidential_state = stx
-                .world
-                .zk_assets
-                .get(&asset_definition_id)
-                .cloned()
-                .expect("confidential state");
-            confidential_state.vk_unshield = Some(crate::state::ZkAssetVerifierBinding {
-                id: vk_id.clone(),
-                commitment,
-            });
-            stx.world.zk_assets.remove(asset_definition_id.clone());
-            stx.world
-                .zk_assets
-                .insert(asset_definition_id.clone(), confidential_state);
-            let before = confidential_state_snapshot(&stx, &asset_definition_id);
-            let public_asset_id = AssetId::of(asset_definition_id.clone(), ALICE_ID.clone());
-            assert!(stx.world.assets.get(&public_asset_id).is_none());
-            let unshield = iroha_data_model::isi::zk::Unshield::new(
-                asset_definition_id.clone(),
-                ALICE_ID.clone(),
-                5u128,
-                vec![[0x41; 32]],
-                fail_closed_proof_attachment(vk_id),
-                Some([0u8; 32]),
-            );
-
-            let error = unshield
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("an unshield key for the wrong circuit must fail closed");
-            assert!(
-                smart_contract_instruction_error_message(error)
-                    .contains("confidential unshield requires a confidential-unshield-v2 or confidential-unshield-v3 circuit")
-            );
-            assert_eq!(
-                confidential_state_snapshot(&stx, &asset_definition_id),
-                before
-            );
-            assert!(stx.world.assets.get(&public_asset_id).is_none());
         }
 
         #[test]

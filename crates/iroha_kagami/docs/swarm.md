@@ -10,7 +10,8 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
 
 ### Options
 
-- `-p, --peers <COUNT>`: Specifies the number of peer services in the configuration.
+- `-p, --peers <COUNT>`: Specifies an exact Sumeragi `3f + 1` validator
+  committee in the supported range 4 through 31.
 
 - `-s, --seed <SEED>`: Enables deterministic development mode.
   - This mode generates validator identities from the public seed and requires the three
@@ -42,18 +43,46 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
 - `-c, --config-dir <DIR>`: Selects the authoritative prepared bundle.
   - Normal mode requires `genesis.json`, exactly `peer0.toml` through `peerN.toml`,
     `genesis.signed.nrt`, `genesis.public_key`, and `genesis.expected_hash`.
-  - Kagami verifies the signed body and signer, then requires every peer config's chain,
-    verifier key, exact hash, trusted roster, validator identity, and PoP map to agree exactly
-    with the signed `RegisterPeerWithPop` roster.
+  - Kagami reads each source config without ambient environment overrides and
+    rejects `extends`. It verifies the canonical signed body and signer, checks
+    that every instruction batch exactly realizes the bound `genesis.json`
+    manifest (including the staging-derived consensus commitment), then
+    requires every peer config's chain, verifier key, exact hash, trusted
+    roster, validator identity, and PoP map to agree exactly with the signed
+    `RegisterPeerWithPop` roster.
   - With `--seed`, only `genesis.json` is used for policy validation.
-  - The directory itself, source manifest, private signing key, and client credentials are never
-    mounted into runtime containers.
+  - Kagami derives a content-addressed, container-safe projection from each
+    validated `peerN.toml` and mounts it as the `/config/peer.toml` Compose
+    secret. Before publication it reparses the projection without ambient
+    overrides or inheritance and proves that the Sumeragi fingerprint,
+    deterministic execution policy, and Nexus/AMX consensus context are
+    unchanged. The launcher passes the projection's BLAKE3 digest to `irohad`,
+    which reads, hashes, and parses the same bytes at startup.
+  - Projection rewrites durable paths to `/storage` and public auxiliary paths
+    to `/config/runtime`. Private Torii account-onboarding and faucet key files
+    are mounted as dedicated Compose secrets; their bytes never appear in
+    Compose YAML or environment variables. Byte-exact public policy assets,
+    including binary Norito inputs, are interned by digest, stored as base64
+    Compose configs, and decoded into `/config/runtime` before `irohad` starts.
+  - The source peer configs, bundle directory, source manifest, genesis private
+    signing key, and client credentials are never mounted. Prepared mode also
+    fails closed when a requested transport, CIDR filter, or helper-service
+    mode cannot be represented without changing the validated runtime
+    semantics.
 
 The generated Compose manifest is validator-only and contains no genesis
 signing key or signing service. In normal mode it reuses the exact validator
-identities from the prepared bundle and embeds relative read-only paths for the
-verifier key, independently approved exact hash, and signed body. It cannot
-silently generate a roster different from the one signed into genesis:
+identities from the prepared bundle and mounts read-only secrets for the
+validated content-addressed config projection, verifier key, independently
+approved exact hash, and signed body. Validator private keys remain inside the
+file-backed config secret and are not serialized into Compose YAML or
+environment variables. Each validator receives a named `/storage` volume.
+Prepared mode accepts fresh state only: it neither imports nor migrates an
+existing live validator state tree into those volumes. Fresh-state admission
+checks every effective path that the projection replaces; relative paths,
+including omitted defaults, are resolved against the prepared bundle directory
+instead of Kagami's ambient working directory. The generator cannot silently
+produce a roster different from the one signed into genesis:
 
 ```bash
 kagami localnet --fresh-random-keys --peers 4 --out-dir ./localnet
@@ -83,9 +112,11 @@ export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/dev-bundle/genesis.expected_hash"
 docker compose -f ./my-configs/docker-compose.dev.yml up
 ```
 
-Those files must have been prepared for the exact same seed, peer count, and
-port/name overrides. This mode is deterministic and intentionally not a
-production custody path.
+Those files must have been prepared by the same Kagami revision for the exact
+same seed, peer count, and consensus/profile policy. Port and service-name
+overrides affect launcher endpoints but do not enter the index-based validator
+key derivation. This mode is deterministic and intentionally not a production
+custody path.
 
 - `-i, --image <NAME>`: Specifies the Docker image used by the peer services. 
   - By default, the image is pulled from Docker Hub if not cached. 
@@ -166,7 +197,14 @@ kagami docker \
    ```
 
 Kagami derives the runtime identities from the validated configs, so there is no
-separate “use the same roster” operator step to get wrong.
+separate “use the same roster” operator step to get wrong. The source localnet
+configs retain account-onboarding and faucet services for bare-metal operation.
+Generated Compose retains configured services only after replacing their
+private-key paths with dedicated Compose secrets.
+
+The exact `3f + 1` committee and projection checks do not remove the standard
+BFT assumptions: liveness remains conditional on at most `f` Byzantine
+validators, eventual synchrony, and terminating local validation and storage.
 
 ## Note on configuration structure
 

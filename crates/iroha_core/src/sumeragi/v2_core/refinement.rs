@@ -33,6 +33,24 @@ use super::{
 /// and re-verified.
 pub const MAX_EFFECTS_PER_STEP: usize = 8;
 
+/// Maximum causal candidates emitted by one abstract command transition.
+///
+/// This is the exact closed `CommandSuccessors` bound in
+/// `SumeragiV2AsyncNetwork.tla`. Production may emit additional synchronous
+/// transport or diagnostic effects, but only the candidate-producing subset
+/// can acquire Completion capacity.
+pub const MAX_CAUSAL_SUCCESSORS_PER_COMMAND: usize = 3;
+
+/// Radix for the Completion-capacity product rank.
+///
+/// One root-position descent must dominate resetting the successor component
+/// to any value in `0..=MAX_CAUSAL_SUCCESSORS_PER_COMMAND`.
+pub const COMPLETION_CAPACITY_RANK_RADIX: u64 = 4;
+
+const _: [(); MAX_EFFECTS_PER_STEP] = [(); 8];
+const _: [(); MAX_CAUSAL_SUCCESSORS_PER_COMMAND] = [(); 3];
+const _: [(); COMPLETION_CAPACITY_RANK_RADIX as usize] = [(); 4];
+
 pub const EFFECT_NONE: u8 = 0;
 pub const EFFECT_PERSIST: u8 = 1;
 pub const EFFECT_FETCH: u8 = 2;
@@ -164,6 +182,53 @@ pub const SERVICE_CLASS_PROGRESS: u8 = 2;
 #[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
 pub const SERVICE_CLASS_NORMAL: u8 = 3;
 
+/// Effect/candidate binding inherited the selected scheduler root.
+pub(crate) const RUNTIME_EFFECT_CAUSALITY_INHERIT: u8 = 1;
+/// Effect/candidate binding owns an independently reconstructed local root.
+pub(crate) const RUNTIME_EFFECT_CAUSALITY_FRESH: u8 = 2;
+
+/// No TLA causal candidate is created by this production effect.
+pub(crate) const RUNTIME_CANDIDATE_KIND_NONE: u8 = 0;
+/// `SignProposal` Completion candidate.
+pub(crate) const RUNTIME_CANDIDATE_KIND_SIGN_PROPOSAL: u8 = 1;
+/// `SignVote` Completion candidate.
+pub(crate) const RUNTIME_CANDIDATE_KIND_SIGN_VOTE: u8 = 2;
+/// `SignTimeout` Completion candidate.
+pub(crate) const RUNTIME_CANDIDATE_KIND_SIGN_TIMEOUT: u8 = 3;
+/// `FetchBody` Completion candidate.
+pub(crate) const RUNTIME_CANDIDATE_KIND_FETCH_BODY: u8 = 4;
+/// `StoreBody` Completion candidate.
+pub(crate) const RUNTIME_CANDIDATE_KIND_STORE_BODY: u8 = 5;
+/// `ValidateBody` Completion candidate.
+pub(crate) const RUNTIME_CANDIDATE_KIND_VALIDATE_BODY: u8 = 6;
+/// `Apply` Completion candidate.
+pub(crate) const RUNTIME_CANDIDATE_KIND_APPLY: u8 = 7;
+
+/// Exact production `Sign(Proposal)` effect.
+pub(crate) const RUNTIME_EFFECT_KIND_SIGN_PROPOSAL: u8 = 1;
+/// Exact production `Sign(Vote)` effect.
+pub(crate) const RUNTIME_EFFECT_KIND_SIGN_VOTE: u8 = 2;
+/// Exact production `Sign(TimeoutVote)` effect.
+pub(crate) const RUNTIME_EFFECT_KIND_SIGN_TIMEOUT: u8 = 3;
+/// Exact production `FetchBody` effect.
+pub(crate) const RUNTIME_EFFECT_KIND_FETCH_BODY: u8 = 4;
+/// Exact production `StoreBody` effect.
+pub(crate) const RUNTIME_EFFECT_KIND_STORE_BODY: u8 = 5;
+/// Exact production `ValidateBody` effect.
+pub(crate) const RUNTIME_EFFECT_KIND_VALIDATE_BODY: u8 = 6;
+/// Exact production `Apply` effect.
+pub(crate) const RUNTIME_EFFECT_KIND_APPLY: u8 = 7;
+/// Exact production `Broadcast` effect (no local causal candidate).
+pub(crate) const RUNTIME_EFFECT_KIND_BROADCAST: u8 = 8;
+/// Exact production `EnterView` effect (synchronous lifecycle transition).
+pub(crate) const RUNTIME_EFFECT_KIND_ENTER_VIEW: u8 = 9;
+/// Exact production equivocation report (diagnostic only).
+pub(crate) const RUNTIME_EFFECT_KIND_REPORT_EQUIVOCATION: u8 = 10;
+/// Exact production invalid-certified-body report (diagnostic only).
+pub(crate) const RUNTIME_EFFECT_KIND_REPORT_INVALID_CERTIFIED_BODY: u8 = 11;
+/// Opaque effect kind used only by generic unit-test runtime drivers.
+pub(crate) const RUNTIME_EFFECT_KIND_OPAQUE_TEST: u8 = u8::MAX;
+
 /// No leader-wire lifecycle occupied the addressed bounded slot.
 pub(crate) const LEADER_WIRE_LIFECYCLE_ABSENT: u8 = 0;
 /// A restart-restored lifecycle owns anti-ABA state but no selector turn.
@@ -274,6 +339,14 @@ pub(crate) const IDENTITY_KIND_REPLY_DELIVERY_ROUTE: u8 = 6;
 pub(crate) const IDENTITY_KIND_REPLY_WRITER_OCCURRENCE: u8 = 7;
 /// Process-local identity kind for one durable leader-wire lifecycle owner.
 pub(crate) const IDENTITY_KIND_LEADER_WIRE_LIFECYCLE: u8 = 8;
+/// Process-local identity of one immutable runtime lifecycle owner.
+pub(crate) const IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER: u8 = 9;
+/// Process-local identity of one exact emitted adapter effect.
+pub(crate) const IDENTITY_KIND_RUNTIME_EFFECT: u8 = 10;
+/// Process-local route-neutral semantic identity of one TLA candidate.
+pub(crate) const IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC: u8 = 11;
+/// Process-local exact TLA-candidate identity under one causal origin.
+pub(crate) const IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE: u8 = 12;
 /// Canonical identity kind for one checksummed durable body frame.
 pub(crate) const IDENTITY_KIND_DURABLE_BODY_FRAME: u8 = 1;
 /// Canonical identity kind for one finality artifact.
@@ -535,6 +608,18 @@ macro_rules! refinement_tag_value {
     (IDENTITY_KIND_LEADER_WIRE_LIFECYCLE) => {
         8u8
     };
+    (IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER) => {
+        9u8
+    };
+    (IDENTITY_KIND_RUNTIME_EFFECT) => {
+        10u8
+    };
+    (IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC) => {
+        11u8
+    };
+    (IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE) => {
+        12u8
+    };
     (IDENTITY_KIND_DURABLE_BODY_FRAME) => {
         1u8
     };
@@ -701,6 +786,10 @@ assert_refinement_tag_values!(
     IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
     IDENTITY_KIND_REPLY_WRITER_OCCURRENCE,
     IDENTITY_KIND_LEADER_WIRE_LIFECYCLE,
+    IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER,
+    IDENTITY_KIND_RUNTIME_EFFECT,
+    IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC,
+    IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,
     IDENTITY_KIND_DURABLE_BODY_FRAME,
     IDENTITY_KIND_FINALITY_ARTIFACT,
     IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD,
@@ -1902,7 +1991,10 @@ macro_rules! event_can_start_wal_record_body {
             }
             4u8 | 5u8 => $record_kind == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT),
             6u8 => $record_kind == refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT),
-            10u8 => {
+            // Validation normally starts a vote intent directly. A
+            // retransmission tick may start the same intent after activating
+            // Set B fallback when the exact body arrived before the tick.
+            7u8 | 10u8 => {
                 $record_kind == refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
                     || $record_kind == refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
             }
@@ -2632,6 +2724,122 @@ macro_rules! production_ingress_reservation_materialization_trace_body {
             && $projection.lifecycle_ordinal > 0u128
             && $projection.lifecycle_ordinal <= $projection.physical_admission_ordinal
             && exact_dormant_transition
+    }};
+}
+
+/// Shared total relation between one concrete adapter effect and the exact
+/// causal-candidate ownership it contributes to the abstract scheduler.
+///
+/// The caller supplies only lossless identities, positions, and owner counts.
+/// This expression derives the effect-to-work-kind map, inherited/fresh owner
+/// relation, three-successor bound, and first-owner/coalesced-retry outcome.
+/// Both production and Verus instantiate this exact expression.
+macro_rules! production_effect_to_candidate_trace_body {
+    ($projection:expr) => {{
+        let expected_candidate_kind = match $projection.incoming_effect_kind {
+            1u8 => 1u8,
+            2u8 => 2u8,
+            3u8 => 3u8,
+            4u8 => 4u8,
+            5u8 => 5u8,
+            6u8 => 6u8,
+            7u8 => 7u8,
+            8u8 | 9u8 | 10u8 | 11u8 => 0u8,
+            _ => 255u8,
+        };
+        let exact_effect_identity = canonical_identity_is_typed_body!(
+            $projection.incoming_effect_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_RUNTIME_EFFECT)
+        ) && canonical_identity_equal_body!(
+            $projection.incoming_effect_identity,
+            $projection.stored_effect_identity
+        );
+        let exact_owner_identity = canonical_identity_is_typed_body!(
+            $projection.incoming_owner_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+            refinement_tag_value!(IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER)
+        ) && canonical_identity_equal_body!(
+            $projection.incoming_owner_identity,
+            $projection.stored_owner_identity
+        );
+        let exact_causality = match $projection.causality {
+            1u8 => {
+                $projection.fresh_root_kind == 0u8
+                    && canonical_identity_equal_body!(
+                        $projection.parent_owner_identity,
+                        $projection.incoming_owner_identity
+                    )
+            }
+            2u8 => {
+                $projection.fresh_root_kind >= 1u8
+                    && $projection.fresh_root_kind <= 5u8
+                    && canonical_identity_is_zero_body!($projection.parent_owner_identity)
+            }
+            _ => false,
+        };
+        let exact_positions = $projection.incoming_effect_count >= 1u8
+            && $projection.incoming_effect_count <= 8u8
+            && $projection.incoming_effect_count == $projection.stored_effect_count
+            && $projection.incoming_effect_position >= 1u8
+            && $projection.incoming_effect_position <= $projection.incoming_effect_count
+            && $projection.incoming_effect_position == $projection.stored_effect_position
+            && $projection.incoming_candidate_count <= 3u8
+            && $projection.incoming_candidate_count == $projection.stored_candidate_count
+            && $projection.incoming_candidate_position == $projection.stored_candidate_position;
+        let exact_candidate = if expected_candidate_kind == 0u8 {
+            $projection.incoming_candidate_kind == 0u8
+                && $projection.stored_candidate_kind == 0u8
+                && $projection.incoming_candidate_position == 0u8
+                && canonical_identity_is_zero_body!(
+                    $projection.incoming_candidate_semantic_identity
+                )
+                && canonical_identity_is_zero_body!($projection.stored_candidate_semantic_identity)
+                && canonical_identity_is_zero_body!($projection.incoming_candidate_identity)
+                && canonical_identity_is_zero_body!($projection.stored_candidate_identity)
+                && $projection.candidate_owner_count_before == 0u8
+                && $projection.candidate_owner_count_after == 0u8
+                && !$projection.candidate_owner_admitted
+        } else {
+            expected_candidate_kind != 255u8
+                && $projection.incoming_candidate_kind == expected_candidate_kind
+                && $projection.stored_candidate_kind == expected_candidate_kind
+                && $projection.incoming_candidate_count >= 1u8
+                && $projection.incoming_candidate_position >= 1u8
+                && $projection.incoming_candidate_position <= $projection.incoming_candidate_count
+                && canonical_identity_is_typed_body!(
+                    $projection.incoming_candidate_semantic_identity,
+                    refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                    refinement_tag_value!(IDENTITY_KIND_RUNTIME_CANDIDATE_SEMANTIC)
+                )
+                && canonical_identity_equal_body!(
+                    $projection.incoming_candidate_semantic_identity,
+                    $projection.stored_candidate_semantic_identity
+                )
+                && canonical_identity_is_typed_body!(
+                    $projection.incoming_candidate_identity,
+                    refinement_tag_value!(IDENTITY_DOMAIN_PROCESS_LOCAL),
+                    refinement_tag_value!(IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE)
+                )
+                && canonical_identity_equal_body!(
+                    $projection.incoming_candidate_identity,
+                    $projection.stored_candidate_identity
+                )
+                && $projection.candidate_owner_count_before <= 1u8
+                && $projection.candidate_owner_count_after == 1u8
+                && $projection.candidate_owner_admitted
+                    == ($projection.candidate_owner_count_before == 0u8)
+        };
+        expected_candidate_kind != 255u8
+            && $projection.incoming_effect_kind == $projection.stored_effect_kind
+            && $projection.incoming_lifecycle_ordinal > 0u128
+            && $projection.incoming_lifecycle_ordinal == $projection.stored_lifecycle_ordinal
+            && exact_effect_identity
+            && exact_owner_identity
+            && exact_causality
+            && exact_positions
+            && exact_candidate
+            && $projection.producer_episode_retained
     }};
 }
 
@@ -4403,6 +4611,47 @@ pub struct ProductionIngressReservationMaterializationTraceProjection {
     pub(crate) dormant_owner_ordinal: u128,
 }
 
+/// Lossless production observation for one effect-to-candidate handoff.
+///
+/// `incoming_*` values are recomputed from the concrete `AdapterEffect` and
+/// current lifecycle owner at the executor boundary. `stored_*` values come
+/// from the positional runtime sidecar retained before that handoff. Candidate
+/// owner counts are taken from every retained batch and outstanding async task;
+/// a count of one therefore classifies a finite coalesced retry rather than a
+/// second scheduler owner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProductionEffectToCandidateTraceProjection {
+    pub(crate) incoming_effect_kind: u8,
+    pub(crate) stored_effect_kind: u8,
+    pub(crate) incoming_candidate_kind: u8,
+    pub(crate) stored_candidate_kind: u8,
+    pub(crate) causality: u8,
+    pub(crate) fresh_root_kind: u8,
+    pub(crate) incoming_effect_position: u8,
+    pub(crate) stored_effect_position: u8,
+    pub(crate) incoming_effect_count: u8,
+    pub(crate) stored_effect_count: u8,
+    pub(crate) incoming_candidate_position: u8,
+    pub(crate) stored_candidate_position: u8,
+    pub(crate) incoming_candidate_count: u8,
+    pub(crate) stored_candidate_count: u8,
+    pub(crate) incoming_lifecycle_ordinal: u128,
+    pub(crate) stored_lifecycle_ordinal: u128,
+    pub(crate) incoming_effect_identity: CanonicalIdentityProjection,
+    pub(crate) stored_effect_identity: CanonicalIdentityProjection,
+    pub(crate) incoming_owner_identity: CanonicalIdentityProjection,
+    pub(crate) stored_owner_identity: CanonicalIdentityProjection,
+    pub(crate) parent_owner_identity: CanonicalIdentityProjection,
+    pub(crate) incoming_candidate_semantic_identity: CanonicalIdentityProjection,
+    pub(crate) stored_candidate_semantic_identity: CanonicalIdentityProjection,
+    pub(crate) incoming_candidate_identity: CanonicalIdentityProjection,
+    pub(crate) stored_candidate_identity: CanonicalIdentityProjection,
+    pub(crate) candidate_owner_count_before: u8,
+    pub(crate) candidate_owner_count_after: u8,
+    pub(crate) candidate_owner_admitted: bool,
+    pub(crate) producer_episode_retained: bool,
+}
+
 /// Total prospective state transition for one durable leader-wire admission.
 ///
 /// The projection retains the complete hashed lifecycle identity, both
@@ -5086,6 +5335,8 @@ impl BoundaryCapabilityKey {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct VolatileSummary {
     pub(crate) candidate_present: bool,
+    /// Whether the current view has crossed the Set B fallback boundary.
+    pub(crate) fallback_active: bool,
     pub(crate) body_work: u64,
     pub(crate) pending_prepare: u64,
     pub(crate) known_prepare: u64,
@@ -5658,6 +5909,7 @@ macro_rules! volatile_summary_well_formed_body {
 macro_rules! volatile_summaries_equal_body {
     ($before:expr, $after:expr) => {{
         $before.candidate_present == $after.candidate_present
+            && $before.fallback_active == $after.fallback_active
             && $before.body_work == $after.body_work
             && $before.pending_prepare == $after.pending_prepare
             && $before.known_prepare == $after.known_prepare
@@ -6276,6 +6528,7 @@ macro_rules! transition_facts_from_projection_body {
 macro_rules! volatile_replay_unchanged_body {
     ($before:expr, $after:expr) => {{
         $before.candidate_present == $after.candidate_present
+            && $before.fallback_active == $after.fallback_active
             && $before.pending_prepare == $after.pending_prepare
             && $before.known_prepare == $after.known_prepare
             && $before.vote_pools == $after.vote_pools
@@ -6556,6 +6809,10 @@ macro_rules! transition_branch_constraints_body {
                         (!$facts.install_view_unchanged || !$facts.generation_unchanged)
                             && $enter_count == 1u64
                             && $apply_count == 0u64
+                            // Every installed TC begins a new proposal
+                            // generation. This includes a same-view lock
+                            // upgrade, so Set B must earn fallback again.
+                            && !$facts.volatile_after.fallback_active
                             && !$facts.volatile_after.candidate_present
                             // A TC-selected lock carries its full PrepareQC.
                             // Installation therefore starts at most one
@@ -6879,6 +7136,14 @@ pub(crate) const fn production_ingress_reservation_materialization_refines_prote
     production_ingress_reservation_materialization_trace_body!(projection)
 }
 
+/// Validate exact effect identity, lifecycle lineage, causal-candidate mapping,
+/// positional bounds, and first-owner/coalesced-retry accounting.
+pub(crate) const fn production_effect_to_candidate_refines_async_ownership_kernel(
+    projection: ProductionEffectToCandidateTraceProjection,
+) -> bool {
+    production_effect_to_candidate_trace_body!(projection)
+}
+
 /// Validate one exact durable leader-wire admission before persistence.
 pub(crate) const fn production_leader_wire_admission_refines_lifecycle_ownership_kernel(
     projection: ProductionLeaderWireAdmissionTraceProjection,
@@ -7059,6 +7324,19 @@ pub(crate) fn check_production_ingress_reservation_materialization_transition(
 {
     if production_ingress_reservation_materialization_refines_protected_ownership_kernel(projection)
     {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one effect-to-candidate handoff before retaining its producer episode
+/// or publishing a new asynchronous owner.
+#[must_use]
+pub(crate) fn check_production_effect_to_candidate_transition(
+    projection: ProductionEffectToCandidateTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionEffectToCandidateTraceProjection>> {
+    if production_effect_to_candidate_refines_async_ownership_kernel(projection) {
         Some(CheckedProductionTransition { projection })
     } else {
         None

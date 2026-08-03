@@ -4,17 +4,13 @@ import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruction
-import org.hyperledger.iroha.sdk.core.model.instructions.ShieldInstruction
-import org.hyperledger.iroha.sdk.core.model.instructions.UnshieldInstruction
-import org.hyperledger.iroha.sdk.core.model.instructions.flattenFixed32
-import org.hyperledger.iroha.sdk.core.model.instructions.optionalBytes
 
 /** Thin JVM/JNI wrapper around `connect_norito_bridge` signing helpers. */
 class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
-        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 2
+        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 3
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
 
@@ -74,104 +70,6 @@ class NativeSignerBridge private constructor() {
             require(signature.isNotEmpty()) { "signature must not be empty" }
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             return nativeVerifyDetached(algorithm.bridgeCode, publicKey, message, signature)
-        }
-
-        @JvmStatic
-        fun encodeShieldSignedTransaction(
-            algorithm: SigningAlgorithm,
-            chainId: String?,
-            chainDiscriminant: Int,
-            authority: String?,
-            creationTimeMs: Long,
-            ttlMs: Long? = null,
-            instruction: ShieldInstruction?,
-            privateKey: ByteArray?,
-            feePayment: FeePaymentIntent,
-        ): NativeSignedTransaction {
-            requireCreationTime(creationTimeMs)
-            val validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant)
-            val selected = requireNotNull(instruction) { "instruction must be provided" }
-            val key = requirePrivateKey(privateKey)
-            val feePaymentJson = feePaymentJson(feePayment)
-            val chainBytes = textBytes(chainId, "chainId")
-            val authorityBytes = textBytes(authority, "authority")
-            val assetBytes = textBytes(selected.asset, "asset")
-            val fromBytes = textBytes(selected.from, "from")
-            val amountBytes = textBytes(selected.amount, "amount")
-            val ttl = ttlValue(ttlMs)
-            val hasTtl = ttlPresent(ttlMs)
-            check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
-            return requireNativeSignedOutput(
-                nativeEncodeShieldSignedTransaction(
-                    algorithm.bridgeCode,
-                    chainBytes,
-                    validatedChainDiscriminant,
-                    authorityBytes,
-                    creationTimeMs,
-                    ttl,
-                    hasTtl,
-                    assetBytes,
-                    fromBytes,
-                    amountBytes,
-                    selected.noteCommitment,
-                    selected.encryptedPayload.ephemeralPublicKey,
-                    selected.encryptedPayload.nonce,
-                    selected.encryptedPayload.ciphertext,
-                    key,
-                    feePaymentJson,
-                ),
-                "encodeShieldSignedTransaction",
-            )
-        }
-
-        @JvmStatic
-        fun encodeUnshieldSignedTransaction(
-            algorithm: SigningAlgorithm,
-            chainId: String?,
-            chainDiscriminant: Int,
-            authority: String?,
-            creationTimeMs: Long,
-            ttlMs: Long? = null,
-            instruction: UnshieldInstruction?,
-            privateKey: ByteArray?,
-            feePayment: FeePaymentIntent,
-        ): NativeSignedTransaction {
-            requireCreationTime(creationTimeMs)
-            val validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant)
-            val selected = requireNotNull(instruction) { "instruction must be provided" }
-            val key = requirePrivateKey(privateKey)
-            val feePaymentJson = feePaymentJson(feePayment)
-            val chainBytes = textBytes(chainId, "chainId")
-            val authorityBytes = textBytes(authority, "authority")
-            val assetBytes = textBytes(selected.asset, "asset")
-            val toBytes = textBytes(selected.to, "to")
-            val publicAmountBytes = textBytes(selected.publicAmount, "publicAmount")
-            val inputsBytes = flattenFixed32(selected.inputs)
-            val proofJsonBytes = selected.proof.toNativeJson().toByteArray(StandardCharsets.UTF_8)
-            val rootHintBytes = optionalBytes(selected.rootHint)
-            val ttl = ttlValue(ttlMs)
-            val hasTtl = ttlPresent(ttlMs)
-            check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
-            return requireNativeSignedOutput(
-                nativeEncodeUnshieldSignedTransaction(
-                    algorithm.bridgeCode,
-                    chainBytes,
-                    validatedChainDiscriminant,
-                    authorityBytes,
-                    creationTimeMs,
-                    ttl,
-                    hasTtl,
-                    assetBytes,
-                    toBytes,
-                    publicAmountBytes,
-                    inputsBytes,
-                    proofJsonBytes,
-                    rootHintBytes,
-                    key,
-                    feePaymentJson,
-                ),
-                "encodeUnshieldSignedTransaction",
-            )
         }
 
         @JvmStatic
@@ -317,45 +215,6 @@ class NativeSignerBridge private constructor() {
             message: ByteArray,
             signature: ByteArray,
         ): Boolean
-
-        @JvmStatic
-        private external fun nativeEncodeShieldSignedTransaction(
-            algorithmCode: Int,
-            chainId: ByteArray,
-            chainDiscriminant: Int,
-            authority: ByteArray,
-            creationTimeMs: Long,
-            ttlMs: Long,
-            ttlPresent: Boolean,
-            asset: ByteArray,
-            from: ByteArray,
-            amount: ByteArray,
-            noteCommitment: ByteArray,
-            payloadEphemeralPublicKey: ByteArray,
-            payloadNonce: ByteArray,
-            payloadCiphertext: ByteArray,
-            privateKey: ByteArray,
-            feePaymentJson: ByteArray,
-        ): Array<ByteArray?>?
-
-        @JvmStatic
-        private external fun nativeEncodeUnshieldSignedTransaction(
-            algorithmCode: Int,
-            chainId: ByteArray,
-            chainDiscriminant: Int,
-            authority: ByteArray,
-            creationTimeMs: Long,
-            ttlMs: Long,
-            ttlPresent: Boolean,
-            asset: ByteArray,
-            to: ByteArray,
-            publicAmount: ByteArray,
-            inputs: ByteArray,
-            proofJson: ByteArray,
-            rootHint: ByteArray,
-            privateKey: ByteArray,
-            feePaymentJson: ByteArray,
-        ): Array<ByteArray?>?
 
         @JvmStatic
         private external fun nativeEncodeRegisterZkAssetSignedTransaction(

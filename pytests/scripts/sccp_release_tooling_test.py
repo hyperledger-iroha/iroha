@@ -1474,6 +1474,19 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
     assert anchor_hash.hex() == (
         "94be7710f3064ff4936d24f51355ca037bf53e653b7712abcd798ba47be20727"
     )
+    current_anchor_hash = common.sora_finality_anchor_hash(
+        {
+            "version": 1,
+            "source_profile": "sora-taira",
+            "protocol_version": common.SORA_TAIRA_CURRENT_SUMERAGI_PROTOCOL_VERSION,
+            "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
+            "checkpoint_height": 5,
+            "checkpoint_block_hash_hex": "73" * 32,
+            "checkpoint_context_id_hex": "74" * 32,
+            "checkpoint_finality_artifact_hash_hex": "75" * 32,
+        }
+    )
+    assert current_anchor_hash != anchor_hash
 
 
 @pytest.mark.parametrize(
@@ -1483,7 +1496,8 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
             protocol_version=common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION - 1
         ),
         lambda anchor: anchor.update(
-            protocol_version=common.SORA_TAIRA_SUMERAGI_PROTOCOL_VERSION + 1
+            protocol_version=common.SORA_TAIRA_CURRENT_SUMERAGI_PROTOCOL_VERSION
+            + 1
         ),
         lambda anchor: anchor.update(protocol_version=True),
         lambda anchor: anchor.update(

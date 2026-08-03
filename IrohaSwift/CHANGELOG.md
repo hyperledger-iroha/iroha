@@ -4,6 +4,9 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- Removed generic shield, shielded-transfer, and unshield request/encoder/native
+  signer surfaces from ABI V1. Typed Kagemusha top-up/redemption and their
+  underlying proof codecs remain available.
 - Replaced the governance mutation boundary with closed public-only request
   types. Deploy proposals no longer expose ignored limits and now use typed
   manifest provenance; ZK public inputs are exact and shared across legacy,

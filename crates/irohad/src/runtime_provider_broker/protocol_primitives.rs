@@ -278,8 +278,7 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) handle: String,
     pub(super) revision: Option<u64>,
     pub(super) policy_digest: Option<[u8; 32]>,
-    pub(super) bootle_lantern_issuance_bindings:
-        Option<BootleLanternIssuanceBindingsWireV1>,
+    pub(super) bootle_lantern_issuance_bindings: Option<BootleLanternIssuanceBindingsWireV1>,
     pub(super) stream_token_signer_public_key: Option<[u8; 32]>,
     pub(super) appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>,
     pub(super) appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>,
@@ -289,8 +288,7 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) por_replay_archive_proof_limits: Option<PorReplayArchiveProofLimitsWireV1>,
     pub(super) potr_runtime_binding: Option<PotrRuntimeBindingWireV1>,
     pub(super) native_signer_binding: Option<NativeTransactionSignerBindingWireV1>,
-    pub(super) governance_request_auth_public_key: Option<[u8; 32]>,
-    pub(super) governance_request_auth_max_body_bytes: Option<u64>,
+    pub(super) governance_request_ingress_binding: Option<GovernanceRequestIngressBindingWireV1>,
     pub(super) provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>,
     pub(super) provider_ingest_source_limits: Option<ProviderIngestSourceLimitsWireV1>,
     pub(super) provider_ingest_checkpoint_max_bytes: Option<u64>,
@@ -303,6 +301,16 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) evidence_viewer_archive_id: Option<[u8; 32]>,
     pub(super) evidence_viewer_archive_public_key: Option<[u8; 32]>,
     pub(super) evidence_viewer_archive_max_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct GovernanceRequestIngressBindingWireV1 {
+    pub(super) scope: u8,
+    pub(super) endpoint_binding: [u8; 32],
+    pub(super) public_key: [u8; 32],
+    pub(super) max_body_bytes: u64,
+    pub(super) max_envelope_lifetime_secs: u64,
+    pub(super) max_future_skew_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]

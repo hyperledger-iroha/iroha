@@ -103,6 +103,9 @@ ANDROID_SDK_ROOT=~/Library/Android/sdk \
 Start the provided Docker Compose network:
 
 ```bash
+cargo run --bin kagami -- localnet \
+  --seed Iroha --peers 4 --sora-profile nexus --consensus-mode npos \
+  --out-dir target/compose-genesis
 export IROHA_GENESIS_SIGNED_FILE="$PWD/target/compose-genesis/genesis.signed.nrt"
 export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/genesis.public_key"
 export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/compose-genesis/genesis.expected_hash"

@@ -127,9 +127,23 @@ generated `README.md` into the output directory.
 `kagami docker`
 - Docker Compose generator for an authoritative prepared bundle from
   `kagami localnet` (or equivalent peer configs plus signed genesis artifacts)
-- Normal mode omits `--seed`: Kagami parses every `peerN.toml`, verifies the
-  exact signer/hash/validator/PoP binding, and embeds the three public artifact
-  paths read-only. It does not generate replacement validator identities.
+- Normal mode omits `--seed`: Kagami parses every `peerN.toml` without ambient
+  environment overrides, rejects `extends`, and verifies the exact signed
+  genesis, manifest, expected hash, verifier key, validator identities, trusted
+  roster, and PoPs as one binding. It does not generate replacement validator
+  identities.
+- Kagami proves that each container-safe projection preserves the Sumeragi,
+  execution-policy, and Nexus/AMX fingerprints, mounts the projected TOML as a
+  file-backed Compose secret, and passes its BLAKE3 digest to `irohad` for a
+  read-hash-parse startup check. Validator keys and private onboarding/faucet
+  files are absent from Compose YAML and environment variables; the latter are
+  mounted as separate Compose secrets.
+- Byte-exact public policy assets are interned by digest as base64 Compose
+  configs and decoded into `/config/runtime` before `irohad` starts. Prepared
+  Compose accepts fresh state only, uses named validator storage volumes, never
+  migrates live state, resolves relative source-state paths and omitted
+  defaults against the prepared bundle directory for freshness checks, and
+  fails closed on unsupported transport, CIDR-filter, or helper-service modes.
 - `--seed` is an explicit deterministic development mode for relocatable sample
   manifests. That mode requires `IROHA_GENESIS_SIGNED_FILE`,
   `IROHA_GENESIS_PUBLIC_KEY_FILE`, and `IROHA_GENESIS_EXPECTED_HASH_FILE` when
@@ -201,7 +215,11 @@ target/debug/kagami genesis sign \
 
 For seedless `kagami docker`, place that body and hash beside the canonical
 `genesis.public_key` and exact `peerN.toml` validator configs. Generation rejects
-any signer, hash, identity, trusted-roster, or PoP disagreement.
+any signer, hash, identity, trusted-roster, or PoP disagreement. The generated
+validator-only Compose projection rewrites operational paths to container
+storage. Configured account-onboarding and faucet private-key files become
+file-backed Compose secrets, while public binary policy inputs become
+digest-interned Compose configs. The original bare-metal configs are unchanged.
 
 ## Streaming Identities
 

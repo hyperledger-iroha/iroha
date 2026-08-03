@@ -3321,9 +3321,10 @@ mod tests {
             0x00, 0x00,
         ];
 
+        let expected_spki_hash: [u8; 32] = Sha256::digest(spki).into();
         assert_eq!(
             leaf_certificate_spki_sha256(&certificate).expect("minimal DER certificate"),
-            Sha256::digest(spki).into()
+            expected_spki_hash
         );
 
         let mut with_trailing_data = certificate.to_vec();

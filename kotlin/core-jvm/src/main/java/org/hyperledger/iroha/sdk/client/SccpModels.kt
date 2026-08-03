@@ -1044,7 +1044,7 @@ object SccpJsonParser {
             upperBytes(anchor, "checkpoint_finality_artifact_hash", 32),
         )
         require(anchorRoles[0] == TAIRA_CHAIN_ID_HASH) { "$label Taira chain id hash mismatch" }
-        val protocolVersion = requiredInt(anchor, "protocol_version", 3, 3)
+        val protocolVersion = requiredInt(anchor, "protocol_version", 3, 4)
         val checkpointHeight = requiredUnsignedInteger(anchor, "checkpoint_height", MAX_U64, true)
         requireDistinctRawHashes(anchorRoles, "$label finality anchor")
         val canonicalAnchor = ByteArrayOutputStream().also { output ->

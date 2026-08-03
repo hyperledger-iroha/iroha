@@ -15,6 +15,9 @@ mod pop;
 pub mod profile;
 mod sign;
 pub use sign::bind_staged_sumeragi_v2_context;
+pub(crate) use sign::{
+    bind_and_sign_staged_sumeragi_v2_context, staged_signed_sumeragi_v2_context_hashes,
+};
 mod validate;
 
 pub use generate::{
@@ -42,7 +45,7 @@ fn require_v2_wire_protocol_only(manifest: &RawGenesisTransaction) -> color_eyre
     let expected = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
     if manifest.wire_protocol_version() != expected {
         return Err(eyre!(
-            "fresh genesis must advertise wire_protocol_version = 3; legacy plural and downgrade protocol shapes are prohibited"
+            "fresh genesis must advertise wire_protocol_version = {expected}; legacy plural and downgrade protocol shapes are prohibited"
         ));
     }
     Ok(())

@@ -4,7 +4,7 @@
 //! inventory the package directory and then subtract an ignore list. Callers are expected to
 //! translate a validated `Musubi.toml` into [`PackageLayout`], pass the original manifest and
 //! verification lock documents to [`plan_package`], and use the resulting immutable plan for a
-//! clean compiler check and SoraFS CAR construction.
+//! clean compiler check and `SoraFS` CAR construction.
 
 use std::{
     collections::BTreeMap,
@@ -22,7 +22,7 @@ use iroha_data_model::{
         MusubiDependencyReqV1, MusubiDescriptionV1, MusubiDocumentRefV1, MusubiKeywordV1,
         MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiReleaseManifestV1,
         MusubiReleaseMetadataV1, MusubiResolutionProofV1, MusubiSemanticReleaseManifestV1,
-        MusubiVerificationLockV1,
+        MusubiVerificationLockV1, validate_musubi_portable_path_set_v1,
     },
     name::Name,
     sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
@@ -47,7 +47,7 @@ use std::os::windows::fs::MetadataExt as _;
 
 /// Maximum total bytes in a Musubi V1 normalized source tree.
 pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
-/// Maximum bytes in a Musubi V1 CARv2 archive.
+/// Maximum bytes in a Musubi V1 `CARv2` archive.
 pub const MAX_CAR_BYTES: u64 = 96 * 1024 * 1024;
 /// Maximum number of regular files in a Musubi V1 source tree.
 pub const MAX_SOURCE_FILES: usize = 4_096;
@@ -217,7 +217,7 @@ impl PackagePlan {
     ///
     /// # Errors
     ///
-    /// Returns an error when SoraFS rejects a portable bundle path, the semantic manifest or
+    /// Returns an error when `SoraFS` rejects a portable bundle path, the semantic manifest or
     /// exact verification lock is invalid, or their release and lock-digest bindings differ.
     pub fn commitment_materials(
         &self,
@@ -236,18 +236,8 @@ impl PackagePlan {
             ));
         }
         semantic_release_manifest
-            .validate()
+            .validate_verification_lock(verification_lock)
             .map_err(|error| PackageError::InvalidBundleBinding(error.to_string()))?;
-        verification_lock
-            .validate()
-            .map_err(|error| PackageError::InvalidBundleBinding(error.to_string()))?;
-        if verification_lock.root != semantic_release_manifest.release
-            || verification_lock.digest() != semantic_release_manifest.verification_lock_digest
-        {
-            return Err(PackageError::InvalidBundleBinding(
-                "semantic release and exact verification lock do not match".to_owned(),
-            ));
-        }
         let semantic_release_bytes = semantic_release_manifest.encode();
         let verification_lock_bytes = verification_lock.encode();
         let source_tree_material = source_tree_material(&self.files);
@@ -282,7 +272,7 @@ impl PackagePlan {
         })
     }
 
-    /// Consume the plan and construct its bounded deterministic SoraFS CARv2 bundle.
+    /// Consume the plan and construct its bounded deterministic `SoraFS` `CARv2` bundle.
     ///
     /// The CAR directory DAG contains the normalized source tree and verification
     /// lock plus the exact semantic release manifest and typed artifact descriptor.
@@ -291,7 +281,7 @@ impl PackagePlan {
     ///
     /// # Errors
     ///
-    /// Returns an error if SoraFS rejects the logical plan, the V1 chunk ceiling is exceeded,
+    /// Returns an error if `SoraFS` rejects the logical plan, the V1 chunk ceiling is exceeded,
     /// writing fails, or the final CAR exceeds 96 MiB.
     pub fn into_car(
         self,
@@ -332,6 +322,8 @@ impl PackagePlan {
         });
         let (plan, payload) = CarBuildPlan::from_files(entries)
             .map_err(|error| PackageError::CarPlan(error.to_string()))?;
+        plan.validate_for_ingest()
+            .map_err(|error| PackageError::CarPlan(error.to_string()))?;
         enforce_chunk_limit(plan.chunks.len())?;
 
         let mut output = BoundedWriter::new(MAX_CAR_BYTES);
@@ -369,7 +361,7 @@ impl PackagePlan {
     }
 }
 
-/// A deterministic, bounded SoraFS CAR generated from a [`PackagePlan`].
+/// A deterministic, bounded `SoraFS` CAR generated from a [`PackagePlan`].
 #[derive(Debug)]
 pub struct PackageCar {
     plan: CarBuildPlan,
@@ -382,9 +374,14 @@ pub struct PackageCar {
 }
 
 impl PackageCar {
-    /// Return the validated SoraFS CAR plan.
+    /// Return the exact validated `SoraFS` plan used to write this package CAR.
+    ///
+    /// The plan covers the positive source tree plus the three mandatory semantic-release,
+    /// artifact-descriptor, and verification-lock bundle entries. Its ordered chunk inventory
+    /// carries no optional Taikai hints and is the canonical witness for the archive commitment's
+    /// content length, chunk count, and chunk-plan digest. The commitment's file count remains the
+    /// source-tree count and therefore excludes those three bundle entries.
     #[must_use]
-    #[cfg(test)]
     pub const fn plan(&self) -> &CarBuildPlan {
         &self.plan
     }
@@ -396,13 +393,13 @@ impl PackageCar {
         &self.payload
     }
 
-    /// Return the complete deterministic CARv2 bytes.
+    /// Return the complete deterministic `CARv2` bytes.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Return SoraFS writer statistics and roots.
+    /// Return `SoraFS` writer statistics and roots.
     #[must_use]
     pub const fn stats(&self) -> &CarWriteStats {
         &self.stats
@@ -432,7 +429,7 @@ impl PackageCar {
     /// # Errors
     ///
     /// Returns an error if the CAR lacks its single canonical root, its plan/profile is
-    /// inconsistent, PoR derivation fails, a count overflows, or a V1 commitment bound is
+    /// inconsistent, `PoR` derivation fails, a count overflows, or a V1 commitment bound is
     /// violated.
     pub fn archive_commitment(&self) -> Result<MusubiArchiveCommitmentV1, PackageError> {
         if self.stats.root_cids.len() != 1 || self.stats.chunk_profile != self.plan.chunk_profile {
@@ -595,7 +592,7 @@ pub enum PackageError {
         /// V1 maximum.
         maximum: u64,
     },
-    /// The SoraFS plan exceeds the chunk-count ceiling.
+    /// The `SoraFS` plan exceeds the chunk-count ceiling.
     TooManyChunks {
         /// Planned chunk count.
         count: usize,
@@ -618,9 +615,9 @@ pub enum PackageError {
     },
     /// Typed semantic release and verification-lock bindings were inconsistent.
     InvalidBundleBinding(String),
-    /// SoraFS rejected the logical source plan.
+    /// `SoraFS` rejected the logical source plan.
     CarPlan(String),
-    /// SoraFS could not encode the CAR.
+    /// `SoraFS` could not encode the CAR.
     CarWrite(String),
 }
 
@@ -843,10 +840,7 @@ pub fn plan_package(
 ///
 /// Path-bearing `[workspace.package]` values are selected relative to the workspace
 /// root and retain their portable manifest spelling in the clean package tree.
-pub(crate) fn package_layout_for_member(
-    workspace_root: &Path,
-    member: &WorkspaceMember,
-) -> PackageLayout {
+pub fn package_layout_for_member(workspace_root: &Path, member: &WorkspaceMember) -> PackageLayout {
     let mut layout = PackageLayout::new(&member.package_root);
     let library = member
         .manifest
@@ -867,21 +861,21 @@ pub(crate) fn package_layout_for_member(
         .as_ref()
         .expect("loaded package members always have package metadata");
     if let Some(readme) = &member.package.readme {
-        if inherited(&package.readme) && workspace_root != member.package_root {
+        if inherited(package.readme.as_ref()) && workspace_root != member.package_root {
             layout.add_external(workspace_root, readme.to_path_buf(), SelectionShape::File);
         } else {
             layout.set_readme(readme.to_path_buf());
         }
     }
     if let Some(license) = &member.package.license_file {
-        if inherited(&package.license_file) && workspace_root != member.package_root {
+        if inherited(package.license_file.as_ref()) && workspace_root != member.package_root {
             layout.add_external(workspace_root, license.to_path_buf(), SelectionShape::File);
         } else {
             layout.set_license(license.to_path_buf());
         }
     }
     for include in &member.package.include {
-        if inherited(&package.include) && workspace_root != member.package_root {
+        if inherited(package.include.as_ref()) && workspace_root != member.package_root {
             layout.add_external(
                 workspace_root,
                 include.to_path_buf(),
@@ -894,7 +888,7 @@ pub(crate) fn package_layout_for_member(
     layout
 }
 
-fn inherited<T>(value: &Option<Inheritable<T>>) -> bool {
+fn inherited<T>(value: Option<&Inheritable<T>>) -> bool {
     matches!(value, Some(Inheritable::Workspace))
 }
 
@@ -902,7 +896,11 @@ fn inherited<T>(value: &Option<Inheritable<T>>) -> bool {
 ///
 /// Effective normal dependencies are retained as canonical registry package/range pairs.
 /// Development dependencies never enter the publication manifest.
-pub(crate) fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, PackageError> {
+#[expect(
+    clippy::too_many_lines,
+    reason = "manifest rendering keeps canonical field ordering and every first-release publication omission adjacent"
+)]
+pub fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, PackageError> {
     let mut root = toml::Table::new();
     root.insert("manifest-version".to_owned(), toml::Value::Integer(1));
 
@@ -1018,7 +1016,7 @@ pub(crate) fn publication_manifest_toml(member: &WorkspaceMember) -> Result<Stri
 }
 
 /// Construct the canonical archive-independent release semantics for a clean package.
-pub(crate) fn semantic_release_manifest(
+pub fn semantic_release_manifest(
     member: &WorkspaceMember,
     release: MusubiReleaseIdV1,
     verification_lock: &MusubiVerificationLockV1,
@@ -1110,7 +1108,7 @@ pub(crate) fn semantic_release_manifest(
 }
 
 /// Bind clean bundle semantics and an exact verification graph to one immutable archive.
-pub(crate) fn publication_claim(
+pub fn publication_claim(
     semantic: &MusubiSemanticReleaseManifestV1,
     archive: &MusubiArchiveCommitmentV1,
     snapshot: MusubiRegistrySnapshotV1,
@@ -1482,8 +1480,11 @@ impl Collector {
     fn finish(self) -> Result<PackagePlan, PackageError> {
         enforce_file_limit(self.files.len())?;
         enforce_source_limit(self.source_bytes)?;
+        let files = self.files.into_values().collect::<Vec<_>>();
+        validate_musubi_portable_path_set_v1(files.iter().map(|file| file.components.as_slice()))
+            .map_err(|error| PackageError::CarPlan(error.to_string()))?;
         Ok(PackagePlan {
-            files: self.files.into_values().collect(),
+            files,
             source_bytes: self.source_bytes,
         })
     }
@@ -1769,7 +1770,7 @@ fn is_fixed_generated_file(path: &Path) -> bool {
     matches!(path.to_str(), Some(MANIFEST_PATH | VERIFICATION_LOCK_PATH))
 }
 
-pub(crate) fn is_excluded_directory(component: &str) -> bool {
+pub fn is_excluded_directory(component: &str) -> bool {
     matches!(
         component.to_ascii_lowercase().as_str(),
         ".git"
@@ -1791,7 +1792,7 @@ pub(crate) fn is_excluded_directory(component: &str) -> bool {
     )
 }
 
-pub(crate) fn is_sensitive_component(component: &str) -> bool {
+pub fn is_sensitive_component(component: &str) -> bool {
     let lower = component.to_ascii_lowercase();
     lower == ".env"
         || lower.starts_with(".env.")
@@ -1932,6 +1933,10 @@ fn sensitive_assignment(line: &[u8]) -> bool {
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the bounded secret-assignment recognizer keeps its explicit cross-shell token grammar in one auditable scanner"
+)]
 fn sensitive_assignment_at(line: &[u8]) -> bool {
     const KEYS: &[&[u8]] = &[
         b"private_key",
@@ -1970,6 +1975,7 @@ fn sensitive_assignment_at(line: &[u8]) -> bool {
         b"password",
         b"passphrase",
     ];
+    const POWERSHELL_ENV_PREFIX: &[u8] = b"$env:";
     let mut input = trim_ascii_start(line);
     let mut allow_whitespace_separator = false;
     for (prefix, whitespace_separator) in [
@@ -1992,7 +1998,6 @@ fn sensitive_assignment_at(line: &[u8]) -> bool {
             break;
         }
     }
-    const POWERSHELL_ENV_PREFIX: &[u8] = b"$env:";
     if input.len() > POWERSHELL_ENV_PREFIX.len()
         && input[..POWERSHELL_ENV_PREFIX.len()].eq_ignore_ascii_case(POWERSHELL_ENV_PREFIX)
     {
@@ -2040,7 +2045,7 @@ fn sensitive_assignment_at(line: &[u8]) -> bool {
             let end = input
                 .iter()
                 .position(|byte| {
-                    byte.is_ascii_whitespace() || matches!(byte, b',' | b';' | b'#' | b'}' | b']')
+                    byte.is_ascii_whitespace() || matches!(byte, b',' | b';' | b'#' | b']')
                 })
                 .unwrap_or(input.len());
             &input[..end]
@@ -2155,6 +2160,8 @@ fn validate_sorafs_bundle_paths(files: &[PlannedFile]) -> Result<(), PackageErro
             data: Vec::new(),
         });
     }
+    validate_musubi_portable_path_set_v1(entries.iter().map(|entry| entry.path.as_slice()))
+        .map_err(|error| PackageError::CarPlan(error.to_string()))?;
     CarBuildPlan::from_files(entries)
         .map(|_| ())
         .map_err(|error| PackageError::CarPlan(error.to_string()))
@@ -2302,15 +2309,42 @@ impl Write for BoundedWriter {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
 
+    use iroha::{
+        crypto::{Algorithm, KeyPair},
+        musubi_runtime::{
+            AuthenticatedMusubiPublicationRuntimeClientV1,
+            InMemoryMusubiPublicationServiceJournalV1, MusubiProviderReadbackBackendV1,
+            MusubiProviderReadbackRequestV1, MusubiProviderReadbackResponseV1,
+            MusubiPublicationPrivateServiceV1, MusubiPublicationServiceBackendErrorV1,
+            MusubiPublicationServiceConfigurationV1, MusubiPublicationServiceJournalBindingV1,
+            MusubiPublicationSystemClockV1, MusubiSeedIngressBackendV1, MusubiSeedIngressCarPlanV1,
+            MusubiSeedIngressStageRequestV1, MusubiStorageCoordinationBackendV1,
+            MusubiStorageCoordinationRequestV1, MusubiStorageCoordinationResponseV1,
+            SoftwareMusubiPublicationRuntimeAuthorizationSignerV1,
+            SoftwareMusubiSeedIngressReceiptSignerV1,
+        },
+    };
     use iroha_data_model::{
+        ChainId,
+        account::AccountId,
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiContentDigestV1,
-            MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
-            MusubiReleaseMetadataV1, MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
+            MusubiDependencyReqV1, MusubiKotodamaEditionV1, MusubiPackageIdV1,
+            MusubiPackageScopeV1, MusubiReleaseIdV1, MusubiReleaseMetadataV1,
+            MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
+            MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
         },
         nexus::DataSpaceId,
+        sorafs::capacity::ProviderId,
     };
     use tempfile::tempdir;
 
@@ -2324,12 +2358,6 @@ manifest-version = 1
 name = "demo"
 version = "1.0.0"
 "#;
-    const LOCK: &str = r#"
-version = 1
-schema = "musubi-lock"
-packages = []
-"#;
-
     fn base_layout(root: &Path) -> PackageLayout {
         let mut layout = PackageLayout::new(root);
         layout.set_library("src");
@@ -2361,6 +2389,66 @@ packages = []
             verification_lock_digest: lock.digest(),
         };
         (semantic, lock)
+    }
+
+    struct ExactPackageSeedBackend {
+        provider: ProviderId,
+        operation_id: [u8; 32],
+        binding: MusubiSeedIngressReceiptBindingV1,
+        commitment: MusubiArchiveCommitmentV1,
+        plan: CarBuildPlan,
+        car: Vec<u8>,
+        admitted: Arc<AtomicBool>,
+    }
+
+    impl MusubiSeedIngressBackendV1 for ExactPackageSeedBackend {
+        fn provider_id(&self) -> ProviderId {
+            self.provider
+        }
+
+        fn stage_exact_car(
+            &mut self,
+            operation_id: [u8; 32],
+            binding: &MusubiSeedIngressReceiptBindingV1,
+            commitment: &MusubiArchiveCommitmentV1,
+            plan: &CarBuildPlan,
+            car: &[u8],
+        ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+            if operation_id != self.operation_id
+                || binding != &self.binding
+                || commitment != &self.commitment
+                || plan != &self.plan
+                || car != self.car.as_slice()
+            {
+                return Err(MusubiPublicationServiceBackendErrorV1::Permanent);
+            }
+            self.admitted.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct UnusedPackageStorageBackend;
+
+    impl MusubiStorageCoordinationBackendV1 for UnusedPackageStorageBackend {
+        fn coordinate_storage(
+            &mut self,
+            _request: &MusubiStorageCoordinationRequestV1,
+        ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
+        {
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent)
+        }
+    }
+
+    struct UnusedPackageReadbackBackend;
+
+    impl MusubiProviderReadbackBackendV1 for UnusedPackageReadbackBackend {
+        fn readback_provider(
+            &mut self,
+            _request: &MusubiProviderReadbackRequestV1,
+        ) -> Result<MusubiProviderReadbackResponseV1, MusubiPublicationServiceBackendErrorV1>
+        {
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent)
+        }
     }
 
     #[test]
@@ -2432,6 +2520,10 @@ packages = []
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the fixture verifies one complete workspace-manifest publication projection"
+    )]
     fn workspace_publication_manifest_resolves_inheritance_and_removes_local_state() {
         let temp = tempdir().expect("tempdir");
         fs::create_dir_all(temp.path().join("app/src")).expect("app source");
@@ -2787,6 +2879,16 @@ exports = []
             collector.insert_virtual("src/STRASSE.ko", b"two".to_vec()),
             Err(PackageError::PathCollision { .. })
         ));
+
+        let prefix = tempdir().expect("tempdir");
+        let mut collector = Collector::new(prefix.path().to_path_buf());
+        collector
+            .insert_virtual("Foo", b"one".to_vec())
+            .expect("case-sensitive file spelling");
+        collector
+            .insert_virtual("foo/z.ko", b"two".to_vec())
+            .expect("case-sensitive directory spelling");
+        assert!(matches!(collector.finish(), Err(PackageError::CarPlan(_))));
     }
 
     #[test]
@@ -2879,6 +2981,9 @@ exports = []
         assert!(!sensitive_assignment(b"export PRIVATE_KEY=${PRIVATE_KEY}"));
         assert!(!sensitive_assignment(
             b"export PRIVATE_KEY=${A_VERY_LONG_PRIVATE_KEY_PLACEHOLDER}"
+        ));
+        assert!(sensitive_assignment(
+            b"export PRIVATE_KEY=${PLACEHOLDER}0123456789abcdef0123456789abcdef"
         ));
         assert!(!sensitive_assignment(
             b"set API_KEY=%A_VERY_LONG_API_KEY_NAME%"
@@ -3074,6 +3179,237 @@ exports = []
     }
 
     #[test]
+    fn exposed_car_plan_exactly_binds_the_archive_commitment() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir(temp.path().join("src")).expect("src");
+        fs::write(temp.path().join("src/lib.ko"), b"fn demo() {}").expect("source");
+        let package =
+            plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1).expect("plan");
+        let (semantic, lock) = semantic_release();
+        let car = package.into_car(&semantic, &lock).expect("CAR");
+        let plan = car.plan();
+        let commitment = car.archive_commitment().expect("archive commitment");
+
+        plan.validate().expect("exposed plan validates");
+        assert_eq!(plan.payload_digest, blake3::hash(car.payload()));
+        assert!(
+            plan.chunks
+                .iter()
+                .all(|chunk| chunk.taikai_segment_hint.is_none()),
+            "Musubi source plans must not carry Taikai routing hints"
+        );
+        assert_eq!(plan.content_length, commitment.content_length);
+        assert_eq!(
+            plan.chunks.len(),
+            usize::try_from(commitment.chunk_count).expect("chunk count fits usize")
+        );
+        assert_eq!(
+            commitment.chunk_plan_digest,
+            MusubiContentDigestV1::new(compute_chunk_plan_digest_sha3(&plan.chunks))
+        );
+
+        let mandatory_bundle_paths = [
+            BUNDLE_RELEASE_PATH,
+            BUNDLE_DESCRIPTOR_PATH,
+            BUNDLE_VERIFICATION_LOCK_PATH,
+        ];
+        for path in mandatory_bundle_paths {
+            assert_eq!(
+                plan.files
+                    .iter()
+                    .filter(|file| file.path.join("/") == path)
+                    .count(),
+                1,
+                "the canonical bundle must contain {path} exactly once"
+            );
+        }
+        let source_file_count =
+            usize::try_from(commitment.file_count).expect("source file count fits usize");
+        assert_eq!(source_file_count, car.source_file_count());
+        assert_eq!(
+            plan.files.len(),
+            source_file_count + mandatory_bundle_paths.len()
+        );
+
+        let wire_plan = iroha::musubi_runtime::MusubiSeedIngressCarPlanV1::from_car_build_plan(
+            plan,
+            &commitment,
+        )
+        .expect("package plan converts to the exact seed-ingress witness");
+        assert_eq!(
+            wire_plan
+                .to_car_build_plan(&commitment)
+                .expect("seed-ingress witness reconstructs the package plan"),
+            *plan
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the fixture verifies the complete package-CAR private seed admission path"
+    )]
+    fn produced_package_car_is_admitted_by_the_private_seed_service() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir(temp.path().join("src")).expect("src");
+        fs::write(temp.path().join("src/lib.ko"), b"fn admitted() {}").expect("source");
+        let package =
+            plan_package(&base_layout(temp.path()), MANIFEST, &semantic_release().1).expect("plan");
+        let (semantic, lock) = semantic_release();
+        let car = package
+            .into_car(&semantic, &lock)
+            .expect("producer package CAR");
+        let commitment = car.archive_commitment().expect("archive commitment");
+        let witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(car.plan(), &commitment)
+            .expect("seed-ingress witness");
+
+        let publisher_key = KeyPair::try_from_seed(
+            b"musubi-package-service-publisher".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("publisher key");
+        let publisher = AccountId::new(publisher_key.public_key().clone());
+        let authorization_signer = SoftwareMusubiPublicationRuntimeAuthorizationSignerV1::new(
+            publisher.clone(),
+            publisher_key,
+        )
+        .expect("publisher signer");
+        let chain_id = ChainId::from("musubi-package-service-test");
+        let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_authorization_signer(
+            chain_id.clone(),
+            publisher.clone(),
+            Arc::new(authorization_signer),
+            Duration::from_secs(5),
+        )
+        .expect("authenticated runtime");
+
+        let broker_key = KeyPair::try_from_seed(
+            b"musubi-package-service-broker".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("broker key");
+        let broker = AccountId::new(broker_key.public_key().clone());
+        let provider = ProviderId::new([0x43; 32]);
+        let operation_id = [0x44; 32];
+        let genesis_block_hash = [0x45; 32];
+        let binding = MusubiSeedIngressReceiptBindingV1 {
+            chain_id: chain_id.clone(),
+            genesis_block_hash,
+            publisher,
+            ingress_broker: broker.clone(),
+            seed_provider: provider,
+            semantic_release_manifest_digest: semantic.semantic_digest(),
+            archive_id: commitment.archive_id(),
+            car_body_digest: commitment.car_digest,
+            car_body_length: commitment.car_size,
+            nonce: [0x46; 32],
+        };
+        let request = MusubiSeedIngressStageRequestV1 {
+            version: 1,
+            operation_id,
+            binding: binding.clone(),
+            commitment: commitment.clone(),
+            plan_digest: witness.canonical_digest().expect("plan digest"),
+            plan_length: witness.canonical_len().expect("plan length"),
+        };
+        let mut car_reader = car.bytes();
+        let prepared = runtime
+            .prepare_seed_ingress_request(&request, car.plan(), &mut car_reader)
+            .expect("memory-only prepared request");
+        assert!(prepared.authorization_expires_at_ms() > prepared.authorization_issued_at_ms());
+
+        let config = MusubiPublicationServiceConfigurationV1 {
+            chain_id,
+            genesis_block_hash,
+            ingress_broker: broker.clone(),
+            seed_provider: provider,
+            max_future_clock_skew_ms: 2_000,
+            receipt_lifetime_ms: 60_000,
+        };
+        let journal_binding = MusubiPublicationServiceJournalBindingV1::from_configuration(&config);
+        let admitted = Arc::new(AtomicBool::new(false));
+        let seed_backend = ExactPackageSeedBackend {
+            provider,
+            operation_id,
+            binding,
+            commitment,
+            plan: car.plan().clone(),
+            car: car.bytes().to_vec(),
+            admitted: Arc::clone(&admitted),
+        };
+        let receipt_signer = SoftwareMusubiSeedIngressReceiptSignerV1::new(broker, broker_key)
+            .expect("receipt signer");
+        let mut service = MusubiPublicationPrivateServiceV1::new(
+            config,
+            Box::new(MusubiPublicationSystemClockV1),
+            Box::new(receipt_signer),
+            Box::new(
+                InMemoryMusubiPublicationServiceJournalV1::new(journal_binding, 4, 8)
+                    .expect("bounded journal"),
+            ),
+            Box::new(seed_backend),
+            Box::new(UnusedPackageStorageBackend),
+            Box::new(UnusedPackageReadbackBackend),
+        )
+        .expect("private seed service");
+
+        let response = service.handle(prepared.as_private_http_request());
+        assert_eq!(response.status, 200);
+        assert!(admitted.load(Ordering::SeqCst));
+        let receipt: MusubiSeedIngressReceiptV1 =
+            norito::decode_canonical(&response.body).expect("seed receipt");
+        receipt
+            .verify(prepared.binding(), receipt.payload.issued_at_ms)
+            .expect("exact producer receipt binding");
+    }
+
+    #[test]
+    fn exact_source_payload_ceiling_leaves_room_for_bundle_metadata() {
+        let (semantic, lock) = semantic_release();
+        let manifest = canonicalize_manifest_toml(MANIFEST).expect("canonical manifest");
+        let verification_lock = render_verification_lock(&lock)
+            .expect("verification lock")
+            .into_bytes();
+        let maximum = usize::try_from(MAX_SOURCE_BYTES).expect("source ceiling fits usize");
+        let source_length = maximum
+            .checked_sub(manifest.len())
+            .and_then(|remaining| remaining.checked_sub(verification_lock.len()))
+            .expect("fixture metadata fits below the source ceiling");
+        let plan = PackagePlan {
+            files: vec![
+                PlannedFile {
+                    path: VERIFICATION_LOCK_PATH.to_owned(),
+                    components: vec![VERIFICATION_LOCK_PATH.to_owned()],
+                    bytes: verification_lock,
+                },
+                PlannedFile {
+                    path: MANIFEST_PATH.to_owned(),
+                    components: vec![MANIFEST_PATH.to_owned()],
+                    bytes: manifest,
+                },
+                PlannedFile {
+                    path: "src/lib.ko".to_owned(),
+                    components: vec!["src".to_owned(), "lib.ko".to_owned()],
+                    bytes: vec![b'x'; source_length],
+                },
+            ],
+            source_bytes: MAX_SOURCE_BYTES,
+        };
+
+        let car = plan
+            .into_car(&semantic, &lock)
+            .expect("source-limit package still fits the larger bundle/CAR ceilings");
+        let commitment = car
+            .archive_commitment()
+            .expect("source-limit bundle has a valid archive commitment");
+        assert!(commitment.content_length > MAX_SOURCE_BYTES);
+        assert!(
+            commitment.content_length
+                <= iroha_data_model::musubi::MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1
+        );
+    }
+
+    #[test]
     fn commitments_and_car_are_deterministic() {
         let left = tempdir().expect("tempdir");
         let right = tempdir().expect("tempdir");
@@ -3192,6 +3528,35 @@ exports = []
     }
 
     #[test]
+    fn semantic_bundle_rejects_unproven_direct_dependencies() {
+        let temp = tempdir().expect("tempdir");
+        fs::create_dir(temp.path().join("src")).expect("src");
+        fs::write(temp.path().join("src/lib.ko"), b"fn demo() {}").expect("source");
+        let (mut semantic, lock) = semantic_release();
+        let plan = plan_package(&base_layout(temp.path()), MANIFEST, &lock).expect("plan");
+        semantic.dependencies.push(MusubiDependencyReqV1 {
+            alias: "dependency".parse().expect("dependency alias"),
+            package: MusubiPackageIdV1::new(
+                DataSpaceId::new(8),
+                MusubiPackageScopeV1::DataspaceRoot,
+                "dependency".parse().expect("dependency name"),
+            ),
+            requirement: "^1.0.0".parse().expect("dependency requirement"),
+        });
+        semantic
+            .validate()
+            .expect("semantic manifest remains independently valid");
+        lock.validate()
+            .expect("verification lock remains independently valid");
+
+        assert!(matches!(
+            plan.commitment_materials(&semantic, &lock),
+            Err(PackageError::InvalidBundleBinding(reason))
+                if reason.contains("dependency counts differ")
+        ));
+    }
+
+    #[test]
     fn commitment_materials_apply_sorafs_portable_path_validation_first() {
         // `PackagePlan` fields are private to this module, so production callers cannot bypass
         // the positive-set collector. This malformed internal fixture pins the additional SoraFS
@@ -3205,6 +3570,31 @@ exports = []
             source_bytes: 6,
         };
         let (semantic, lock) = semantic_release();
+        assert!(matches!(
+            malformed.commitment_materials(&semantic, &lock),
+            Err(PackageError::CarPlan(_))
+        ));
+    }
+
+    #[test]
+    fn commitment_materials_reject_casefold_colliding_internal_plans() {
+        let malformed = PackagePlan {
+            files: vec![
+                PlannedFile {
+                    path: "src/Foo.ko".to_owned(),
+                    components: vec!["src".to_owned(), "Foo.ko".to_owned()],
+                    bytes: b"one".to_vec(),
+                },
+                PlannedFile {
+                    path: "src/foo.ko".to_owned(),
+                    components: vec!["src".to_owned(), "foo.ko".to_owned()],
+                    bytes: b"two".to_vec(),
+                },
+            ],
+            source_bytes: 6,
+        };
+        let (semantic, lock) = semantic_release();
+
         assert!(matches!(
             malformed.commitment_materials(&semantic, &lock),
             Err(PackageError::CarPlan(_))

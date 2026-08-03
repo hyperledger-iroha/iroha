@@ -303,7 +303,7 @@ pub struct NposGenesisParams {
     pub vrf_commit_window_blocks: u64,
     /// VRF reveal window length in blocks.
     pub vrf_reveal_window_blocks: u64,
-    /// Maximum validators to elect for the next epoch (0 = unlimited).
+    /// Exact bounded `3f + 1` ceiling for the next epoch committee.
     pub max_validators: u32,
     /// Minimum self-bond required for validator eligibility.
     pub min_self_bond: Quantity,
@@ -337,6 +337,12 @@ impl NposGenesisParams {
         }
         if self.vrf_commit_window_blocks == 0 || self.vrf_reveal_window_blocks == 0 {
             return Err("VRF commit and reveal windows must be greater than zero");
+        }
+        if usize::try_from(self.max_validators)
+            .ok()
+            .is_none_or(|count| !super::consensus_v2::is_valid_committee_size(count))
+        {
+            return Err("max_validators must be a bounded 3f + 1 committee size (4..=31)");
         }
         if self
             .vrf_commit_window_blocks

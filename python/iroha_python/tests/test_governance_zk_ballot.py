@@ -138,7 +138,7 @@ def _governance_mutation_payloads() -> tuple[tuple[str, str, dict[str, Any]], ..
             "governance_finalize_referendum",
             "/v1/gov/finalize",
             {
-                "referendum_id": "referendum-1",
+                "referendum_id": "44" * 32,
                 "proposal_id": "44" * 32,
             },
         ),
@@ -164,21 +164,21 @@ def test_governance_legacy_zk_ballot_surface_is_absent() -> None:
     assert hasattr(ToriiClient, "governance_submit_zk_ballot_proof_v1")
 
 
-def test_governance_get_identifiers_are_exact_encoded_path_segments() -> None:
+def test_governance_get_identifiers_are_canonical_unreserved_path_segments() -> None:
     session = RecordingSession(StubResponse(status_code=404))
     client = _governance_client(session)
     proposal_id = "ab" * 32
 
     assert client.get_governance_proposal(proposal_id) is None
-    assert client.get_governance_referendum("ref/one") is None
-    assert client.get_governance_tally("ref/two") is None
-    assert client.get_governance_locks("ref/three") is None
+    assert client.get_governance_referendum("ref.one~1") is None
+    assert client.get_governance_tally("ref_two-2") is None
+    assert client.get_governance_locks("Ref3") is None
 
     assert [call["url"] for call in session.calls] == [
         f"http://node.test/v1/gov/proposals/{proposal_id}",
-        "http://node.test/v1/gov/referenda/ref%2Fone",
-        "http://node.test/v1/gov/tally/ref%2Ftwo",
-        "http://node.test/v1/gov/locks/ref%2Fthree",
+        "http://node.test/v1/gov/referenda/ref.one~1",
+        "http://node.test/v1/gov/tally/ref_two-2",
+        "http://node.test/v1/gov/locks/Ref3",
     ]
 
 
@@ -191,8 +191,13 @@ def test_governance_get_identifiers_are_exact_encoded_path_segments() -> None:
         ("get_governance_proposal", "proposal/segment"),
         ("get_governance_referendum", " ref-1"),
         ("get_governance_referendum", "ref 1"),
+        ("get_governance_referendum", "ref/1"),
+        ("get_governance_referendum", ".hidden"),
+        ("get_governance_referendum", "ref%31"),
+        ("get_governance_referendum", "投票"),
         ("get_governance_tally", "ref\t1"),
         ("get_governance_tally", "ref\u20031"),
+        ("get_governance_tally", "a" * 129),
         ("get_governance_locks", "ref\x001"),
     ],
 )
@@ -207,6 +212,24 @@ def test_governance_get_identifiers_fail_before_dispatch(
         getattr(client, method_name)(identifier)
 
     assert session.calls == []
+
+
+@pytest.mark.parametrize("selector", ["ref/1", ".hidden", "ref%31", "投票", "a" * 129])
+@pytest.mark.parametrize("payload_index", [1, 3, 4])
+def test_governance_draft_identifiers_share_canonical_selector_grammar(
+    selector: str,
+    payload_index: int,
+) -> None:
+    session = RecordingSession(StubResponse(payload={"ok": True}))
+    client = _governance_client(session)
+    method_name, _path, payload = _governance_mutation_payloads()[payload_index]
+    selector_field = "referendum_id" if payload_index in (1, 5) else "election_id"
+
+    with pytest.raises(ValueError, match="RFC 3986"):
+        getattr(client, method_name)({**payload, selector_field: selector})
+
+    assert session.calls == []
+
 
 @pytest.mark.parametrize(
     ("method_name", "_path", "payload"),
@@ -384,6 +407,23 @@ def test_governance_finalize_and_enact_require_closed_exact_inputs_before_dispat
     with pytest.raises((TypeError, ValueError), match="referendum_id"):
         client.governance_finalize_referendum(
             {"referendum_id": " ref-1 ", "proposal_id": "44" * 32}
+        )
+    for referendum_id in ("ref/1", ".hidden", "ref%31", "投票", "a" * 129):
+        with pytest.raises(ValueError, match="referendum_id"):
+            client.governance_finalize_referendum(
+                {"referendum_id": referendum_id, "proposal_id": "44" * 32}
+            )
+    with pytest.raises(ValueError, match="exactly 64 lowercase"):
+        client.governance_finalize_referendum(
+            {"referendum_id": "AA" * 32, "proposal_id": "aa" * 32}
+        )
+    with pytest.raises(ValueError, match="exactly 64 lowercase"):
+        client.governance_finalize_referendum(
+            {"referendum_id": "44" * 32, "proposal_id": "AA" * 32}
+        )
+    with pytest.raises(ValueError, match="must equal proposal_id"):
+        client.governance_finalize_referendum(
+            {"referendum_id": "44" * 32, "proposal_id": "55" * 32}
         )
     with pytest.raises(ValueError, match="unknown field `window`"):
         client.governance_enact_proposal(

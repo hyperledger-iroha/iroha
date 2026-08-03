@@ -285,7 +285,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
+        "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -299,6 +299,13 @@ def make_bootstrap_evidence(
         path.write_bytes(data)
         path.chmod(mode)
         synthetic_sources[label] = path
+    receipt_validator_support = trust_dir / "sumeragi_v2_localnet_manifest.py"
+    shutil.copy2(
+        ROOT_DIR / "scripts" / receipt_validator_support.name,
+        receipt_validator_support,
+    )
+    receipt_validator_support.chmod(0o400)
+    synthetic_sources["receipt_validator_support"] = receipt_validator_support
     runner_tool_data = {
         "chmod": b"#!/bin/sh\nexit 0\n",
         "cargo": (
@@ -351,6 +358,9 @@ def make_bootstrap_evidence(
         "manifest_helper": synthetic_sources["manifest_helper"],
         "python": synthetic_sources["python"],
         "receipt_validator": synthetic_sources["receipt_validator"],
+        "receipt_validator_support": synthetic_sources[
+            "receipt_validator_support"
+        ],
         "revocation": signature_revocation,
         "runner_tool_manifest": synthetic_sources["runner_tool_manifest"],
         "ssh_keygen": signature_ssh_keygen,
@@ -364,6 +374,10 @@ def make_bootstrap_evidence(
         "manifest_helper": ("compute-manifest.py", 0o400),
         "python": ("python3", 0o500),
         "receipt_validator": ("validate-receipt.py", 0o400),
+        "receipt_validator_support": (
+            "sumeragi_v2_localnet_manifest.py",
+            0o400,
+        ),
         "revocation": ("bootstrap-revocation", 0o400),
         "runner_tool_manifest": ("runner-tool-manifest.json", 0o400),
         "ssh_keygen": ("ssh-keygen", 0o500),
@@ -2826,7 +2840,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
+        "98f0a450fd0c25c890d77e3f5c0d13faca76ff3227797962c5dd33e5a29cd2f7"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(

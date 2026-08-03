@@ -59,6 +59,12 @@ pub const CONFIDENTIAL_UNSHIELD_V3_VK_DIGEST_V1: [u8; 32] = [
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 /// Maximum number of leaves in the confidential commitment tree.
 pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2;
+/// Fixed-size incremental frontier persisted for the confidential tree.
+///
+/// Slot `level` contains the complete left subtree selected by bit `level` of
+/// the current commitment count. A full tree has no populated lower frontier
+/// slots; its separately persisted current root retains the completed root.
+pub type ConfidentialTreeFrontierV2 = [Option<[u8; 32]>; CONFIDENTIAL_TREE_DEPTH_V2];
 
 /// Unsigned range families shared by the public schema, standalone circuits,
 /// and Kagemusha recursive adapters.
@@ -3913,6 +3919,15 @@ pub fn poseidon_empty_root_v2() -> [u8; 32] {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+/// Return whether a persisted confidential-tree node is one canonical Pasta scalar.
+///
+/// Zero is accepted here because this validates the scalar representation of a
+/// tree node, not a non-empty commitment leaf.
+pub fn confidential_tree_node_is_canonical_v2(node: [u8; 32]) -> bool {
+    scalar_from_repr(node).is_some()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute the fixed-tree root for canonical commitment leaves.
 pub fn compute_confidential_root_v2(commitments: &[[u8; 32]]) -> Result<[u8; 32], String> {
     compute_confidential_root_v3(commitments)
@@ -4123,10 +4138,46 @@ fn confidential_commitment_leaf_v3(commitment: [u8; 32], index: usize) -> Result
         .ok_or_else(|| {
             format!("confidential V3 commitment[{index}] must be non-zero and canonical")
         })?;
+    #[cfg(test)]
+    CONFIDENTIAL_COMMITMENT_LEAF_HASH_CALLS_V3.with(|calls| {
+        calls.set(calls.get().saturating_add(1));
+    });
     Ok(confidential_poseidon_hash_v3(
         CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3,
         &[commitment],
     ))
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+std::thread_local! {
+    static CONFIDENTIAL_COMMITMENT_LEAF_HASH_CALLS_V3: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+fn reset_confidential_commitment_leaf_hash_calls_v3() {
+    CONFIDENTIAL_COMMITMENT_LEAF_HASH_CALLS_V3.with(|calls| calls.set(0));
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+fn confidential_commitment_leaf_hash_calls_v3() -> usize {
+    CONFIDENTIAL_COMMITMENT_LEAF_HASH_CALLS_V3.with(std::cell::Cell::get)
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+std::thread_local! {
+    static CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+fn reset_confidential_frontier_append_parent_hash_calls_v2() {
+    CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2.with(|calls| calls.set(0));
+}
+
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+fn confidential_frontier_append_parent_hash_calls_v2() -> usize {
+    CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2.with(std::cell::Cell::get)
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -4182,6 +4233,262 @@ fn compute_confidential_prefix_roots_v3(commitments: &[[u8; 32]]) -> Result<Vec<
         roots.push(scalar_to_repr_bytes(node));
     }
     Ok(roots)
+}
+
+/// One authenticated compact projection of the fixed confidential tree.
+///
+/// The projection stores only nodes whose subtrees intersect the persisted
+/// commitment prefix. Building it hashes every commitment leaf exactly once
+/// and takes linear time and space. Authentication paths then take exactly the
+/// fixed tree depth without rescanning commitments.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub struct ConfidentialTreeProjectionV2 {
+    layers: Vec<Vec<Scalar>>,
+    empty_roots: [Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1],
+    commitment_count: usize,
+    root: [u8; 32],
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl ConfidentialTreeProjectionV2 {
+    /// Build one compact authenticated projection for an ordered commitment prefix.
+    pub fn build(commitments: &[[u8; 32]]) -> Result<Self, String> {
+        validate_confidential_tree_len_v3(commitments)?;
+        let empty_roots = confidential_empty_subtree_roots_v3();
+        let mut nodes = commitments
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, commitment)| confidential_commitment_leaf_v3(commitment, index))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut layers = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+
+        for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+            let mut parents = Vec::with_capacity(nodes.len().div_ceil(2));
+            for pair in nodes.chunks(2) {
+                let left = pair[0];
+                let right = pair.get(1).copied().unwrap_or(empty_roots[level]);
+                parents.push(merkle_parent_v3(left, right));
+            }
+            layers.push(nodes);
+            nodes = parents;
+        }
+
+        let root = nodes
+            .first()
+            .copied()
+            .unwrap_or(empty_roots[CONFIDENTIAL_TREE_DEPTH_V2]);
+        Ok(Self {
+            layers,
+            empty_roots,
+            commitment_count: commitments.len(),
+            root: scalar_to_repr_bytes(root),
+        })
+    }
+
+    /// Return the root authenticated by this projection.
+    #[must_use]
+    pub const fn root(&self) -> [u8; 32] {
+        self.root
+    }
+
+    /// Reconstruct the fixed-size incremental frontier authenticated by this projection.
+    pub fn frontier(&self) -> Result<ConfidentialTreeFrontierV2, String> {
+        let mut frontier = [None; CONFIDENTIAL_TREE_DEPTH_V2];
+        for (level, slot) in frontier.iter_mut().enumerate() {
+            if (self.commitment_count >> level) & 1 == 0 {
+                continue;
+            }
+            let position = (self.commitment_count >> level) - 1;
+            let node = self.layers[level].get(position).copied().ok_or_else(|| {
+                format!("confidential projection is missing frontier node at level {level}")
+            })?;
+            *slot = Some(scalar_to_repr_bytes(node));
+        }
+        Ok(frontier)
+    }
+
+    /// Compute one membership or zero-leaf path without rescanning commitments.
+    pub fn compute_path(&self, leaf_index: usize) -> Result<ConfidentialMerklePathV2, String> {
+        if leaf_index >= CONFIDENTIAL_TREE_CAPACITY_V2 {
+            return Err(format!(
+                "leaf_index must be < {} for confidential V3 proofs",
+                CONFIDENTIAL_TREE_CAPACITY_V2
+            ));
+        }
+
+        let mut node = self.layers[0]
+            .get(leaf_index)
+            .copied()
+            .unwrap_or(self.empty_roots[0]);
+        let mut siblings = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+        let mut directions = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+        let mut witness_nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+        for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+            let position = leaf_index >> level;
+            let direction = (position & 1) as u8;
+            let sibling = self.layers[level]
+                .get(position ^ 1)
+                .copied()
+                .unwrap_or(self.empty_roots[level]);
+            node = if direction == 0 {
+                merkle_parent_v3(node, sibling)
+            } else {
+                merkle_parent_v3(sibling, node)
+            };
+            siblings.push(scalar_to_repr_bytes(sibling));
+            directions.push(direction);
+            witness_nodes.push(scalar_to_repr_bytes(node));
+        }
+        let computed_root = scalar_to_repr_bytes(node);
+        if computed_root != self.root {
+            return Err("confidential projection path did not authenticate its root".to_owned());
+        }
+        Ok(ConfidentialMerklePathV2 {
+            siblings,
+            directions,
+            witness_nodes,
+            root: computed_root,
+        })
+    }
+}
+
+/// Result of simulating one atomic append against a persisted tree frontier.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub struct ConfidentialTreeAppendV2 {
+    /// Frontier after the complete batch.
+    pub frontier: ConfidentialTreeFrontierV2,
+    /// Current root after the complete batch.
+    pub current_root: [u8; 32],
+    /// Root after each appended commitment, in request order.
+    pub appended_roots: Vec<[u8; 32]>,
+}
+
+/// Validate the fixed-size frontier and its separately persisted current root.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn validate_confidential_tree_frontier_v2(
+    commitment_count: usize,
+    frontier: &ConfidentialTreeFrontierV2,
+    persisted_root: [u8; 32],
+) -> Result<(), String> {
+    if commitment_count > CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "confidential tree capacity {} exceeded by {commitment_count} commitments",
+            CONFIDENTIAL_TREE_CAPACITY_V2
+        ));
+    }
+    if !confidential_tree_node_is_canonical_v2(persisted_root) {
+        return Err("persisted confidential current root is not a canonical Pasta scalar".to_owned());
+    }
+
+    for (level, slot) in frontier.iter().enumerate() {
+        let should_be_populated = (commitment_count >> level) & 1 == 1;
+        if slot.is_some() != should_be_populated {
+            return Err(format!(
+                "confidential frontier slot {level} does not match commitment-count shape"
+            ));
+        }
+        if slot.is_some_and(|node| !confidential_tree_node_is_canonical_v2(node)) {
+            return Err(format!(
+                "confidential frontier slot {level} is not a canonical Pasta scalar"
+            ));
+        }
+    }
+
+    if commitment_count == CONFIDENTIAL_TREE_CAPACITY_V2 {
+        // The final append consumes every lower slot. Full recovery validation
+        // compares this separately persisted root with a rebuilt projection.
+        return Ok(());
+    }
+
+    let empty_roots = confidential_empty_subtree_roots_v3();
+    let mut node = empty_roots[0];
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        if let Some(left) = frontier[level] {
+            let left = scalar_from_repr(left).ok_or_else(|| {
+                format!("confidential frontier slot {level} is not canonical")
+            })?;
+            node = merkle_parent_v3(left, node);
+        } else {
+            node = merkle_parent_v3(node, empty_roots[level]);
+        }
+    }
+    if scalar_to_repr_bytes(node) != persisted_root {
+        return Err(
+            "persisted confidential current root does not match the incremental frontier"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Simulate an ordered append in `O(batch * depth)` without mutating persisted state.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn append_confidential_tree_frontier_v2(
+    commitment_count: usize,
+    frontier: ConfidentialTreeFrontierV2,
+    persisted_root: [u8; 32],
+    commitments: &[[u8; 32]],
+) -> Result<ConfidentialTreeAppendV2, String> {
+    let next_count = commitment_count
+        .checked_add(commitments.len())
+        .ok_or_else(|| "confidential commitment count overflow".to_owned())?;
+    if next_count > CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "confidential tree capacity {} exceeded by {next_count} commitments",
+            CONFIDENTIAL_TREE_CAPACITY_V2
+        ));
+    }
+    validate_confidential_tree_frontier_v2(commitment_count, &frontier, persisted_root)?;
+
+    let leaves = commitments
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(offset, commitment)| {
+            confidential_commitment_leaf_v3(commitment, commitment_count + offset)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if leaves.is_empty() {
+        return Ok(ConfidentialTreeAppendV2 {
+            frontier,
+            current_root: persisted_root,
+            appended_roots: Vec::new(),
+        });
+    }
+
+    let empty_roots = confidential_empty_subtree_roots_v3();
+    let mut frontier_scalars = frontier.map(|slot| slot.and_then(scalar_from_repr));
+    let mut appended_roots = Vec::with_capacity(leaves.len());
+    for (offset, mut node) in leaves.into_iter().enumerate() {
+        let mut position = commitment_count + offset;
+        for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+            #[cfg(test)]
+            CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2.with(|calls| {
+                calls.set(calls.get().saturating_add(1));
+            });
+            if position & 1 == 0 {
+                frontier_scalars[level] = Some(node);
+                node = merkle_parent_v3(node, empty_roots[level]);
+            } else {
+                let left = frontier_scalars[level].take().ok_or_else(|| {
+                    format!("missing confidential tree frontier at level {level}")
+                })?;
+                node = merkle_parent_v3(left, node);
+            }
+            position >>= 1;
+        }
+        appended_roots.push(scalar_to_repr_bytes(node));
+    }
+
+    Ok(ConfidentialTreeAppendV2 {
+        frontier: frontier_scalars.map(|slot| slot.map(scalar_to_repr_bytes)),
+        current_root: appended_roots
+            .last()
+            .copied()
+            .unwrap_or(persisted_root),
+        appended_roots,
+    })
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -7101,6 +7408,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn compact_projection_matches_legacy_paths_and_incremental_frontier() {
+        let commitments = (1_u64..=64).map(scalar_bytes).collect::<Vec<_>>();
+        let projection = super::ConfidentialTreeProjectionV2::build(&commitments)
+            .expect("compact confidential projection");
+        let prefix_roots = super::compute_confidential_prefix_roots_v2(&commitments)
+            .expect("canonical prefix roots");
+        assert_eq!(projection.root(), prefix_roots[commitments.len() - 1]);
+
+        let append = super::append_confidential_tree_frontier_v2(
+            0,
+            [None; super::CONFIDENTIAL_TREE_DEPTH_V2],
+            super::poseidon_empty_root_v2(),
+            &commitments,
+        )
+        .expect("incremental append");
+        assert_eq!(projection.frontier().expect("projection frontier"), append.frontier);
+        assert_eq!(projection.root(), append.current_root);
+        assert_eq!(append.appended_roots, prefix_roots);
+
+        for leaf_index in [0_usize, 1, 2, 31, 63, 64] {
+            let projected = projection
+                .compute_path(leaf_index)
+                .expect("projected authentication path");
+            let legacy = super::compute_confidential_merkle_path_v3(&commitments, leaf_index)
+                .expect("legacy authentication path");
+            assert_eq!(projected.siblings, legacy.siblings);
+            assert_eq!(projected.directions, legacy.directions);
+            assert_eq!(projected.witness_nodes, legacy.witness_nodes);
+            assert_eq!(projected.root, legacy.root);
+        }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn compact_projection_hashes_each_commitment_once_for_many_paths() {
+        let commitments = (1_u64..=128).map(scalar_bytes).collect::<Vec<_>>();
+        let expected_root = super::compute_confidential_root_v2(&commitments)
+            .expect("canonical confidential root");
+        super::reset_confidential_commitment_leaf_hash_calls_v3();
+
+        let projection = super::ConfidentialTreeProjectionV2::build(&commitments)
+            .expect("compact confidential projection");
+        assert_eq!(
+            super::confidential_commitment_leaf_hash_calls_v3(),
+            commitments.len(),
+            "projection construction must hash each commitment exactly once"
+        );
+        for leaf_index in 0..=commitments.len() {
+            projection
+                .compute_path(leaf_index)
+                .expect("requested or next-zero authentication path");
+        }
+        assert_eq!(projection.root(), expected_root);
+        assert_eq!(
+            super::confidential_commitment_leaf_hash_calls_v3(),
+            commitments.len(),
+            "path count must not cause another commitment scan"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn incremental_frontier_append_work_depends_only_on_batch_and_depth() {
+        let commitments = (1_u64..=128).map(scalar_bytes).collect::<Vec<_>>();
+        let expected_roots = super::compute_confidential_prefix_roots_v2(&commitments)
+            .expect("canonical prefix roots");
+        super::reset_confidential_commitment_leaf_hash_calls_v3();
+        super::reset_confidential_frontier_append_parent_hash_calls_v2();
+
+        let append = super::append_confidential_tree_frontier_v2(
+            0,
+            [None; super::CONFIDENTIAL_TREE_DEPTH_V2],
+            super::poseidon_empty_root_v2(),
+            &commitments,
+        )
+        .expect("incremental append");
+        assert_eq!(append.appended_roots, expected_roots);
+        assert_eq!(
+            super::confidential_commitment_leaf_hash_calls_v3(),
+            commitments.len()
+        );
+        assert_eq!(
+            super::confidential_frontier_append_parent_hash_calls_v2(),
+            commitments.len() * super::CONFIDENTIAL_TREE_DEPTH_V2
+        );
+        super::validate_confidential_tree_frontier_v2(
+            commitments.len(),
+            &append.frontier,
+            append.current_root,
+        )
+        .expect("appended frontier remains self-consistent");
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

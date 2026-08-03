@@ -71,6 +71,7 @@ import {
 } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
 import { decodeCanonicalVerifyingKeyTransactionPayload } from "./transactionCodec.js";
+import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import {
   KotodamaQuantity,
   NumericV1,
@@ -456,9 +457,22 @@ const EVIDENCE_KIND_VALUES = new Set([
   "InvalidQc",
   "InvalidProposal",
   "Censorship",
+  "SumeragiV2Equivocation",
 ]);
 
 const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
+const EVIDENCE_EQUIVOCATION_CLASS_VALUES = new Set([
+  "proposal",
+  "phase_vote",
+  "timeout_vote",
+]);
+const EVIDENCE_BASE_FIELDS = Object.freeze([
+  "kind",
+  "recorded_height",
+  "recorded_view",
+  "recorded_ms",
+  "consensus_admitted_height",
+]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
@@ -7315,7 +7329,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceReferendum(referendumId, options) {
-    const normalized = requireExactTokenString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceReferendum");
     const response = await this._request(
       "GET",
@@ -7355,7 +7369,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceTally(referendumId, options) {
-    const normalized = requireExactTokenString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceTally");
     const response = await this._request(
       "GET",
@@ -7382,7 +7396,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiGovernanceTallyResult>}
    */
   async getGovernanceTallyTyped(referendumId, options) {
-    const normalizedId = requireExactTokenString(referendumId, "referendumId");
+    const normalizedId = requireGovernanceSelectorString(referendumId, "referendumId");
     const payload = await this.getGovernanceTally(normalizedId, options);
     if (!payload) {
       return createEmptyGovernanceTallyResult(normalizedId);
@@ -7397,7 +7411,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceLocks(referendumId, options) {
-    const normalized = requireExactTokenString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceLocks");
     const response = await this._request(
       "GET",
@@ -7424,7 +7438,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiGovernanceLocksResult>}
    */
   async getGovernanceLocksTyped(referendumId, options) {
-    const normalizedId = requireExactTokenString(referendumId, "referendumId");
+    const normalizedId = requireGovernanceSelectorString(referendumId, "referendumId");
     const payload = await this.getGovernanceLocks(normalizedId, options);
     if (!payload) {
       return createEmptyGovernanceLocksResult(normalizedId);
@@ -8148,43 +8162,6 @@ export class ToriiClient {
       throw new TypeError("sumeragi evidence count response.count must be a non-negative number");
     }
     return { count };
-  }
-
-  /**
-   * Submit consensus evidence (`POST /v1/sumeragi/evidence/submit`).
-   * @param {SumeragiEvidenceSubmitRequest} request
-   * @returns {Promise<SumeragiEvidenceSubmitResponse>}
-   */
-  async submitSumeragiEvidence(request) {
-    const record = ensureRecord(request, "request");
-    const evidenceHex = record.evidence_hex;
-    if (typeof evidenceHex !== "string" || evidenceHex.trim().length === 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_HEX,
-        "request.evidence_hex must be a non-empty hex string",
-        "submitSumeragiEvidence.request.evidence_hex",
-      );
-    }
-    const headers = {
-      "Content-Type": APPLICATION_JSON,
-      Accept: APPLICATION_JSON,
-    };
-    if (record.apiToken) {
-      headers["X-API-Token"] = String(record.apiToken);
-    }
-    const response = await this._request("POST", "/v1/sumeragi/evidence/submit", {
-      headers,
-      body: JSON.stringify({ evidence_hex: evidenceHex }),
-    });
-    await this._expectStatus(response, [202]);
-    const payload = ensureRecord(
-      await this._maybeJson(response),
-      "sumeragi evidence submit response",
-    );
-    return {
-      status: String(payload.status ?? ""),
-      kind: String(payload.kind ?? ""),
-    };
   }
 
   /**
@@ -16319,8 +16296,8 @@ function parseSumeragiStatusPayload(payload) {
     "sumeragi.protocol_version",
     { max: 0xffff },
   );
-  if (protocolVersion !== 3) {
-    throw new RangeError("sumeragi.protocol_version must equal 3");
+  if (protocolVersion !== 4) {
+    throw new RangeError("sumeragi.protocol_version must equal 4");
   }
   const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
   const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
@@ -17301,9 +17278,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
     if (
       minSigners !== active.heightContext.quorum.min_signers ||
       totalPower !== active.heightContext.quorum.total_power ||
-      signedPower < signerCount ||
-      signedPower > totalPower ||
-      (active.heightContext.mode.mode === "permissioned" && signedPower !== signerCount)
+      signedPower !== signerCount
     ) {
       throw new RangeError(`${itemContext} disagrees with the frozen dual quorum`);
     }
@@ -17348,7 +17323,11 @@ function parseSumeragiLivenessStatus(value, context, active) {
     });
   };
   const voteQuorums = (field, phase) => Object.freeze(
-    assertSumeragiArrayBound(record[field], 128, `${context}.${field}`).map(
+    assertSumeragiArrayBound(
+      record[field],
+      phase === "commit" ? 32 : 31,
+      `${context}.${field}`,
+    ).map(
       (item, index) => checkedPartialQuorum(
         item,
         `${context}.${field}[${index}]`,
@@ -17359,7 +17338,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
   const timeoutQuorums = Object.freeze(
     assertSumeragiArrayBound(
       record.timeout_quorums,
-      128,
+      31,
       `${context}.timeout_quorums`,
     ).map((item, index) => checkedPartialQuorum(
       item,
@@ -17602,6 +17581,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
           "timeout_certificate_missing",
           "scheduler_starvation",
           "application_pending",
+          "successor_activation_pending",
           "local_control_pending",
         ],
         `${context}.blocker`,
@@ -18047,14 +18027,14 @@ function parseSumeragiHeightContext(value, context) {
   const validatorCount = parseSumeragiUnsigned(
     record.validator_count,
     `${context}.validator_count`,
-    { positive: true, max: 128 },
+    { positive: true, max: 31 },
   );
   const quorumRecord = ensureRecord(record.quorum, `${context}.quorum`);
   const quorum = Object.freeze({
     min_signers: parseSumeragiUnsigned(
       quorumRecord.min_signers,
       `${context}.quorum.min_signers`,
-      { positive: true, max: 128 },
+      { positive: true, max: 31 },
     ),
     total_power: parseSumeragiUnsigned(
       quorumRecord.total_power,
@@ -18063,7 +18043,12 @@ function parseSumeragiHeightContext(value, context) {
     ),
   });
   const expectedMinSigners = Math.floor((validatorCount * 2) / 3) + 1;
-  if (quorum.min_signers !== expectedMinSigners || quorum.total_power < validatorCount) {
+  if (
+    validatorCount < 4 ||
+    (validatorCount - 1) % 3 !== 0 ||
+    quorum.min_signers !== expectedMinSigners ||
+    quorum.total_power !== validatorCount
+  ) {
     throw new RangeError(`${context}.quorum is not canonical for validator_count`);
   }
   const mode = parseSumeragiTaggedUnit(
@@ -18072,9 +18057,6 @@ function parseSumeragiHeightContext(value, context) {
     ["permissioned", "npos"],
     `${context}.mode`,
   );
-  if (mode.mode === "permissioned" && quorum.total_power !== validatorCount) {
-    throw new RangeError(`${context}.quorum.total_power must equal validator_count in permissioned mode`);
-  }
   const epochSeed = parseSumeragiByte32(record.epoch_seed, `${context}.epoch_seed`);
   return Object.freeze({
     epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
@@ -18094,7 +18076,7 @@ function parseSumeragiCommitQcStatus(value, context) {
   const validatorCount = parseSumeragiUnsigned(
     record.validator_count,
     `${context}.validator_count`,
-    { positive: true, max: 128 },
+    { positive: true, max: 31 },
   );
   const signerCount = parseSumeragiUnsigned(
     record.signer_count,
@@ -18104,7 +18086,7 @@ function parseSumeragiCommitQcStatus(value, context) {
   const minSigners = parseSumeragiUnsigned(
     record.min_signers,
     `${context}.min_signers`,
-    { positive: true, max: 128 },
+    { positive: true, max: 31 },
   );
   const signedPower = parseSumeragiUnsigned(
     record.signed_power,
@@ -18116,10 +18098,12 @@ function parseSumeragiCommitQcStatus(value, context) {
     { positive: true },
   );
   if (
+    validatorCount < 4 ||
+    (validatorCount - 1) % 3 !== 0 ||
     signerCount > validatorCount ||
     minSigners !== Math.floor((validatorCount * 2) / 3) + 1 ||
-    signedPower > totalPower ||
-    totalPower < validatorCount ||
+    signedPower !== signerCount ||
+    totalPower !== validatorCount ||
     signerCount < minSigners ||
     BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n
   ) {
@@ -22436,6 +22420,18 @@ function requireExactTokenString(value, name) {
   return exact;
 }
 
+function requireGovernanceSelectorString(value, name) {
+  const exact = requireExactTokenString(value, name);
+  if (!isCanonicalGovernanceSelectorV1(exact)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot`,
+      name,
+    );
+  }
+  return exact;
+}
+
 function requireExactAsciiTokenString(value, name) {
   const exact = requireExactTokenString(value, name);
   if (!/^[!-~]+$/u.test(exact)) {
@@ -22696,7 +22692,7 @@ function requireExactPositiveIntegerLike(value, context) {
 }
 
 function requireEvidencePhase(value, context) {
-  const phase = requireNonEmptyString(value, context);
+  const phase = requireExactNonEmptyString(value, context);
   if (!EVIDENCE_PHASE_VALUES.has(phase)) {
     throw new RangeError(
       `${context} must be one of ${Array.from(EVIDENCE_PHASE_VALUES).join(", ")}`,
@@ -25047,16 +25043,24 @@ function normalizeGovernanceFinalizePayload(input) {
       "governanceFinalizeReferendum.proposalId",
     );
   }
-  return {
-    referendum_id: requireExactTokenString(
-      referendumId,
+  const exactReferendumId = requireExactLowerHex32String(
+    referendumId,
+    "governanceFinalizeReferendum.referendumId",
+  );
+  const exactProposalId = requireExactLowerHex32String(
+    proposalId,
+    "governanceFinalizeReferendum.proposalId",
+  );
+  if (exactReferendumId !== exactProposalId) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      "governanceFinalizeReferendum.referendumId must equal proposalId",
       "governanceFinalizeReferendum.referendumId",
-    ),
-    proposal_id: normalizeHex32String(
-      proposalId,
-      "governanceFinalizeReferendum.proposalId",
-      { allowScheme: true, scheme: "blake2b32", exactString: true },
-    ),
+    );
+  }
+  return {
+    referendum_id: exactReferendumId,
+    proposal_id: exactProposalId,
   };
 }
 
@@ -25763,7 +25767,7 @@ function normalizeGovernancePlainBallotPayload(input) {
       record.chainId,
       "governanceSubmitPlainBallot.chainId",
     ),
-    referendum_id: requireExactTokenString(
+    referendum_id: requireGovernanceSelectorString(
       record.referendumId,
       "governanceSubmitPlainBallot.referendumId",
     ),
@@ -25879,7 +25883,7 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       record.chainId,
       "governanceSubmitZkBallotV1.chainId",
     ),
-    election_id: requireExactTokenString(
+    election_id: requireGovernanceSelectorString(
       record.electionId,
       "governanceSubmitZkBallotV1.electionId",
     ),
@@ -26029,7 +26033,7 @@ function normalizeGovernanceZkBallotProofPayload(input) {
       record.chainId,
       "governanceSubmitZkBallotProofV1.chainId",
     ),
-    election_id: requireExactTokenString(
+    election_id: requireGovernanceSelectorString(
       record.electionId,
       "governanceSubmitZkBallotProofV1.electionId",
     ),
@@ -36040,77 +36044,149 @@ function normalizeSumeragiEvidenceListResponse(payload) {
   return { total, items };
 }
 
+function assertExactSumeragiEvidenceFields(
+  record,
+  context,
+  requiredVariantFields,
+  optionalVariantFields = [],
+) {
+  const required = new Set([...EVIDENCE_BASE_FIELDS, ...requiredVariantFields]);
+  const allowed = new Set([...required, ...optionalVariantFields]);
+  const missing = Array.from(required).filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  const unexpected = Object.keys(record).filter((field) => !allowed.has(field));
+  if (missing.length > 0 || unexpected.length > 0) {
+    const details = [];
+    if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
+    if (unexpected.length > 0) details.push(`unexpected ${unexpected.join(", ")}`);
+    throw new TypeError(`${context} must use the exact server fields (${details.join("; ")})`);
+  }
+}
+
+function requireSumeragiEvidenceUnsigned(value, context, maximum = Number.MAX_SAFE_INTEGER) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > maximum
+  ) {
+    throw new TypeError(`${context} must be a non-negative JSON safe integer`);
+  }
+  return value;
+}
+
+function requireSumeragiEvidenceHash(value, context) {
+  return requireExactLowerHex32String(value, context);
+}
+
 function normalizeSumeragiEvidenceRecord(value, context) {
   const record = ensureRecord(value, context);
-  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
+  const kind = requireExactNonEmptyString(record.kind, `${context}.kind`);
+  if (!EVIDENCE_KIND_VALUES.has(kind)) {
+    throw new RangeError(
+      `${context}.kind must be one of ${Array.from(EVIDENCE_KIND_VALUES).join(", ")}`,
+    );
+  }
+  const consensusAdmittedHeight = record.consensus_admitted_height;
   const base = {
     kind,
-    recorded_height: requireNonNegativeIntegerLike(
+    recorded_height: requireSumeragiEvidenceUnsigned(
       record.recorded_height,
       `${context}.recorded_height`,
     ),
-    recorded_view: requireNonNegativeIntegerLike(
+    recorded_view: requireSumeragiEvidenceUnsigned(
       record.recorded_view,
       `${context}.recorded_view`,
     ),
-    recorded_ms: requireNonNegativeIntegerLike(
+    recorded_ms: requireSumeragiEvidenceUnsigned(
       record.recorded_ms,
       `${context}.recorded_ms`,
     ),
+    consensus_admitted_height:
+      consensusAdmittedHeight === null
+        ? null
+        : requireSumeragiEvidenceUnsigned(
+            consensusAdmittedHeight,
+            `${context}.consensus_admitted_height`,
+          ),
   };
   if (
     kind === "DoublePrepare" ||
     kind === "DoubleCommit"
   ) {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "phase",
+      "height",
+      "view",
+      "epoch",
+      "signer",
+      "block_hash_1",
+      "block_hash_2",
+    ]);
     const phase = requireEvidencePhase(
-      pickOverride(record, "phase", "phase"),
+      record.phase,
       `${context}.phase`,
     );
+    const blockHash1 = requireSumeragiEvidenceHash(
+      record.block_hash_1,
+      `${context}.block_hash_1`,
+    );
+    const blockHash2 = requireSumeragiEvidenceHash(
+      record.block_hash_2,
+      `${context}.block_hash_2`,
+    );
+    if (blockHash1 === blockHash2) {
+      throw new RangeError(`${context} block hashes must identify distinct blocks`);
+    }
     return {
       ...base,
       phase,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      signer: requireNonEmptyString(
+      signer: requireSumeragiEvidenceUnsigned(
         record.signer,
         `${context}.signer`,
+        0xffffffff,
       ),
-      block_hash_1: requireHexString(
-        record.block_hash_1,
-        `${context}.block_hash_1`,
-      ),
-      block_hash_2: requireHexString(
-        record.block_hash_2,
-        `${context}.block_hash_2`,
-      ),
+      block_hash_1: blockHash1,
+      block_hash_2: blockHash2,
     };
   }
   if (kind === "InvalidQc") {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "height",
+      "view",
+      "epoch",
+      "subject_block_hash",
+      "phase",
+      "reason",
+    ]);
     return {
       ...base,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      subject_block_hash: requireHexString(
+      subject_block_hash: requireSumeragiEvidenceHash(
         record.subject_block_hash,
         `${context}.subject_block_hash`,
       ),
@@ -36118,73 +36194,149 @@ function normalizeSumeragiEvidenceRecord(value, context) {
         record.phase,
         `${context}.phase`,
       ),
-      reason: requireNonEmptyString(
+      reason: requireExactNonEmptyString(
         record.reason,
         `${context}.reason`,
       ),
     };
   }
   if (kind === "InvalidProposal") {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "height",
+      "view",
+      "epoch",
+      "subject_block_hash",
+      "payload_hash",
+      "reason",
+    ]);
     return {
       ...base,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      subject_block_hash: requireHexString(
+      subject_block_hash: requireSumeragiEvidenceHash(
         record.subject_block_hash,
         `${context}.subject_block_hash`,
       ),
-      payload_hash: requireHexString(
+      payload_hash: requireSumeragiEvidenceHash(
         record.payload_hash,
         `${context}.payload_hash`,
       ),
-      reason: requireNonEmptyString(
+      reason: requireExactNonEmptyString(
         record.reason,
         `${context}.reason`,
       ),
     };
   }
   if (kind === "Censorship") {
-    return {
+    assertExactSumeragiEvidenceFields(
+      record,
+      context,
+      ["tx_hash", "receipt_count", "signers"],
+      ["submitted_at_height_min", "submitted_at_height_max"],
+    );
+    const receiptCount = requireSumeragiEvidenceUnsigned(
+      record.receipt_count,
+      `${context}.receipt_count`,
+    );
+    const signers = requireStringArray(record.signers, `${context}.signers`).map(
+      (signer, index) => requireExactNonEmptyString(signer, `${context}.signers[${index}]`),
+    );
+    if (signers.length !== receiptCount) {
+      throw new RangeError(`${context}.receipt_count must equal signers.length`);
+    }
+    const hasMin = Object.prototype.hasOwnProperty.call(
+      record,
+      "submitted_at_height_min",
+    );
+    const hasMax = Object.prototype.hasOwnProperty.call(
+      record,
+      "submitted_at_height_max",
+    );
+    if (hasMin !== hasMax || (receiptCount > 0 && !hasMin) || (receiptCount === 0 && hasMin)) {
+      throw new TypeError(
+        `${context} must include both submitted_at_height bounds exactly when receipts are present`,
+      );
+    }
+    const result = {
       ...base,
-      tx_hash: requireHexString(
+      tx_hash: requireSumeragiEvidenceHash(
         record.tx_hash,
         `${context}.tx_hash`,
       ),
-      receipt_count: requireNonNegativeIntegerLike(
-        record.receipt_count,
-        `${context}.receipt_count`,
-      ),
-      min_height: requireNonNegativeIntegerLike(
-        record.min_height,
-        `${context}.min_height`,
-      ),
-      max_height: requireNonNegativeIntegerLike(
-        record.max_height,
-        `${context}.max_height`,
-      ),
-      signers: requireStringArray(
-        record.signers,
-        `${context}.signers`,
-      ),
+      receipt_count: receiptCount,
+      signers,
+    };
+    if (!hasMin) return result;
+    const submittedAtHeightMin = requireSumeragiEvidenceUnsigned(
+      record.submitted_at_height_min,
+      `${context}.submitted_at_height_min`,
+    );
+    const submittedAtHeightMax = requireSumeragiEvidenceUnsigned(
+      record.submitted_at_height_max,
+      `${context}.submitted_at_height_max`,
+    );
+    if (submittedAtHeightMin > submittedAtHeightMax) {
+      throw new RangeError(
+        `${context}.submitted_at_height_min must be <= submitted_at_height_max`,
+      );
+    }
+    return {
+      ...result,
+      submitted_at_height_min: submittedAtHeightMin,
+      submitted_at_height_max: submittedAtHeightMax,
     };
   }
-  const detailValue = record.detail;
-  if (detailValue === undefined || detailValue === null) {
-    return base;
+  assertExactSumeragiEvidenceFields(record, context, [
+    "class",
+    "height",
+    "view",
+    "epoch",
+    "signer",
+    "context_id",
+    "artifact_hash_1",
+    "artifact_hash_2",
+  ]);
+  const evidenceClass = requireExactNonEmptyString(record.class, `${context}.class`);
+  if (!EVIDENCE_EQUIVOCATION_CLASS_VALUES.has(evidenceClass)) {
+    throw new RangeError(
+      `${context}.class must be one of ${Array.from(EVIDENCE_EQUIVOCATION_CLASS_VALUES).join(", ")}`,
+    );
+  }
+  const artifactHash1 = requireSumeragiEvidenceHash(
+    record.artifact_hash_1,
+    `${context}.artifact_hash_1`,
+  );
+  const artifactHash2 = requireSumeragiEvidenceHash(
+    record.artifact_hash_2,
+    `${context}.artifact_hash_2`,
+  );
+  if (artifactHash1 === artifactHash2) {
+    throw new RangeError(`${context} artifact hashes must identify distinct artifacts`);
   }
   return {
     ...base,
-    detail: requireNonEmptyString(detailValue, `${context}.detail`),
+    class: evidenceClass,
+    height: requireSumeragiEvidenceUnsigned(record.height, `${context}.height`),
+    view: requireSumeragiEvidenceUnsigned(record.view, `${context}.view`),
+    epoch: requireSumeragiEvidenceUnsigned(record.epoch, `${context}.epoch`),
+    signer: requireSumeragiEvidenceUnsigned(
+      record.signer,
+      `${context}.signer`,
+      0xffffffff,
+    ),
+    context_id: requireSumeragiEvidenceHash(record.context_id, `${context}.context_id`),
+    artifact_hash_1: artifactHash1,
+    artifact_hash_2: artifactHash2,
   };
 }
 

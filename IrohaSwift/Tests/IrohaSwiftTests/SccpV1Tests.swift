@@ -746,9 +746,15 @@ final class SccpV1Tests: XCTestCase {
             finalityAnchor.anchorHash,
             Data(hexString: "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA")
         )
+        let currentRequest = try SccpGroth16ProofRequestV1.parse(
+            try proofRequestJSON(protocolVersion: 4)
+        )
+        XCTAssertEqual(currentRequest.soraFinalityAnchor.protocolVersion, 4)
+        XCTAssertNotEqual(currentRequest.soraFinalityAnchor.anchorHash, finalityAnchor.anchorHash)
 
         let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
             { $0["protocol_version"] = 1 },
+            { $0["protocol_version"] = 5 },
             { $0["protocol_version"] = "3" },
             { $0["protocol_version"] = true },
             { $0["validator_set_epoch"] = 2 },
@@ -1561,10 +1567,10 @@ final class SccpV1Tests: XCTestCase {
         ])
     }
 
-    private func proofRequestJSON() throws -> Data {
+    private func proofRequestJSON(protocolVersion: Int = 3) throws -> Data {
         let key = verifyingKey()
         let hashes = policyHashes()
-        let anchor = finalityAnchor()
+        let anchor = finalityAnchor(protocolVersion: protocolVersion)
         return jsonData([
             "version": 1,
             "backend": ["backend": "evm_groth16_bn254_v1", "family": NSNull()],
@@ -1741,14 +1747,14 @@ final class SccpV1Tests: XCTestCase {
         return (semantic, finalityAnchor().hash)
     }
 
-    private func finalityAnchor() -> (object: [String: Any], hash: Data) {
+    private func finalityAnchor(protocolVersion: Int = 3) -> (object: [String: Any], hash: Data) {
         let chainId = Data(hexString: "fc56984b2be7431d840e21514d1883f0")!
         let chainHash = irohaKeccak256(chainId)
         let checkpoint = Data(repeating: 0xa1, count: 32)
         let contextId = Data(repeating: 0xa2, count: 32)
         let artifactHash = Data(repeating: 0xa3, count: 32)
         var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
-        appendUInt16LE(3, to: &canonical)
+        appendUInt16LE(UInt16(protocolVersion), to: &canonical)
         canonical.append(chainHash)
         appendUInt64LE(7, to: &canonical)
         canonical.append(checkpoint)
@@ -1759,7 +1765,7 @@ final class SccpV1Tests: XCTestCase {
         return ([
             "version": 1,
             "source_network": network("sora-taira"),
-            "protocol_version": 3,
+            "protocol_version": protocolVersion,
             "chain_id_hash": chainHash.hexEncodedString().uppercased(),
             "checkpoint_height": 7,
             "checkpoint_block_hash": checkpoint.hexEncodedString().uppercased(),

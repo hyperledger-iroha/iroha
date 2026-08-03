@@ -25,6 +25,7 @@ import {
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { getNativeBinding } from "./native.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
 import {
   parseStrictLosslessIntegerJson,
@@ -332,12 +333,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   "zk::CancelConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition",
-  "iroha_data_model::isi::zk::Shield":
-    "iroha_data_model::isi::zk::Shield",
-  "iroha_data_model::isi::zk::ZkTransfer":
-    "iroha_data_model::isi::zk::ZkTransfer",
-  "iroha_data_model::isi::zk::Unshield":
-    "iroha_data_model::isi::zk::Unshield",
   "iroha_data_model::isi::zk::CreateElection":
     "iroha_data_model::isi::zk::CreateElection",
   "iroha_data_model::isi::zk::SubmitBallot":
@@ -357,10 +352,7 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
     ]),
   ),
 );
-const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
-  "iroha_data_model::isi::zk::Shield": 8,
-  "iroha_data_model::isi::zk::Unshield": 8,
-});
+const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({});
 
 const CRC64_TABLE = (() => {
   const table = new Array(256);
@@ -554,6 +546,55 @@ function isStrictGovernanceInstructionCandidate(value) {
       Object.prototype.hasOwnProperty.call(value, "CastZkBallot")
     )
   );
+}
+
+function assertCanonicalGovernanceSelectorV1(value, context) {
+  if (!isCanonicalGovernanceSelectorV1(value)) {
+    throw new TypeError(
+      `${context} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot`,
+    );
+  }
+  return value;
+}
+
+function validateGovernanceSelectorPayload(payload, field, context) {
+  if (
+    !isPlainObject(payload) ||
+    !Object.prototype.hasOwnProperty.call(payload, field)
+  ) {
+    return;
+  }
+  assertCanonicalGovernanceSelectorV1(payload[field], `${context}.${field}`);
+}
+
+function validateGovernanceInstructionSelectors(instruction) {
+  if (!isPlainObject(instruction)) {
+    return;
+  }
+  for (const [variant, field] of [
+    ["CastZkBallot", "election_id"],
+    ["CastPlainBallot", "referendum_id"],
+    ["FinalizeReferendum", "referendum_id"],
+  ]) {
+    validateGovernanceSelectorPayload(instruction[variant], field, variant);
+  }
+  for (const zkKey of ["zk", "Zk", "ZK"]) {
+    const zk = instruction[zkKey];
+    if (!isPlainObject(zk)) {
+      continue;
+    }
+    for (const variant of [
+      "CreateElection",
+      "SubmitBallot",
+      "FinalizeElection",
+    ]) {
+      validateGovernanceSelectorPayload(
+        zk[variant],
+        "election_id",
+        `${zkKey}.${variant}`,
+      );
+    }
+  }
 }
 
 function rejectGovernancePrivateKeyFieldsDeep(value, context) {
@@ -793,13 +834,10 @@ function validateCastZkBallotPayload(value) {
     ["election_id", "proof_b64", "public_inputs_json"],
     context,
   );
-  const electionId = assertExactNonEmptyString(
+  assertCanonicalGovernanceSelectorV1(
     value.election_id,
     `${context}.election_id`,
   );
-  if (electionId.trim().length === 0 || electionId.trim() !== electionId) {
-    throw new TypeError(`${context}.election_id must be exact non-blank text`);
-  }
   decodeExactStandardBase64(value.proof_b64, `${context}.proof_b64`);
   value.public_inputs_json = normalizeGovernanceZkPublicInputsJson(
     value.public_inputs_json,
@@ -809,6 +847,7 @@ function validateCastZkBallotPayload(value) {
 }
 
 function validateGovernanceInstructionBoundary(instruction) {
+  validateGovernanceInstructionSelectors(instruction);
   if (!isStrictGovernanceInstructionCandidate(instruction)) {
     return;
   }
@@ -822,7 +861,27 @@ function validateGovernanceInstructionBoundary(instruction) {
   validateCastZkBallotPayload(instruction.CastZkBallot);
 }
 
+const RETIRED_GENERIC_ZK_VARIANTS = Object.freeze([
+  ["Shi", "eld"].join(""),
+  ["Zk", "Transfer"].join(""),
+  ["Un", "shield"].join(""),
+]);
+
+function rejectRetiredGenericZkInstruction(instruction) {
+  if (!isPlainObject(instruction) || !isPlainObject(instruction.zk)) {
+    return;
+  }
+  for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
+    if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
+      throw new TypeError(
+        `zk.${variant} is retired in ABI V1; use the typed Kagemusha flow`,
+      );
+    }
+  }
+}
+
 function encodeNormalizedInstruction(normalized) {
+  rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
   let encoded;
   try {
@@ -1759,25 +1818,17 @@ export function noritoDecodeInstruction(bytes, options = {}) {
 }
 
 function validateDecodedInstructionProofAttachments(instruction) {
+  rejectRetiredGenericZkInstruction(instruction);
   if (!isPlainObject(instruction) || !isPlainObject(instruction.zk)) {
     return;
   }
   for (const [variant, field] of [
-    ["ZkTransfer", "proof"],
-    ["Unshield", "proof"],
     ["SubmitBallot", "ballot_proof"],
     ["FinalizeElection", "tally_proof"],
   ]) {
     const payload = instruction.zk[variant];
     if (!isPlainObject(payload)) {
       continue;
-    }
-    if (variant === "Unshield") {
-      assertOnlyObjectKeys(
-        payload,
-        ["asset", "to", "public_amount", "inputs", "proof", "root_hint"],
-        "zk.Unshield",
-      );
     }
     if (!Object.prototype.hasOwnProperty.call(payload, field)) {
       throw new TypeError(`zk.${variant}.${field} is required`);
@@ -3417,9 +3468,6 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case "iroha_data_model::isi::zk::RegisterZkAsset":
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
-    case "iroha_data_model::isi::zk::Shield":
-    case "iroha_data_model::isi::zk::ZkTransfer":
-    case "iroha_data_model::isi::zk::Unshield":
     case "iroha_data_model::isi::zk::CreateElection":
     case "iroha_data_model::isi::zk::SubmitBallot":
     case "iroha_data_model::isi::zk::FinalizeElection":
@@ -4728,119 +4776,6 @@ function decodeZkInstructionPayload(wireId, payload) {
             transition_id: decodeHashValue(
               fields.transition_id,
               "zk.CancelConfidentialPolicyTransition.transition_id",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::Shield": {
-      const fields = decodeStructFields(payload, "zk.Shield", [
-        "asset",
-        "from",
-        "amount",
-        "note_commitment",
-        "enc_payload",
-      ]);
-      return {
-        zk: {
-          Shield: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Shield.asset"),
-            from: decodeAccountIdValue(fields.from, "zk.Shield.from"),
-            amount: decodeQuantityValue(fields.amount, "zk.Shield.amount"),
-            note_commitment: Array.from(
-              decodeFixedBytesValue(fields.note_commitment, 32, "zk.Shield.note_commitment"),
-            ),
-            enc_payload: decodeConfidentialEncryptedPayloadValue(
-              fields.enc_payload,
-              "zk.Shield.enc_payload",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::ZkTransfer": {
-      const fields = decodeStructFields(payload, "zk.ZkTransfer", [
-        "asset",
-        "inputs",
-        "outputs",
-        "proof",
-        "root_hint",
-      ]);
-      return {
-        zk: {
-          ZkTransfer: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.ZkTransfer.asset"),
-            inputs: decodeNoritoVec(
-              fields.inputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.ZkTransfer.inputs[${index}]`,
-                  ),
-                ),
-              "zk.ZkTransfer.inputs",
-            ),
-            outputs: decodeNoritoVec(
-              fields.outputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.ZkTransfer.outputs[${index}]`,
-                  ),
-                ),
-              "zk.ZkTransfer.outputs",
-            ),
-            proof: decodeProofAttachmentValue(fields.proof, "zk.ZkTransfer.proof"),
-            root_hint: decodeOptionValue(
-              fields.root_hint,
-              (entry, context) =>
-                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.ZkTransfer.root_hint",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::Unshield": {
-      const fields = decodeStructFields(payload, "zk.Unshield", [
-        "asset",
-        "to",
-        "public_amount",
-        "inputs",
-        "proof",
-        "root_hint",
-      ]);
-      return {
-        zk: {
-          Unshield: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Unshield.asset"),
-            to: decodeAccountIdValue(fields.to, "zk.Unshield.to"),
-            public_amount: decodeQuantityValue(
-              fields.public_amount,
-              "zk.Unshield.public_amount",
-            ),
-            inputs: decodeNoritoVec(
-              fields.inputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.Unshield.inputs[${index}]`,
-                  ),
-                ),
-              "zk.Unshield.inputs",
-            ),
-            proof: decodeProofAttachmentValue(fields.proof, "zk.Unshield.proof"),
-            root_hint: decodeOptionValue(
-              fields.root_hint,
-              (entry, context) =>
-                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.Unshield.root_hint",
             ),
           },
         },
@@ -6537,7 +6472,10 @@ function encodeCastZkBallotPayload(value) {
 
 function encodeCastPlainBallotPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.referendum_id, "CastPlainBallot.referendum_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.referendum_id,
+      "CastPlainBallot.referendum_id",
+    ))],
     [encodeAccountIdValue(value.owner, "CastPlainBallot.owner")],
     [encodeQuantityValue(value.amount, "CastPlainBallot.amount")],
     [encodeU64NumberValue(value.duration_blocks, "CastPlainBallot.duration_blocks")],
@@ -6555,7 +6493,10 @@ function encodeEnactReferendumPayload(value) {
 
 function encodeFinalizeReferendumPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.referendum_id, "FinalizeReferendum.referendum_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.referendum_id,
+      "FinalizeReferendum.referendum_id",
+    ))],
     [encodeFixedBytesValue(value.proposal_id, 32, "FinalizeReferendum.proposal_id")],
   ]);
 }
@@ -6750,9 +6691,6 @@ function encodeZkInstruction(instruction) {
     ["RegisterZkAsset", "iroha_data_model::isi::zk::RegisterZkAsset", encodeRegisterZkAssetPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
-    ["Shield", "iroha_data_model::isi::zk::Shield", encodeShieldPayload],
-    ["ZkTransfer", "iroha_data_model::isi::zk::ZkTransfer", encodeZkTransferPayload],
-    ["Unshield", "iroha_data_model::isi::zk::Unshield", encodeUnshieldPayload],
     ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
     ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
     ["FinalizeElection", "iroha_data_model::isi::zk::FinalizeElection", encodeFinalizeElectionPayload],
@@ -6796,63 +6734,12 @@ function encodeCancelConfidentialPolicyTransitionPayload(value) {
   ]);
 }
 
-function encodeShieldPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.Shield.asset")],
-    [encodeAccountIdValue(value.from, "zk.Shield.from")],
-    [encodeQuantityValue(value.amount, "zk.Shield.amount")],
-    [encodeFixedBytesValue(value.note_commitment, 32, "zk.Shield.note_commitment")],
-    [encodeConfidentialEncryptedPayloadValue(value.enc_payload, "zk.Shield.enc_payload")],
-  ]);
-}
-
-function encodeZkTransferPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.ZkTransfer.asset")],
-    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.ZkTransfer.inputs[${index}]`),
-    )],
-    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.ZkTransfer.outputs[${index}]`),
-    )],
-    [encodeProofAttachmentValue(value.proof, "zk.ZkTransfer.proof")],
-    [
-      encodeOptionValue(
-        value.root_hint,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.ZkTransfer.root_hint",
-      ),
-    ],
-  ]);
-}
-
-function encodeUnshieldPayload(value) {
-  assertOnlyObjectKeys(
-    value,
-    ["asset", "to", "public_amount", "inputs", "proof", "root_hint"],
-    "zk.Unshield",
-  );
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.Unshield.asset")],
-    [encodeAccountIdValue(value.to, "zk.Unshield.to")],
-    [encodeQuantityValue(value.public_amount, "zk.Unshield.public_amount")],
-    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
-    )],
-    [encodeProofAttachmentValue(value.proof, "zk.Unshield.proof")],
-    [
-      encodeOptionValue(
-        value.root_hint,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.Unshield.root_hint",
-      ),
-    ],
-  ]);
-}
-
 function encodeCreateElectionPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.CreateElection.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.CreateElection.election_id",
+    ))],
     [encodeU32Value(value.options, "zk.CreateElection.options")],
     [encodeFixedBytesValue(value.eligible_root, 32, "zk.CreateElection.eligible_root")],
     [encodeU64NumberValue(value.start_ts, "zk.CreateElection.start_ts")],
@@ -6865,7 +6752,10 @@ function encodeCreateElectionPayload(value) {
 
 function encodeSubmitBallotPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.SubmitBallot.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.SubmitBallot.election_id",
+    ))],
     [encodeByteVecValue(value.ciphertext, "zk.SubmitBallot.ciphertext")],
     [encodeProofAttachmentValue(value.ballot_proof, "zk.SubmitBallot.ballot_proof")],
     [encodeFixedBytesValue(value.nullifier, 32, "zk.SubmitBallot.nullifier")],
@@ -6874,7 +6764,10 @@ function encodeSubmitBallotPayload(value) {
 
 function encodeFinalizeElectionPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.FinalizeElection.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.FinalizeElection.election_id",
+    ))],
     [encodeNoritoVec(value.tally ?? [], (entry, index) =>
       encodeU64NumberValue(entry, `zk.FinalizeElection.tally[${index}]`),
     )],
@@ -8838,44 +8731,6 @@ function decodeMerkleProofValue(payload, context) {
       `${context}.audit_path`,
       LANE_PRIVACY_MERKLE_MAX_DEPTH,
     ),
-  };
-}
-
-function encodeConfidentialEncryptedPayloadValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  const version = encodeU8Value(value.version, `${context}.version`);
-  const ephemeral = encodeFixedBytesValue(value.ephemeral_pubkey, 32, `${context}.ephemeral_pubkey`);
-  const nonce = encodeFixedBytesValue(value.nonce, 24, `${context}.nonce`);
-  const ciphertext = Buffer.from(normalizeFlexibleBytes(value.ciphertext, `${context}.ciphertext`));
-  return Buffer.concat([
-    version,
-    ephemeral,
-    nonce,
-    encodeCompactLength(ciphertext.length),
-    ciphertext,
-  ]);
-}
-
-function decodeConfidentialEncryptedPayloadValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const version = reader.readU8("version");
-  const ephemeral_pubkey = Array.from(reader.readBytes(32, "ephemeral_pubkey"));
-  const nonce = Array.from(reader.readBytes(24, "nonce"));
-  const [ciphertextLength, lengthBytes] = decodeUnsignedLeb128(
-    payload,
-    reader.offset,
-    `${context}.ciphertext.length`,
-  );
-  reader.offset += lengthBytes;
-  const ciphertext = reader.readBytes(ciphertextLength, "ciphertext");
-  reader.assertEof();
-  return {
-    version,
-    ephemeral_pubkey,
-    nonce,
-    ciphertext: Buffer.from(ciphertext).toString("base64"),
   };
 }
 

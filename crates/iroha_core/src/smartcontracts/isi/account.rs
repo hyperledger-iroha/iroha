@@ -742,6 +742,16 @@ pub mod isi {
                 &request,
                 &current_account,
             )?;
+            request.invalidated_multisig_proposal_hashes =
+                crate::smartcontracts::isi::multisig::invalidate_outstanding_proposals(
+                    state_transaction,
+                    &current_account,
+                )
+                .map_err(|error| {
+                    invalid_account_recovery(format!(
+                        "failed to invalidate outstanding multisig proposals for `{alias:?}`: {error}"
+                    ))
+                })?;
             let new_account = crate::smartcontracts::isi::multisig::replace_account_controller(
                 authority,
                 state_transaction,
@@ -2625,13 +2635,17 @@ pub mod query {
                 stx.world.account_aliases.get(&alias),
                 Some(&replacement_account)
             );
-            assert_eq!(
-                stx.world
-                    .account_recovery_requests
-                    .get(&alias)
-                    .expect("request should remain for audit")
-                    .status,
-                AccountRecoveryStatus::Finalized
+            let terminal_request = stx
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .expect("request should remain for audit");
+            assert_eq!(terminal_request.status, AccountRecoveryStatus::Finalized);
+            assert!(
+                terminal_request
+                    .invalidated_multisig_proposal_hashes
+                    .is_empty(),
+                "single-key recovery must retain exact empty invalidation evidence"
             );
             assert!(
                 stx.world.account_recovery_policies.get(&alias).is_some(),

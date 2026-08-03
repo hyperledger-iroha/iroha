@@ -300,7 +300,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         verifier_address: [0x31; 20],
         verifier_code_hash: [0x41; 32],
         verifying_key,
-        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(verifying_key)
+        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key)
             .expect("exact SCCP test verification key is curve-valid"),
         outbound_proof_policy: outbound_policy(),
         route_address: [0x51; 20],
@@ -597,13 +597,13 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     });
     let roster = keypairs
         .iter()
-        .zip([40_u64, 30, 20, 10])
+        .zip([1_u64; 4])
         .map(|(keypair, power)| ValidatorPower {
             validator: PeerId::new(keypair.public_key().clone()),
             power,
         })
         .collect::<Vec<_>>();
-    let quorum = DualQuorum::from_roster(&roster).expect("valid powered SCCP fixture roster");
+    let quorum = DualQuorum::from_roster(&roster).expect("valid SCCP fixture roster");
     let validator_set_pops = keypairs
         .iter()
         .map(|keypair| {
@@ -611,12 +611,12 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         })
         .collect::<Vec<_>>();
     let da_layout = DataAvailabilityLayout {
-        encoding: PayloadEncoding::Plain,
+        encoding: PayloadEncoding::ReedSolomon16,
         chunk_size_bytes: 1024,
-        data_shards: 0,
-        parity_shards: 0,
+        data_shards: 1,
+        parity_shards: 1,
         max_payload_size_bytes: 4096,
-        max_chunk_count: 4,
+        max_chunk_count: 8,
     };
     let context = match (height, block_header.prev_block_hash(), parent) {
         (1, None, None) => HeightContext {

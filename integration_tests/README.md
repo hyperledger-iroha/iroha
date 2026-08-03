@@ -65,6 +65,17 @@ This crate hosts cross-component tests for Iroha.
   `tests/privacy_exact12_zk_ams_vega_network.rs`. The test is an enforced
   release-evidence gate (not ignored) and runs with
   `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_zk_ams_vega_network::canonical_zk_ams_and_vega_actions_survive_four_validator_activation_replay_and_restart -- --exact --nocapture --test-threads=1`.
+- Governed ZK-X509 trust-anchor, certificate-policy, and signed-CRL dependency
+  ordering, unavailable-profile activation refusal, candidate-action refusal,
+  exact four-peer convergence of every rejection, substituted
+  anchor/policy/CRL candidate references at the outer unavailable-protocol
+  boundary, and cold-restart persistence live in
+  `tests/privacy_exact12_zk_x509_network.rs`. This gate intentionally asserts
+  that the profile remains unavailable until real KAT/resource evidence is
+  pinned; it does not claim reference-specific native proof verification and
+  must be replaced by canonical acceptance and nullifier-replay coverage when
+  the native network action builder is released. Run it with
+  `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_zk_x509_network::zk_x509_governance_and_unreleased_actions_fail_closed_across_four_peer_restart -- --exact --nocapture --test-threads=1`.
 - The complete canonical exact-12 privacy-registry release gate lives in
   `tests/privacy_exact12_activation_network.rs` inside the
   `network_functional` harness. It covers unauthorized and malformed

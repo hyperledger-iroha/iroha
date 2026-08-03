@@ -251,7 +251,7 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "executed_block_wire_hash": _canonical_hash(0x37),
     }
     return {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
@@ -3168,6 +3168,87 @@ def test_get_governance_contract_parses_response() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "",
+        ".",
+        ".hidden",
+        "selector/alias",
+        "selector%2Falias",
+        "selector alias",
+        "selector\nalias",
+        "sélector",
+        "a" * 129,
+    ],
+)
+def test_governance_selectors_reject_before_transport(selector: str) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    operations = [
+        lambda: client.get_governance_locks(selector),
+        lambda: client.get_governance_referendum(selector),
+        lambda: client.get_governance_tally(selector),
+        lambda: client.submit_plain_ballot(
+            authority=CANONICAL_OWNER,
+            chain_id="chain",
+            referendum_id=selector,
+            owner=CANONICAL_OWNER,
+            amount="1",
+            duration_blocks=1,
+            direction="Aye",
+        ),
+        lambda: client.submit_zk_ballot_v1(
+            authority=CANONICAL_OWNER,
+            chain_id="chain",
+            election_id=selector,
+            backend="halo2/ipa",
+            envelope_b64="AAAA",
+        ),
+    ]
+    for operation in operations:
+        with pytest.raises(RuntimeError, match="canonical governance selector V1"):
+            operation()
+    assert session.calls == []
+
+
+def test_governance_selector_accepts_exact_boundaries() -> None:
+    for selector in ("a", "a" * 128, "A9_selector~with.dots"):
+        assert (
+            ToriiClient._require_governance_selector_v1(
+                selector,
+                context="selector",
+            )
+            == selector
+        )
+
+
+@pytest.mark.parametrize(
+    "proposal_id",
+    ["a" * 63, "A" * 64, "0x" + "a" * 64, "a" * 63 + "/"],
+)
+def test_governance_proposal_ids_reject_before_transport(proposal_id: str) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    for operation in [
+        lambda: client.get_governance_proposal(proposal_id),
+        lambda: client.enact_proposal(proposal_id=proposal_id),
+        lambda: client.finalize_referendum(
+            referendum_id="a" * 64,
+            proposal_id=proposal_id,
+        ),
+        lambda: client.finalize_referendum(
+            referendum_id=proposal_id,
+            proposal_id="a" * 64,
+        ),
+    ]:
+        with pytest.raises(RuntimeError, match="lowercase 32-byte hex"):
+            operation()
+    assert session.calls == []
+
+
 def _governance_locks_payload(amount: Any) -> Dict[str, Any]:
     return {
         "found": True,
@@ -3737,7 +3818,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["protocol_version"] == 3
+        assert payload["protocol_version"] == 4
         assert payload["restart_required"] is False
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
@@ -3760,7 +3841,7 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
     try:
         base_url = server.base_url.rstrip("/")
         fixtures = {
-            "status": {"protocol_version": 3, "height": 42},
+            "status": {"protocol_version": 4, "height": 42},
             "leader": {"leader_index": 2},
             "telemetry": {"availability": {"total_votes_ingested": 7}},
         }
@@ -3795,7 +3876,7 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
 
     assert type(status) is SumeragiV2Status
     assert SumeragiV2Status is not SumeragiDiagnosticsStatus
-    assert status.protocol_version == 3
+    assert status.protocol_version == 4
     assert status.restart_required is False
     assert status.height == 10
     assert status.phase == "prepare"
@@ -4032,6 +4113,18 @@ def test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker() ->
     status = _get_sumeragi_status(payload)
 
     assert status.liveness.blocker == "local_control_pending"
+
+
+def test_get_sumeragi_status_accepts_successor_activation_pending_liveness_blocker() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["blocker"] = {
+        "blocker": "successor_activation_pending",
+        "details": None,
+    }
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.liveness.blocker == "successor_activation_pending"
 
 
 def test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason() -> None:
@@ -4891,7 +4984,7 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
 
     wrong_version = _sumeragi_v2_status_payload()
     wrong_version["protocol_version"] = 1
-    with pytest.raises(RuntimeError, match="protocol_version must equal 3"):
+    with pytest.raises(RuntimeError, match="protocol_version must equal 4"):
         _get_sumeragi_status(wrong_version)
 
     missing_restart_required = _sumeragi_v2_status_payload()
@@ -4961,6 +5054,19 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     underpowered["last_commit_qc"]["signed_power"] = 2
     with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
         _get_sumeragi_status(underpowered)
+
+    weighted_npos = _sumeragi_v2_status_payload()
+    weighted_npos["height_context"]["mode"] = {"mode": "npos", "details": None}
+    weighted_npos["height_context"]["quorum"]["total_power"] = 5
+    with pytest.raises(RuntimeError, match="quorum is not canonical"):
+        _get_sumeragi_status(weighted_npos)
+
+    invalid_geometry = _sumeragi_v2_status_payload()
+    invalid_geometry["height_context"]["validator_count"] = 5
+    invalid_geometry["height_context"]["quorum"]["min_signers"] = 4
+    invalid_geometry["height_context"]["quorum"]["total_power"] = 5
+    with pytest.raises(RuntimeError, match="quorum is not canonical"):
+        _get_sumeragi_status(invalid_geometry)
 
 
 def test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_details() -> None:
@@ -5956,69 +6062,219 @@ def test_get_sumeragi_evidence_count_returns_int() -> None:
     assert session.calls[0]["url"].endswith("/v1/sumeragi/evidence/count")
 
 
+def _sumeragi_evidence_common(*, admitted: Optional[int] = None) -> Dict[str, Any]:
+    return {
+        "recorded_height": 40,
+        "recorded_view": 2,
+        "recorded_ms": 1_700_000_000_000,
+        "consensus_admitted_height": admitted,
+    }
+
+
+def _sumeragi_v2_equivocation_record(
+    *, evidence_class: str = "phase_vote"
+) -> Dict[str, Any]:
+    return {
+        "kind": "SumeragiV2Equivocation",
+        "class": evidence_class,
+        "height": 31,
+        "view": 4,
+        "epoch": 2,
+        "signer": 3,
+        "context_id": "11" * 32,
+        "artifact_hash_1": "22" * 32,
+        "artifact_hash_2": "33" * 32,
+        **_sumeragi_evidence_common(admitted=41),
+    }
+
+
+def _sumeragi_censorship_record() -> Dict[str, Any]:
+    return {
+        "kind": "Censorship",
+        "tx_hash": "44" * 32,
+        "receipt_count": 2,
+        "signers": ["alice@test", "bob@test"],
+        "submitted_at_height_min": 20,
+        "submitted_at_height_max": 22,
+        **_sumeragi_evidence_common(),
+    }
+
+
 def test_list_sumeragi_evidence_parses_records() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "total": 3,
+                "total": 4,
                 "items": [
                     {
                         "kind": "DoublePrepare",
                         "recorded_height": 1,
                         "recorded_view": 2,
                         "recorded_ms": 3,
+                        "consensus_admitted_height": None,
                         "phase": "Prepare",
                         "height": 4,
                         "view": 5,
                         "epoch": 6,
-                        "signer": "ed011122",
-                        "block_hash_1": "aa11",
-                        "block_hash_2": "bb22",
+                        "signer": 1,
+                        "block_hash_1": "aa" * 32,
+                        "block_hash_2": "bb" * 32,
                     },
                     {
                         "kind": "InvalidProposal",
                         "recorded_height": 7,
                         "recorded_view": 8,
                         "recorded_ms": 9,
+                        "consensus_admitted_height": None,
                         "height": 10,
                         "view": 11,
                         "epoch": 12,
-                        "subject_block_hash": "cc33",
-                        "payload_hash": "dd44",
+                        "subject_block_hash": "cc" * 32,
+                        "payload_hash": "dd" * 32,
                         "reason": "payload mismatch",
                     },
-                    {
-                        "kind": "UnknownEvidence",
-                        "recorded_height": 13,
-                        "recorded_view": 14,
-                        "recorded_ms": 15,
-                        "detail": "unknown entry",
-                    },
+                    _sumeragi_censorship_record(),
+                    _sumeragi_v2_equivocation_record(),
                 ],
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_sumeragi_evidence(limit=5, offset=1, kind="DoublePrepare")
+    page = client.list_sumeragi_evidence(
+        limit=5, offset=1, kind="SumeragiV2Equivocation"
+    )
 
-    assert page.total == 3
-    assert len(page.items) == 3
+    assert page.total == 4
+    assert len(page.items) == 4
     prevote = page.items[0]
+    assert isinstance(prevote, client_module.SumeragiDoubleVoteEvidenceRecord)
     assert prevote.kind == "DoublePrepare"
     assert prevote.phase == "Prepare"
-    assert prevote.block_hash_1 == "aa11"
-    assert prevote.block_hash_2 == "bb22"
+    assert prevote.signer == 1
+    assert prevote.block_hash_1 == "aa" * 32
+    assert prevote.block_hash_2 == "bb" * 32
     invalid_proposal = page.items[1]
-    assert invalid_proposal.payload_hash == "dd44"
+    assert isinstance(
+        invalid_proposal, client_module.SumeragiInvalidProposalEvidenceRecord
+    )
+    assert invalid_proposal.payload_hash == "dd" * 32
     assert invalid_proposal.reason == "payload mismatch"
-    unknown = page.items[2]
-    assert unknown.kind == "UnknownEvidence"
-    assert unknown.detail == "unknown entry"
+    censorship = page.items[2]
+    assert isinstance(censorship, client_module.SumeragiCensorshipEvidenceRecord)
+    assert censorship.submitted_at_height_min == 20
+    assert censorship.submitted_at_height_max == 22
+    equivocation = page.items[3]
+    assert isinstance(
+        equivocation, client_module.SumeragiV2EquivocationEvidenceRecord
+    )
+    assert equivocation.class_ == "phase_vote"
+    assert equivocation.signer == 3
+    assert equivocation.context_id == "11" * 32
+    assert equivocation.consensus_admitted_height == 41
     call = session.calls[0]
     assert call["url"].endswith("/v1/sumeragi/evidence")
-    assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrepare"}
+    assert call["params"] == {
+        "limit": 5,
+        "offset": 1,
+        "kind": "SumeragiV2Equivocation",
+    }
+
+
+@pytest.mark.parametrize("evidence_class", ["proposal", "phase_vote", "timeout_vote"])
+def test_sumeragi_v2_equivocation_accepts_exact_classes(evidence_class: str) -> None:
+    parsed = ToriiClient._parse_sumeragi_evidence_record(
+        _sumeragi_v2_equivocation_record(evidence_class=evidence_class),
+        context="evidence",
+    )
+
+    assert isinstance(parsed, client_module.SumeragiV2EquivocationEvidenceRecord)
+    assert parsed.class_ == evidence_class
+
+
+def test_sumeragi_evidence_rejects_unknown_record_kind() -> None:
+    record = {"kind": "UnknownEvidence", **_sumeragi_evidence_common()}
+
+    with pytest.raises(RuntimeError, match=r"kind must be one of"):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "min_height",
+        "max_height",
+        "minHeight",
+        "maxHeight",
+        "submittedAtHeightMin",
+        "submittedAtHeightMax",
+    ],
+)
+def test_sumeragi_censorship_rejects_retired_height_aliases(alias: str) -> None:
+    record = _sumeragi_censorship_record()
+    record[alias] = 20
+
+    with pytest.raises(RuntimeError, match=rf"unexpected {alias}"):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("class", "Prepare", r"class must be one of"),
+        ("signer", "3", r"signer must be a non-negative JSON integer"),
+        ("signer", True, r"signer must be a non-negative JSON integer"),
+        ("signer", 0x1_0000_0000, r"signer must be <= 4294967295"),
+        ("context_id", "AA" * 32, r"exact lowercase 32-byte hex"),
+        ("artifact_hash_2", "22" * 32, r"distinct artifacts"),
+    ],
+)
+def test_sumeragi_v2_equivocation_rejects_noncanonical_fields(
+    field: str, value: Any, match: str
+) -> None:
+    record = _sumeragi_v2_equivocation_record()
+    record[field] = value
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(("field", "match"), [("context_id", "missing context_id")])
+def test_sumeragi_v2_equivocation_rejects_missing_fields(
+    field: str, match: str
+) -> None:
+    record = _sumeragi_v2_equivocation_record()
+    del record[field]
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    ("receipt_count", "signers", "height_min", "height_max", "match"),
+    [
+        (2, ["alice@test"], 20, 22, r"receipt_count must equal len\(signers\)"),
+        (2, ["alice@test", "bob@test"], 23, 22, r"submitted_at_height_min"),
+    ],
+)
+def test_sumeragi_censorship_rejects_inconsistent_receipt_metadata(
+    receipt_count: int,
+    signers: List[str],
+    height_min: int,
+    height_max: int,
+    match: str,
+) -> None:
+    record = _sumeragi_censorship_record()
+    record.update(
+        receipt_count=receipt_count,
+        signers=signers,
+        submitted_at_height_min=height_min,
+        submitted_at_height_max=height_max,
+    )
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
 
 
 def test_list_sumeragi_evidence_validates_limit() -> None:
@@ -6226,7 +6482,11 @@ def test_finalize_referendum_posts_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    draft = client.finalize_referendum(referendum_id="ref-1", proposal_id="a" * 64)
+    proposal_id = "a" * 64
+    draft = client.finalize_referendum(
+        referendum_id=proposal_id,
+        proposal_id=proposal_id,
+    )
 
     assert draft.ok is True
     assert len(draft.tx_instructions) == 1
@@ -6234,8 +6494,8 @@ def test_finalize_referendum_posts_payload() -> None:
     assert call["method"] == "POST"
     assert call["url"].endswith("/v1/gov/finalize")
     assert json.loads(call["data"]) == {
-        "referendum_id": "ref-1",
-        "proposal_id": "a" * 64,
+        "referendum_id": proposal_id,
+        "proposal_id": proposal_id,
     }
 
 
@@ -6704,6 +6964,67 @@ def _offline_top_up_finality_proof(
     **overrides: Any,
 ) -> Dict[str, Any]:
     bound_anchor = anchor if anchor is not None else _offline_top_up_anchor()
+    context_id = _canonical_hash(0xA0)
+
+    def execution_commitment(*, includes_top_up: bool, seed: int) -> Dict[str, Any]:
+        commitment = {
+            "parent_state_root": _canonical_hash(seed),
+            "post_state_root": _canonical_hash(seed + 1),
+            "ordinary_writes_root": _canonical_hash(seed + 2),
+            "topup_anchor_root": None,
+            "topup_anchor_count": 0,
+            "native_amx_application_manifest_version": 1,
+            "native_amx_application_manifest_root": (
+                _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+            ),
+            "native_amx_application_manifest_count": 0,
+            "executed_block_wire_hash": _canonical_hash(seed + 3),
+        }
+        if includes_top_up:
+            commitment["topup_anchor_root"] = _canonical_hash(seed + 4)
+            commitment["topup_anchor_count"] = 1
+        return commitment
+
+    def certificate(
+        *,
+        height: int,
+        certificate_context_id: str,
+        includes_top_up: bool,
+        seed: int,
+    ) -> Dict[str, Any]:
+        round_ = {
+            "context_id": [certificate_context_id],
+            "height": height,
+            "view": 0,
+        }
+        return {
+            "round": round_,
+            "proposal_round": copy.deepcopy(round_),
+            "phase": {"phase": "commit", "details": None},
+            "subject": {
+                "parent_block_hash": (
+                    None if height == 1 else _canonical_hash(seed + 5)
+                ),
+                "block_hash": _canonical_hash(seed + 6),
+                "payload_hash": _canonical_hash(seed + 7),
+            },
+            "execution_commitment": execution_commitment(
+                includes_top_up=includes_top_up,
+                seed=seed + 8,
+            ),
+            "signers": [0],
+            "aggregate_signature": [seed] * 96,
+        }
+
+    parent_commit_qc = None
+    if finalized_height > 1:
+        parent_commit_qc = certificate(
+            height=finalized_height - 1,
+            certificate_context_id=_canonical_hash(0xA1),
+            includes_top_up=False,
+            seed=0x21,
+        )
+
     proof = {
         "version": 1,
         "anchor": {
@@ -6716,13 +7037,37 @@ def _offline_top_up_finality_proof(
         },
         "commit_qc": {
             "height_context": {
+                "context_id": [context_id],
+                "chain_id": "wonderland",
+                "protocol_version": 4,
                 "height": finalized_height,
-                "opaque_context": {"protocol_version": 3},
+                "epoch": 0,
+                "epoch_end_height": max(100, finalized_height),
+                "next_epoch_snapshot": None,
+                "mode": {"mode": "permissioned", "details": None},
+                "parent_commit_qc": parent_commit_qc,
+                "snapshot_bootstrap": None,
+                "nexus_amx_context_hash": _canonical_hash(0xA2),
+                "execution_policy_hash": _canonical_hash(0xA3),
+                "da_layout": {
+                    "encoding": {
+                        "encoding": "reed_solomon16",
+                        "details": None,
+                    },
+                    "chunk_size_bytes": 4,
+                    "data_shards": 1,
+                    "parity_shards": 1,
+                    "max_payload_size_bytes": 4,
+                    "max_chunk_count": 2,
+                },
+                "leader_seed": _offline_fixed_bytes(0xA4),
             },
-            "certificate": {
-                "round": {"height": finalized_height, "view": 0},
-                "opaque_certificate": [1, 2, 3],
-            },
+            "certificate": certificate(
+                height=finalized_height,
+                certificate_context_id=context_id,
+                includes_top_up=True,
+                seed=0x31,
+            ),
         },
         "anchor_path": {"leaf_index": 0, "leaf_count": 1, "siblings": []},
     }
@@ -7159,10 +7504,8 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert typed_anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
 
 
-def test_offline_top_up_finality_proof_is_direct_typed_and_preserves_opaque_internals() -> None:
+def test_offline_top_up_finality_proof_is_closed_and_direct_typed() -> None:
     proof = _offline_top_up_finality_proof()
-    proof["commit_qc"]["future_qc_field"] = {"opaque": [7, 8, 9]}
-    proof["anchor_path"]["future_path_field"] = "preserved"
     session = RecordingSession()
     session.queue(
         StubResponse(payload=_offline_applied_top_up_status(finality_proof=proof))
@@ -7179,11 +7522,244 @@ def test_offline_top_up_finality_proof_is_direct_typed_and_preserves_opaque_inte
     assert typed_proof.version == 1
     assert typed_proof.anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
     assert typed_proof.anchor.anchor_digest == tuple(_offline_fixed_bytes(0x71))
-    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
-    assert typed_proof.anchor_path["future_path_field"] == "preserved"
+    assert typed_proof.commit_qc.height_context.protocol_version == 4
+    assert (
+        typed_proof.commit_qc.height_context.da_layout.encoding.encoding
+        == "reed_solomon16"
+    )
+    assert typed_proof.commit_qc.height_context.da_layout.data_shards == 1
+    assert typed_proof.commit_qc.height_context.da_layout.parity_shards == 1
+    assert typed_proof.commit_qc.certificate.round.height == 12
+    assert (
+        typed_proof.commit_qc.certificate.proposal_round
+        == typed_proof.commit_qc.certificate.round
+    )
+    assert typed_proof.commit_qc.height_context.snapshot_bootstrap is None
+    assert typed_proof.anchor_path.leaf_count == 1
 
-    proof["commit_qc"]["future_qc_field"]["opaque"][0] = 255
-    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
+
+def test_offline_top_up_public_parser_types_snapshot_and_omitted_genesis_authorities() -> None:
+    snapshot_proof = _offline_top_up_finality_proof()
+    snapshot_context = snapshot_proof["commit_qc"]["height_context"]
+    snapshot_context["parent_commit_qc"] = None
+    snapshot_context["snapshot_bootstrap"] = {
+        "snapshot_height": 11,
+        "snapshot_block_hash": _canonical_hash(0xA6),
+        "snapshot_block_creation_time_ms": 1_000,
+        "snapshot_state_hash": _canonical_hash(0xA7),
+    }
+    snapshot_session = RecordingSession()
+    snapshot_session.queue(
+        StubResponse(
+            payload=_offline_applied_top_up_status(finality_proof=snapshot_proof)
+        )
+    )
+
+    snapshot_status = ToriiClient(
+        "http://node.test", session=snapshot_session
+    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(snapshot_status, OfflineAppliedOperation)
+    snapshot_bootstrap = (
+        snapshot_status.result.result.finality_proof.commit_qc.height_context.snapshot_bootstrap
+    )
+    assert snapshot_bootstrap is not None
+    assert snapshot_bootstrap.snapshot_height == 11
+    assert snapshot_bootstrap.snapshot_block_creation_time_ms == 1_000
+
+    genesis_anchor = _offline_top_up_anchor(finalized_height=1)
+    genesis_proof = _offline_top_up_finality_proof(
+        genesis_anchor,
+        finalized_height=1,
+    )
+    genesis_context = genesis_proof["commit_qc"]["height_context"]
+    for optional_field in (
+        "next_epoch_snapshot",
+        "parent_commit_qc",
+        "snapshot_bootstrap",
+    ):
+        genesis_context.pop(optional_field)
+    genesis_session = RecordingSession()
+    genesis_session.queue(
+        StubResponse(
+            payload=_offline_applied_top_up_status(
+                genesis_anchor,
+                finalized_block_height=1,
+                finality_proof=genesis_proof,
+            )
+        )
+    )
+
+    genesis_status = ToriiClient(
+        "http://node.test", session=genesis_session
+    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(genesis_status, OfflineAppliedOperation)
+    genesis_height_context = (
+        genesis_status.result.result.finality_proof.commit_qc.height_context
+    )
+    assert genesis_height_context.next_epoch_snapshot is None
+    assert genesis_height_context.parent_commit_qc is None
+    assert genesis_height_context.snapshot_bootstrap is None
+
+
+def test_offline_top_up_public_parser_rejects_noncanonical_da_layouts() -> None:
+    invalid_proofs = []
+
+    missing_encoding = copy.deepcopy(_offline_top_up_finality_proof())
+    missing_encoding["commit_qc"]["height_context"]["da_layout"].pop("encoding")
+    invalid_proofs.append(
+        (missing_encoding, r"da_layout\.encoding is required")
+    )
+
+    missing_variant = copy.deepcopy(_offline_top_up_finality_proof())
+    missing_variant["commit_qc"]["height_context"]["da_layout"]["encoding"] = {
+        "details": None,
+    }
+    invalid_proofs.append(
+        (missing_variant, r"da_layout\.encoding\.encoding is required")
+    )
+
+    for retired_or_unknown in ("plain", "rs16"):
+        invalid_encoding = copy.deepcopy(_offline_top_up_finality_proof())
+        layout = invalid_encoding["commit_qc"]["height_context"]["da_layout"]
+        layout["encoding"]["encoding"] = retired_or_unknown
+        invalid_proofs.append(
+            (
+                invalid_encoding,
+                r"da_layout\.encoding\.encoding must be reed_solomon16",
+            )
+        )
+
+    for field in ("data_shards", "parity_shards"):
+        zero_shard = copy.deepcopy(_offline_top_up_finality_proof())
+        zero_shard["commit_qc"]["height_context"]["da_layout"][field] = 0
+        invalid_proofs.append(
+            (zero_shard, rf"da_layout\.{field} must be between 1 and 65535")
+        )
+
+    for proof, expected_error in invalid_proofs:
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_applied_top_up_status(finality_proof=proof)
+            )
+        )
+        with pytest.raises(RuntimeError, match=expected_error):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+
+def test_offline_top_up_public_parser_rejects_unknown_finality_projection_fields() -> None:
+    def next_epoch_snapshot() -> Dict[str, Any]:
+        return {
+            "epoch": 1,
+            "epoch_end_height": 100,
+            "mode": {"mode": "permissioned", "details": None},
+            "roster": [{"validator": _NATIVE_AMX_VALIDATOR_SET[0], "power": 1}],
+            "validator_set_pops": [[1] * 96],
+            "quorum": {"min_signers": 1, "total_power": 1},
+            "leader_seed": _offline_fixed_bytes(0xA5),
+        }
+
+    invalid_proofs: List[tuple[Dict[str, Any], str]] = []
+
+    def reject_unknown(
+        proof: Dict[str, Any], target: Dict[str, Any], field: str, context: str
+    ) -> None:
+        target[field] = "retired-extension"
+        invalid_proofs.append((proof, rf"{context}\.{field} is not part"))
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    reject_unknown(proof, height_context, "future_context", r"height_context")
+
+    proof = _offline_top_up_finality_proof()
+    certificate = proof["commit_qc"]["certificate"]
+    reject_unknown(proof, certificate, "future_certificate", r"certificate")
+
+    for component in ("round", "proposal_round", "phase", "subject"):
+        proof = _offline_top_up_finality_proof()
+        nested = proof["commit_qc"]["certificate"][component]
+        reject_unknown(proof, nested, f"future_{component}", rf"certificate\.{component}")
+
+    proof = _offline_top_up_finality_proof()
+    execution = proof["commit_qc"]["certificate"]["execution_commitment"]
+    reject_unknown(
+        proof,
+        execution,
+        "future_execution",
+        r"certificate\.execution_commitment",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    mode = proof["commit_qc"]["height_context"]["mode"]
+    reject_unknown(proof, mode, "future_mode", r"height_context\.mode")
+
+    proof = _offline_top_up_finality_proof()
+    reject_unknown(proof, proof["anchor_path"], "future_path", r"anchor_path")
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"],
+        "future_snapshot",
+        r"next_epoch_snapshot",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"]["roster"][0],
+        "future_validator",
+        r"roster\[0\]",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"]["quorum"],
+        "future_quorum",
+        r"next_epoch_snapshot\.quorum",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["parent_commit_qc"] = None
+    height_context["snapshot_bootstrap"] = {
+        "snapshot_height": 11,
+        "snapshot_block_hash": _canonical_hash(0xA6),
+        "snapshot_block_creation_time_ms": 1_000,
+        "snapshot_state_hash": _canonical_hash(0xA7),
+    }
+    reject_unknown(
+        proof,
+        height_context["snapshot_bootstrap"],
+        "future_bootstrap",
+        r"snapshot_bootstrap",
+    )
+
+    for proof, expected_error in invalid_proofs:
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_applied_top_up_status(finality_proof=proof)
+            )
+        )
+        with pytest.raises(RuntimeError, match=expected_error):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
 
 
 def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confused_fields() -> None:
@@ -7211,6 +7787,7 @@ def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confu
         mutated("commit_qc", "certificate", []),
         mutated("commit_qc", "certificate", "round", []),
         mutated("commit_qc", "certificate", "round", "height", 13),
+        mutated("commit_qc", "certificate", "proposal_round", "view", 1),
         mutated("anchor_path", []),
     ]
     for payload in invalid:

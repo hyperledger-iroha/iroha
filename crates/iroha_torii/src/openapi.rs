@@ -195,6 +195,16 @@ fn tags_section() -> Value {
         ),
     );
 
+    let mut account_recovery = Map::new();
+    account_recovery.insert("name".into(), Value::String("Account Recovery".to_owned()));
+    account_recovery.insert(
+        "description".into(),
+        Value::String(
+            "Detached-signature, alias-bound regulated account recovery and terminal evidence."
+                .to_owned(),
+        ),
+    );
+
     let mut zk = Map::new();
     zk.insert("name".into(), Value::String("ZK".to_owned()));
     zk.insert(
@@ -452,6 +462,7 @@ fn tags_section() -> Value {
         Value::Object(streams),
         Value::Object(contracts),
         Value::Object(multisig),
+        Value::Object(account_recovery),
         Value::Object(zk),
         Value::Object(proofs),
         Value::Object(governance),
@@ -3578,7 +3589,7 @@ fn multisig_paths() -> Map {
         "/v1/multisig/propose".to_owned(),
         Value::Object(multisig_post_operation(
             "Propose a multisig instruction batch.",
-            "Resolve a multisig selector, wrap an instruction batch in a multisig proposal envelope, and optionally submit it.",
+            "Resolve a multisig selector, wrap an instruction batch in a multisig proposal envelope, and optionally submit it. A signer/threshold policy change that must cancel prior work prepends the owner-authorized `InvalidateOutstanding` custom payload before `ReplaceAccountController`; ordinary rekey continues to preserve proposals.",
             "#/components/schemas/MultisigProposeRequest",
             "#/components/schemas/MultisigResponse",
             "Multisig alias not found.",
@@ -3657,6 +3668,98 @@ fn multisig_paths() -> Map {
     paths
 }
 
+fn account_recovery_post_operation(
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Account Recovery".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(request_schema_ref)),
+    );
+    let mut responses = single_json_response(response_schema_ref);
+    responses.insert(
+        "400".to_owned(),
+        json_response("Invalid recovery payload.", error_schema_reference()),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(
+            "Stable account alias, policy, or request not found.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Recovery state, controller lineage, quorum, timelock, or terminal evidence conflict.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn account_recovery_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/accounts/recovery/policy/set".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Configure regulated account recovery.",
+            "Prepare or submit a caller-signed SetAccountRecoveryPolicy transaction. This application route accepts only three distinct weight-one Ed25519 guardians, quorum two, and an exact 72-hour timelock. Native multisig accounts configure the same instruction through /v1/multisig/propose.",
+            "#/components/schemas/AccountRecoveryPolicySetRequest",
+            "#/components/schemas/AccountRecoveryMutationResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/recovery/propose".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Propose regulated account recovery.",
+            "Prepare or submit an alias-bound ProposeAccountRecovery transaction signed by the active account or a configured guardian. The replacement must be a native Ed25519 multisig controller.",
+            "#/components/schemas/AccountRecoveryProposeRequest",
+            "#/components/schemas/AccountRecoveryMutationResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/recovery/approve".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Approve regulated account recovery.",
+            "Prepare or submit one guardian approval. Duplicate approvals remain idempotent by guardian subject and never increase weight.",
+            "#/components/schemas/AccountRecoveryApproveRequest",
+            "#/components/schemas/AccountRecoveryMutationResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/recovery/finalize".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Finalize regulated account recovery.",
+            "Prepare or submit guardian-triggered finalization after native 2-of-3 quorum and the full 72-hour ledger timelock. Finalization atomically terminalizes every outstanding native multisig proposal before rekeying the stable alias.",
+            "#/components/schemas/AccountRecoveryFinalizeRequest",
+            "#/components/schemas/AccountRecoveryMutationResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/recovery/status".to_owned(),
+        Value::Object(account_recovery_post_operation(
+            "Read regulated account-recovery evidence.",
+            "Resolve the stable alias and return its current policy, request lifecycle, exact invalidated proposal hashes, and validated CANCELED or EXPIRED terminal records.",
+            "#/components/schemas/AccountRecoveryStatusRequest",
+            "#/components/schemas/AccountRecoveryStatusResponse",
+        )),
+    );
+    paths
+}
+
 fn controls_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -3681,24 +3784,20 @@ fn zk_paths() -> Map {
     );
     paths.insert(
         "/v1/zk/roots".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
+        Value::Object(zk_state_query_operation(
             "Fetch ZK roots.",
             "Fetch roots for any asset with a validated persisted confidential tree profile, including unshield-only registration, from one exact committed snapshot.",
             "#/components/schemas/ZkRootsGetRequest",
             "#/components/schemas/ZkRootsGetResponse",
-            Vec::new(),
         )),
     );
     paths.insert(
         "/v1/zk/merkle-path".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
+        Value::Object(zk_state_query_operation(
             "Fetch ZK Merkle paths.",
             "Fetch current confidential-v2 commitment inclusion paths bound to one exact committed snapshot.",
             "#/components/schemas/ZkMerklePathGetRequest",
             "#/components/schemas/ZkMerklePathGetResponse",
-            Vec::new(),
         )),
     );
     paths.insert(
@@ -3912,7 +4011,7 @@ fn zk_verify_batch_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Verify a bounded batch of zero-knowledge proof envelopes supplied as JSON or canonical Norito. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
+            "Verify a bounded batch of zero-knowledge proof envelopes supplied with one exact JSON or canonical-Norito Content-Type. The route is available only when Halo2 verification is enabled and moves admitted decode/verification work to a cancellation-safe blocking worker. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
                 .to_owned(),
         ),
     );
@@ -3928,6 +4027,49 @@ fn zk_verify_batch_operation() -> Map {
             "#/components/schemas/ZkVerifyBatchResponse",
         )),
     );
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
+fn zk_state_query_operation(
+    summary: &str,
+    description: &str,
+    request_schema: &str,
+    response_schema: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("ZK".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(request_schema)),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        typed_dual_format_response(
+            "Typed result from one immutable committed state snapshot.",
+            response_schema,
+        ),
+    );
+    responses.insert(
+        "400".into(),
+        json_response("The typed request is invalid.", error_schema_reference()),
+    );
+    responses.insert(
+        "404".into(),
+        json_response(
+            "The requested asset or commitment does not exist in the committed state snapshot.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".into(), Value::Object(operation));
     methods
@@ -3962,6 +4104,13 @@ fn zk_vote_tally_operation() -> Map {
         typed_dual_format_response(
             "Tally and committed-state evaluation anchor for the requested election.",
             "#/components/schemas/ZkVoteGetTallyResponse",
+        ),
+    );
+    responses.insert(
+        "400".into(),
+        json_response(
+            "The election identifier is not a canonical governance selector V1.",
+            error_schema_reference(),
         ),
     );
     responses.insert(
@@ -4123,8 +4272,8 @@ fn governance_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![patterned_string_path_param(
                 "rid",
-                "Exact nonempty referendum identifier.",
-                GOVERNANCE_EXACT_TOKEN_PATTERN,
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
             )],
         )),
     );
@@ -4137,8 +4286,8 @@ fn governance_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![patterned_string_path_param(
                 "id",
-                "Exact nonempty referendum identifier.",
-                GOVERNANCE_EXACT_TOKEN_PATTERN,
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
             )],
         )),
     );
@@ -4151,8 +4300,8 @@ fn governance_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![patterned_string_path_param(
                 "id",
-                "Exact nonempty referendum identifier.",
-                GOVERNANCE_EXACT_TOKEN_PATTERN,
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
             )],
         )),
     );
@@ -8566,7 +8715,11 @@ role- and sponsor-gated responses always return `Cache-Control: private, no-stor
 all canonical authentication headers. Existing protected bundles authenticate and authorize \
 before file lookup: absent or invalid proof returns 401, authorization mismatch returns 403, \
 and a missing file returns 404 only after successful authorization. Unknown or expired bundles \
-also return 404."
+also return 404. The Torii origin is a byte-delivery boundary, not a web-hosting origin: safe \
+inert media retain their type, while active, unknown, or invalid media types are returned as \
+`application/octet-stream` attachments. Every successful response sends `X-Content-Type-Options: \
+nosniff` and a restrictive sandbox Content Security Policy without changing byte or range \
+semantics."
                         .to_owned(),
                 ),
             );
@@ -8583,7 +8736,7 @@ also return 404."
             responses.insert(
                 "200".to_owned(),
                 content_binary_response(
-                    "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable.",
+                    "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable. Active, unknown, and invalid media types are delivered as non-sniffable `application/octet-stream` attachments from the Torii origin; byte and range semantics are unchanged.",
                 ),
             );
             responses.insert(
@@ -8633,6 +8786,27 @@ fn content_binary_response(description: &str) -> Value {
                 "schema": {
                     "type": "string",
                     "const": (crate::content::CANONICAL_CONTENT_AUTH_VARY)
+                }
+            },
+            "X-Content-Type-Options": {
+                "description": "Always `nosniff` so content bytes cannot override the selected inert representation type.",
+                "schema": {
+                    "type": "string",
+                    "const": "nosniff"
+                }
+            },
+            "Content-Security-Policy": {
+                "description": "A restrictive sandbox fallback for every response served from the Torii origin.",
+                "schema": {
+                    "type": "string",
+                    "const": "sandbox; default-src 'none'"
+                }
+            },
+            "Content-Disposition": {
+                "description": "Present as `attachment` when a requested media type is active, unknown, or invalid; absent for the inert inline allow-list.",
+                "schema": {
+                    "type": "string",
+                    "const": "attachment"
                 }
             }
         }),
@@ -8923,31 +9097,13 @@ fn sumeragi_paths() -> Map {
     );
     paths.insert(
         "/v1/sumeragi/evidence".to_owned(),
-        Value::Object({
-            let get_op = json_get_operation(
-                "Sumeragi",
-                "List evidence entries.",
-                "List evidence entries recorded by the node.",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let post_op = json_post_operation(
-                "Sumeragi",
-                "Submit evidence.",
-                "Submit consensus evidence payloads.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let mut methods = Map::new();
-            if let Some(get_value) = get_op.get("get") {
-                methods.insert("get".to_owned(), get_value.clone());
-            }
-            if let Some(post_value) = post_op.get("post") {
-                methods.insert("post".to_owned(), post_value.clone());
-            }
-            methods
-        }),
+        Value::Object(json_get_operation(
+            "Sumeragi",
+            "List evidence entries.",
+            "List evidence entries recorded by the node.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
     );
     paths.insert(
         "/v1/sumeragi/status".to_owned(),
@@ -9174,28 +9330,6 @@ fn sumeragi_paths() -> Map {
                 "Epoch identifier.",
                 Some("uint64"),
             )],
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/vrf/commit".to_owned(),
-        Value::Object(json_post_operation(
-            "Sumeragi",
-            "Submit VRF commit.",
-            "Submit an authenticated VRF commit payload.",
-            "#/components/schemas/SumeragiVrfCommitRequest",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/vrf/reveal".to_owned(),
-        Value::Object(json_post_operation(
-            "Sumeragi",
-            "Submit VRF reveal.",
-            "Submit an authenticated VRF reveal payload.",
-            "#/components/schemas/SumeragiVrfRevealRequest",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths
@@ -11952,6 +12086,7 @@ fn paths_section(enabled_features: EnabledFeatures<'_>) -> Map {
     paths.extend(proof_paths());
     paths.extend(contracts_paths());
     paths.extend(multisig_paths());
+    paths.extend(account_recovery_paths());
     paths.extend(controls_paths());
     paths.extend(zk_paths());
     paths.extend(governance_paths());
@@ -12088,9 +12223,6 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
                 | "/v1/internal/torii/proxy"
                 | "/v1/nexus/lifecycle"
                 | "/v1/nexus/lane-lifecycle"
-                | "/v1/sumeragi/evidence"
-                | "/v1/sumeragi/vrf/commit"
-                | "/v1/sumeragi/vrf/reveal"
                 | "/v1/gov/protected-namespaces"
         )
 }
@@ -12129,6 +12261,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/da/pin-intents/prove"
                     | "/v1/da/pin-intents/verify"
                     | "/v1/domains/query"
+                    | "/v1/accounts/recovery/status"
                     | "/v1/multisig/proposals/query"
                     | "/v1/multisig/proposals/resolve"
                     | "/v1/multisig/spec"
@@ -14789,7 +14922,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 "properties": {
                     "context_id": { "$ref": "#/components/schemas/SumeragiV2HeightContextId" },
                     "chain_id": { "type": "string", "minLength": 1 },
-                    "protocol_version": { "type": "integer", "format": "uint16", "enum": [3] },
+                    "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                     "height": { "type": "integer", "format": "uint64", "minimum": 1 },
                     "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
                     "epoch_end_height": { "type": "integer", "format": "uint64", "minimum": 1 },
@@ -14799,6 +14932,9 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "mode": { "$ref": "#/components/schemas/SumeragiV2ConsensusMode" },
                     "parent_commit_qc": {
                         "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
+                    },
+                    "snapshot_bootstrap": {
+                        "$ref": "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
                     },
                     "nexus_amx_context_hash": { "$ref": "#/components/schemas/Hash" },
                     "execution_policy_hash": { "$ref": "#/components/schemas/Hash" },
@@ -16008,7 +16144,7 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
             "properties": {
                 "version": { "type": "integer", "enum": [1] },
                 "source_network": { "$ref": "#/components/schemas/SccpTairaNetworkV1" },
-                "protocol_version": { "type": "integer", "enum": [3] },
+                "protocol_version": { "type": "integer", "enum": [3, 4] },
                 "chain_id_hash": {
                     "const": "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7"
                 },
@@ -17482,6 +17618,30 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "SumeragiV2SnapshotBootstrapAnchor".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "snapshot_height", "snapshot_block_hash",
+                "snapshot_block_creation_time_ms", "snapshot_state_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "snapshot_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "snapshot_block_hash": { "$ref": "#/components/schemas/Hash" },
+                "snapshot_block_creation_time_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "snapshot_state_hash": { "$ref": "#/components/schemas/Hash" }
+            },
+            "description": "Audited snapshot boundary that replaces an unavailable parent CommitQC and binds the restored ledger geometry and WSV."
+        }),
+    );
+    schemas.insert(
         "SumeragiV2BlsProof".to_owned(),
         norito::json!({
             "type": "array",
@@ -17521,7 +17681,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "required": ["encoding", "details"],
             "additionalProperties": false,
             "properties": {
-                "encoding": { "type": "string", "enum": ["plain", "reed_solomon16"] },
+                "encoding": { "type": "string", "enum": ["reed_solomon16"] },
                 "details": { "type": "null" }
             },
             "description": "Adjacent-tag Norito JSON representation of the unit-variant v2 payload encoding."
@@ -17561,8 +17721,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "properties": {
                 "validator": { "$ref": "#/components/schemas/SumeragiV2BlsValidatorId" },
                 "power": {
-                    "type": "integer", "format": "uint64", "minimum": 1,
-                    "maximum": 18446744073709551615_u64
+                    "type": "integer", "format": "uint64", "enum": [1]
                 }
             }
         }),
@@ -17579,11 +17738,11 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "maximum": max_sumeragi_validators
                 },
                 "total_power": {
-                    "type": "integer", "format": "uint64", "minimum": 1,
-                    "maximum": 18446744073709551615_u64
+                    "type": "integer", "format": "uint64", "minimum": 4,
+                    "maximum": max_sumeragi_validators
                 }
             },
-            "description": "Canonical strict-greater-than-two-thirds count and power quorum derived from the frozen roster."
+            "description": "Canonical 2f+1 equal-vote quorum derived from a bounded 3f+1 roster."
         }),
     );
     schemas.insert(
@@ -17598,15 +17757,16 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "properties": {
                 "encoding": { "$ref": "#/components/schemas/SumeragiV2PayloadEncoding" },
                 "chunk_size_bytes": {
-                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "type": "integer", "format": "uint32", "minimum": 2,
+                    "multipleOf": 2,
                     "maximum": 4294967295_u64
                 },
                 "data_shards": {
-                    "type": "integer", "format": "uint16", "minimum": 0,
+                    "type": "integer", "format": "uint16", "minimum": 1,
                     "maximum": 65535
                 },
                 "parity_shards": {
-                    "type": "integer", "format": "uint16", "minimum": 0,
+                    "type": "integer", "format": "uint16", "minimum": 1,
                     "maximum": 65535
                 },
                 "max_payload_size_bytes": {
@@ -17617,37 +17777,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "type": "integer", "format": "uint32", "minimum": 1,
                     "maximum": 4294967295_u64
                 }
-            },
-            "oneOf": [
-                {
-                    "properties": {
-                        "encoding": {
-                            "type": "object",
-                            "required": ["encoding", "details"],
-                            "properties": {
-                                "encoding": { "enum": ["plain"] },
-                                "details": { "type": "null" }
-                            }
-                        },
-                        "data_shards": { "const": 0 },
-                        "parity_shards": { "const": 0 }
-                    }
-                },
-                {
-                    "properties": {
-                        "encoding": {
-                            "type": "object",
-                            "required": ["encoding", "details"],
-                            "properties": {
-                                "encoding": { "enum": ["reed_solomon16"] },
-                                "details": { "type": "null" }
-                            }
-                        },
-                        "data_shards": { "minimum": 1 },
-                        "parity_shards": { "minimum": 1 }
-                    }
-                }
-            ]
+            }
         }),
     );
     schemas.insert(
@@ -17772,12 +17902,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "round", "phase", "subject", "execution_commitment", "signers",
-                "aggregate_signature"
+                "round", "proposal_round", "phase", "subject", "execution_commitment",
+                "signers", "aggregate_signature"
             ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2GlobalPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
                 "execution_commitment": {
@@ -17801,12 +17932,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "round", "phase", "subject", "execution_commitment", "signers",
-                "aggregate_signature"
+                "round", "proposal_round", "phase", "subject", "execution_commitment",
+                "signers", "aggregate_signature"
             ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2CommitPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
                 "execution_commitment": {
@@ -17837,7 +17969,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "additionalProperties": false,
             "properties": {
                 "chain_id": { "type": "string", "minLength": 1 },
-                "protocol_version": { "type": "integer", "format": "uint16", "enum": [3] },
+                "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                 "height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
@@ -17857,8 +17989,11 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "parent_commit_qc": {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
+                "snapshot_bootstrap": {
+                    "$ref": "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+                },
                 "roster": {
-                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
+                    "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/SumeragiV2ValidatorPower" },
                     "description": "Canonical ordered voting roster; observers are excluded and validator identities must be unique."
@@ -17869,7 +18004,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
                 "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
             },
-            "description": "Complete immutable Sumeragi-v2 context. next_epoch_snapshot is present exactly at an epoch-ending height; parent_commit_qc is omitted only at height one."
+            "description": "Complete immutable Sumeragi-v2 context. next_epoch_snapshot is present exactly at an epoch-ending height; parent_commit_qc is omitted only at height one or an audited snapshot boundary, where snapshot_bootstrap is required instead."
         }),
     );
     schemas.insert(
@@ -17892,12 +18027,12 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 },
                 "mode": { "$ref": "#/components/schemas/SumeragiV2ConsensusMode" },
                 "roster": {
-                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
+                    "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/SumeragiV2ValidatorPower" }
                 },
                 "validator_set_pops": {
-                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
+                    "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
                     "description": "Parent-authenticated BLS proofs of possession aligned one-for-one with the next roster."
                 },
@@ -17918,7 +18053,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "additionalProperties": false,
             "properties": {
                 "format_version": { "type": "integer", "format": "uint16", "enum": [3] },
-                "protocol_version": { "type": "integer", "format": "uint16", "enum": [3] },
+                "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                 "height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
@@ -17930,7 +18065,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
                 "validator_set_pops": {
-                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
+                    "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
                     "description": "Durable BLS proofs of possession aligned one-for-one with height_context.roster."
                 }
@@ -19072,6 +19207,8 @@ const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
     "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
 const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
 const GOVERNANCE_EXACT_TOKEN_PATTERN: &str = r"^[^\s\u0000-\u001F\u007F-\u009F]+$";
+const GOVERNANCE_SELECTOR_V1_PATTERN: &str =
+    iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN;
 const GOVERNANCE_NAMESPACE_TOKEN_PATTERN: &str = "^[!-~]+$";
 const GOVERNANCE_U64_DECIMAL_PATTERN: &str = concat!(
     "^(?:0|[1-9][0-9]{0,18}|",
@@ -19252,7 +19389,8 @@ fn governance_mutation_schemas(schemas: &mut Map) {
                 },
                 "referendum_id": {
                     "type": "string", "minLength": 1,
-                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
                 },
                 "owner": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
                 "amount": { "$ref": "#/components/schemas/Quantity" },
@@ -19307,7 +19445,8 @@ fn governance_mutation_schemas(schemas: &mut Map) {
                 },
                 "election_id": {
                     "type": "string", "minLength": 1,
-                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
                 },
                 "backend": {
                     "type": "string", "minLength": 1,
@@ -19359,7 +19498,8 @@ fn governance_mutation_schemas(schemas: &mut Map) {
                 },
                 "election_id": {
                     "type": "string", "minLength": 1,
-                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
                 },
                 "ballot": { "$ref": "#/components/schemas/GovernanceBallotProofV1" }
             }
@@ -19373,10 +19513,15 @@ fn governance_mutation_schemas(schemas: &mut Map) {
             "required": ["referendum_id", "proposal_id"],
             "properties": {
                 "referendum_id": {
-                    "type": "string", "minLength": 1,
-                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                    "type": "string", "minLength": 64, "maxLength": 64,
+                    "pattern": (GOVERNANCE_LOWER_HEX32_PATTERN),
+                    "description": "Exact lowercase proposal fingerprint; must equal proposal_id."
                 },
-                "proposal_id": { "type": "string", "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN) }
+                "proposal_id": {
+                    "type": "string", "minLength": 64, "maxLength": 64,
+                    "pattern": (GOVERNANCE_LOWER_HEX32_PATTERN),
+                    "description": "Exact lowercase proposal fingerprint; referendum_id must equal this value."
+                }
             }
         }),
     );
@@ -22167,12 +22312,11 @@ fn insert_musubi_v1_schemas(schemas: &mut Map) {
 
 fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
     use iroha_data_model::musubi::{
-        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1,
-        MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_FILES_V1,
-        MUSUBI_MAX_KEYWORDS_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-        MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1,
+        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1,
+        MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1, MUSUBI_MAX_DEPENDENCIES_V1,
+        MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_FILES_V1, MUSUBI_MAX_KEYWORDS_V1,
+        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1,
         MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
-        MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1,
     };
 
     schemas.insert(
@@ -22446,7 +22590,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                         "type": "integer",
                         "format": "uint64",
                         "minimum": 1,
-                        "maximum": (MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1)
+                        "maximum": (MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1)
                     }),
                 ),
                 ("car_digest", schema_ref("MusubiDigest32V1")),
@@ -23057,7 +23201,8 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
 
 fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
     use iroha_data_model::musubi::{
-        MUSUBI_MAX_PACKAGE_MEMBERS_V1, MUSUBI_MAX_PACKAGE_OWNERS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
+        MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1, MUSUBI_MAX_PACKAGE_MEMBERS_V1,
+        MUSUBI_MAX_PACKAGE_OWNERS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
     };
 
     schemas.insert(
@@ -23360,10 +23505,7 @@ fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
     );
     schemas.insert(
         "MusubiOrderedPrefixV1".to_owned(),
-        musubi_string_newtype(
-            iroha_data_model::musubi::MUSUBI_MAX_CURSOR_KEY_BYTES_V1,
-            None,
-        ),
+        musubi_string_newtype(MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1, None),
     );
     schemas.insert(
         "MusubiOrderedPackageEntryV1".to_owned(),
@@ -24504,8 +24646,9 @@ fn openapi_schemas() -> Map {
                 "election_id": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 256,
-                    "description": "Exact on-chain election identifier."
+                    "maxLength": 128,
+                    "pattern": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN),
+                    "description": "Canonical governance selector V1: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot."
                 }
             }
         }),
@@ -26258,7 +26401,7 @@ fn openapi_schemas() -> Map {
                     "description": "Canonical uppercase 32-byte Norito JSON hex."
                 },
                 "validator_count": {
-                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "type": "integer", "format": "uint32", "minimum": 4,
                     "maximum": max_sumeragi_validators
                 },
                 "quorum": { "$ref": "#/components/schemas/SumeragiV2DualQuorum" }
@@ -26558,7 +26701,8 @@ fn openapi_schemas() -> Map {
                         "missing_proposal", "body_unavailable",
                         "prepare_quorum_missing", "commit_quorum_missing",
                         "timeout_certificate_missing", "scheduler_starvation",
-                        "application_pending", "local_control_pending"
+                        "application_pending", "successor_activation_pending",
+                        "local_control_pending"
                     ]
                 },
                 "details": { "type": "null" }
@@ -26681,7 +26825,7 @@ fn openapi_schemas() -> Map {
             ],
             "additionalProperties": false,
             "properties": {
-                "protocol_version": { "type": "integer", "minimum": 3, "maximum": 3 },
+                "protocol_version": { "type": "integer", "minimum": 4, "maximum": 4 },
                 "node_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "build_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "config_fingerprint": { "$ref": "#/components/schemas/Hash" },
@@ -27923,62 +28067,6 @@ fn openapi_schemas() -> Map {
                 "tx_hash_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                 "status": { "type": "string", "enum": ["Queued", "Repaired", "Unchanged"] },
                 "disposition": { "$ref": "#/components/schemas/JsonValue" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiVrfCommitRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["epoch", "signer", "commitment_hex", "bls_sig_hex"],
-            "additionalProperties": false,
-            "properties": {
-                "epoch": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Sumeragi VRF epoch number."
-                },
-                "signer": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "description": "Validator index in the active topology for the epoch height."
-                },
-                "commitment_hex": {
-                    "type": "string",
-                    "description": "32-byte VRF reveal commitment encoded as hex."
-                },
-                "bls_sig_hex": {
-                    "type": "string",
-                    "description": "BLS signature over the Sumeragi VRF commit preimage, encoded as non-empty hex."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiVrfRevealRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["epoch", "signer", "reveal_hex", "bls_sig_hex"],
-            "additionalProperties": false,
-            "properties": {
-                "epoch": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Sumeragi VRF epoch number."
-                },
-                "signer": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "description": "Validator index in the active topology for the epoch height."
-                },
-                "reveal_hex": {
-                    "type": "string",
-                    "description": "32-byte VRF reveal value encoded as hex."
-                },
-                "bls_sig_hex": {
-                    "type": "string",
-                    "description": "BLS signature over the Sumeragi VRF reveal preimage, encoded as non-empty hex."
-                }
             }
         }),
     );
@@ -32136,7 +32224,7 @@ fn openapi_schemas() -> Map {
         "MultisigProposeInstructionInput".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Structured JSON InstructionBox object. For native Norito, send the entire MultisigProposeRequest body as application/x-norito; the JSON instructions field does not accept per-instruction Norito blobs."
+            "description": "Structured JSON InstructionBox object. For native Norito, send the entire MultisigProposeRequest body as application/x-norito; the JSON instructions field does not accept per-instruction Norito blobs. Deliberate policy-change invalidation uses the custom payload documented by MultisigInvalidateOutstandingPayload."
         }),
     );
     schemas.insert(
@@ -32539,6 +32627,284 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas
+}
+
+#[inline(never)]
+fn insert_account_recovery_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "MultisigInvalidateOutstandingPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["InvalidateOutstanding"],
+            "additionalProperties": false,
+            "description": "Exact MultisigInstructionBox custom payload that atomically terminalizes every other outstanding proposal. It must execute as the target multisig account.",
+            "properties": {
+                "InvalidateOutstanding": {
+                    "type": "object",
+                    "required": ["account"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "account": { "type": "string", "minLength": 1 }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryPolicySetRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_alias", "signer_account_id", "fee_payment", "guardians", "quorum", "timelock_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "account_alias": { "type": "string", "minLength": 3, "maxLength": 512 },
+                "signer_account_id": { "type": "string", "minLength": 1 },
+                "public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "signature_b64": { "type": "string", "minLength": 88, "maxLength": 88 },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
+                "guardians": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "items": { "$ref": "#/components/schemas/AccountRecoveryGuardian" }
+                },
+                "quorum": { "type": "integer", "format": "uint16", "const": 2 },
+                "timelock_ms": { "type": "integer", "format": "uint64", "const": 259200000 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryGuardian".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account", "weight"],
+            "additionalProperties": false,
+            "properties": {
+                "account": { "type": "string", "minLength": 1 },
+                "weight": { "type": "integer", "format": "uint16", "const": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryMultisigMember".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["public_key", "weight"],
+            "additionalProperties": false,
+            "properties": {
+                "public_key": {
+                    "type": "string",
+                    "pattern": "^ed0120[0-9a-f]{64}$",
+                    "description": "Canonical Iroha Ed25519 public-key literal."
+                },
+                "weight": { "type": "integer", "format": "uint16", "const": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryMultisigPolicy".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "threshold", "members"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint8", "const": 1 },
+                "threshold": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 1,
+                    "description": "Must be 1 for one member, or between 2 and N for two or more members."
+                },
+                "members": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/AccountRecoveryMultisigMember" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryMultisigController".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "payload"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": { "const": "Multisig" },
+                "payload": { "$ref": "#/components/schemas/AccountRecoveryMultisigPolicy" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryPolicy".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["guardians", "quorum", "timelock_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "guardians": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/AccountRecoveryGuardian" }
+                },
+                "quorum": { "type": "integer", "format": "uint16", "const": 2 },
+                "timelock_ms": { "type": "integer", "format": "uint64", "const": 259200000 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryProposeRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_alias", "signer_account_id", "fee_payment", "new_controller"],
+            "additionalProperties": false,
+            "properties": {
+                "account_alias": { "type": "string", "minLength": 3, "maxLength": 512 },
+                "signer_account_id": { "type": "string", "minLength": 1 },
+                "public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "signature_b64": { "type": "string", "minLength": 88, "maxLength": 88 },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
+                "new_controller": {
+                    "$ref": "#/components/schemas/AccountRecoveryMultisigController",
+                    "description": "Native AccountController::Multisig JSON value with weight-one Ed25519 members."
+                }
+            }
+        }),
+    );
+    for name in [
+        "AccountRecoveryApproveRequest",
+        "AccountRecoveryFinalizeRequest",
+    ] {
+        schemas.insert(
+            name.to_owned(),
+            norito::json!({
+                "type": "object",
+                "required": ["account_alias", "signer_account_id", "fee_payment"],
+                "additionalProperties": false,
+                "properties": {
+                    "account_alias": { "type": "string", "minLength": 3, "maxLength": 512 },
+                    "signer_account_id": { "type": "string", "minLength": 1 },
+                    "public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                    "signature_b64": { "type": "string", "minLength": 88, "maxLength": 88 },
+                    "creation_time_ms": { "type": "integer", "format": "uint64" },
+                    "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" }
+                }
+            }),
+        );
+    }
+    schemas.insert(
+        "AccountRecoveryStatusRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_alias"],
+            "additionalProperties": false,
+            "properties": {
+                "account_alias": { "type": "string", "minLength": 3, "maxLength": 512 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryMutationResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "action", "account_alias", "resolved_active_account_id", "submitted", "creation_time_ms", "fee_payment"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "action": { "type": "string", "enum": ["SET_POLICY", "PROPOSE", "APPROVE", "FINALIZE"] },
+                "account_alias": { "type": "string" },
+                "resolved_active_account_id": { "type": "string" },
+                "submitted": { "type": "boolean" },
+                "tx_hash_hex": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                        { "type": "null" }
+                    ]
+                },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "fee_payment": { "$ref": "#/components/schemas/FeePaymentIntent" },
+                "signing_message_b64": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 44, "maxLength": 44 },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryInvalidatedProposalEvidence".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proposal_id", "status", "terminal_at_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "status": { "type": "string", "enum": ["CANCELED", "EXPIRED"] },
+                "terminal_at_ms": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "active_account_id_at_proposal", "proposed_controller", "approvals", "invalidated_multisig_proposal_hashes", "proposed_by", "execute_after_ms", "status"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": { "$ref": "#/components/schemas/JsonValue" },
+                "active_account_id_at_proposal": { "type": "string", "minLength": 1 },
+                "proposed_controller": { "$ref": "#/components/schemas/AccountRecoveryMultisigController" },
+                "approvals": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": { "type": "string", "minLength": 1 }
+                },
+                "invalidated_multisig_proposal_hashes": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" }
+                },
+                "proposed_by": { "type": "string", "minLength": 1 },
+                "execute_after_ms": { "type": "integer", "format": "uint64" },
+                "status": { "$ref": "#/components/schemas/JsonValue" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountRecoveryStatusResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_alias", "resolved_active_account_id", "invalidated_proposals", "invalidation_evidence_complete"],
+            "additionalProperties": false,
+            "properties": {
+                "account_alias": { "type": "string" },
+                "resolved_active_account_id": { "type": "string" },
+                "policy": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/AccountRecoveryPolicy" },
+                        { "type": "null" }
+                    ]
+                },
+                "request": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/AccountRecoveryRequest" },
+                        { "type": "null" }
+                    ]
+                },
+                "invalidated_proposals": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/AccountRecoveryInvalidatedProposalEvidence" }
+                },
+                "invalidation_evidence_complete": { "type": "boolean" }
+            }
+        }),
+    );
 }
 
 fn queue_error_snapshot_schema() -> Value {
@@ -33430,6 +33796,7 @@ fn canonical_request_security_schemes() -> Map {
 fn components_section() -> Value {
     let mut components = Map::new();
     let mut schemas = openapi_schemas();
+    insert_account_recovery_schemas(&mut schemas);
     privacy_capability_schemas(&mut schemas);
     privacy_issuance_schemas(&mut schemas);
     schemas.insert("AxtErrorDetails".to_owned(), axt_error_details_schema());
@@ -33944,6 +34311,7 @@ mod tests {
                 | "SumeragiV2FinalizedNextEpochSnapshot"
                 | "SumeragiV2ConsensusMode"
                 | "SumeragiV2CommitQuorumCertificate"
+                | "SumeragiV2SnapshotBootstrapAnchor"
                 | "SumeragiV2DataAvailabilityLayout"
                 | "SumeragiV2Bytes32"
         )
@@ -33995,6 +34363,137 @@ mod tests {
         assert!(
             reference_count > 0,
             "generated OpenAPI document unexpectedly contains no schema references"
+        );
+    }
+
+    #[test]
+    fn generated_openapi_freezes_regulated_account_recovery_and_multisig_invalidation() {
+        let document = generate_spec();
+        let cases = [
+            (
+                "/v1/accounts/recovery/policy/set",
+                "#/components/schemas/AccountRecoveryPolicySetRequest",
+                "#/components/schemas/AccountRecoveryMutationResponse",
+            ),
+            (
+                "/v1/accounts/recovery/propose",
+                "#/components/schemas/AccountRecoveryProposeRequest",
+                "#/components/schemas/AccountRecoveryMutationResponse",
+            ),
+            (
+                "/v1/accounts/recovery/approve",
+                "#/components/schemas/AccountRecoveryApproveRequest",
+                "#/components/schemas/AccountRecoveryMutationResponse",
+            ),
+            (
+                "/v1/accounts/recovery/finalize",
+                "#/components/schemas/AccountRecoveryFinalizeRequest",
+                "#/components/schemas/AccountRecoveryMutationResponse",
+            ),
+            (
+                "/v1/accounts/recovery/status",
+                "#/components/schemas/AccountRecoveryStatusRequest",
+                "#/components/schemas/AccountRecoveryStatusResponse",
+            ),
+        ];
+        for (path, request, response) in cases {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(operation_request_schema_ref(operation, path), request);
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                response
+            );
+        }
+
+        let schemas = component_schemas(&document);
+        let invalidation = schemas
+            .get("MultisigInvalidateOutstandingPayload")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("InvalidateOutstanding"))
+            .and_then(Value::as_object)
+            .expect("multisig invalidation payload schema");
+        assert_eq!(
+            invalidation
+                .get("required")
+                .and_then(Value::as_array)
+                .and_then(|required| required.first())
+                .and_then(Value::as_str),
+            Some("account")
+        );
+        let policy = schemas
+            .get("AccountRecoveryPolicySetRequest")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("regulated recovery policy properties");
+        assert_eq!(
+            policy
+                .get("guardians")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minItems")),
+            Some(&Value::from(3_u64))
+        );
+        assert_eq!(
+            policy
+                .get("guardians")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxItems")),
+            Some(&Value::from(3_u64))
+        );
+        assert_eq!(
+            policy
+                .get("quorum")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const")),
+            Some(&Value::from(2_u64))
+        );
+        assert_eq!(
+            policy
+                .get("timelock_ms")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const")),
+            Some(&Value::from(259_200_000_u64))
+        );
+
+        let evidence = schemas
+            .get("AccountRecoveryInvalidatedProposalEvidence")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("recovery proposal evidence properties");
+        assert_eq!(
+            evidence
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array),
+            Some(&vec![
+                Value::String("CANCELED".to_owned()),
+                Value::String("EXPIRED".to_owned()),
+            ])
+        );
+        assert_eq!(
+            evidence
+                .get("terminal_at_ms")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minimum")),
+            Some(&Value::from(1_u64))
+        );
+
+        let request = schemas
+            .get("AccountRecoveryRequest")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("account recovery request properties");
+        assert_eq!(
+            request
+                .get("invalidated_multisig_proposal_hashes")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("uniqueItems")),
+            Some(&Value::Bool(true))
         );
     }
 
@@ -37368,9 +37867,8 @@ mod tests {
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("enum"))
                 .and_then(Value::as_array)
-                .and_then(|values| values.first())
-                .and_then(Value::as_u64),
-            Some(3)
+                .map(|values| { values.iter().filter_map(Value::as_u64).collect::<Vec<_>>() }),
+            Some(vec![3, 4])
         );
         assert_eq!(
             finality_anchor_properties
@@ -38494,6 +38992,10 @@ mod tests {
             "authenticate and authorize before file lookup",
             "absent or invalid proof returns 401",
             "missing file returns 404 only after successful authorization",
+            "byte-delivery boundary",
+            "active, unknown, or invalid media types",
+            "X-Content-Type-Options",
+            "without changing byte or range semantics",
         ] {
             assert!(
                 description.contains(phrase),
@@ -38557,6 +39059,23 @@ mod tests {
                 .and_then(Value::as_str),
             Some(crate::content::CANONICAL_CONTENT_AUTH_VARY)
         );
+        for (name, expected) in [
+            ("X-Content-Type-Options", "nosniff"),
+            ("Content-Security-Policy", "sandbox; default-src 'none'"),
+            ("Content-Disposition", "attachment"),
+        ] {
+            assert_eq!(
+                success_headers
+                    .get(name)
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some(expected),
+                "content response must document the {name} boundary"
+            );
+        }
 
         let unauthorized = responses
             .get("401")
@@ -38576,7 +39095,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_batch_and_tally_openapi_match_runtime_media_and_status_contracts() {
+    fn zk_openapi_matches_runtime_media_and_status_contracts() {
         fn content_types(container: &Map) -> BTreeSet<&str> {
             container
                 .get("content")
@@ -38593,6 +39112,10 @@ mod tests {
             "ZkVerifyBatchRequest",
             "ZkVerifyBatchOutcome",
             "ZkVerifyBatchResponse",
+            "ZkRootsGetRequest",
+            "ZkRootsGetResponse",
+            "ZkMerklePathGetRequest",
+            "ZkMerklePathGetResponse",
             "ZkVoteGetTallyRequest",
             "ZkVoteGetTallyResponse",
         ] {
@@ -38692,6 +39215,73 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/ZkVoteGetTallyResponse")
         );
+
+        for (path, request_schema, response_schema) in [
+            (
+                "/v1/zk/roots",
+                "#/components/schemas/ZkRootsGetRequest",
+                "#/components/schemas/ZkRootsGetResponse",
+            ),
+            (
+                "/v1/zk/merkle-path",
+                "#/components/schemas/ZkMerklePathGetRequest",
+                "#/components/schemas/ZkMerklePathGetResponse",
+            ),
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            let request = operation
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .expect("ZK state-query request body");
+            assert_eq!(
+                content_types(request),
+                BTreeSet::from(["application/json", "application/x-norito"]),
+                "request media mismatch for {path}"
+            );
+            assert_eq!(
+                request
+                    .get("content")
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(request_schema),
+                "request schema mismatch for {path}"
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("ZK state-query responses");
+            assert!(
+                responses.contains_key("406"),
+                "missing negotiation failure for {path}"
+            );
+            let success = responses
+                .get("200")
+                .and_then(Value::as_object)
+                .expect("ZK state-query success response");
+            assert_eq!(
+                content_types(success),
+                BTreeSet::from(["application/json", "application/x-norito"]),
+                "response media mismatch for {path}"
+            );
+            assert_eq!(
+                success
+                    .get("content")
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(response_schema),
+                "response schema mismatch for {path}"
+            );
+        }
 
         let roots = openapi_operation(&document, "/v1/zk/roots", "post");
         let roots_description = roots
@@ -40865,6 +41455,30 @@ mod tests {
             "#/components/schemas/OfflineTopUpFinalityCompactQc"
         );
         assert_eq!(
+            component_required(schemas, "OfflineTopUpFinalityHeightContext"),
+            [
+                "context_id",
+                "chain_id",
+                "protocol_version",
+                "height",
+                "epoch",
+                "epoch_end_height",
+                "mode",
+                "nexus_amx_context_hash",
+                "execution_policy_hash",
+                "da_layout",
+                "leader_seed",
+            ]
+        );
+        assert_eq!(
+            property_ref(
+                schemas,
+                "OfflineTopUpFinalityHeightContext",
+                "snapshot_bootstrap",
+            ),
+            "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+        );
+        assert_eq!(
             property_ref(schemas, "OfflineTopUpFinalityProof", "anchor_path"),
             "#/components/schemas/OfflineTopUpAnchorMerkleProof"
         );
@@ -41898,6 +42512,39 @@ mod tests {
     }
 
     #[test]
+    fn musubi_cursor_and_ordered_prefix_bounds_match_the_wire_types() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let cursor_last_key = schemas
+            .get("MusubiFinalizedCursorV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("last_key"))
+            .and_then(Value::as_object)
+            .expect("Musubi finalized-cursor last-key schema");
+        assert_eq!(
+            cursor_last_key.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(iroha_data_model::musubi::MUSUBI_MAX_CURSOR_KEY_BYTES_V1)
+                    .expect("cursor-key bound fits u64")
+            )
+        );
+
+        let ordered_prefix = schemas
+            .get("MusubiOrderedPrefixV1")
+            .and_then(Value::as_object)
+            .expect("Musubi ordered-prefix schema");
+        assert_eq!(
+            ordered_prefix.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(iroha_data_model::musubi::MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1)
+                    .expect("ordered-prefix bound fits u64")
+            )
+        );
+    }
+
+    #[test]
     fn musubi_chain_and_chunker_text_bounds_match_the_wire_types() {
         let document = generate_spec();
         let schemas = component_schemas(&document);
@@ -42094,35 +42741,27 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_documents_vrf_signature_payloads() {
-        fn post_request_schema_ref<'a>(doc: &'a Value, path: &str) -> Option<&'a str> {
-            doc.get("paths")?
-                .as_object()?
-                .get(path)?
-                .as_object()?
-                .get("post")?
-                .as_object()?
-                .get("requestBody")?
-                .as_object()?
-                .get("content")?
-                .as_object()?
-                .get("application/json")?
-                .as_object()?
-                .get("schema")?
-                .as_object()?
-                .get("$ref")?
-                .as_str()
-        }
-
+    fn retired_sumeragi_mutation_surfaces_are_absent() {
         let doc = generate_spec();
-        assert_eq!(
-            post_request_schema_ref(&doc, "/v1/sumeragi/vrf/commit"),
-            Some("#/components/schemas/SumeragiVrfCommitRequest")
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let evidence = paths
+            .get("/v1/sumeragi/evidence")
+            .and_then(Value::as_object)
+            .expect("retained evidence-list path");
+        assert!(evidence.contains_key("get"));
+        assert!(
+            !evidence.contains_key("post"),
+            "retired evidence submission operation remains documented"
         );
-        assert_eq!(
-            post_request_schema_ref(&doc, "/v1/sumeragi/vrf/reveal"),
-            Some("#/components/schemas/SumeragiVrfRevealRequest")
-        );
+        for retired_path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+            assert!(
+                !paths.contains_key(retired_path),
+                "retired Sumeragi mutation path remains documented: {retired_path}"
+            );
+        }
 
         let schemas = doc
             .get("components")
@@ -42130,18 +42769,10 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("schemas section");
-        for schema_name in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
-            let required = schemas
-                .get(schema_name)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("required"))
-                .and_then(Value::as_array)
-                .expect("VRF request required fields");
+        for retired_schema in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
             assert!(
-                required
-                    .iter()
-                    .any(|field| field.as_str() == Some("bls_sig_hex")),
-                "{schema_name} should require bls_sig_hex"
+                !schemas.contains_key(retired_schema),
+                "retired Sumeragi mutation schema remains documented: {retired_schema}"
             );
         }
     }
@@ -44006,6 +44637,78 @@ mod tests {
     }
 
     #[test]
+    fn sumeragi_v2_da_schema_requires_reed_solomon16_without_plain_compatibility() {
+        let schemas = openapi_schemas();
+        let encoding = schemas
+            .get("SumeragiV2PayloadEncoding")
+            .and_then(Value::as_object)
+            .expect("Sumeragi v2 payload encoding schema");
+        let allowed_encodings = encoding
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("encoding"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("Sumeragi v2 payload encoding enum");
+        assert_eq!(allowed_encodings, &[Value::from("reed_solomon16")]);
+        assert!(
+            !allowed_encodings
+                .iter()
+                .any(|encoding| encoding.as_str() == Some("plain")),
+            "retired Plain payload encoding must not be advertised"
+        );
+
+        let layout = schemas
+            .get("SumeragiV2DataAvailabilityLayout")
+            .and_then(Value::as_object)
+            .expect("Sumeragi v2 data-availability layout schema");
+        assert!(
+            layout.get("oneOf").is_none() && layout.get("anyOf").is_none(),
+            "the RS16-only layout must not retain a compatibility union"
+        );
+        let required = layout
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("Sumeragi v2 data-availability required fields");
+        for field in ["encoding", "data_shards", "parity_shards"] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "Sumeragi v2 data-availability layout must require {field}"
+            );
+        }
+        let properties = layout
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("Sumeragi v2 data-availability properties");
+        assert_eq!(
+            properties
+                .get("encoding")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2PayloadEncoding")
+        );
+        for field in ["data_shards", "parity_shards"] {
+            assert_eq!(
+                properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("minimum"))
+                    .and_then(Value::as_u64),
+                Some(1),
+                "RS16 requires a positive {field} value"
+            );
+        }
+        let serialized_layout = norito::json::to_string(&Value::Object(layout.clone()))
+            .expect("serialize Sumeragi v2 data-availability layout schema");
+        assert!(
+            !serialized_layout.contains("\"plain\""),
+            "retired Plain layout branch must not be advertised"
+        );
+    }
+
+    #[test]
     fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         fn schema<'a>(schemas: &'a Map, name: &str) -> &'a Map {
             schemas
@@ -44151,6 +44854,7 @@ mod tests {
                 "next_epoch_snapshot",
                 "mode",
                 "parent_commit_qc",
+                "snapshot_bootstrap",
                 "roster",
                 "quorum",
                 "nexus_amx_context_hash",
@@ -44211,6 +44915,7 @@ mod tests {
                 certificate,
                 &[
                     "round",
+                    "proposal_round",
                     "phase",
                     "subject",
                     "execution_commitment",
@@ -44219,6 +44924,7 @@ mod tests {
                 ],
                 &[
                     "round",
+                    "proposal_round",
                     "phase",
                     "subject",
                     "execution_commitment",
@@ -44227,6 +44933,22 @@ mod tests {
                 ],
             );
         }
+        assert_closed_shape(
+            &schemas,
+            "SumeragiV2SnapshotBootstrapAnchor",
+            &[
+                "snapshot_height",
+                "snapshot_block_hash",
+                "snapshot_block_creation_time_ms",
+                "snapshot_state_hash",
+            ],
+            &[
+                "snapshot_height",
+                "snapshot_block_hash",
+                "snapshot_block_creation_time_ms",
+                "snapshot_state_hash",
+            ],
+        );
         assert_closed_shape(
             &schemas,
             "SumeragiV2FinalizedNextEpochSnapshot",
@@ -44314,8 +45036,8 @@ mod tests {
         );
         for (schema_name, field, version) in [
             ("SumeragiV2FinalityArtifact", "format_version", 3_u64),
-            ("SumeragiV2FinalityArtifact", "protocol_version", 3_u64),
-            ("SumeragiV2HeightContext", "protocol_version", 3_u64),
+            ("SumeragiV2FinalityArtifact", "protocol_version", 4_u64),
+            ("SumeragiV2HeightContext", "protocol_version", 4_u64),
         ] {
             assert_eq!(
                 property(&schemas, schema_name, field)
@@ -44327,7 +45049,7 @@ mod tests {
         }
 
         let roster = property(&schemas, "SumeragiV2HeightContext", "roster");
-        assert_eq!(roster.get("minItems").and_then(Value::as_u64), Some(1));
+        assert_eq!(roster.get("minItems").and_then(Value::as_u64), Some(4));
         assert_eq!(
             roster.get("maxItems").and_then(Value::as_u64),
             Some(max_validators)
@@ -44346,9 +45068,9 @@ mod tests {
         );
         assert_eq!(
             property(&schemas, "SumeragiV2ValidatorPower", "power")
-                .get("minimum")
-                .and_then(Value::as_u64),
-            Some(1)
+                .get("enum")
+                .and_then(Value::as_array),
+            Some(&vec![Value::from(1_u64)])
         );
         assert_ref(
             &schemas,
@@ -44368,7 +45090,7 @@ mod tests {
             "SumeragiV2FinalizedNextEpochSnapshot",
         ] {
             let pops = property(&schemas, owner, "validator_set_pops");
-            assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(1));
+            assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(4));
             assert_eq!(
                 pops.get("maxItems").and_then(Value::as_u64),
                 Some(max_validators)
@@ -44406,6 +45128,12 @@ mod tests {
                 Some(true)
             );
         }
+        assert_eq!(
+            property(&schemas, "SumeragiV2FinalizedNextEpochSnapshot", "roster")
+                .get("minItems")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
         assert_eq!(
             property(&schemas, "SumeragiV2FinalizedNextEpochSnapshot", "roster")
                 .get("maxItems")
@@ -44655,7 +45383,9 @@ mod tests {
         );
         assert_eq!(
             artifact.get("protocol_version").and_then(Value::as_u64),
-            Some(3)
+            Some(u64::from(
+                iroha_data_model::block::consensus_v2::PROTOCOL_VERSION
+            ))
         );
         let context = artifact
             .get("height_context")
@@ -44663,10 +45393,13 @@ mod tests {
             .expect("height context JSON object");
         assert_eq!(
             context.get("protocol_version").and_then(Value::as_u64),
-            Some(3)
+            Some(u64::from(
+                iroha_data_model::block::consensus_v2::PROTOCOL_VERSION
+            ))
         );
         assert!(!context.contains_key("next_epoch_snapshot"));
         assert!(!context.contains_key("parent_commit_qc"));
+        assert!(!context.contains_key("snapshot_bootstrap"));
         let mode = context
             .get("mode")
             .and_then(Value::as_object)
@@ -44681,7 +45414,7 @@ mod tests {
             .expect("adjacently tagged payload encoding");
         assert_eq!(
             encoding.get("encoding").and_then(Value::as_str),
-            Some("plain")
+            Some("reed_solomon16")
         );
         assert_eq!(encoding.get("details"), Some(&Value::Null));
 
@@ -44745,6 +45478,7 @@ mod tests {
                 .and_then(Value::as_array)
                 .is_some_and(|context_id| context_id.len() == 1)
         );
+        assert_eq!(commit_qc.get("proposal_round"), commit_qc.get("round"));
         let execution_commitment = commit_qc
             .get("execution_commitment")
             .and_then(Value::as_object)
@@ -47863,20 +48597,10 @@ mod tests {
         }
 
         for (schema_name, fields) in [
-            (
-                "GovernanceZkBallotEnvelopeRequestV1",
-                &["chain_id", "election_id"][..],
-            ),
-            (
-                "GovernanceZkBallotProofRequestV1",
-                &["chain_id", "election_id"][..],
-            ),
-            (
-                "GovernancePlainBallotRequestV1",
-                &["chain_id", "referendum_id"][..],
-            ),
+            ("GovernanceZkBallotEnvelopeRequestV1", &["chain_id"][..]),
+            ("GovernanceZkBallotProofRequestV1", &["chain_id"][..]),
+            ("GovernancePlainBallotRequestV1", &["chain_id"][..]),
             ("GovernanceParliamentBallotRequestV1", &["chain_id"][..]),
-            ("GovernanceFinalizeRequestV1", &["referendum_id"][..]),
         ] {
             for field in fields {
                 assert_eq!(
@@ -47893,6 +48617,39 @@ mod tests {
                     "{schema_name}.{field} must publish the runtime's exact token grammar"
                 );
             }
+        }
+
+        for (schema_name, field) in [
+            ("GovernanceZkBallotEnvelopeRequestV1", "election_id"),
+            ("GovernanceZkBallotProofRequestV1", "election_id"),
+            ("GovernancePlainBallotRequestV1", "referendum_id"),
+        ] {
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(field))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some(GOVERNANCE_SELECTOR_V1_PATTERN),
+                "{schema_name}.{field} must publish the canonical V1 selector grammar"
+            );
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(field))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maxLength"))
+                    .and_then(Value::as_u64),
+                Some(iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64),
+                "{schema_name}.{field} must publish the selector byte ceiling"
+            );
         }
 
         assert_eq!(
@@ -47921,6 +48678,31 @@ mod tests {
             Some(GOVERNANCE_LOWER_HEX32_PATTERN),
             "enactment must accept only the exact committed proposal-key grammar"
         );
+        for field in ["referendum_id", "proposal_id"] {
+            let finalization_id = schemas
+                .get("GovernanceFinalizeRequestV1")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .expect("finalization identifier schema");
+            assert_eq!(
+                finalization_id.get("pattern").and_then(Value::as_str),
+                Some(GOVERNANCE_LOWER_HEX32_PATTERN),
+                "finalization {field} must use the exact committed proposal-key grammar"
+            );
+            assert_eq!(
+                finalization_id.get("minLength").and_then(Value::as_u64),
+                Some(64),
+                "finalization {field} must publish the exact digest length"
+            );
+            assert_eq!(
+                finalization_id.get("maxLength").and_then(Value::as_u64),
+                Some(64),
+                "finalization {field} must publish the exact digest length"
+            );
+        }
 
         let provenance_properties = schemas
             .get("GovernanceManifestProvenanceV1")
@@ -48061,19 +48843,19 @@ mod tests {
                 "/v1/gov/locks/{rid}",
                 "get",
                 "rid",
-                GOVERNANCE_EXACT_TOKEN_PATTERN,
+                GOVERNANCE_SELECTOR_V1_PATTERN,
             ),
             (
                 "/v1/gov/referenda/{id}",
                 "get",
                 "id",
-                GOVERNANCE_EXACT_TOKEN_PATTERN,
+                GOVERNANCE_SELECTOR_V1_PATTERN,
             ),
             (
                 "/v1/gov/tally/{id}",
                 "get",
                 "id",
-                GOVERNANCE_EXACT_TOKEN_PATTERN,
+                GOVERNANCE_SELECTOR_V1_PATTERN,
             ),
         ] {
             let parameters = paths

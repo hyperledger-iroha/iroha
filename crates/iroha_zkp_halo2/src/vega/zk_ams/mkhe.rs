@@ -162,6 +162,15 @@ pub use direct_collective_eval_ceremony::{
     zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1, zk_ams_mkhe_direct_proof_audit_v1,
     zk_ams_mkhe_direct_resource_certificate_v1,
 };
+pub use direct_object_transport::{
+    ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
+    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
+    ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheDirectObjectPublicationReceiptV1,
+    ZkAmsMkheDirectObjectPublicationTransactionV1, ZkAmsMkheDirectObjectPublishedBindingV1,
+    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectReadReceiptV1,
+    ZkAmsMkheDirectObjectSealTokenV1, ZkAmsMkheDirectObjectStagingTokenV1,
+    validate_zk_ams_mkhe_direct_object_v1,
+};
 pub(super) use manifest::require_release_ready_v1;
 pub use manifest::{
     ZkAmsMkheReadinessV1, ZkAmsMkheReleaseManifestV1, zk_ams_mkhe_manifest_digest_v1,

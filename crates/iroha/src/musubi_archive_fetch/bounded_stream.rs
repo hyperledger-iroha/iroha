@@ -7,15 +7,15 @@ use std::{
 };
 
 /// Maximum owned byte payload carried by one worker channel frame.
-pub(crate) const STREAM_FRAME_BYTES: usize = 32 * 1024;
+pub(super) const STREAM_FRAME_BYTES: usize = 32 * 1024;
 /// Maximum number of byte frames retained ahead of the consumer.
-pub(crate) const STREAM_FRAME_COUNT: usize = 4;
+pub(super) const STREAM_FRAME_COUNT: usize = 4;
 /// Maximum concurrently owned frame bytes at the channel boundary.
 ///
 /// In addition to the bounded queue, the consumer may own its current frame
 /// while the producer owns the next frame whose send is blocked on a full
 /// queue.
-pub(crate) const STREAM_MAX_OWNED_FRAME_BYTES: usize =
+pub(super) const STREAM_MAX_OWNED_FRAME_BYTES: usize =
     STREAM_FRAME_BYTES * (STREAM_FRAME_COUNT + 2);
 
 enum StreamMessageV1 {
@@ -158,7 +158,7 @@ impl Read for ChannelCarReaderV1 {
 /// total ownership also accounts for the consumer's current frame and a
 /// producer frame blocked on a full queue. Terminal reads and reader drop join
 /// the worker, so callers do not retain detached worker allocations.
-pub(crate) fn bounded_car_reader<F>(
+pub(super) fn bounded_car_reader<F>(
     expected_car_size: u64,
     worker: F,
 ) -> io::Result<Box<dyn Read + Send + 'static>>

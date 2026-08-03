@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/** Typed builder for {@code FinalizeReferendum} instructions. */
+/** Typed builder for {@code FinalizeReferendum} instructions for one exact proposal digest. */
 public final class FinalizeReferendumInstruction implements InstructionTemplate {
 
   private static final String ACTION = "FinalizeReferendum";
@@ -21,6 +21,9 @@ public final class FinalizeReferendumInstruction implements InstructionTemplate 
       final Builder builder, final Map<String, String> argumentOrder) {
     this.referendumId = builder.referendumId;
     this.proposalIdHex = builder.proposalIdHex;
+    if (!Objects.equals(referendumId, proposalIdHex)) {
+      throw new IllegalArgumentException("referendumId must equal proposalIdHex");
+    }
     this.arguments = Map.copyOf(argumentOrder);
   }
 
@@ -86,16 +89,15 @@ public final class FinalizeReferendumInstruction implements InstructionTemplate 
     private Builder() {}
 
     public Builder setReferendumId(final String referendumId) {
-      if (referendumId == null || referendumId.isBlank()) {
-        throw new IllegalArgumentException("referendumId must not be blank");
-      }
-      this.referendumId = referendumId;
+      this.referendumId =
+          GovernanceInstructionUtils.requireExactLowercaseHex(referendumId, "referendumId", 32);
       return this;
     }
 
     public Builder setProposalIdHex(final String proposalIdHex) {
       this.proposalIdHex =
-          GovernanceInstructionUtils.requireHex(proposalIdHex, "proposalIdHex", 32);
+          GovernanceInstructionUtils.requireExactLowercaseHex(
+              proposalIdHex, "proposalIdHex", 32);
       return this;
     }
 

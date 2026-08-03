@@ -56,11 +56,12 @@ const MAX_CACHED_SNAPSHOTS_V1: usize = 16;
 const MAX_CACHED_PAGES_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 17;
 const MAX_CACHED_ROW_OCCURRENCES_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 64;
 const MAX_CACHE_FILE_BYTES_V1: u64 = 64 * 1024 * 1024;
+const MAX_CACHE_FILE_BYTES_USIZE_V1: usize = 64 * 1024 * 1024;
 const MAX_CACHE_DECODE_ELEMENTS_V1: usize = 1_000_000;
 const MAX_CACHE_DECODE_ALLOCATION_V1: usize = 128 * 1024 * 1024;
 const CACHE_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     MAX_CACHED_ROW_OCCURRENCES_V1,
-    MAX_CACHE_FILE_BYTES_V1 as usize,
+    MAX_CACHE_FILE_BYTES_USIZE_V1,
     MAX_CACHE_DECODE_ELEMENTS_V1,
     MAX_CACHE_DECODE_ALLOCATION_V1,
     64,
@@ -83,7 +84,7 @@ struct CachedResolverPageV1 {
 
 /// Complete coherent set of pages consumed by one successful graph collection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub(crate) struct ResolverIndexCacheSnapshotV1 {
+pub struct ResolverIndexCacheSnapshotV1 {
     chain_id: ChainId,
     genesis_hash: [u8; 32],
     account_chain_discriminant: u16,
@@ -93,6 +94,10 @@ pub(crate) struct ResolverIndexCacheSnapshotV1 {
 }
 
 impl ResolverIndexCacheSnapshotV1 {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "cache snapshot admission validates every deployment, page-order, cursor, and coherence invariant in one fail-closed pass"
+    )]
     fn validate(&self) -> Result<(), ResolverIndexCacheErrorV1> {
         if self.chain_id.as_str().is_empty()
             || self.genesis_hash.iter().all(|byte| *byte == 0)
@@ -410,14 +415,14 @@ impl ResolverIndexCacheCatalogV1 {
 
 /// Durable cache handle rooted in the platform-owned Musubi cache directory.
 #[derive(Debug)]
-pub(crate) struct ResolverIndexCacheV1 {
+pub struct ResolverIndexCacheV1 {
     write_root: AtomicWriteRoot,
     root_identity: DirectoryIdentityV1,
 }
 
 impl ResolverIndexCacheV1 {
     /// Open the resolver cache below an explicit trusted user cache root.
-    pub(crate) fn open(user_cache_root: &Path) -> Result<Self, ResolverIndexCacheErrorV1> {
+    pub(super) fn open(user_cache_root: &Path) -> Result<Self, ResolverIndexCacheErrorV1> {
         let archive_cache =
             MusubiCache::open(user_cache_root).map_err(ResolverIndexCacheErrorV1::Cache)?;
         let registry_root = archive_cache.root().join("registry-v1");
@@ -433,7 +438,11 @@ impl ResolverIndexCacheV1 {
     }
 
     /// Atomically merge one successfully collected coherent snapshot.
-    pub(crate) fn publish(
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "publishing takes ownership of one completed snapshot while cloning it only across bounded optimistic commit retries"
+    )]
+    pub(super) fn publish(
         &self,
         snapshot: ResolverIndexCacheSnapshotV1,
     ) -> Result<(), ResolverIndexCacheErrorV1> {
@@ -458,7 +467,7 @@ impl ResolverIndexCacheV1 {
     }
 
     /// Load newest-first coherent sources suitable for one offline resolution.
-    pub(crate) fn sources(
+    pub(super) fn sources(
         &self,
         previous: Option<&LockfileV1>,
     ) -> Result<Vec<CachedResolverSourceV1>, ResolverIndexCacheErrorV1> {
@@ -471,11 +480,7 @@ impl ResolverIndexCacheV1 {
             .into_iter()
             .map(|entry| entry.value)
             .filter(|snapshot| {
-                let compatible = if let Some(lock) = previous {
-                    snapshot.is_not_older_than(lock)
-                } else {
-                    true
-                };
+                let compatible = previous.is_none_or(|lock| snapshot.is_not_older_than(lock));
                 if compatible {
                     deployments.insert((
                         snapshot.chain_id.as_str().to_owned(),
@@ -563,7 +568,7 @@ impl ResolverIndexCacheV1 {
 }
 
 /// Online source wrapper that records only successfully returned validated pages.
-pub(crate) struct RecordingResolverSourceV1<'a> {
+pub struct RecordingResolverSourceV1<'a> {
     inner: &'a RegistryReadClientV1,
     ordered: RefCell<Vec<CachedOrderedPageV1>>,
     resolver: RefCell<Vec<CachedResolverPageV1>>,
@@ -571,7 +576,7 @@ pub(crate) struct RecordingResolverSourceV1<'a> {
 
 impl<'a> RecordingResolverSourceV1<'a> {
     /// Wrap one signer-free online registry reader.
-    pub(crate) fn new(inner: &'a RegistryReadClientV1) -> Self {
+    pub(super) fn new(inner: &'a RegistryReadClientV1) -> Self {
         Self {
             inner,
             ordered: RefCell::new(Vec::new()),
@@ -580,7 +585,7 @@ impl<'a> RecordingResolverSourceV1<'a> {
     }
 
     /// Finish a coherent capture after graph collection succeeds.
-    pub(crate) fn finish(self) -> Result<ResolverIndexCacheSnapshotV1, ResolverIndexCacheErrorV1> {
+    pub(super) fn finish(self) -> Result<ResolverIndexCacheSnapshotV1, ResolverIndexCacheErrorV1> {
         let mut ordered_pages = self.ordered.into_inner();
         let mut resolver_pages = self.resolver.into_inner();
         ordered_pages.sort_by_cached_key(|page| page.request.encode());
@@ -651,7 +656,7 @@ impl ResolverRegistrySourceV1 for RecordingResolverSourceV1<'_> {
 
 /// One validated immutable snapshot replayed as the ordinary graph source.
 #[derive(Clone, Debug)]
-pub(crate) struct CachedResolverSourceV1 {
+pub struct CachedResolverSourceV1 {
     snapshot: ResolverIndexCacheSnapshotV1,
 }
 
@@ -661,7 +666,7 @@ impl CachedResolverSourceV1 {
     }
 
     /// Bind local package text structurally using the cached immutable namespace binding.
-    pub(crate) fn bind_selector_namespace(
+    pub(super) fn bind_selector_namespace(
         &self,
         selector: &MusubiPackageSelectorV1,
     ) -> Result<MusubiPackageIdV1, ResolverIndexCacheSourceErrorV1> {
@@ -687,12 +692,12 @@ impl CachedResolverSourceV1 {
 
     /// Return the exact finalized anchor represented by this source.
     #[cfg(test)]
-    pub(crate) const fn snapshot(&self) -> MusubiRegistrySnapshotV1 {
+    pub(super) const fn snapshot(&self) -> MusubiRegistrySnapshotV1 {
         self.snapshot.snapshot
     }
 
     /// Return the non-secret account-network discriminant captured with this snapshot.
-    pub(crate) const fn account_chain_discriminant(&self) -> u16 {
+    pub(super) const fn account_chain_discriminant(&self) -> u16 {
         self.snapshot.account_chain_discriminant
     }
 }
@@ -731,7 +736,7 @@ impl ResolverRegistrySourceV1 for CachedResolverSourceV1 {
 
 /// Stable cache-source lookup failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ResolverIndexCacheSourceErrorV1 {
+pub enum ResolverIndexCacheSourceErrorV1 {
     /// No complete exact request coverage exists in this snapshot.
     Miss,
     /// Multiple disagreeing cached responses matched one exact request.
@@ -754,7 +759,7 @@ impl Error for ResolverIndexCacheSourceErrorV1 {}
 
 /// Stable resolver-index cache failure.
 #[derive(Debug)]
-pub(crate) enum ResolverIndexCacheErrorV1 {
+pub enum ResolverIndexCacheErrorV1 {
     /// The shared archive/cache root failed its safety checks.
     Cache(CacheError),
     /// Root-confined atomic replacement failed.
@@ -1304,7 +1309,7 @@ exports = []
         fs::write(&path, bytes).expect("tamper cache");
         assert!(matches!(
             cache.sources(None),
-            Err(ResolverIndexCacheErrorV1::Codec(_)) | Err(ResolverIndexCacheErrorV1::Invalid(_))
+            Err(ResolverIndexCacheErrorV1::Codec(_) | ResolverIndexCacheErrorV1::Invalid(_))
         ));
     }
 

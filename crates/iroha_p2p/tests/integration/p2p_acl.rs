@@ -6,7 +6,6 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config_base::WithOrigin;
-use iroha_crypto::KeyPair;
 use iroha_data_model::{ChainId, prelude::Peer};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{NetworkHandle, network::message::*};
@@ -90,8 +89,8 @@ async fn deny_key_blocks_connection() {
     let idle = Duration::from_millis(1500);
     let chain_id = ChainId::from("test_chain");
 
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = socket_addr!(127.0.0.1:12_030);
     let addr2 = socket_addr!(127.0.0.1:12_031);
 
@@ -100,7 +99,7 @@ async fn deny_key_blocks_connection() {
     cfg1.idle_timeout = idle;
     cfg1.deny_keys = vec![kp2.public_key().clone()];
     let started1 = NetworkHandle::<TestMessage>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg1,
         chain_id.clone(),
         None,
@@ -117,7 +116,7 @@ async fn deny_key_blocks_connection() {
     let mut cfg2 = base_cfg(addr2.clone());
     cfg2.idle_timeout = idle;
     let started2 = NetworkHandle::<TestMessage>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg2,
         chain_id.clone(),
         None,
@@ -148,8 +147,8 @@ async fn allowlist_only_permits_only_listed_key() {
     let idle = Duration::from_millis(1500);
     let chain_id = ChainId::from("test_chain");
 
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = socket_addr!(127.0.0.1:12_032);
     let addr2 = socket_addr!(127.0.0.1:12_033);
 
@@ -159,7 +158,7 @@ async fn allowlist_only_permits_only_listed_key() {
     cfg1.allowlist_only = true;
     cfg1.allow_keys = vec![kp2.public_key().clone()];
     let started1 = NetworkHandle::<TestMessage>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg1,
         chain_id.clone(),
         None,
@@ -176,7 +175,7 @@ async fn allowlist_only_permits_only_listed_key() {
     let mut cfg2 = base_cfg(addr2.clone());
     cfg2.idle_timeout = idle;
     let started2 = NetworkHandle::<TestMessage>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg2,
         chain_id.clone(),
         None,
@@ -219,8 +218,8 @@ async fn cidr_deny_blocks_inbound() {
     let idle = Duration::from_millis(1500);
     let chain_id = ChainId::from("test_chain");
 
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let addr1 = socket_addr!(127.0.0.1:12_034);
     let addr2 = socket_addr!(127.0.0.1:12_035);
 
@@ -229,7 +228,7 @@ async fn cidr_deny_blocks_inbound() {
     cfg1.idle_timeout = idle;
     cfg1.deny_cidrs = vec!["127.0.0.0/8".to_string()];
     let started1 = NetworkHandle::<TestMessage>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg1,
         chain_id.clone(),
         None,
@@ -246,7 +245,7 @@ async fn cidr_deny_blocks_inbound() {
     let mut cfg2 = base_cfg(addr2.clone());
     cfg2.idle_timeout = idle;
     let started2 = NetworkHandle::<TestMessage>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg2,
         chain_id.clone(),
         None,

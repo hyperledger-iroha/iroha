@@ -5,9 +5,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     asset::AssetId,
+    block::BlockHeader,
     domain::DomainId,
     events::data::{DataEvent, musubi::prelude::*},
     governance::types::ProposalKind,
@@ -638,7 +639,11 @@ impl Execute for PublishMusubiReleaseV1 {
                     rejection_reason,
                 )?;
                 validate_publication_snapshot(&self.publication, state_transaction)?;
-                validate_resolution_proof(&self.publication, state_transaction.world())?;
+                validate_resolution_proof(
+                    &self.publication,
+                    state_transaction.world(),
+                    state_transaction.block_hashes(),
+                )?;
                 let archive = state_transaction
                     .world
                     .musubi_archives
@@ -2286,7 +2291,13 @@ impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
                     .is_none_or(|requirement| requirement.matches(&release.version))
             })
             .map(|(release, row)| (release.version.to_string(), row.clone()));
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
+        let (items, next_cursor) = paginate_with_json_items_budget(
+            rows,
+            &self.request.page,
+            query_hash,
+            snapshot,
+            MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1,
+        )?;
         let page = MusubiResolverIndexPageV1 {
             query: self.request.clone(),
             chain_id,
@@ -2864,21 +2875,57 @@ fn query_hash(domain: &[u8], encoded: &[u8]) -> MusubiQueryHashV1 {
     MusubiQueryHashV1::new(*Hash::new(&payload).as_ref())
 }
 
-fn paginate<T>(
+fn paginate<T: norito::json::JsonSerialize>(
     rows: impl IntoIterator<Item = (String, T)>,
     page: &MusubiPageRequestV1,
     query_hash: MusubiQueryHashV1,
     snapshot: MusubiRegistrySnapshotV1,
 ) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
-    paginate_for_caller(rows, page, query_hash, snapshot, None)
+    paginate_for_caller_with_json_items_budget(rows, page, query_hash, snapshot, None, None)
 }
 
-fn paginate_for_caller<T>(
+fn paginate_with_json_items_budget<T: norito::json::JsonSerialize>(
+    rows: impl IntoIterator<Item = (String, T)>,
+    page: &MusubiPageRequestV1,
+    query_hash: MusubiQueryHashV1,
+    snapshot: MusubiRegistrySnapshotV1,
+    json_items_budget: usize,
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
+    paginate_for_caller_with_json_items_budget(
+        rows,
+        page,
+        query_hash,
+        snapshot,
+        None,
+        Some(json_items_budget),
+    )
+}
+
+#[cfg(test)]
+fn paginate_for_caller<T: norito::json::JsonSerialize>(
     rows: impl IntoIterator<Item = (String, T)>,
     page: &MusubiPageRequestV1,
     query_hash: MusubiQueryHashV1,
     snapshot: MusubiRegistrySnapshotV1,
     expected_caller: Option<&AccountId>,
+) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
+    paginate_for_caller_with_json_items_budget(
+        rows,
+        page,
+        query_hash,
+        snapshot,
+        expected_caller,
+        None,
+    )
+}
+
+fn paginate_for_caller_with_json_items_budget<T: norito::json::JsonSerialize>(
+    rows: impl IntoIterator<Item = (String, T)>,
+    page: &MusubiPageRequestV1,
+    query_hash: MusubiQueryHashV1,
+    snapshot: MusubiRegistrySnapshotV1,
+    expected_caller: Option<&AccountId>,
+    json_items_budget: Option<usize>,
 ) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
     page.validate().map_err(query_invalid)?;
     let cursor_last_key = if let Some(cursor) = &page.cursor {
@@ -2911,12 +2958,41 @@ fn paginate_for_caller<T>(
     let limit = page.effective_limit();
     let mut cursor_seen = cursor_last_key.is_none();
     let mut page_rows = Vec::with_capacity(limit.saturating_add(1));
+    let mut json_items_bytes = 0_usize;
+    let mut budget_has_more = false;
     for (key, item) in rows {
         if !cursor_seen {
             if Some(key.as_str()) == cursor_last_key {
                 cursor_seen = true;
             }
             continue;
+        }
+        if let Some(json_items_budget) = json_items_budget {
+            let encoded = norito::json::to_json(&item).map_err(|_| {
+                query_invalid(iroha_data_model::ParseError::new(
+                    "Musubi resolver row cannot be encoded as canonical JSON",
+                ))
+            })?;
+            let separator_bytes = usize::from(!page_rows.is_empty());
+            let candidate_bytes = json_items_bytes
+                .checked_add(separator_bytes)
+                .and_then(|bytes| bytes.checked_add(encoded.len()))
+                .ok_or_else(|| {
+                    query_invalid(iroha_data_model::ParseError::new(
+                        "Musubi resolver JSON item budget overflow",
+                    ))
+                })?;
+            if candidate_bytes > json_items_budget {
+                if page_rows.is_empty() {
+                    return Err(query_invalid(iroha_data_model::ParseError::new(
+                        "one Musubi resolver row exceeds the JSON item budget",
+                    ))
+                    .into());
+                }
+                budget_has_more = true;
+                break;
+            }
+            json_items_bytes = candidate_bytes;
         }
         page_rows.push((key, item));
         if page_rows.len() > limit {
@@ -2928,8 +3004,8 @@ fn paginate_for_caller<T>(
             MusubiCursorFailureV1::LastKeyStale,
         ));
     }
-    let has_more = page_rows.len() > limit;
-    if has_more {
+    let has_more = budget_has_more || page_rows.len() > limit;
+    if page_rows.len() > limit {
         page_rows.pop();
     }
     let last_key = page_rows.last().map(|(key, _)| key.clone());
@@ -4177,24 +4253,95 @@ fn validate_publication_snapshot(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     let snapshot = &publication.resolution.snapshot;
-    let current_height = u64::try_from(state_transaction.block_hashes().len())
-        .map_err(|_| invariant("Musubi finalized height overflows u64"))?;
-    let snapshot_index = snapshot
-        .finalized_height
-        .checked_sub(1)
-        .and_then(|index| usize::try_from(index).ok());
-    let finalized_hash = snapshot_index.and_then(|index| {
-        state_transaction
-            .block_hashes()
-            .get(index)
-            .map(|hash| *hash.as_ref())
-    });
     let current_revision = state_transaction
         .world
         .musubi_resolver_index_revision
         .get()
         .get();
-    validate_publication_snapshot_anchor(snapshot, current_height, finalized_hash, current_revision)
+    validate_publication_snapshot_history(
+        snapshot,
+        state_transaction.world(),
+        state_transaction.block_hashes(),
+        current_revision,
+    )
+}
+
+fn canonical_finalized_hash(
+    block_hashes: &[HashOf<BlockHeader>],
+    finalized_height: u64,
+) -> Option<[u8; 32]> {
+    finalized_height
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| block_hashes.get(index))
+        .map(|hash| *hash.as_ref())
+}
+
+fn validate_publication_snapshot_history(
+    snapshot: &MusubiRegistrySnapshotV1,
+    world: &impl WorldReadOnly,
+    block_hashes: &[HashOf<BlockHeader>],
+    current_revision: u64,
+) -> Result<(), Error> {
+    let current_height = u64::try_from(block_hashes.len())
+        .map_err(|_| invariant("Musubi finalized height overflows u64"))?;
+    validate_publication_snapshot_anchor(
+        snapshot,
+        current_height,
+        canonical_finalized_hash(block_hashes, snapshot.finalized_height),
+        current_revision,
+    )?;
+
+    let revision = MusubiResolverIndexRevisionV1::new(snapshot.index_revision)
+        .map_err(|error| invariant(error.reason()))?;
+    let checkpoints = world.musubi_resolver_index_checkpoints();
+    let activation = checkpoints.get(&revision).ok_or_else(|| {
+        invariant(
+            "Musubi publication proof snapshot references an unrecorded resolver-index revision",
+        )
+    })?;
+    if activation.index_revision != revision.get() {
+        return Err(invariant(
+            "Musubi resolver checkpoint key does not match its embedded revision",
+        ));
+    }
+    validate_publication_snapshot_anchor(
+        activation,
+        current_height,
+        canonical_finalized_hash(block_hashes, activation.finalized_height),
+        current_revision,
+    )?;
+    if activation.finalized_height > snapshot.finalized_height {
+        return Err(invariant(
+            "Musubi publication proof snapshot predates its resolver revision activation",
+        ));
+    }
+
+    if let Some((successor_revision, successor)) = checkpoints
+        .range((
+            std::ops::Bound::Excluded(revision),
+            std::ops::Bound::Unbounded,
+        ))
+        .next()
+    {
+        if successor.index_revision != successor_revision.get() {
+            return Err(invariant(
+                "Musubi resolver checkpoint key does not match its embedded revision",
+            ));
+        }
+        validate_publication_snapshot_anchor(
+            successor,
+            current_height,
+            canonical_finalized_hash(block_hashes, successor.finalized_height),
+            current_revision,
+        )?;
+        if successor.finalized_height <= snapshot.finalized_height {
+            return Err(invariant(
+                "Musubi publication proof snapshot is outside its resolver revision activation interval",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_publication_snapshot_anchor(
@@ -4222,6 +4369,7 @@ fn validate_publication_snapshot_anchor(
 fn validate_resolution_proof(
     publication: &MusubiPublicationV1,
     world: &impl WorldReadOnly,
+    block_hashes: &[HashOf<BlockHeader>],
 ) -> Result<(), Error> {
     let nodes = publication
         .resolution
@@ -4240,6 +4388,55 @@ fn validate_resolution_proof(
                     node.release
                 ))
             })?;
+        row.validate().map_err(|error| {
+            invariant(format!(
+                "Musubi proof release '{}' has an invalid resolver row: {}",
+                node.release,
+                error.reason()
+            ))
+        })?;
+        let snapshot = &publication.resolution.snapshot;
+        let storage = &row.selection.storage;
+        if storage.index_revision > snapshot.index_revision {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' storage revision is newer than the claimed resolver snapshot",
+                node.release
+            )));
+        }
+        if row.index_revision > snapshot.index_revision {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' is newer than the claimed resolver snapshot",
+                node.release
+            )));
+        }
+        if storage.finalized_height > snapshot.finalized_height {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' storage state is newer than the claimed finalized snapshot",
+                node.release
+            )));
+        }
+        if storage.finalized_height == snapshot.finalized_height
+            && storage.finalized_block_hash != snapshot.finalized_block_hash
+        {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' storage state does not match the claimed finalized block",
+                node.release
+            )));
+        }
+        if canonical_finalized_hash(block_hashes, storage.finalized_height)
+            != Some(storage.finalized_block_hash)
+        {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' storage state is not anchored to its canonical finalized block",
+                node.release
+            )));
+        }
+        if row.selection.yank.changed_at_height > snapshot.finalized_height {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' yank state is newer than the claimed finalized snapshot",
+                node.release
+            )));
+        }
         if !row.selection.fresh_selectable()
             || row.release_digest != node.release_digest
             || row.archive_id != node.archive_id
@@ -5280,6 +5477,264 @@ mod tests {
         assert!(validate_publication_snapshot_anchor(&snapshot, 2, Some([0x33; 32]), 4).is_err());
         assert!(validate_publication_snapshot_anchor(&snapshot, 3, Some([0x44; 32]), 4).is_err());
         assert!(validate_publication_snapshot_anchor(&snapshot, 3, Some([0x33; 32]), 3).is_err());
+    }
+
+    fn canonical_block_hashes(count: u8) -> Vec<HashOf<BlockHeader>> {
+        (1..=count)
+            .map(|byte| HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; 32])))
+            .collect()
+    }
+
+    #[test]
+    fn publication_snapshot_requires_its_exact_revision_activation_interval() {
+        let block_hashes = canonical_block_hashes(9);
+        let mut world = World::new();
+        world.musubi_resolver_index_checkpoints.insert(
+            MusubiResolverIndexRevisionV1::new(7).expect("revision seven"),
+            MusubiRegistrySnapshotV1 {
+                finalized_height: 2,
+                finalized_block_hash: [2; 32],
+                index_revision: 7,
+            },
+        );
+        world.musubi_resolver_index_checkpoints.insert(
+            MusubiResolverIndexRevisionV1::new(9).expect("revision nine"),
+            MusubiRegistrySnapshotV1 {
+                finalized_height: 6,
+                finalized_block_hash: [6; 32],
+                index_revision: 9,
+            },
+        );
+        let view = world.view();
+
+        validate_publication_snapshot_history(
+            &MusubiRegistrySnapshotV1 {
+                finalized_height: 5,
+                finalized_block_hash: [5; 32],
+                index_revision: 7,
+            },
+            &view,
+            &block_hashes,
+            9,
+        )
+        .expect("an unchanged block inside revision seven's activation interval is valid");
+
+        let predates_activation = MusubiRegistrySnapshotV1 {
+            finalized_height: 1,
+            finalized_block_hash: [1; 32],
+            index_revision: 7,
+        };
+        assert!(
+            validate_publication_snapshot_history(&predates_activation, &view, &block_hashes, 9)
+                .is_err()
+        );
+
+        let successor_already_active = MusubiRegistrySnapshotV1 {
+            finalized_height: 6,
+            finalized_block_hash: [6; 32],
+            index_revision: 7,
+        };
+        assert!(
+            validate_publication_snapshot_history(
+                &successor_already_active,
+                &view,
+                &block_hashes,
+                9
+            )
+            .is_err()
+        );
+
+        let skipped_same_block_revision = MusubiRegistrySnapshotV1 {
+            finalized_height: 5,
+            finalized_block_hash: [5; 32],
+            index_revision: 8,
+        };
+        let error = validate_publication_snapshot_history(
+            &skipped_same_block_revision,
+            &view,
+            &block_hashes,
+            9,
+        )
+        .expect_err("an intra-block revision without a checkpoint cannot be claimed");
+        assert!(
+            error
+                .to_string()
+                .contains("unrecorded resolver-index revision")
+        );
+    }
+
+    #[test]
+    fn publication_resolution_binds_rows_and_selection_state_to_snapshot() {
+        let root_release = MusubiReleaseIdV1::new(
+            package("snapshot-root"),
+            "1.0.0".parse().expect("root version"),
+        );
+        let dependency_release = MusubiReleaseIdV1::new(
+            package("snapshot-dependency"),
+            "1.2.0".parse().expect("dependency version"),
+        );
+        let requirement: MusubiVersionReqV1 = "^1.0.0".parse().expect("requirement");
+        let edge = MusubiExactDependencyEdgeV1 {
+            alias: "dependency".parse().expect("dependency alias"),
+            kind: MusubiDependencyKindV1::Normal,
+            package: dependency_release.package.clone(),
+            requirement: requirement.clone(),
+            selected: dependency_release.clone(),
+        };
+        let archive_id = ArchiveId::new([0x61; 32]);
+        let node = MusubiVerificationNodeV1 {
+            release: dependency_release.clone(),
+            release_digest: MusubiReleaseDigestV1::new([0x62; 32]),
+            archive_id,
+            source_digest: MusubiContentDigestV1::new([0x63; 32]),
+            interface_digest: MusubiContentDigestV1::new([0x64; 32]),
+            abi: MusubiAbiBindingV1::new([0x65; 32]).expect("dependency ABI"),
+            dependencies: Vec::new(),
+        };
+        let lock = MusubiVerificationLockV1 {
+            schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            root: root_release.clone(),
+            root_dependencies: vec![edge],
+            nodes: vec![node.clone()],
+        };
+        let publication = MusubiPublicationV1 {
+            manifest: MusubiReleaseManifestV1 {
+                release: root_release,
+                edition: MusubiKotodamaEditionV1::V1,
+                abi: MusubiAbiBindingV1::new([0x66; 32]).expect("root ABI"),
+                dependencies: vec![MusubiDependencyReqV1 {
+                    alias: "dependency".parse().expect("dependency alias"),
+                    package: dependency_release.package.clone(),
+                    requirement,
+                }],
+                exports: Vec::new(),
+                interface_digest: MusubiContentDigestV1::new([0x67; 32]),
+                metadata: MusubiReleaseMetadataV1::default(),
+                archive_id: ArchiveId::new([0x68; 32]),
+                verification_lock_digest: lock.digest(),
+            },
+            resolution: MusubiResolutionProofV1 {
+                snapshot: snapshot(7),
+                lock,
+            },
+        };
+        publication.validate().expect("valid exact proof fixture");
+
+        let row = MusubiResolverReleaseRowV1 {
+            release: dependency_release.clone(),
+            release_digest: node.release_digest,
+            archive_id,
+            source_digest: node.source_digest,
+            interface_digest: node.interface_digest,
+            abi: node.abi,
+            dependencies: Vec::new(),
+            selection: MusubiReleaseSelectionStateV1 {
+                yank: MusubiReleaseYankV1 {
+                    release: dependency_release.clone(),
+                    yanked: false,
+                    reason: "snapshot fixture".parse().expect("yank reason"),
+                    changed_by: account(0x69),
+                    changed_at_height: 7,
+                    revision: 1,
+                },
+                storage: MusubiArchiveAvailabilityV1 {
+                    archive_id,
+                    availability: MusubiStorageAvailabilityV1::Selectable,
+                    healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    active_locations: 1,
+                    finalized_height: 7,
+                    finalized_block_hash: [7; 32],
+                    index_revision: 7,
+                },
+                governance: MusubiArtifactGovernanceStateV1::Available,
+            },
+            index_revision: 7,
+        };
+        row.validate().expect("matching resolver row");
+        let block_hashes = canonical_block_hashes(7);
+        let validate_row = |candidate: MusubiResolverReleaseRowV1| {
+            let mut world = World::new();
+            world
+                .musubi_resolver_index
+                .insert(dependency_release.clone(), candidate);
+            let world_view = world.view();
+            validate_resolution_proof(&publication, &world_view, &block_hashes)
+        };
+        validate_row(row.clone()).expect("a row at the claimed snapshot is admissible");
+
+        let mut storage_newer_than_row = row.clone();
+        storage_newer_than_row.selection.storage.index_revision = 8;
+        assert!(storage_newer_than_row.validate().is_err());
+        let error = validate_row(storage_newer_than_row)
+            .expect_err("availability cannot be newer than its resolver row");
+        assert!(error.to_string().contains("invalid resolver row"));
+
+        let mut newer_row = row.clone();
+        newer_row.index_revision = 8;
+        newer_row
+            .validate()
+            .expect("newer resolver row remains canonical");
+        let error =
+            validate_row(newer_row).expect_err("a newer row did not exist at the claimed snapshot");
+        assert!(error.to_string().contains("newer than the claimed"));
+
+        let mut newer_storage_revision = row.clone();
+        newer_storage_revision.index_revision = 8;
+        newer_storage_revision.selection.storage.index_revision = 8;
+        newer_storage_revision
+            .validate()
+            .expect("newer availability projection remains canonical");
+        let error = validate_row(newer_storage_revision)
+            .expect_err("a newer availability projection did not exist at the snapshot");
+        assert!(error.to_string().contains("storage revision"));
+
+        let mut newer_storage_height = row.clone();
+        newer_storage_height.selection.storage.finalized_height = 8;
+        newer_storage_height.selection.storage.finalized_block_hash = [8; 32];
+        newer_storage_height
+            .validate()
+            .expect("future-height availability projection remains canonical");
+        let error = validate_row(newer_storage_height)
+            .expect_err("future availability state did not exist at the snapshot");
+        assert!(error.to_string().contains("storage state is newer"));
+
+        let mut mismatched_storage_hash = row.clone();
+        mismatched_storage_hash
+            .selection
+            .storage
+            .finalized_block_hash = [0x6A; 32];
+        mismatched_storage_hash
+            .validate()
+            .expect("nonzero availability block hashes are structurally valid");
+        let error = validate_row(mismatched_storage_hash)
+            .expect_err("equal-height availability must bind the snapshot block");
+        assert!(error.to_string().contains("claimed finalized block"));
+
+        let mut noncanonical_older_storage = row.clone();
+        noncanonical_older_storage
+            .selection
+            .storage
+            .finalized_height = 6;
+        noncanonical_older_storage
+            .selection
+            .storage
+            .finalized_block_hash = [0x6A; 32];
+        noncanonical_older_storage
+            .validate()
+            .expect("an older availability anchor is structurally valid");
+        let error = validate_row(noncanonical_older_storage)
+            .expect_err("older availability must still bind its own canonical block");
+        assert!(error.to_string().contains("not anchored to its canonical"));
+
+        let mut newer_yank = row;
+        newer_yank.selection.yank.changed_at_height = 8;
+        newer_yank
+            .validate()
+            .expect("future-height yank projection remains canonical");
+        let error =
+            validate_row(newer_yank).expect_err("future yank state did not exist at the snapshot");
+        assert!(error.to_string().contains("yank state is newer"));
     }
 
     #[test]
@@ -7391,6 +7846,177 @@ mod tests {
         let (second, cursor) = paginate(rows, &request, hash, snapshot(1)).expect("second page");
         assert_eq!(second, vec![3]);
         assert!(cursor.is_none());
+    }
+
+    #[test]
+    fn pagination_accepts_the_longest_canonical_semver_cursor_tail() {
+        let prerelease = vec![
+            MusubiPrereleaseIdentifierV1::AlphaNumeric(
+                "a".repeat(MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1),
+            );
+            MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1
+        ];
+        let maximum_prerelease = MusubiVersionV1::new(u64::MAX, u64::MAX, u64::MAX, prerelease)
+            .expect("maximum bounded prerelease version");
+        let stable = MusubiVersionV1::new(u64::MAX, u64::MAX, u64::MAX, Vec::new())
+            .expect("stable maximum version");
+        assert!(maximum_prerelease < stable);
+        let maximum_text = maximum_prerelease.to_string();
+        assert_eq!(maximum_text.len(), MUSUBI_MAX_VERSION_CURSOR_KEY_BYTES_V1);
+
+        let rows = vec![
+            (maximum_text.clone(), maximum_prerelease.clone()),
+            (stable.to_string(), stable.clone()),
+        ];
+        let query_hash = query_hash(b"versions", b"maximum-semver-cursor");
+        let request = MusubiPageRequestV1 {
+            limit: 1,
+            cursor: None,
+        };
+        let page_snapshot = snapshot(1);
+        let (first, cursor) = paginate(rows.clone(), &request, query_hash, page_snapshot)
+            .expect("maximum semantic version fits a finalized cursor");
+        assert_eq!(first, vec![maximum_prerelease.clone()]);
+        let cursor = cursor.expect("stable maximum remains after the prerelease");
+        assert_eq!(cursor.last_key, maximum_text);
+        cursor
+            .validate()
+            .expect("the longest canonical semantic version is a valid cursor key");
+
+        let start = package_release_page_start(
+            &package("maximum-version-cursor"),
+            &MusubiPageRequestV1 {
+                limit: 1,
+                cursor: Some(cursor.clone()),
+            },
+        )
+        .expect("version page start parses the longest canonical semantic version");
+        assert_eq!(start.version, maximum_prerelease);
+
+        let (continued, cursor) = paginate(
+            rows,
+            &MusubiPageRequestV1 {
+                limit: 1,
+                cursor: Some(cursor),
+            },
+            query_hash,
+            page_snapshot,
+        )
+        .expect("pagination resumes strictly after the longest semantic-version key");
+        assert_eq!(continued, vec![stable]);
+        assert!(cursor.is_none());
+    }
+
+    #[test]
+    fn resolver_pagination_truncates_at_json_budget_and_continues_after_its_tail() {
+        let resolver_row = |version: &str, seed: u8| {
+            let archive = retention_archive(seed);
+            let release = retention_release(
+                archive.archive_id,
+                version,
+                false,
+                MusubiArtifactGovernanceStateV1::Available,
+            );
+            MusubiResolverReleaseRowV1 {
+                release: release.manifest.release.clone(),
+                release_digest: release.release_digest,
+                archive_id: archive.archive_id,
+                source_digest: archive.commitment.source_tree_digest,
+                interface_digest: release.manifest.interface_digest,
+                abi: release.manifest.abi,
+                dependencies: release.manifest.dependencies,
+                selection: MusubiReleaseSelectionStateV1 {
+                    yank: release.yank,
+                    storage: MusubiArchiveAvailabilityV1 {
+                        archive_id: archive.archive_id,
+                        availability: MusubiStorageAvailabilityV1::Selectable,
+                        healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                        active_locations: 1,
+                        finalized_height: 7,
+                        finalized_block_hash: [7; 32],
+                        index_revision: 1,
+                    },
+                    governance: release.artifact_governance,
+                },
+                index_revision: 1,
+            }
+        };
+        let rows = vec![
+            ("1.0.0".to_owned(), resolver_row("1.0.0", 0x81)),
+            ("2.0.0".to_owned(), resolver_row("2.0.0", 0x82)),
+            ("3.0.0".to_owned(), resolver_row("3.0.0", 0x83)),
+        ];
+        rows.iter()
+            .try_for_each(|(_, row)| row.validate())
+            .expect("resolver fixtures are canonical");
+        let two_item_budget = norito::json::to_json(&rows[0].1)
+            .expect("first resolver row encodes")
+            .len()
+            .checked_add(1)
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    norito::json::to_json(&rows[1].1)
+                        .expect("second resolver row encodes")
+                        .len(),
+                )
+            })
+            .expect("two bounded resolver rows fit usize");
+        let query_hash = query_hash(b"resolver-index", b"budget-test");
+        let request = MusubiPageRequestV1 {
+            limit: 3,
+            cursor: None,
+        };
+        let page_snapshot = snapshot(1);
+        let (first, next_cursor) = paginate_with_json_items_budget(
+            rows.clone(),
+            &request,
+            query_hash,
+            page_snapshot,
+            two_item_budget,
+        )
+        .expect("the first resolver page fits exactly two rows");
+        assert_eq!(first.len(), 2);
+        let next_cursor = next_cursor.expect("the byte-truncated page has a continuation");
+        assert_eq!(next_cursor.last_key, "2.0.0");
+
+        let query = MusubiResolverIndexQueryV1 {
+            package: package("retention"),
+            requirement: None,
+            page: request,
+        };
+        let response = MusubiResolverIndexPageV1 {
+            query: query.clone(),
+            chain_id: iroha_data_model::ChainId::from("resolver-budget-test"),
+            genesis_hash: [0x91; 32],
+            items: first,
+            next_cursor: Some(next_cursor.clone()),
+            snapshot: page_snapshot,
+        };
+        response
+            .validate_for(&query)
+            .expect("a nonempty short resolver page may carry its exact tail cursor");
+        assert!(
+            norito::json::to_json(&response)
+                .expect("resolver response encodes")
+                .len()
+                <= MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1
+        );
+
+        let continued_request = MusubiPageRequestV1 {
+            limit: 3,
+            cursor: Some(next_cursor),
+        };
+        let (second, next_cursor) = paginate_with_json_items_budget(
+            rows,
+            &continued_request,
+            query_hash,
+            page_snapshot,
+            two_item_budget,
+        )
+        .expect("the continuation advances after the exact byte-truncated tail");
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].release.version.to_string(), "3.0.0");
+        assert!(next_cursor.is_none());
     }
 
     #[test]

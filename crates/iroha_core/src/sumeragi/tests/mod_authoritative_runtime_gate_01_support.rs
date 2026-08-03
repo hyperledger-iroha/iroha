@@ -152,6 +152,35 @@
         ))
     }
 
+    fn minimal_rs16_layout() -> wire::DataAvailabilityLayout {
+        wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 2,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 1,
+            max_chunk_count: 2,
+        }
+    }
+
+    fn single_stripe_rs16_layout(body_len: usize) -> wire::DataAvailabilityLayout {
+        let max_payload_size_bytes =
+            u64::try_from(body_len.max(1)).expect("test body bound fits u64");
+        let chunk_size_bytes =
+            u32::try_from(body_len.max(1)).expect("test body bound fits u32");
+        let chunk_size_bytes = chunk_size_bytes
+            .checked_add(chunk_size_bytes % 2)
+            .expect("test body bound has an even u32 successor");
+        wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes,
+            max_chunk_count: 2,
+        }
+    }
+
     fn v2_certified_body_response(
         request_ordinal: u64,
         responder: wire::ValidatorIndex,
@@ -175,16 +204,8 @@
             round,
             subject,
             payload_size_bytes: u64::try_from(body_len).expect("test body length fits u64"),
-            layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
-                chunk_size_bytes: u32::try_from(body_len.max(1)).unwrap_or(u32::MAX),
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: u64::try_from(body_len.max(1))
-                    .expect("test body bound fits u64"),
-                max_chunk_count: 1,
-            },
-            chunk_hashes: vec![payload_hash],
+            layout: single_stripe_rs16_layout(body_len),
+            chunk_hashes: vec![payload_hash; 2],
             chunk_root: Hash::new(payload_hash.as_ref()),
         };
         BlockMessage::V2(wire::ConsensusMessageV2::new(
@@ -552,14 +573,7 @@
         requester: &PeerId,
         roster_len: usize,
     ) -> (BlockMessage, BlockMessage, BlockMessage) {
-        let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 1,
-        };
+        let layout = minimal_rs16_layout();
         let BlockMessage::V2(proposal_message) =
             v2_maximum_structural_proposal_wire(layout, roster_len)
         else {
@@ -740,16 +754,9 @@
             .configure_roster([validator.clone(), alternate_validator.clone()])
             .expect("two-validator fair-ingress geometry");
         ingress.require_leader_wire_lifecycle_gate();
-        ingress.state.lock().leader_wire_max_chunk_count = 1;
+        ingress.state.lock().leader_wire_max_chunk_count = 2;
 
-        let layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 1,
-            max_chunk_count: 1,
-        };
+        let layout = minimal_rs16_layout();
         let message = v2_maximum_structural_proposal_wire(layout, 1);
         let BlockMessage::V2(envelope) = &message else {
             unreachable!("leader-wire restart fixture is a v2 envelope");
@@ -785,7 +792,7 @@
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
         let capacity =
-            super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(2, 1)
+            super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(2, 2)
                 .expect("finite leader-wire geometry");
         let recovery_authority =
             super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
@@ -802,7 +809,7 @@
             owner,
             roster.clone(),
             capacity,
-            1,
+            2,
             recovery_authority,
             &[],
             &[],
@@ -856,7 +863,7 @@
             owner,
             roster,
             capacity,
-            1,
+            2,
             recovery_authority,
             &[],
             &[],
@@ -904,4 +911,3 @@
             runtime_owner,
         }
     }
-

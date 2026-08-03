@@ -202,37 +202,77 @@ fn collect_storage_security_bindings(
     }
     let governance_service = &storage.governance_dag_service;
     if governance_service.enabled {
+        let ipfs_endpoint_binding =
+            sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(
+                sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
+                governance_service.ipfs_api_url.as_deref().ok_or(
+                    IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                        IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+                    ),
+                )?,
+            )
+            .map_err(|_| {
+                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+                )
+            })?;
+        let ipfs_slot = IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator;
+        let ipfs_ingress_binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+            sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
+            ipfs_endpoint_binding,
+            governance_service.ipfs_request_auth_public_key.ok_or(
+                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(ipfs_slot),
+            )?,
+            sorafs_node::governance_service::authenticated_ipfs_wire_body_max_bytes(
+                governance_service.max_request_bytes.0,
+            )
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(ipfs_slot))?,
+            governance_service.request_auth_max_envelope_lifetime_secs,
+            governance_service.request_auth_max_future_skew_secs,
+        )
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(ipfs_slot))?;
         append_required_governance_request_auth_binding(
             bindings,
-            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+            ipfs_slot,
             governance_service.ipfs_authenticator_handle.as_deref(),
             governance_service.ipfs_authenticator_revision,
             governance_service.ipfs_authenticator_policy_digest,
-            governance_service.ipfs_request_auth_public_key,
-            governance_service.max_request_bytes.0,
+            Some(ipfs_ingress_binding),
         )?;
-        if governance_service.head_mode == "signed_http" {
-            append_required_governance_request_auth_binding(
-                bindings,
-                IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
-                governance_service.head_authenticator_handle.as_deref(),
-                governance_service.head_authenticator_revision,
-                governance_service.head_authenticator_policy_digest,
-                governance_service.head_request_auth_public_key,
-                governance_service.max_request_bytes.0,
-            )?;
-        } else if governance_service.head_mode != "ipns"
-            || governance_service.head_authenticator_handle.is_some()
-            || governance_service.head_authenticator_revision.is_some()
-            || governance_service
-                .head_authenticator_policy_digest
-                .is_some()
-            || governance_service.head_request_auth_public_key.is_some()
-        {
-            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
-            ));
-        }
+        let head_endpoint_binding =
+            sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(
+                sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
+                governance_service.signed_head_url.as_deref().ok_or(
+                    IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                        IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                    ),
+                )?,
+            )
+            .map_err(|_| {
+                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                )
+            })?;
+        let head_slot = IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator;
+        let head_ingress_binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+            sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
+            head_endpoint_binding,
+            governance_service.head_request_auth_public_key.ok_or(
+                IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(head_slot),
+            )?,
+            governance_service.max_request_bytes.0,
+            governance_service.request_auth_max_envelope_lifetime_secs,
+            governance_service.request_auth_max_future_skew_secs,
+        )
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(head_slot))?;
+        append_required_governance_request_auth_binding(
+            bindings,
+            head_slot,
+            governance_service.head_authenticator_handle.as_deref(),
+            governance_service.head_authenticator_revision,
+            governance_service.head_authenticator_policy_digest,
+            Some(head_ingress_binding),
+        )?;
     } else {
         if governance_service.ipfs_authenticator_handle.is_some()
             || governance_service.ipfs_authenticator_revision.is_some()
@@ -297,11 +337,10 @@ pub(super) fn append_required_governance_request_auth_binding(
     handle: Option<&str>,
     revision: Option<u64>,
     policy_digest: Option<[u8; 32]>,
-    public_key: Option<[u8; 32]>,
-    max_body_bytes: u64,
+    ingress_binding: Option<sorafs_node::GovernanceDagRequestIngressBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    let (Some(handle), Some(revision), Some(policy_digest), Some(public_key)) =
-        (handle, revision, policy_digest, public_key)
+    let (Some(handle), Some(revision), Some(policy_digest), Some(ingress_binding)) =
+        (handle, revision, policy_digest, ingress_binding)
     else {
         return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
     };
@@ -311,8 +350,7 @@ pub(super) fn append_required_governance_request_auth_binding(
             handle,
             revision,
             policy_digest,
-            public_key,
-            max_body_bytes,
+            ingress_binding,
         )?,
     );
     Ok(())

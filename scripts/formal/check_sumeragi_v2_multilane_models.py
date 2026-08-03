@@ -1474,9 +1474,12 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "plan.application_block_hash",
             "plan.manifest_leaf_count",
             "mode.permits_retention_cleanup()",
+            "preflight_native_amx_participant_application_plan_under_publication_guard",
             "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "read_back_native_amx_plan_manifests_under_publication_guard",
+            "manifest_readback.authenticates",
             "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
-            "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+            "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
             "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
             "mode.requires_post_apply_metadata()",
             "NativeAmxParticipantApplicationPrepublicationToken::from_plan",
@@ -1527,20 +1530,26 @@ NATIVE_PREPUBLICATION_BINDINGS = (
     (
         "crates/iroha_core/src/kura.rs",
         "fn",
-        "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+        "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
         (
+            "validate_native_amx_participant_application_receipt_artifact",
             "manifest_artifact_hash",
+            "finality_artifact_hash",
             "native_amx_participant_receipt_matches_manifest_leaf",
+            "preflight.incoming",
+            "ensure_prune_recovery_not_required",
             "get_durable_block_hash",
             "require_active_lane_artifact",
             "native_amx_evidence_namespace_for_entry",
+            "preflight.current",
+            "validate_native_amx_prepublication_transition_locked",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE",
             "permit_retention_cleanup",
             "require_native_amx_evidence_prune_intent_absent_locked",
             "recover_native_amx_evidence_publication_temp_locked",
-            "discard_native_amx_latest_index_temp_locked",
             "read_native_amx_participant_application_manifest_from_paths_locked",
             "read_native_amx_participant_application_receipt_from_paths_locked",
-            "persist_native_amx_participant_receipt_latest_index_locked",
+            "persist_native_amx_participant_receipt_latest_index_from_reconstructed_inventory_locked",
             "progress_mutation_namespace_unchanged",
             "native_amx_evidence_tracked_bytes_locked",
         ),
@@ -1584,7 +1593,8 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "store_block",
             "store_v2_finality_artifact",
             "prepublish_native_amx_participant_application_evidence",
-            "token.authenticates",
+            "native_amx_participant_frontier_markers",
+            "token.authenticates_state_frontiers",
             "apply_without_execution_with_verified_v2_finality",
             "state_block.commit",
         ),
@@ -1598,7 +1608,8 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
         (
             ".store_v2_finality_artifact(artifact)",
             ".prepublish_native_amx_participant_application_evidence(",
-            "!token.authenticates(committed_block.as_ref(), &native_amx_manifest, artifact)",
+            "State::native_amx_participant_frontier_markers(",
+            "token.authenticates_state_frontiers(",
             ".apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology)",
             "state_block.commit().map_err",
         ),
@@ -1609,8 +1620,9 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
         "persist_native_amx_participant_application_evidence_under_publication_guard",
         (
             "self.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(",
+            "self.read_back_native_amx_plan_manifests_under_publication_guard(",
             "self.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(",
-            "self.write_native_amx_participant_receipt_latest_index_under_publication_guard(",
+            "self.write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard(",
             "self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(",
             "let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan",
             "if permit_cleanup {",
@@ -1621,7 +1633,7 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
 NATIVE_PREPUBLICATION_RETENTION_WRITERS = (
     "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
     "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
-    "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+    "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
 )
 QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
 QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
@@ -3175,14 +3187,17 @@ def _validate_native_prepublication_contract(
             "self.write_native_amx_participant_application_manifest_artifact_"
             "with_retention_policy_under_publication_guard( "
             "manifest, permit_cleanup, )?; }",
+            "let manifest_readback = self."
+            "read_back_native_amx_plan_manifests_under_publication_guard(plan)?;",
             "for (manifest, receipt) in &plan.artifacts { "
             "self.write_native_amx_participant_application_receipt_artifact_"
             "only_with_retention_policy_under_publication_guard( "
             "receipt, manifest, permit_cleanup, )?; }",
-            "for (manifest, receipt) in &plan.artifacts { "
-            "self.write_native_amx_participant_receipt_latest_index_"
-            "under_publication_guard( "
-            "receipt, manifest, permit_cleanup, )?; }",
+            "for ((manifest, receipt), preflight) in "
+            "plan.artifacts.iter().zip(route_preflights.iter()) { "
+            "self.write_native_amx_participant_receipt_latest_index_for_"
+            "prepublication_under_publication_guard( "
+            "receipt, manifest, permit_cleanup, preflight, )?; }",
             "if permit_cleanup { for (_, receipt) in &plan.artifacts { "
             "self.cleanup_native_amx_participant_application_evidence_"
             "under_publication_guard( receipt, )?; } }",

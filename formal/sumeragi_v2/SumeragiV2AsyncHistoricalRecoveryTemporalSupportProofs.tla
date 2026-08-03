@@ -848,7 +848,7 @@ HistoricalTemporalStage4EpisodeOrdering ==
 HistoricalTemporalStage4EpisodeRank(candidate) ==
   <<HistoricalTemporalStage4Branch(candidate),
     <<Stage4CapacityRank(candidate.node),
-      ReadyRunAuxRank(candidate.node)>>>
+      ReadyRunAuxRank(candidate.node)>>>>
 
 HistoricalTemporalStage4BlockedAtRank(
     candidate, position, rank) ==
@@ -6360,7 +6360,7 @@ BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExi
        AsyncAllVars
 
 THEOREM HistoricalCandidateProducerContinuationIngressCutOwnerUsesAsyncFairness ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in Responsive,
      ownerKind \in
        HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds:

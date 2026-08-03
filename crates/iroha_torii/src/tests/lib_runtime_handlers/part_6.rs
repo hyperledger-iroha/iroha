@@ -160,6 +160,183 @@ async fn finality_and_sccp_proof_routes_require_heavy_query_admission() {
     }
 }
 
+#[tokio::test]
+async fn zk_tree_queries_require_heavy_admission_before_state_integrity_work() {
+    let mut app = mk_app_state_for_tests();
+    let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+    app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+    app_mut.query_queue_timeout = Duration::ZERO;
+
+    let roots_error = match handler_zk_roots(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        NoritoJson(routing::ZkRootsGetRequestDto {
+            asset_id: String::new(),
+            max: 1,
+        }),
+    )
+    .await
+    {
+        Ok(_) => panic!("roots query must acquire heavy admission"),
+        Err(error) => error,
+    };
+    let merkle_error = match handler_zk_merkle_path(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        NoritoJson(routing::ZkMerklePathGetRequestDto {
+            asset_id: String::new(),
+            commitments: Vec::new(),
+        }),
+    )
+    .await
+    {
+        Ok(_) => panic!("Merkle-path query must acquire heavy admission"),
+        Err(error) => error,
+    };
+    let errors = [roots_error, merkle_error];
+    for error in errors {
+        assert!(
+            matches!(
+                error,
+                Error::Query(ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+                ))
+            ),
+            "unexpected ZK tree-query admission error: {error}"
+        );
+    }
+}
+
+#[cfg(feature = "zk-verify-batch")]
+#[tokio::test]
+async fn zk_verify_batch_honors_halo2_gate_before_compute_admission() {
+    let mut app = mk_app_state_for_tests();
+    let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+    Arc::get_mut(&mut app_mut.state)
+        .expect("unique core state fixture")
+        .zk
+        .halo2
+        .enabled = false;
+    app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+    app_mut.query_queue_timeout = Duration::ZERO;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+
+    let error = match handler_zk_verify_batch(
+        State(app),
+        headers,
+        crate::loopback_connect_info(),
+        axum::body::Bytes::from_static(b"[]"),
+    )
+    .await
+    {
+        Ok(_) => panic!("disabled Halo2 verifier must fail closed"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        Error::Query(ValidationFail::NotPermitted(message))
+            if message == "halo2 verification is disabled in node configuration"
+    ));
+}
+
+#[cfg(feature = "zk-verify-batch")]
+#[tokio::test]
+async fn enabled_zk_verify_batch_requires_heavy_compute_admission() {
+    let mut app = mk_app_state_for_tests();
+    let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+    Arc::get_mut(&mut app_mut.state)
+        .expect("unique core state fixture")
+        .zk
+        .halo2
+        .enabled = true;
+    app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+    app_mut.query_queue_timeout = Duration::ZERO;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+
+    let error = match handler_zk_verify_batch(
+        State(app),
+        headers,
+        crate::loopback_connect_info(),
+        axum::body::Bytes::from_static(b"[]"),
+    )
+    .await
+    {
+        Ok(_) => panic!("batch verification must acquire heavy admission"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        Error::Query(ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+        ))
+    ));
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn por_history_routes_require_heavy_query_admission_before_projection() {
+    let mut app = mk_app_state_for_tests();
+    let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+    app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+    app_mut.query_queue_timeout = Duration::ZERO;
+
+    let errors = [
+        handler_get_sorafs_por_status(
+            State(app.clone()),
+            AxQuery(routing::PorStatusQueryDto {
+                manifest: None,
+                provider: None,
+                epoch: None,
+                status: None,
+                limit: 1,
+                max_bytes: 1,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect_err("PoR status projection must acquire heavy admission"),
+        handler_get_sorafs_por_export(
+            State(app.clone()),
+            AxQuery(routing::PorExportQueryDto {
+                start_epoch: None,
+                end_epoch: None,
+                limit: 1,
+                max_bytes: 1,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect_err("PoR export projection must acquire heavy admission"),
+        handler_get_sorafs_por_report(State(app), axum::extract::Path("2026-W01".to_owned()))
+            .await
+            .expect_err("PoR report projection must acquire heavy admission"),
+    ];
+
+    for error in errors {
+        assert!(
+            matches!(
+                error,
+                Error::Query(ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+                ))
+            ),
+            "unexpected PoR heavy-admission error: {error}"
+        );
+    }
+}
+
 async fn heavy_route_auth_errors_for_test(app: SharedAppState, headers: HeaderMap) -> [Error; 5] {
     let message_id = "11".repeat(32);
     [

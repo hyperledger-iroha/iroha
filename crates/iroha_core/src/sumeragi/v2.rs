@@ -3683,21 +3683,7 @@ fn commit_qc_status(
     certificate.validate(context)?;
     let signer_count = u32::try_from(certificate.signers.len())
         .map_err(|_| wire::ValidationError::TooManySigners)?;
-    let signed_power = certificate.signers.iter().try_fold(
-        0_u64,
-        |total, signer| -> Result<u64, AdapterError> {
-            let index = usize::try_from(*signer)
-                .map_err(|_| AdapterError::ValidatorIndexOutOfRange(*signer))?;
-            let power = context
-                .roster
-                .get(index)
-                .ok_or(AdapterError::ValidatorIndexOutOfRange(*signer))?
-                .power;
-            total
-                .checked_add(power)
-                .ok_or_else(|| wire::ValidationError::VotingPowerOverflow.into())
-        },
-    )?;
+    let signed_power = u64::from(signer_count);
     let validator_count =
         u32::try_from(context.roster.len()).map_err(|_| wire::ValidationError::RosterTooLarge)?;
     Ok(wire::SumeragiV2CommitQcStatus {
@@ -5557,6 +5543,52 @@ impl SumeragiV2Adapter {
             })
     }
 
+    /// Return the adapter admission ordinals of exact Busy-deferred owners.
+    ///
+    /// The serialized runtime joins these ordinals to its retained lifecycle
+    /// sidecars before it permits an owner-aware completion to coalesce.
+    pub(crate) fn deferred_body_pipeline_completion_exact_owner_ordinals(
+        &self,
+        tag: reducer::EventTag,
+        candidate: &BodyPipelineCompletionEvidence,
+    ) -> Vec<u128> {
+        let (wire_round, wire_subject, expected_stage) = match candidate {
+            BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => (
+                manifest.round,
+                manifest.subject,
+                DeferredBodyPipelineCompletionStage::LocalProposalReady,
+            ),
+            BodyPipelineCompletionEvidence::BodyAvailable { manifest } => (
+                manifest.round,
+                manifest.subject,
+                DeferredBodyPipelineCompletionStage::BodyAvailable,
+            ),
+            BodyPipelineCompletionEvidence::BodyStored { round, subject, .. } => (
+                *round,
+                *subject,
+                DeferredBodyPipelineCompletionStage::BodyStored,
+            ),
+            BodyPipelineCompletionEvidence::ValidationSucceeded { round, subject, .. }
+            | BodyPipelineCompletionEvidence::ValidationFailed { round, subject } => (
+                *round,
+                *subject,
+                DeferredBodyPipelineCompletionStage::Validation,
+            ),
+        };
+        let round = reducer::Round::new(wire_round.height, wire_round.view);
+        let subject = reducer::Subject::new(Hash::new(wire_subject.encode()).into());
+        self.deferred_completions
+            .iter()
+            .chain(&self.deferred_inputs)
+            .filter(|input| {
+                input.completion_evidence.as_ref() == Some(candidate)
+                    && deferred_body_pipeline_completion_stage(input, tag, round, subject)
+                        == Some(expected_stage)
+            })
+            .map(|input| input.admission_ordinal)
+            .collect()
+    }
+
     /// Classify exact decided `LocalProposalReady` owners without mutating any
     /// Busy-deferred lane.
     pub(crate) fn deferred_decided_local_proposal_counts(
@@ -5924,12 +5956,17 @@ impl SumeragiV2Adapter {
         Ok(())
     }
 
-    fn rollback_deferred_conflicting_proposal(
-        &mut self,
+    fn deferred_conflicting_proposal_owner(
+        &self,
         round: reducer::Round,
         subject: reducer::Subject,
         canonical: &wire::PayloadManifest,
-    ) -> bool {
+    ) -> Option<(
+        wire::PayloadManifest,
+        wire::Proposal,
+        IngressSemanticKey,
+        IngressEquivocationRecord,
+    )> {
         // Busy authenticated ingress deliberately retains its staged registry
         // expansion. A canonical body completion may overtake that deferred
         // proposal, but may roll back only the exact proposal-owned manifest;
@@ -5937,19 +5974,19 @@ impl SumeragiV2Adapter {
         // registered for subsequent progress.
         let key = (round, subject);
         let Some(registered_manifest) = self.registry.manifests.get(&key).cloned() else {
-            return false;
+            return None;
         };
         if registered_manifest == *canonical {
-            return false;
+            return None;
         }
         let Some(registered_proposal) = self.registry.proposals.get(&key).cloned() else {
-            return false;
+            return None;
         };
         if registered_proposal.round != canonical.round
             || registered_proposal.subject != canonical.subject
             || registered_proposal.manifest != registered_manifest
         {
-            return false;
+            return None;
         }
         let admission_key = IngressSemanticKey::Proposal {
             round: registered_proposal.round,
@@ -5959,10 +5996,10 @@ impl SumeragiV2Adapter {
             IngressFingerprint::Proposal(Hash::new(registered_proposal.signature_preimage()));
         let Some(registered_equivocation) = self.ingress_equivocations.get(&admission_key).copied()
         else {
-            return false;
+            return None;
         };
         if registered_equivocation.fingerprint != expected_fingerprint {
-            return false;
+            return None;
         }
         let owns_conflict = |input: &DeferredInput| {
             Self::deferred_input_owns_registered_proposal(
@@ -5973,8 +6010,40 @@ impl SumeragiV2Adapter {
             )
         };
         if !self.deferred_inputs.iter().any(owns_conflict) {
-            return false;
+            return None;
         }
+        Some((
+            registered_manifest,
+            registered_proposal,
+            admission_key,
+            registered_equivocation,
+        ))
+    }
+
+    fn rollback_deferred_conflicting_proposal(
+        &mut self,
+        round: reducer::Round,
+        subject: reducer::Subject,
+        canonical: &wire::PayloadManifest,
+    ) -> bool {
+        let Some((
+            registered_manifest,
+            registered_proposal,
+            admission_key,
+            registered_equivocation,
+        )) = self.deferred_conflicting_proposal_owner(round, subject, canonical)
+        else {
+            return false;
+        };
+        let key = (round, subject);
+        let owns_conflict = |input: &DeferredInput| {
+            Self::deferred_input_owns_registered_proposal(
+                input,
+                round,
+                subject,
+                &registered_proposal,
+            )
+        };
 
         self.deferred_inputs.retain(|input| !owns_conflict(input));
         self.retire_unowned_deferred_producer_continuations();
@@ -6211,6 +6280,17 @@ impl SumeragiV2Adapter {
                 AdapterCommand::BodyAvailable { manifest } => {
                     let round = registry.round_to_core(manifest.round, &self.wire_context)?;
                     let subject = registry.register_subject(manifest.subject)?;
+                    if self
+                        .deferred_conflicting_proposal_owner(round, subject, manifest)
+                        .is_some()
+                    {
+                        // Mirror the exact dispatch-side rollback in the
+                        // cloned preflight registry. No live proposal,
+                        // delivery, equivocation, or deferred owner is retired
+                        // until the admitted callback actually dispatches.
+                        registry.proposals.remove(&(round, subject));
+                        registry.manifests.remove(&(round, subject));
+                    }
                     let core_manifest = registry.manifest_to_core(manifest, &self.wire_context)?;
                     if core_manifest.subject() != subject {
                         return Err(AdapterError::DurableBodyMismatch);
@@ -6351,27 +6431,30 @@ impl SumeragiV2Adapter {
             None,
         );
         if let Some((key, _, _)) = serviced_candidate {
-            if self.serviced_candidates.contains_key(&key) {
-                return Preflight::Coalesce;
-            }
+            let serviced = self.serviced_candidates.contains_key(&key);
             let matching = self
                 .producer_continuations
                 .iter()
                 .filter(|(_, record)| record.identity().candidate() == key)
                 .collect::<Vec<_>>();
             match matching.len() {
+                0 if serviced => return Preflight::Coalesce,
                 0 => {}
                 1 => {
                     let (address, record) = matching[0];
-                    if record.status() != ProducerContinuationStatus::Reserved
+                    let identity = record.identity();
+                    if serviced
+                        || record.status() != ProducerContinuationStatus::Reserved
                         || !self
                             .restored_dormant_producer_continuations
                             .contains(address)
                         || self.durable_producer_continuations.get(address) != Some(record)
                     {
-                        return Preflight::Coalesce;
+                        return Preflight::CoalesceOwned {
+                            causal_lifecycle_key: identity.causal_lifecycle_key(),
+                            admission_ordinal: identity.admission_ordinal(),
+                        };
                     }
-                    let identity = record.identity();
                     // `ServicedCandidateKey` is deliberately route/priority
                     // neutral. This branch is nevertheless class-exact:
                     // only internal completion commands reach this
@@ -11087,6 +11170,7 @@ mod tests {
 
     use super::super::serviced_candidate_store::ProducerContinuationSourceClass;
     use super::*;
+    use crate::sumeragi::v2_chunks::encode_payload;
 
     #[derive(Debug)]
     struct TestAggregator;
@@ -11135,11 +11219,11 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: 1024 * 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 512 * 1024,
                 max_chunk_count: 1024,
             },
             leader_seed: [0xA5; 32],
@@ -11342,11 +11426,11 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: 1024 * 1024,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 512 * 1024,
                 max_chunk_count: 1024,
             },
             leader_seed: [0x5A; 32],
@@ -11631,16 +11715,13 @@ mod tests {
             height: successor.height,
             view: 0,
         };
-        let proposal_subject = subject(0x72);
+        let mut proposal_subject = subject(0x72);
         let proposal_body = b"parent-auth-body".to_vec();
-        let manifest = wire::PayloadManifest::derive(
-            &successor,
-            proposal_round,
-            proposal_subject,
-            u64::try_from(proposal_body.len()).expect("fixture body length fits u64"),
-            &[proposal_body],
-        )
-        .expect("valid successor manifest");
+        proposal_subject.payload_hash = Hash::new(&proposal_body);
+        let manifest = encode_payload(&successor, proposal_round, proposal_subject, &proposal_body)
+            .expect("encode successor fixture payload")
+            .manifest()
+            .clone();
         let proposer = successor.leader(0);
         let mut proposal = wire::Proposal {
             round: proposal_round,
@@ -11852,14 +11933,9 @@ mod tests {
     }
 
     #[test]
-    fn commit_qc_status_reports_exact_frozen_signer_power() {
+    fn commit_qc_status_reports_equal_vote_projection_in_npos_mode() {
         let mut context = context();
         context.mode = wire::ConsensusMode::Npos;
-        for (index, validator) in context.roster.iter_mut().enumerate() {
-            validator.power = u64::try_from(index + 1).expect("fixture power fits u64");
-        }
-        context.quorum =
-            wire::DualQuorum::from_roster(&context.roster).expect("weighted fixture quorum");
         let certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
                 context_id: context.id(),
@@ -11884,8 +11960,8 @@ mod tests {
         assert_eq!(summary.validator_count, 4);
         assert_eq!(summary.signer_count, 3);
         assert_eq!(summary.min_signers, 3);
-        assert_eq!(summary.signed_power, 8);
-        assert_eq!(summary.total_power, 10);
+        assert_eq!(summary.signed_power, 3);
+        assert_eq!(summary.total_power, 4);
     }
 
     #[test]
@@ -11922,14 +11998,12 @@ mod tests {
             view: 1,
         };
         let locked_subject = subject(0x32);
-        let exact_manifest = wire::PayloadManifest::derive(
-            &context,
-            locked_round,
-            locked_subject,
-            5,
-            &[b"chunk".to_vec()],
-        )
-        .expect("exact locked manifest");
+        let locked_payload = [0x32, 2];
+        let exact_manifest =
+            encode_payload(&context, locked_round, locked_subject, &locked_payload)
+                .expect("encode exact locked payload")
+                .manifest()
+                .clone();
         let exact = wire::Proposal {
             round: locked_round,
             proposer: context.leader(locked_round.view),
@@ -11953,14 +12027,10 @@ mod tests {
         let later = wire::Proposal {
             round: later_round,
             proposer: context.leader(later_round.view),
-            manifest: wire::PayloadManifest::derive(
-                &context,
-                later_round,
-                locked_subject,
-                5,
-                &[b"chunk".to_vec()],
-            )
-            .expect("later same-subject manifest"),
+            manifest: encode_payload(&context, later_round, locked_subject, &locked_payload)
+                .expect("encode later same-subject payload")
+                .manifest()
+                .clone(),
             ..exact
         };
         assert!(proposal_is_safe_for_lock(
@@ -11978,6 +12048,7 @@ mod tests {
             view: prepared_round.view + 1,
             ..prepared_round
         };
+        let prepared_payload = [0x33, 2];
         let highest_prepare = wire::QuorumCertificate {
             round: prepared_round,
             proposal_round: prepared_round,
@@ -11991,14 +12062,15 @@ mod tests {
             round: proposal_round,
             proposer: context.leader(proposal_round.view),
             subject: prepared_subject,
-            manifest: wire::PayloadManifest::derive(
+            manifest: encode_payload(
                 &context,
                 proposal_round,
                 prepared_subject,
-                5,
-                &[b"chunk".to_vec()],
+                &prepared_payload,
             )
-            .expect("prepared-subject manifest"),
+            .expect("encode prepared-subject payload")
+            .manifest()
+            .clone(),
             justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
                 timeout_certificate: wire::TimeoutCertificate {
                     round: prepared_round,
@@ -12130,9 +12202,17 @@ mod tests {
             height: context.height,
             view: 0,
         };
-        let manifest =
-            wire::PayloadManifest::derive(context, round, subject, 5, &[b"chunk".to_vec()])
-                .expect("valid fixture manifest");
+        let payload = b"chunk";
+        let chunks = wire::encode_payload_chunks(context.da_layout, payload)
+            .expect("encode complete canonical fixture chunks");
+        let manifest = wire::PayloadManifest::derive(
+            context,
+            round,
+            subject,
+            u64::try_from(payload.len()).expect("fixture payload length fits u64"),
+            &chunks,
+        )
+        .expect("valid fixture manifest");
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(wire::Proposal {
             round,
             proposer,
@@ -13333,14 +13413,11 @@ mod tests {
             view: tag.view(),
         };
         let subject = subject(0x4A);
-        let manifest = wire::PayloadManifest::derive(
-            &adapter.wire_context,
-            round,
-            subject,
-            5,
-            &[b"producer-retirement-body".to_vec()],
-        )
-        .expect("derive body manifest");
+        let payload = [0x4A, 2];
+        let manifest = encode_payload(&adapter.wire_context, round, subject, &payload)
+            .expect("encode producer-retirement payload")
+            .manifest()
+            .clone();
         adapter
             .defer_body_pipeline_stage_for_test(
                 tag,
@@ -14023,14 +14100,16 @@ mod tests {
 
         let proposal_round = wire::ConsensusRound { view: 1, ..round };
         let proposal_subject = subject(0xC3);
-        let manifest = wire::PayloadManifest::derive(
+        let proposal_payload = [0xC3, 2];
+        let manifest = encode_payload(
             &adapter.wire_context,
             proposal_round,
             proposal_subject,
-            5,
-            &[b"chunk".to_vec()],
+            &proposal_payload,
         )
-        .expect("derive proposal manifest");
+        .expect("encode proposal payload")
+        .manifest()
+        .clone();
         let mut proposal_key = None;
         for (variant, signers) in signer_subsets.iter().enumerate() {
             let marker = u8::try_from(variant).expect("small carrier variant");
@@ -14678,14 +14757,11 @@ mod tests {
             view: 0,
         };
         let subject = subject(0x97);
-        let manifest = wire::PayloadManifest::derive(
-            &adapter.wire_context,
-            round,
-            subject,
-            5,
-            &[b"chunk".to_vec()],
-        )
-        .expect("valid certified-body manifest");
+        let payload = [0x97, 2];
+        let manifest = encode_payload(&adapter.wire_context, round, subject, &payload)
+            .expect("encode certified-body payload")
+            .manifest()
+            .clone();
         let (durable, validated) =
             validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let execution_commitment = validated.execution_commitment();
@@ -14880,12 +14956,18 @@ mod tests {
         adapter
             .body_available(tag, manifest.clone())
             .expect("register exact manifest");
+        let alternate_body = b"other";
+        let alternate_chunks =
+            wire::encode_payload_chunks(adapter.wire_context.da_layout, alternate_body)
+                .expect("encode complete canonical alternate-body chunks");
+        // Deliberately bind the complete canonical alternate body to the
+        // original subject so this remains a manifest-conflict negative.
         let conflicting = wire::PayloadManifest::derive(
             &adapter.wire_context,
             manifest.round,
             manifest.subject,
-            5,
-            &[b"other".to_vec()],
+            u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+            &alternate_chunks,
         )
         .expect("structurally valid conflicting manifest");
 
@@ -14923,12 +15005,17 @@ mod tests {
         else {
             panic!("fixture is a proposal")
         };
+        let alternate_body = b"other";
+        let alternate_chunks = wire::encode_payload_chunks(context.da_layout, alternate_body)
+            .expect("encode complete canonical alternate-body chunks");
+        // Deliberately bind the complete canonical alternate body to the
+        // original subject so this remains a manifest-conflict negative.
         conflicting_proposal.manifest = wire::PayloadManifest::derive(
             &context,
             conflicting_proposal.round,
             conflicting_proposal.subject,
-            5,
-            &[b"other".to_vec()],
+            u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+            &alternate_chunks,
         )
         .expect("structurally valid alternate manifest");
         let conflicting = AuthenticatedConsensusMessage::for_test(conflicting);
@@ -14991,12 +15078,17 @@ mod tests {
             else {
                 panic!("fixture is a proposal")
             };
+            let alternate_body = b"other";
+            let alternate_chunks = wire::encode_payload_chunks(context.da_layout, alternate_body)
+                .expect("encode complete canonical alternate-body chunks");
+            // Deliberately bind the complete canonical alternate body to the
+            // original subject so this remains a manifest-conflict negative.
             conflicting_proposal.manifest = wire::PayloadManifest::derive(
                 &context,
                 conflicting_proposal.round,
                 conflicting_proposal.subject,
-                5,
-                &[b"other".to_vec()],
+                u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+                &alternate_chunks,
             )
             .expect("structurally valid alternate manifest");
             conflicting_proposal.clone()
@@ -15044,6 +15136,29 @@ mod tests {
                 generation: deferred_tag.generation(),
                 locked_commit_progress: false,
             },
+        );
+        let body_command = super::super::v2_runtime::AdapterCommand::BodyAvailable {
+            manifest: canonical_manifest.clone(),
+        };
+        adapter
+            .deferred_inputs
+            .front_mut()
+            .expect("the conflicting proposal remains deferred")
+            .retag_authenticated_ingress = false;
+        assert_eq!(
+            adapter.preflight_runtime_command_admission(deferred_tag, &body_command),
+            super::super::v2_runtime::RuntimeCommandAdmissionPreflight::Reject,
+            "a generic deferred item cannot authorize proposal-registry rollback"
+        );
+        adapter
+            .deferred_inputs
+            .front_mut()
+            .expect("the conflicting proposal remains deferred")
+            .retag_authenticated_ingress = true;
+        assert_eq!(
+            adapter.preflight_runtime_command_admission(deferred_tag, &body_command),
+            super::super::v2_runtime::RuntimeCommandAdmissionPreflight::Admit,
+            "preflight must project the exact rollback supported by dispatch"
         );
 
         let retained_qc = wire::QuorumCertificate {
@@ -16548,14 +16663,16 @@ mod tests {
                 && certificate.phase == wire::GlobalPhase::Prepare
         )));
 
-        let manifest = wire::PayloadManifest::derive(
+        let locked_payload = [0xBE, 2];
+        let manifest = encode_payload(
             &adapter.wire_context,
             wire_round,
             locked_subject,
-            5,
-            &[b"chunk".to_vec()],
+            &locked_payload,
         )
-        .expect("derive the certified body manifest");
+        .expect("encode the certified body payload")
+        .manifest()
+        .clone();
         let (durable, _) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let validated = ValidatedBodyReceipt::for_test_with_commitment(
             durable.clone(),
@@ -19170,14 +19287,16 @@ mod tests {
             view: 0,
         };
         let locally_validated_subject = subject(0x87);
-        let locally_validated_manifest = wire::PayloadManifest::derive(
+        let locally_validated_payload = [0x87, 2];
+        let locally_validated_manifest = encode_payload(
             &context,
             round,
             locally_validated_subject,
-            5,
-            &[b"local".to_vec()],
+            &locally_validated_payload,
         )
-        .expect("derive locally validated manifest");
+        .expect("encode locally validated payload")
+        .manifest()
+        .clone();
         let (_, locally_validated_receipt) =
             validated_receipts_for_manifest(&context, &locally_validated_manifest);
         let locally_validated_commitment = locally_validated_receipt.execution_commitment();
@@ -19439,14 +19558,11 @@ mod tests {
         let proposal_round = wire::ConsensusRound { view: 2, ..round };
         let proposal_subject = bound_subject;
         let proposal_body = vec![0x83, 2];
-        let proposal_manifest = wire::PayloadManifest::derive(
-            &context,
-            proposal_round,
-            proposal_subject,
-            u64::try_from(proposal_body.len()).expect("proposal body length"),
-            &[proposal_body],
-        )
-        .expect("derive later-view proposal manifest");
+        let proposal_manifest =
+            encode_payload(&context, proposal_round, proposal_subject, &proposal_body)
+                .expect("encode later-view proposal payload")
+                .manifest()
+                .clone();
         let proposer = context.leader(proposal_round.view);
         let mut conflicting_proposal = wire::Proposal {
             round: proposal_round,
@@ -19763,9 +19879,11 @@ mod tests {
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&prepare_refs)
                 .expect("aggregate PrepareQC"),
         };
-        let manifest =
-            wire::PayloadManifest::derive(&context, round, subject, 5, &[b"chunk".to_vec()])
-                .expect("valid protected-body manifest");
+        let protected_payload = [13, 2];
+        let manifest = encode_payload(&context, round, subject, &protected_payload)
+            .expect("encode protected-body payload")
+            .manifest()
+            .clone();
         let core_manifest = adapter
             .registry
             .manifest_to_core(&manifest, &context)

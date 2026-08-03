@@ -25,7 +25,7 @@ validator fleet.
 - Public Sumeragi-v2 chain ID: `fc56984b-2be7-431d-840e-21514d1883f0`
 - Archived pre-v2 chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
-- Consensus protocol: Sumeragi v2 state machine, wire revision 3 only (`wire_protocol_version = 3`)
+- Consensus protocol: Sumeragi v2 state machine, wire revision 4 only (`wire_protocol_version = 4`)
 - Timing profile: authoritative 4,000 ms block cadence and one absolute 40,000 ms view-zero round deadline
 - Candidate bounds: 96 transactions, 21 MiB canonical body, and a four-times bounded queue scan
 - Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
@@ -107,7 +107,8 @@ into multi-second stalls.
 - `validator_roster.example.toml`: copy-me roster template for all validator
   public addresses, public keys, and PoPs. Keep the populated file user-local.
 - `validator_secrets.example.toml`: copy-me runtime template for per-validator
-  private keys, shared onboarding/faucet authority and streaming identity key
+  BLS private keys and dedicated SoraNet Ed25519 transport key pairs, shared
+  onboarding/faucet authority and streaming identity key
   material, the public identity of the provider-backed Soracloud mutation
   signer, plus the public SoraFS admission-council roots and quorum. Keep the
   populated file user-local. The Soracloud provider owns its private key; only
@@ -623,11 +624,16 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    `configs/soranexus/taira/validator_secrets.local.toml`.
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
-   roster, then put the matching validator `private_key` values and the shared
+   roster, then put each matching validator `private_key` plus its dedicated
+   Ed25519 `soranet_transport_public_key`/`soranet_transport_private_key` pair
+   and the shared
    `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`, every
    `soracloud_runtime_signer_*` public binding field,
    `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
-   values in the runtime file. SoraFS council roots must be canonical Ed25519
+   values in the runtime file. A validator's SoraNet transport identity must
+   be distinct from both its BLS node identity and the shared streaming
+   identity; the renderer rejects reuse and duplicate transport identities.
+   SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
    advert keys.
 4. Render the per-validator bundle:
@@ -1358,7 +1364,7 @@ frontier and no CommitQC exists yet,
 submits the first post-genesis write, and then re-checks `/status` plus
 `/v1/sumeragi/status` strictly after that write lands.
 
-The rollout script requires `/v1/sumeragi/status` to advertise wire revision 3, a
+The rollout script requires `/v1/sumeragi/status` to advertise wire revision 4, a
 frozen `height_context` with at least 4 validators and a consistent dual
 quorum, an exact durable `last_commit_qc` after genesis, bounded `operator`
 queues, and all canonical lane-evidence arrays. It rejects mismatched CommitQC
@@ -1665,8 +1671,9 @@ away from the shipped MCP-enabled config:
 3. Render the per-validator config bundle from a user-local roster file, then
    copy the correct validator config onto the host, for example:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
-   - `validator_secrets.local.toml` must include both the validator private
-     keys and the shared `account_onboarding_*`, `torii_faucet_*`, and
+   - `validator_secrets.local.toml` must include every validator BLS private
+     key, its dedicated Ed25519 `soranet_transport_public_key` and
+     `soranet_transport_private_key`, and the shared `account_onboarding_*`, `torii_faucet_*`, and
      `streaming_identity_*`, `soracloud_runtime_signer_*`,
      `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
      fields because the checked-in template intentionally leaves those
@@ -1814,20 +1821,21 @@ From `../iroha2-block-explorer-web`:
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
-     `max_transactions = 96`, `max_payload_bytes = 22020096`, and
+     `max_transactions = 96`, `max_payload_bytes = 16777216`, and
      `proposal_queue_scan_multiplier = 4` bounds, plus the
      `[sumeragi.queues]` canonical outer-ingress wire-byte baseline
-     `authenticated_non_validator_sources = 2`, `body_bytes = 315621376`, and
-     `body_source_bytes = 45088768`, before running public write canaries or
+     `authenticated_non_validator_sources = 2`, `body_bytes = 242221056`, and
+     `body_source_bytes = 34603008`, before running public write canaries or
      scenario sweeps. The four-validator baseline isolates every validator,
      both authenticated non-validator source lanes, and anonymous delivery;
      `render_taira_validator_bundle.py` raises `body_bytes` to at least
      `(validator_count + authenticated_non_validator_sources + 1) *
      body_source_bytes` for larger legal rosters.
-     The 21 MiB body is derived from two 10 MiB transaction-admission ceilings
-     (each carrying one 9 MiB privacy action) plus 1 MiB of canonical block
-     framing. The matching DA ceiling is `22020096`; the per-source queue
-     rounds the exact ordinary/completion/timeout minimum up to 43 MiB. Keep
+     The revision-4 protocol caps the complete canonical body at 16 MiB. This
+     admits one maximum 10 MiB transaction carrying one 9 MiB privacy action
+     while retaining 6 MiB for canonical block framing and context attachments;
+     smaller transactions can still share the block. The per-source queue
+     rounds the exact ordinary/completion/timeout minimum up to 33 MiB. Keep
      `[network] max_frame_bytes_tx_gossip = 11534336` (11 MiB plaintext),
      `[network] max_frame_bytes_block_sync = 23068672` (22 MiB plaintext) and
      `max_frame_bytes = 23068700` (the same ceiling plus 28 AEAD bytes) with

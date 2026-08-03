@@ -833,7 +833,7 @@ export interface SccpSemanticProofProfileV1 {
 export interface SccpSoraFinalityAnchorV1 {
   readonly version: 1;
   readonly source_network: SccpNetworkV1;
-  readonly protocol_version: 3;
+  readonly protocol_version: 3 | 4;
   readonly chain_id_hash: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
@@ -1242,13 +1242,6 @@ export interface OpenVerifyEnvelope {
   public_inputs: BinaryLike;
   proof_bytes: BinaryLike;
   aux?: BinaryLike;
-}
-
-export interface ConfidentialEncryptedPayloadInput {
-  version?: number;
-  ephemeralPublicKey: BinaryLike;
-  nonce: BinaryLike;
-  ciphertext: BinaryLike;
 }
 
 export interface ProofAttachmentInput {
@@ -4716,7 +4709,7 @@ export type ToriiNativeAmxTransactionEntrypointHash = string & {
 };
 
 export interface ToriiNativeAmxAttestationBody {
-  round: ToriiSumeragiV2Round;
+  round: ToriiSumeragiV2ConsensusRound;
   epoch: ToriiU64;
   chain_id_hash: string;
   source_id: ToriiNativeAmxSourceId;
@@ -5737,7 +5730,7 @@ export interface ToriiPipelineRecoveryFastpqProofs {
   proofs: ReadonlyArray<ToriiPipelineRecoveryFastpqProof>;
 }
 
-export type ToriiSumeragiV2ContextId = readonly [string];
+export type ToriiSumeragiV2HeightContextId = readonly [string];
 
 export type ToriiSumeragiV2ConsensusMode = Readonly<{
   mode: "permissioned" | "npos";
@@ -5771,8 +5764,8 @@ export type ToriiSumeragiV2BodyState = Readonly<{
   details: null;
 }>;
 
-export interface ToriiSumeragiV2Round {
-  context_id: ToriiSumeragiV2ContextId;
+export interface ToriiSumeragiV2ConsensusRound {
+  context_id: ToriiSumeragiV2HeightContextId;
   height: ToriiU64;
   view: ToriiU64;
 }
@@ -5795,31 +5788,19 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   executed_block_wire_hash: string;
 }
 
-export interface ToriiSumeragiV2QcReference {
-  round: ToriiSumeragiV2Round;
-  proposal_round: ToriiSumeragiV2Round;
+export interface ToriiSumeragiV2QuorumCertificateRef {
+  round: ToriiSumeragiV2ConsensusRound;
+  proposal_round: ToriiSumeragiV2ConsensusRound;
   phase: ToriiSumeragiV2GlobalPhase;
   subject: ToriiSumeragiV2BlockSubject;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment;
 }
 
-export interface ToriiSumeragiV2TimeoutReference {
-  round: ToriiSumeragiV2Round;
-  highest_prepare_qc: ToriiSumeragiV2QcReference | null;
+export interface ToriiSumeragiV2TimeoutCertificateRef {
+  round: ToriiSumeragiV2ConsensusRound;
+  highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
   certificate_hash: string;
 }
-
-/** Canonical-name alias retained for consumers of the reducer-only draft. */
-export type ToriiSumeragiV2HeightContextId = ToriiSumeragiV2ContextId;
-
-/** Canonical-name alias retained for consumers of the reducer-only draft. */
-export type ToriiSumeragiV2ConsensusRound = ToriiSumeragiV2Round;
-
-/** Canonical-name alias retained for consumers of the reducer-only draft. */
-export type ToriiSumeragiV2QuorumCertificateRef = ToriiSumeragiV2QcReference;
-
-/** Canonical-name alias retained for consumers of the reducer-only draft. */
-export type ToriiSumeragiV2TimeoutCertificateRef = ToriiSumeragiV2TimeoutReference;
 
 export interface ToriiSumeragiV2HeightContextStatus {
   epoch: ToriiU64;
@@ -5834,7 +5815,7 @@ export interface ToriiSumeragiV2HeightContextStatus {
 }
 
 export interface ToriiSumeragiV2CommitQcStatus {
-  certificate: ToriiSumeragiV2QcReference;
+  certificate: ToriiSumeragiV2QuorumCertificateRef;
   validator_count: number;
   signer_count: number;
   min_signers: number;
@@ -5843,8 +5824,8 @@ export interface ToriiSumeragiV2CommitQcStatus {
 }
 
 export interface ToriiSumeragiV2VoteQuorumStatus {
-  round: ToriiSumeragiV2Round;
-  proposal_round: ToriiSumeragiV2Round;
+  round: ToriiSumeragiV2ConsensusRound;
+  proposal_round: ToriiSumeragiV2ConsensusRound;
   subject: ToriiSumeragiV2BlockSubject;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment;
   signer_count: number;
@@ -5854,7 +5835,7 @@ export interface ToriiSumeragiV2VoteQuorumStatus {
 }
 
 export interface ToriiSumeragiV2TimeoutQuorumStatus {
-  round: ToriiSumeragiV2Round;
+  round: ToriiSumeragiV2ConsensusRound;
   signer_count: number;
   signed_power: ToriiU64;
   min_signers: number;
@@ -5881,8 +5862,8 @@ export type ToriiSumeragiV2OutboundIntentStage = Readonly<{
 
 export interface ToriiSumeragiV2OutboundIntentStatus {
   kind: ToriiSumeragiV2OutboundIntentKind;
-  round: ToriiSumeragiV2Round;
-  proposal_round: ToriiSumeragiV2Round | null;
+  round: ToriiSumeragiV2ConsensusRound;
+  proposal_round: ToriiSumeragiV2ConsensusRound | null;
   subject: ToriiSumeragiV2BlockSubject | null;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment | null;
   stage: ToriiSumeragiV2OutboundIntentStage;
@@ -5948,7 +5929,7 @@ export type ToriiSumeragiV2ProgressTransition = Readonly<{
 
 export interface ToriiSumeragiV2ProgressTransitionStatus {
   generation: ToriiU64;
-  round: ToriiSumeragiV2Round;
+  round: ToriiSumeragiV2ConsensusRound;
   transition: ToriiSumeragiV2ProgressTransition;
   age_ms: ToriiU64;
 }
@@ -5962,6 +5943,7 @@ export type ToriiSumeragiV2LivenessBlocker = Readonly<{
     | "timeout_certificate_missing"
     | "scheduler_starvation"
     | "application_pending"
+    | "successor_activation_pending"
     | "local_control_pending";
   details: null;
 }>;
@@ -6117,19 +6099,19 @@ export interface ToriiSumeragiSafetyHaltStatus {
 }
 
 export interface ToriiSumeragiStatus {
-  protocol_version: 3;
+  protocol_version: 4;
   node_fingerprint: string;
   build_fingerprint: string;
   config_fingerprint: string;
   restart_required: boolean;
-  height_context_id: ToriiSumeragiV2ContextId;
+  height_context_id: ToriiSumeragiV2HeightContextId;
   height: ToriiU64;
   view: ToriiU64;
   phase: ToriiSumeragiV2StatusPhase;
   leader: number;
-  locked_prepare_qc: ToriiSumeragiV2QcReference | null;
-  highest_prepare_qc: ToriiSumeragiV2QcReference | null;
-  last_timeout_certificate: ToriiSumeragiV2TimeoutReference | null;
+  locked_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
+  highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
+  last_timeout_certificate: ToriiSumeragiV2TimeoutCertificateRef | null;
   body_state: ToriiSumeragiV2BodyState;
   pending_persistence_id: ToriiU64 | null;
   last_committed_height: ToriiU64;
@@ -6433,7 +6415,8 @@ export type SumeragiEvidenceKind =
   | "DoubleCommit"
   | "InvalidQc"
   | "InvalidProposal"
-  | "Censorship";
+  | "Censorship"
+  | "SumeragiV2Equivocation";
 
 export interface SumeragiEvidenceListOptions {
   limit?: NumericLike;
@@ -6443,10 +6426,11 @@ export interface SumeragiEvidenceListOptions {
 }
 
 export interface SumeragiEvidenceRecordBase {
-  kind: string;
+  kind: SumeragiEvidenceKind;
   recorded_height: number;
   recorded_view: number;
   recorded_ms: number;
+  consensus_admitted_height: number | null;
 }
 
 export interface SumeragiDoubleVoteEvidenceRecord
@@ -6456,7 +6440,7 @@ export interface SumeragiDoubleVoteEvidenceRecord
   height: number;
   view: number;
   epoch: number;
-  signer: string;
+  signer: number;
   block_hash_1: string;
   block_hash_2: string;
 }
@@ -6468,7 +6452,7 @@ export interface SumeragiInvalidQcEvidenceRecord
   view: number;
   epoch: number;
   subject_block_hash: string;
-  phase: string;
+  phase: "Prepare" | "Commit" | "NewView";
   reason: string;
 }
 
@@ -6488,14 +6472,22 @@ export interface SumeragiCensorshipEvidenceRecord
   kind: "Censorship";
   tx_hash: string;
   receipt_count: number;
-  min_height: number;
-  max_height: number;
   signers: ReadonlyArray<string>;
+  submitted_at_height_min?: number;
+  submitted_at_height_max?: number;
 }
 
-export interface SumeragiUnknownEvidenceRecord
+export interface SumeragiV2EquivocationEvidenceRecord
   extends SumeragiEvidenceRecordBase {
-  detail?: string;
+  kind: "SumeragiV2Equivocation";
+  class: "proposal" | "phase_vote" | "timeout_vote";
+  height: number;
+  view: number;
+  epoch: number;
+  signer: number;
+  context_id: string;
+  artifact_hash_1: string;
+  artifact_hash_2: string;
 }
 
 export type SumeragiEvidenceRecord =
@@ -6503,7 +6495,7 @@ export type SumeragiEvidenceRecord =
   | SumeragiInvalidQcEvidenceRecord
   | SumeragiInvalidProposalEvidenceRecord
   | SumeragiCensorshipEvidenceRecord
-  | SumeragiUnknownEvidenceRecord;
+  | SumeragiV2EquivocationEvidenceRecord;
 
 export interface SumeragiEvidenceListResponse {
   total: number;
@@ -6512,16 +6504,6 @@ export interface SumeragiEvidenceListResponse {
 
 export interface SumeragiEvidenceCountResponse {
   count: number;
-}
-
-export interface SumeragiEvidenceSubmitRequest {
-  evidence_hex: string;
-  apiToken?: string;
-}
-
-export interface SumeragiEvidenceSubmitResponse {
-  status: string;
-  kind: string;
 }
 
 export type KaigiRelayHealthStatus = "healthy" | "degraded" | "unavailable";
@@ -7685,7 +7667,9 @@ export interface EnactReferendumInstructionInput {
 }
 
 export interface FinalizeReferendumInstructionInput {
+  /** Exact lowercase 32-byte proposal digest; must equal `proposalId`. */
   referendumId: string;
+  /** Proposal digest bytes, or the same exact lowercase digest string as `referendumId`. */
   proposalId: HashLike;
 }
 
@@ -7716,31 +7700,6 @@ export interface ScheduleConfidentialPolicyTransitionInstructionInput {
 export interface CancelConfidentialPolicyTransitionInstructionInput {
   assetDefinitionId: string;
   transitionId: HashLike;
-}
-
-export interface ShieldInstructionInput {
-  assetDefinitionId: string;
-  fromAccountId: string;
-  amount: QuantityInput;
-  noteCommitment: BinaryLike;
-  encryptedPayload: ConfidentialEncryptedPayloadInput;
-}
-
-export interface ZkTransferInstructionInput {
-  assetDefinitionId: string;
-  inputs: ReadonlyArray<BinaryLike>;
-  outputs: ReadonlyArray<BinaryLike>;
-  proof: ProofAttachmentInput;
-  rootHint?: BinaryLike | null;
-}
-
-export interface UnshieldInstructionInput {
-  assetDefinitionId: string;
-  destinationAccountId: string;
-  publicAmount: QuantityInput;
-  inputs: ReadonlyArray<BinaryLike>;
-  proof: ProofAttachmentInput;
-  rootHint?: BinaryLike | null;
 }
 
 export interface CreateElectionInstructionInput {
@@ -9859,42 +9818,6 @@ export interface CancelConfidentialPolicyTransitionTransactionInput {
   privateKeyAlgorithm?: string | null;
 }
 
-export interface ShieldTransactionInput {
-  chainId: string;
-  authority: string;
-  shield: ShieldInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export interface ZkTransferTransactionInput {
-  chainId: string;
-  authority: string;
-  transfer: ZkTransferInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export interface UnshieldTransactionInput {
-  chainId: string;
-  authority: string;
-  unshield: UnshieldInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
 export interface CreateElectionTransactionInput {
   chainId: string;
   authority: string;
@@ -11704,9 +11627,6 @@ export declare class ToriiClient {
     options?: SumeragiEvidenceListOptions,
   ): Promise<SumeragiEvidenceListResponse>;
   getSumeragiEvidenceCount(): Promise<SumeragiEvidenceCountResponse>;
-  submitSumeragiEvidence(
-    request: SumeragiEvidenceSubmitRequest,
-  ): Promise<SumeragiEvidenceSubmitResponse>;
   getMetrics(options: { asText: true; signal?: AbortSignal }): Promise<string>;
   getMetrics(options?: {
     asText?: boolean;
@@ -13020,15 +12940,6 @@ export function buildScheduleConfidentialPolicyTransitionTransaction(
 export function buildCancelConfidentialPolicyTransitionTransaction(
   input: CancelConfidentialPolicyTransitionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildShieldTransaction(
-  input: ShieldTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
-export function buildZkTransferTransaction(
-  input: ZkTransferTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
-export function buildUnshieldTransaction(
-  input: UnshieldTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
 export function buildCreateElectionTransaction(
   input: CreateElectionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
@@ -13701,16 +13612,6 @@ export function buildScheduleConfidentialPolicyTransitionInstruction(
 
 export function buildCancelConfidentialPolicyTransitionInstruction(
   input: CancelConfidentialPolicyTransitionInstructionInput,
-): object;
-
-export function buildShieldInstruction(input: ShieldInstructionInput): object;
-
-export function buildZkTransferInstruction(
-  input: ZkTransferInstructionInput,
-): object;
-
-export function buildUnshieldInstruction(
-  input: UnshieldInstructionInput,
 ): object;
 
 export function buildCreateElectionInstruction(

@@ -32,7 +32,6 @@ use iroha_data_model::{
         mint_burn::BurnBox,
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
-        zk::{Shield, Unshield, ZkTransfer},
     },
     metadata::Metadata,
     nft::{NftEntry, NftId},
@@ -685,9 +684,6 @@ pub(crate) enum ExplorerInstructionKind {
     SetParameter,
     Upgrade,
     Log,
-    Shield,
-    ZkTransfer,
-    Unshield,
     KagemushaTopUp,
     KagemushaRedeem,
     Custom,
@@ -709,9 +705,6 @@ impl ExplorerInstructionKind {
             Self::SetParameter => "SetParameter",
             Self::Upgrade => "Upgrade",
             Self::Log => "Log",
-            Self::Shield => "Shield",
-            Self::ZkTransfer => "ZkTransfer",
-            Self::Unshield => "Unshield",
             Self::KagemushaTopUp => "KagemushaTopUp",
             Self::KagemushaRedeem => "KagemushaRedeem",
             Self::Custom => "Custom",
@@ -737,9 +730,6 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "setparameter" | "set_parameter" => Ok(Self::SetParameter),
             "upgrade" => Ok(Self::Upgrade),
             "log" => Ok(Self::Log),
-            "shield" => Ok(Self::Shield),
-            "zktransfer" | "zk_transfer" => Ok(Self::ZkTransfer),
-            "unshield" => Ok(Self::Unshield),
             "kagemushatopup" | "kagemusha_top_up" => Ok(Self::KagemushaTopUp),
             "kagemusharedeem" | "kagemusha_redeem" => Ok(Self::KagemushaRedeem),
             "custom" => Ok(Self::Custom),
@@ -849,12 +839,6 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Upgrade
             } else if any.downcast_ref::<Log>().is_some() {
                 ExplorerInstructionKind::Log
-            } else if any.downcast_ref::<Shield>().is_some() {
-                ExplorerInstructionKind::Shield
-            } else if any.downcast_ref::<ZkTransfer>().is_some() {
-                ExplorerInstructionKind::ZkTransfer
-            } else if any.downcast_ref::<Unshield>().is_some() {
-                ExplorerInstructionKind::Unshield
             } else if any.downcast_ref::<TopUpKagemushaRecursiveV4>().is_some() {
                 ExplorerInstructionKind::KagemushaTopUp
             } else if any.downcast_ref::<RedeemKagemushaRecursiveV4>().is_some() {
@@ -988,9 +972,6 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::SetParameter => set_parameter_payload(instruction),
         ExplorerInstructionKind::Upgrade => upgrade_payload(instruction),
         ExplorerInstructionKind::Log => log_payload(instruction),
-        ExplorerInstructionKind::Shield => zk_payload(instruction, "Shield"),
-        ExplorerInstructionKind::ZkTransfer => zk_payload(instruction, "ZkTransfer"),
-        ExplorerInstructionKind::Unshield => zk_payload(instruction, "Unshield"),
         ExplorerInstructionKind::KagemushaTopUp => kagemusha_top_up_payload(instruction),
         ExplorerInstructionKind::KagemushaRedeem => kagemusha_redeem_payload(instruction),
         ExplorerInstructionKind::Custom => custom_payload(instruction),
@@ -1262,33 +1243,6 @@ fn custom_payload(instruction: &InstructionBox) -> Option<Value> {
     let parsed = json::parse_value(custom.payload.get())
         .unwrap_or_else(|_| Value::String(custom.payload.get().clone()));
     Some(instruction_variant_value("Custom", parsed))
-}
-
-fn zk_payload(instruction: &InstructionBox, variant: &'static str) -> Option<Value> {
-    match variant {
-        "Shield" => {
-            let shield = instruction.as_any().downcast_ref::<Shield>()?;
-            Some(instruction_variant_value(
-                "Shield",
-                json::to_value(shield).ok()?,
-            ))
-        }
-        "ZkTransfer" => {
-            let transfer = instruction.as_any().downcast_ref::<ZkTransfer>()?;
-            Some(instruction_variant_value(
-                "ZkTransfer",
-                json::to_value(transfer).ok()?,
-            ))
-        }
-        "Unshield" => {
-            let unshield = instruction.as_any().downcast_ref::<Unshield>()?;
-            Some(instruction_variant_value(
-                "Unshield",
-                json::to_value(unshield).ok()?,
-            ))
-        }
-        _ => None,
-    }
 }
 
 fn instruction_variant_value(variant: &str, value: Value) -> Value {

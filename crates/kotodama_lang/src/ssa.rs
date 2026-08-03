@@ -2839,24 +2839,6 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(proof);
             f(vk);
         }
-        BuildUnshieldInline {
-            asset,
-            to,
-            amount,
-            inputs,
-            backend,
-            proof,
-            vk,
-            ..
-        } => {
-            f(asset);
-            f(to);
-            f(amount);
-            f(inputs);
-            f(backend);
-            f(proof);
-            f(vk);
-        }
         PointerEq { left, right, .. } => {
             f(left);
             f(right);
@@ -3010,7 +2992,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         ir::Instr::TuplePack { dest, .. } => Some(dest),
         ir::Instr::TupleGet { dest, .. } => Some(dest),
         ir::Instr::BuildSubmitBallotInline { dest, .. } => Some(dest),
-        ir::Instr::BuildUnshieldInline { dest, .. } => Some(dest),
         ir::Instr::VendorExecuteQuery { dest, .. } => Some(dest),
         ir::Instr::Call { dest, .. } | ir::Instr::InvokeEntrypointAs { dest, .. } => dest.as_mut(),
         ir::Instr::GrantPermission { .. }

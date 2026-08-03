@@ -2797,7 +2797,7 @@ mod measured_bytes_impls {
         },
         smartcontracts::code::ContractSubjectBinding,
         state::{
-            AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord,
+            AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
             DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
             FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
             GovernanceLocksForReferendum, GovernanceParliamentSnapshot, GovernancePipeline,
@@ -2856,6 +2856,7 @@ mod measured_bytes_impls {
         ConfidentialPolicyMode,
         ConfidentialPolicyTransition,
         ConfidentialStatus,
+        ConfidentialTreeProfile,
         ContractAbiHash,
         ContractCodeHash,
         CouncilDerivationKind,
@@ -3846,6 +3847,9 @@ mod measured_bytes_impls {
     impl MeasuredBytes for ZkAssetState {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ZkAssetState>();
+            total = total.saturating_add(self.tree_profile.measured_bytes_extra());
+            total = total.saturating_add(self.tree_frontier.measured_bytes_extra());
+            total = total.saturating_add(self.persisted_root.measured_bytes_extra());
             total = total.saturating_add(self.mode.measured_bytes_extra());
             total = total.saturating_add(self.allow_shield.measured_bytes_extra());
             total = total.saturating_add(self.allow_unshield.measured_bytes_extra());

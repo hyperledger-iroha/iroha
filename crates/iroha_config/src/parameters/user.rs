@@ -709,6 +709,12 @@ pub struct Root {
     public_key: WithOrigin<PublicKey>,
     #[config(env = "PRIVATE_KEY")]
     private_key: WithOrigin<PrivateKey>,
+    /// Dedicated Ed25519 identity used only by the SoraNet transport handshake.
+    #[config(env = "P2P_SORANET_TRANSPORT_PUBLIC_KEY")]
+    soranet_transport_public_key: WithOrigin<PublicKey>,
+    /// Private half of the dedicated SoraNet transport identity.
+    #[config(env = "P2P_SORANET_TRANSPORT_PRIVATE_KEY")]
+    soranet_transport_private_key: WithOrigin<PrivateKey>,
     #[config(env = "TRUSTED_PEERS", default)]
     trusted_peers: WithOrigin<TrustedPeers>,
     #[config(
@@ -809,6 +815,9 @@ pub enum ParseError {
     /// Key pair (public/private) values could not be combined into a valid key pair.
     #[error("Failed to construct the key pair")]
     BadKeyPair,
+    /// The dedicated SoraNet transport identity is not a matching Ed25519 key pair.
+    #[error("Invalid dedicated SoraNet transport identity")]
+    InvalidSoranetTransportIdentity,
     /// Nexus configuration contained invalid lane or dataspace definitions.
     #[error("Invalid Nexus lane/dataspace configuration")]
     InvalidNexusConfig,
@@ -1062,6 +1071,42 @@ impl Root {
             );
         }
 
+        let (soranet_transport_private_key, soranet_transport_private_key_origin) =
+            self.soranet_transport_private_key.into_tuple();
+        let (soranet_transport_public_key, soranet_transport_public_key_origin) =
+            self.soranet_transport_public_key.into_tuple();
+        let soranet_transport_key_pair =
+            KeyPair::new(soranet_transport_public_key, soranet_transport_private_key)
+                .attach(ConfigValueAndOrigin::new(
+                    "[REDACTED]",
+                    soranet_transport_public_key_origin.clone(),
+                ))
+                .attach(ConfigValueAndOrigin::new(
+                    "[REDACTED]",
+                    soranet_transport_private_key_origin.clone(),
+                ))
+                .change_context(ParseError::InvalidSoranetTransportIdentity)
+                .ok_or_emit(&mut emitter);
+        if let Some(key_pair) = soranet_transport_key_pair.as_ref()
+            && !matches!(
+                key_pair.public_key().try_algorithm(),
+                Ok(Algorithm::Ed25519)
+            )
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoranetTransportIdentity)
+                    .attach("soranet_transport_public_key/private_key must be Ed25519")
+                    .attach(ConfigValueAndOrigin::new(
+                        "[REDACTED]",
+                        soranet_transport_public_key_origin,
+                    ))
+                    .attach(ConfigValueAndOrigin::new(
+                        "[REDACTED]",
+                        soranet_transport_private_key_origin,
+                    )),
+            );
+        }
+
         let (network, block_sync, transaction_gossiper) = self.network.parse();
         let Some(key_pair_ref) = key_pair.as_ref() else {
             panic!("Key pair is missing");
@@ -1159,6 +1204,17 @@ impl Root {
         } else {
             None
         };
+        if let (Some(soranet_transport_key_pair), Some(streaming)) =
+            (soranet_transport_key_pair.as_ref(), streaming.as_ref())
+            && soranet_transport_key_pair.public_key()
+                == streaming.key_material.identity().public_key()
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoranetTransportIdentity).attach(
+                    "soranet_transport_public_key must not reuse streaming.identity_public_key",
+                ),
+            );
+        }
         let crypto = self.crypto.parse(&mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
@@ -1201,9 +1257,12 @@ impl Root {
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
 
         let key_pair = key_pair.unwrap();
+        let soranet_transport_key_pair = soranet_transport_key_pair
+            .expect("SoraNet transport identity should be valid when emitter succeeds");
         let peer = actual::Common {
             chain: self.chain.0,
             key_pair,
+            soranet_transport_key_pair,
             peer,
             trusted_peers,
             chain_discriminant: self.chain_discriminant,
@@ -3983,6 +4042,10 @@ impl Zk {
 /// These are consensus execution limits. They deliberately have no environment-variable aliases:
 /// every validator must obtain the same values from its configuration file.
 #[derive(Debug, ReadConfig, Clone, Copy)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the max_ prefix is part of the public SCCP configuration schema"
+)]
 pub struct Sccp {
     /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
     #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES")]
@@ -4510,7 +4573,7 @@ impl Fastpq {
 }
 
 /// IVM runtime presentation toggles (user view).
-#[derive(Debug, ReadConfig, Clone, Copy)]
+#[derive(Debug, ReadConfig, Clone, Copy, Default)]
 pub struct Ivm {
     /// Startup banner settings.
     #[config(nested)]
@@ -4521,14 +4584,6 @@ impl Ivm {
     fn parse(self) -> actual::Ivm {
         actual::Ivm {
             banner: self.banner.parse(),
-        }
-    }
-}
-
-impl Default for Ivm {
-    fn default() -> Self {
-        Self {
-            banner: Banner::default(),
         }
     }
 }
@@ -7928,6 +7983,10 @@ pub struct Settlement {
 
 /// User-level optional Kagemusha proof-release cache configuration.
 #[derive(Debug, ReadConfig, Clone)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the kagemusha_ prefix is part of the public settlement configuration schema"
+)]
 pub struct Offline {
     /// Canonical Norito policy authenticating promoted Kagemusha releases.
     ///
@@ -26142,15 +26201,8 @@ pub struct SorafsGovernanceDagService {
     pub state_dir: Option<PathBuf>,
     /// IPFS-compatible HTTP API base URL.
     pub ipfs_api_url: Option<String>,
-    /// Public-head mode (`signed_http` or `ipns`).
-    #[config(default = "defaults::sorafs::storage::governance_dag_service::HEAD_MODE.to_owned()")]
-    pub head_mode: String,
-    /// Signed-head HTTP endpoint used by `signed_http` mode.
+    /// Signed-head HTTP endpoint providing strong-ETag compare-and-swap.
     pub signed_head_url: Option<String>,
-    /// IPNS name resolved by `ipns` mode.
-    pub ipns_name: Option<String>,
-    /// IPFS keystore alias passed to `name/publish` by `ipns` mode.
-    pub ipns_key_name: Option<String>,
     /// Opaque runtime authenticator handle for the IPFS/Kubo API.
     pub ipfs_authenticator_handle: Option<String>,
     /// Exact non-zero IPFS authenticator provider revision.
@@ -26203,15 +26255,6 @@ pub struct SorafsGovernanceDagService {
     /// Maximum local block, head, or CAR request payload.
     #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_REQUEST_BYTES")]
     pub max_request_bytes: Bytes<u64>,
-    /// Maximum entries retained in the deterministic IPLD mirror.
-    #[config(default = "defaults::sorafs::storage::governance_dag_service::MIRROR_MAX_ENTRIES")]
-    pub mirror_max_entries: usize,
-    /// Maximum canonical block bytes retained in the deterministic IPLD mirror.
-    #[config(default = "defaults::sorafs::storage::governance_dag_service::MIRROR_MAX_BYTES")]
-    pub mirror_max_bytes: Bytes<u64>,
-    /// Maximum accepted age of a source signed head.
-    #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_HEAD_AGE_SECS")]
-    pub max_head_age_secs: u64,
     /// Maximum accepted future clock skew for blocks and heads.
     #[config(default = "defaults::sorafs::storage::governance_dag_service::MAX_FUTURE_SKEW_SECS")]
     pub max_future_skew_secs: u64,
@@ -26246,10 +26289,7 @@ impl Default for SorafsGovernanceDagService {
             enabled: service::ENABLED,
             state_dir: service::state_dir(),
             ipfs_api_url: None,
-            head_mode: service::HEAD_MODE.to_owned(),
             signed_head_url: None,
-            ipns_name: None,
-            ipns_key_name: None,
             ipfs_authenticator_handle: None,
             ipfs_authenticator_revision: None,
             ipfs_authenticator_policy_digest_hex: None,
@@ -26271,9 +26311,6 @@ impl Default for SorafsGovernanceDagService {
             dns_timeout_ms: service::DNS_TIMEOUT_MS,
             max_response_bytes: service::MAX_RESPONSE_BYTES,
             max_request_bytes: service::MAX_REQUEST_BYTES,
-            mirror_max_entries: service::MIRROR_MAX_ENTRIES,
-            mirror_max_bytes: service::MIRROR_MAX_BYTES,
-            max_head_age_secs: service::MAX_HEAD_AGE_SECS,
             max_future_skew_secs: service::MAX_FUTURE_SKEW_SECS,
             allow_insecure_http: service::ALLOW_INSECURE_HTTP,
             allow_private_ipfs_endpoint: service::ALLOW_PRIVATE_IPFS_ENDPOINT,
@@ -26459,7 +26496,6 @@ impl SorafsGovernanceDagService {
             ("connect_timeout_ms", self.connect_timeout_ms),
             ("request_timeout_ms", self.request_timeout_ms),
             ("dns_timeout_ms", self.dns_timeout_ms),
-            ("max_head_age_secs", self.max_head_age_secs),
         ] {
             if value == 0 {
                 emit(
@@ -26471,7 +26507,6 @@ impl SorafsGovernanceDagService {
         for (field, value) in [
             ("max_response_bytes", self.max_response_bytes.0),
             ("max_request_bytes", self.max_request_bytes.0),
-            ("mirror_max_bytes", self.mirror_max_bytes.0),
         ] {
             if value == 0 {
                 emit(
@@ -26488,13 +26523,6 @@ impl SorafsGovernanceDagService {
                 format!(
                     "sorafs.storage.governance_dag_service.max_request_bytes must be at least the canonical Governance DAG block ceiling of {minimum_request_bytes} bytes"
                 ),
-            );
-        }
-        if self.mirror_max_entries == 0 {
-            emit(
-                emitter,
-                "sorafs.storage.governance_dag_service.mirror_max_entries must be non-zero"
-                    .to_owned(),
             );
         }
         if self.request_timeout_ms < self.connect_timeout_ms {
@@ -26562,13 +26590,6 @@ impl SorafsGovernanceDagService {
                     .to_owned(),
             );
         }
-        if !matches!(self.head_mode.as_str(), "signed_http" | "ipns") {
-            emit(
-                emitter,
-                "sorafs.storage.governance_dag_service.head_mode must be `signed_http` or `ipns`"
-                    .to_owned(),
-            );
-        }
         for (field, value) in [
             (
                 "ipfs_authenticator_handle",
@@ -26625,49 +26646,14 @@ impl SorafsGovernanceDagService {
                     );
                 }
             }
-            match self.head_mode.as_str() {
-                "signed_http" => {
-                    if self.signed_head_url.is_none()
-                        || !head_provider_fields.iter().all(|present| *present)
-                    {
-                        emit(
-                            emitter,
-                            "sorafs.storage.governance_dag_service.signed_head_url and the complete head authenticator binding are required in signed_http mode"
-                                .to_owned(),
-                        );
-                    }
-                    if self.ipns_name.is_some() || self.ipns_key_name.is_some() {
-                        emit(
-                            emitter,
-                            "sorafs.storage.governance_dag_service.ipns_name and ipns_key_name must be absent in signed_http mode"
-                                .to_owned(),
-                        );
-                    }
-                }
-                "ipns" => {
-                    if self.ipns_name.is_none() || self.ipns_key_name.is_none() {
-                        emit(
-                            emitter,
-                            "sorafs.storage.governance_dag_service.ipns_name and ipns_key_name are required in ipns mode"
-                                .to_owned(),
-                        );
-                    }
-                    if head_provider_fields.iter().any(|present| *present) {
-                        emit(
-                            emitter,
-                            "sorafs.storage.governance_dag_service head authenticator binding must be absent in ipns mode"
-                                .to_owned(),
-                        );
-                    }
-                    if self.signed_head_url.is_some() {
-                        emit(
-                            emitter,
-                            "sorafs.storage.governance_dag_service.signed_head_url must be absent in ipns mode"
-                                .to_owned(),
-                        );
-                    }
-                }
-                _ => {}
+            if self.signed_head_url.is_none()
+                || !head_provider_fields.iter().all(|present| *present)
+            {
+                emit(
+                    emitter,
+                    "sorafs.storage.governance_dag_service.signed_head_url and the complete head authenticator binding are required when enabled"
+                        .to_owned(),
+                );
             }
         }
         if checkpoint_provider_required {
@@ -26706,10 +26692,7 @@ impl SorafsGovernanceDagService {
             enabled: self.enabled,
             state_dir: self.state_dir,
             ipfs_api_url: self.ipfs_api_url,
-            head_mode: self.head_mode,
             signed_head_url: self.signed_head_url,
-            ipns_name: self.ipns_name,
-            ipns_key_name: self.ipns_key_name,
             ipfs_authenticator_handle: self.ipfs_authenticator_handle,
             ipfs_authenticator_revision: self.ipfs_authenticator_revision,
             ipfs_authenticator_policy_digest,
@@ -26730,9 +26713,6 @@ impl SorafsGovernanceDagService {
             dns_timeout: std::time::Duration::from_millis(self.dns_timeout_ms.max(1)),
             max_response_bytes: Bytes(self.max_response_bytes.0.max(1)),
             max_request_bytes: Bytes(self.max_request_bytes.0.max(1)),
-            mirror_max_entries: self.mirror_max_entries.max(1),
-            mirror_max_bytes: Bytes(self.mirror_max_bytes.0.max(1)),
-            max_head_age_secs: self.max_head_age_secs.max(1),
             max_future_skew_secs: self.max_future_skew_secs,
             allow_insecure_http: self.allow_insecure_http,
             allow_private_ipfs_endpoint: self.allow_private_ipfs_endpoint,
@@ -26764,6 +26744,10 @@ pub struct SorafsGovernanceDagServiceRootSorafs {
 
 /// Storage fields consumed by the standalone Governance DAG service.
 #[derive(Debug, ReadConfig)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the governance_dag_ prefix is part of the public SoraFS configuration schema"
+)]
 pub struct SorafsGovernanceDagServiceRootStorage {
     /// Verified filesystem publisher root consumed by the service.
     pub governance_dag_dir: Option<PathBuf>,
@@ -26940,14 +26924,12 @@ mod sorafs_governance_dag_service_tests {
     }
 
     #[test]
-    fn service_rejects_zero_bounds_bad_timeout_order_and_unknown_mode() {
+    fn service_rejects_zero_response_bound_and_bad_timeout_order() {
         let mut service = SorafsGovernanceDagService::default();
         service.poll_interval_secs = 0;
         service.connect_timeout_ms = 10;
         service.request_timeout_ms = 9;
         service.max_response_bytes = Bytes(0);
-        service.mirror_max_entries = 0;
-        service.head_mode = "unversioned".to_owned();
         service.listen_addr = "localhost:9094".to_owned();
         let mut emitter = Emitter::new();
 
@@ -27190,67 +27172,6 @@ allow_private_head_endpoint = false
     }
 
     #[test]
-    fn ipns_mode_rejects_every_signed_head_authenticator_field() {
-        let mut service = valid_governance_dag_service();
-        service.head_mode = "ipns".to_owned();
-        service.signed_head_url = None;
-        service.ipns_name = Some("k51qzi5uqu5dl-governance".to_owned());
-        service.ipns_key_name = Some("governance-publisher".to_owned());
-        service.head_authenticator_handle = None;
-        service.head_authenticator_revision = None;
-        service.head_authenticator_policy_digest_hex = None;
-        service.head_request_auth_public_key_hex = None;
-        let mut valid_emitter = Emitter::new();
-        let _ = service.clone().parse(false, &mut valid_emitter);
-        valid_emitter
-            .into_result()
-            .expect("IPNS mode without a signed-head authenticator must parse");
-
-        service.signed_head_url = Some("https://governance-head.example/v1/head".to_owned());
-        let mut endpoint_emitter = Emitter::new();
-        let _ = service.clone().parse(false, &mut endpoint_emitter);
-        drop(
-            endpoint_emitter
-                .into_result()
-                .expect_err("a signed-head endpoint must fail in IPNS mode"),
-        );
-
-        service.signed_head_url = None;
-        service.head_request_auth_public_key_hex =
-            Some(ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX.to_owned());
-        let mut invalid_emitter = Emitter::new();
-        let _ = service.parse(false, &mut invalid_emitter);
-        drop(
-            invalid_emitter
-                .into_result()
-                .expect_err("even a lone signed-head verifier key must fail in IPNS mode"),
-        );
-    }
-
-    #[test]
-    fn signed_http_mode_rejects_every_ipns_selector() {
-        let selectors: [fn(&mut SorafsGovernanceDagService); 2] = [
-            |service: &mut SorafsGovernanceDagService| {
-                service.ipns_name = Some("k51qzi5uqu5dl-governance".to_owned());
-            },
-            |service: &mut SorafsGovernanceDagService| {
-                service.ipns_key_name = Some("governance-publisher".to_owned());
-            },
-        ];
-        for set_selector in selectors {
-            let mut service = valid_governance_dag_service();
-            set_selector(&mut service);
-            let mut emitter = Emitter::new();
-            let _ = service.parse(false, &mut emitter);
-            drop(
-                emitter
-                    .into_result()
-                    .expect_err("IPNS selectors must fail in signed_http mode"),
-            );
-        }
-    }
-
-    #[test]
     fn dedicated_view_rejects_incomplete_invalid_or_substituted_producer_binding() {
         let mut cases = Vec::new();
 
@@ -27417,7 +27338,6 @@ allow_private_head_endpoint = false
             view.producer_publisher_public_key_hex.as_deref(),
             Some(VALID_PUBLISHER_PUBLIC_KEY_HEX)
         );
-        assert_eq!(view.service.head_mode, "signed_http");
         assert_eq!(
             view.service.checkpoint_store_handle.as_deref(),
             Some("kms:governance/checkpoint")
@@ -27499,6 +27419,22 @@ allow_private_head_endpoint = false
         );
 
         assert!(diagnostic.contains("unknown_service_field"), "{diagnostic}");
+    }
+
+    #[test]
+    fn dedicated_view_rejects_node_local_mirror_retention_knobs() {
+        for (field, assignment) in [
+            ("mirror_max_entries", "mirror_max_entries = 1"),
+            ("mirror_max_bytes", "mirror_max_bytes = 1"),
+        ] {
+            let table = valid_dedicated_view_toml("", assignment);
+            let diagnostic = format!(
+                "{:?}",
+                actual::SorafsGovernanceDagServiceView::from_toml_source(TomlSource::inline(table))
+                    .expect_err("node-local mirror retention policy must be rejected")
+            );
+            assert!(diagnostic.contains(field), "{diagnostic}");
+        }
     }
 
     #[test]
@@ -32441,6 +32377,8 @@ mod duration_clamp_tests {
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
 ]
@@ -32454,7 +32392,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"

@@ -74,7 +74,7 @@ Query syscall (Norito)
 - Gas is `base + per_item + per_byte`, with per-item cost multiplied when sorting is requested and an offset penalty applied for large pagination skips.
 
 Vendor syscall (Norito)
-- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory operation tag in `r11`: `1` for `SubmitBallot`, `2` for `Unshield`, or `3` for `RecordSccpMessage`. Tag `0`, unknown tags, mismatched instruction types, and other instruction types are rejected.
+- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory operation tag in `r11`: `1` for `SubmitBallot` or `2` for `RecordSccpMessage`. Tag `0`, unknown tags, mismatched instruction types, and other instruction types are rejected.
 
 Ordering and OUTPUT
 - Syscalls execute in program order. Hosts must apply their side effects in the order received.
@@ -272,12 +272,10 @@ NFTs
 - 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
 
 Zero‑knowledge (verification/state‑read)
-- 0x60 ZK_VERIFY_TRANSFER — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
-- 0x61 ZK_VERIFY_UNSHIELD — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
-- 0x62 ZK_VOTE_VERIFY_BALLOT — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
-- 0x63 ZK_VOTE_VERIFY_TALLY — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
-- 0x64 ZK_ROOTS_GET — Args: `r10=&NoritoBytes(RootsGetRequest)` → `ptr (NoritoBytes(RootsGetResponse))` — Gas: G_roots_get + bytes
-- 0x65 ZK_VOTE_GET_TALLY — Args: `r10=&NoritoBytes(VoteGetTallyRequest)` → `ptr (NoritoBytes(VoteGetTallyResponse))` — Gas: G_vote_get + bytes
+- 0x60 ZK_VOTE_VERIFY_BALLOT — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
+- 0x61 ZK_VOTE_VERIFY_TALLY — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
+- 0x62 ZK_ROOTS_GET — Args: `r10=&NoritoBytes(RootsGetRequest)` → `ptr (NoritoBytes(RootsGetResponse))` — Gas: G_roots_get + bytes
+- 0x63 ZK_VOTE_GET_TALLY — Args: `r10=&NoritoBytes(VoteGetTallyRequest)` → `ptr (NoritoBytes(VoteGetTallyResponse))` — Gas: G_vote_get + bytes
 
 ZK gating & determinism
 - `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
@@ -344,7 +342,7 @@ Durable state
   bytes.
 
 Smart‑contract helpers (Norito)
-- 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`, `2=Unshield`, `3=RecordSccpMessage`) → 0 — Gas: G_sci
+- 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`, `2=RecordSccpMessage`) → 0 — Gas: G_sci
 - 0xA5 SUBSCRIPTION_BILL — Args: none → 0 — Gas: G_sub_bill
   - Uses trigger metadata `subscription_ref` to locate the subscription NFT, computes charges, updates subscription metadata (including `subscription_invoice`), and reschedules the billing trigger.
 - 0xA6 SUBSCRIPTION_RECORD_USAGE — Args: none → 0 — Gas: G_sub_usage
@@ -397,7 +395,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 Canonical instruction bridge
 - `EXECUTE_INSTRUCTION` accepts only a pointer-ABI `NoritoBytes` payload containing the canonical
   Norito frame of one data-model `InstructionBox`. Register `r11` must contain the matching
-  operation tag: `1` for `SubmitBallot`, `2` for `Unshield`, or `3` for `RecordSccpMessage`.
+  operation tag: `1` for `SubmitBallot` or `2` for `RecordSccpMessage`.
 - JSON pointers, raw JSON envelopes, direct concrete-instruction frames, alternate-layout Norito
   frames, tag `0`, unknown tags, mismatched instruction types, and all other instruction types are
   rejected. There is no compatibility decoding path.
@@ -629,7 +627,7 @@ node enforces that policy unconditionally.
 | 0x98 | BLAKE2B256_HASH | r10=&Blob(message) | r10=ptr (&Blob(raw Blake2b-256 digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x99 | KECCAK256_HASH | r10=&Blob(message) | r10=ptr (&Blob(Keccak-256 digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x9A | IROHA_HASH | r10=&Blob(message) | r10=ptr (&Blob(Iroha Hash::new digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
-| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=Unshield,3=RecordSccpMessage) | u64=0 | asset:gas/G_sci@ivm.core/v2 |
+| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=RecordSccpMessage) | u64=0 | asset:gas/G_sci@ivm.core/v2 |
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | u64=count | asset:gas/G_create_nfts_all@ivm.core/v2 |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | r10=depth:u64 | u64=prev | asset:gas/G_sc_depth@ivm.core/v2 |
@@ -839,7 +837,7 @@ Codec helpers
 - Null inputs: DECODE_INT, JSON_DECODE, NAME_DECODE, and POINTER_FROM_NORITO accept `r10=0` and return `r10=0` without error.
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
-- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: configured V1 proof + public-input-unit + encoded request/response byte schedule; 1 MiB encoded-payload and 16-proof hard caps
+- 0x64 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: configured V1 proof + public-input-unit + encoded request/response byte schedule; 1 MiB encoded-payload and 16-proof hard caps
   - `DefaultHost` has no proof backend. After canonical validation it returns one failure status byte (`0`) per item, `r11=ERR_BACKEND`, and `r12=0`; it never reports a proof as verified.
   - `CoreHost` returns the same status-vector shape and runs the same outer-envelope binding plus full backend verification path as the single-item ZK verify syscalls.
   - Top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).

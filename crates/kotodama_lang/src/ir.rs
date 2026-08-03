@@ -1255,20 +1255,6 @@ pub enum Instr {
         proof: Temp,
         vk: Temp,
     },
-    /// Build a Norito-encoded Unshield InstructionBox from literal public inputs.
-    ///
-    /// Private change commitments are derived from the proof by the host and are never supplied by
-    /// guest code.
-    BuildUnshieldInline {
-        dest: Temp,
-        asset: Temp,
-        to: Temp,
-        amount: Temp,
-        inputs: Temp,
-        backend: Temp,
-        proof: Temp,
-        vk: Temp,
-    },
     /// Compare two pointer-ABI values for deep equality by content.
     PointerEq {
         dest: Temp,
@@ -1320,8 +1306,6 @@ pub enum Instr {
 pub enum VendorInstructionKind {
     /// Governance `SubmitBallot`.
     SubmitBallot,
-    /// ZK `Unshield`.
-    Unshield,
     /// Bridge `RecordSccpMessage`.
     RecordSccpMessage,
 }
@@ -5364,13 +5348,8 @@ fn lower_direct_helper_call(
 ) -> Temp {
     let syscall = direct_builtin_syscall(builtin);
     let mut lowered_args = Vec::with_capacity(args.len());
-    for (idx, arg) in args.iter().enumerate() {
-        let temp = if builtin == Builtin::JsonSetIntDirect && idx == 2 {
-            lower_expr_as_i64(ctx, arg, vars)
-        } else {
-            lower_expr(ctx, arg, vars)
-        };
-        lowered_args.push(temp);
+    for arg in args {
+        lowered_args.push(lower_expr(ctx, arg, vars));
     }
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::DirectHelperSyscall {
@@ -5544,22 +5523,7 @@ fn lower_surface_builtin_call(
         Builtin::PointerConstructor(constructor) => {
             lower_pointer_constructor_call(ctx, constructor, args, vars)
         }
-        Builtin::JsonSetIntDirect
-        | Builtin::JsonSetAccountIdDirect
-        | Builtin::JsonGetIntDirect
-        | Builtin::JsonGetDecimalDirect
-        | Builtin::JsonGetQuantityDirect
-        | Builtin::JsonGetJsonDirect
-        | Builtin::JsonGetNameDirect
-        | Builtin::JsonGetAccountIdDirect
-        | Builtin::JsonGetAssetDefinitionIdDirect
-        | Builtin::JsonGetNftIdDirect
-        | Builtin::JsonGetBlobHexDirect
-        | Builtin::BuildPathKeyNoritoDirect
-        | Builtin::SchemaEncodeDirect
-        | Builtin::SchemaDecodeDirect
-        | Builtin::SchemaInfoDirect
-        | Builtin::NumericToIntDirect
+        Builtin::NumericToIntDirect
         | Builtin::NumericAddDirect
         | Builtin::NumericSubDirect
         | Builtin::NumericMulDirect
@@ -6219,39 +6183,11 @@ fn lower_surface_builtin_call(
             });
             dest
         }
-        Builtin::BuildUnshieldInline => {
-            let asset = lower_expr(ctx, &args[0], vars);
-            let to = lower_expr(ctx, &args[1], vars);
-            // Keep the canonical nominal `quantity` pointer through IR.
-            // Code generation requires a literal and validates the narrower
-            // exact scale-0/u128 V1 proof-scalar boundary without changing the
-            // public instruction field's source type.
-            let amount = lower_expr(ctx, &args[2], vars);
-            let inputs = lower_expr(ctx, &args[3], vars);
-            let backend = lower_expr(ctx, &args[4], vars);
-            let proof = lower_expr(ctx, &args[5], vars);
-            let vk = lower_expr(ctx, &args[6], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::BuildUnshieldInline {
-                dest,
-                asset,
-                to,
-                amount,
-                inputs,
-                backend,
-                proof,
-                vk,
-            });
-            dest
-        }
-        Builtin::RecordSccpMessage
-        | Builtin::ScExecuteSubmitBallot
-        | Builtin::ScExecuteUnshield => {
+        Builtin::RecordSccpMessage | Builtin::ScExecuteSubmitBallot => {
             let payload = lower_expr(ctx, &args[0], vars);
             let kind = match builtin {
                 Builtin::RecordSccpMessage => VendorInstructionKind::RecordSccpMessage,
                 Builtin::ScExecuteSubmitBallot => VendorInstructionKind::SubmitBallot,
-                Builtin::ScExecuteUnshield => VendorInstructionKind::Unshield,
                 _ => unreachable!("matched operation-specific instruction bridge"),
             };
             ctx.current_instr(Instr::VendorExecuteInstruction { payload, kind });
@@ -6580,14 +6516,14 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
         }
-        Builtin::CreateTrigger | Builtin::RegisterTrigger => {
+        Builtin::RegisterTrigger => {
             let json = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::CreateTrigger { json });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
         }
-        Builtin::RemoveTrigger | Builtin::UnregisterTrigger => {
+        Builtin::UnregisterTrigger => {
             let name = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::RemoveTrigger { name });
             let t = ctx.new_temp();
@@ -6924,9 +6860,7 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::ZkVoteGetTally { dest, payload });
             dest
         }
-        builtin @ (Builtin::ZkVerifyTransfer
-        | Builtin::ZkVerifyUnshield
-        | Builtin::ZkVerifyBatch
+        builtin @ (Builtin::ZkVerifyBatch
         | Builtin::ZkVoteVerifyBallot
         | Builtin::ZkVoteVerifyTally) => {
             let payload = lower_expr(ctx, &args[0], vars);
@@ -10760,16 +10694,23 @@ mod tests {
     }
 
     #[test]
-    fn failed_list_mutation_branches_have_no_stores() {
+    fn multiword_failed_list_mutation_branches_have_no_stores_or_allocations() {
         let source = r#"
+            struct Pair { int first, int second }
+
             fn set(int index) -> bool {
-                var List<int, 1> values = [1];
-                values.try_set(index: index, value: 2)
+                var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
+                let Pair replacement = Pair { first: 3, second: 4 };
+                values.try_set(
+                    index: index,
+                    value: replacement,
+                )
             }
 
             fn push() -> bool {
-                var List<int, 1> values = [1];
-                values.try_push(2)
+                var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
+                let Pair replacement = Pair { first: 3, second: 4 };
+                values.try_push(replacement)
             }
         "#;
         let lowered = lower(
@@ -10778,23 +10719,70 @@ mod tests {
         )
         .expect("lower failed mutation paths");
         for function in &lowered.functions {
-            let branch = function
+            let (success_label, failure_label) = function
                 .blocks
                 .iter()
                 .find_map(|block| match block.terminator {
-                    Terminator::Branch { else_bb, .. } => Some(else_bb),
+                    Terminator::Branch {
+                        then_bb, else_bb, ..
+                    } => {
+                        let success = function
+                            .blocks
+                            .iter()
+                            .find(|candidate| candidate.label == then_bb)
+                            .expect("mutation success block exists");
+                        success
+                            .instrs
+                            .iter()
+                            .any(|instruction| {
+                                matches!(
+                                    instruction,
+                                    Instr::Store64 { .. } | Instr::Store64Imm { .. }
+                                )
+                            })
+                            .then_some((then_bb, else_bb))
+                    }
                     _ => None,
                 })
                 .expect("mutation has a bounds branch");
+            let success = function
+                .blocks
+                .iter()
+                .find(|block| block.label == success_label)
+                .expect("mutation success block exists");
+            let expected_store_count = if function.name == "set" { 2 } else { 3 };
+            assert_eq!(
+                success
+                    .instrs
+                    .iter()
+                    .filter(|instruction| matches!(
+                        instruction,
+                        Instr::Store64 { .. } | Instr::Store64Imm { .. }
+                    ))
+                    .count(),
+                expected_store_count,
+                "{} must write both Pair words{} only on success",
+                function.name,
+                if function.name == "push" {
+                    " and then commit the length"
+                } else {
+                    ""
+                }
+            );
             let failure = function
                 .blocks
                 .iter()
-                .find(|block| block.label == branch)
+                .find(|block| block.label == failure_label)
                 .expect("failure block exists");
-            assert!(failure.instrs.iter().all(|instruction| !matches!(
-                instruction,
-                Instr::Store64 { .. } | Instr::Store64Imm { .. }
-            )));
+            assert!(
+                failure.instrs.iter().all(|instruction| !matches!(
+                    instruction,
+                    Instr::Alloc { .. } | Instr::Store64 { .. } | Instr::Store64Imm { .. }
+                )),
+                "{} failure block must be allocation- and store-free: {:?}",
+                function.name,
+                failure.instrs
+            );
         }
     }
 
@@ -12360,11 +12348,11 @@ seiyaku RangeOffsetBits {{
     }
 
     #[test]
-    fn lower_trigger_aliases() {
+    fn lower_canonical_trigger_operations() {
         let src = r#"
             fn main() {
                 ledger::trigger::register(Json::parse("{}"));
-                ledger::trigger::remove(Name::parse("wake"));
+                ledger::trigger::unregister(Name::parse("wake"));
             }
         "#;
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");

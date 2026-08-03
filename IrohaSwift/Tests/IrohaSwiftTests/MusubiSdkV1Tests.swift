@@ -82,6 +82,191 @@ final class MusubiSdkV1Tests: XCTestCase {
         }
     }
 
+    func testParentLocalDependencyAliasesAreUniqueAcrossPublicationModels() throws {
+        func package(_ name: String) throws -> MusubiPackageIdV1 {
+            try MusubiPackageIdV1(
+                homeDataspace: 7,
+                scope: .dataspaceRoot,
+                name: MusubiPackageNameV1(name)
+            )
+        }
+
+        func digest(_ fill: UInt8) throws -> MusubiDigest32V1 {
+            try MusubiDigest32V1(bytes: Array(repeating: fill, count: 32))
+        }
+
+        let rootRelease = MusubiReleaseIdV1(
+            package: try package("root-package"),
+            version: try MusubiVersionV1.parse("1.0.0")
+        )
+        let firstRelease = MusubiReleaseIdV1(
+            package: try package("alpha-dependency"),
+            version: try MusubiVersionV1.parse("1.2.3")
+        )
+        let secondRelease = MusubiReleaseIdV1(
+            package: try package("beta-dependency"),
+            version: try MusubiVersionV1.parse("1.2.4")
+        )
+        let requirement = try MusubiVersionReqV1.parse("^1.0.0")
+        let dependencies = try [firstRelease, secondRelease].map { selected in
+            try MusubiDependencyReqV1(
+                alias: "shared",
+                package: selected.package,
+                requirement: requirement
+            )
+        }
+        let exactDependencies = try [firstRelease, secondRelease].map { selected in
+            try MusubiExactDependencyEdgeV1(
+                alias: "shared",
+                kind: .normal,
+                package: selected.package,
+                requirement: requirement,
+                selected: selected
+            )
+        }
+        let abi = try MusubiAbiBindingV1(abiHash: Array(repeating: 9, count: 32))
+        let firstNode = try MusubiVerificationNodeV1(
+            release: firstRelease,
+            releaseDigest: digest(10),
+            archiveID: digest(11),
+            sourceDigest: digest(12),
+            interfaceDigest: digest(13),
+            abi: abi,
+            dependencies: []
+        )
+        let secondNode = try MusubiVerificationNodeV1(
+            release: secondRelease,
+            releaseDigest: digest(20),
+            archiveID: digest(21),
+            sourceDigest: digest(22),
+            interfaceDigest: digest(23),
+            abi: abi,
+            dependencies: []
+        )
+
+        let constructors: [() throws -> Void] = [
+            {
+                _ = try MusubiReleaseManifestV1(
+                    release: rootRelease,
+                    abi: abi,
+                    dependencies: dependencies,
+                    exports: [],
+                    interfaceDigest: digest(1),
+                    metadata: MusubiReleaseMetadataV1(),
+                    archiveID: digest(2),
+                    verificationLockDigest: digest(3)
+                )
+            },
+            {
+                _ = try MusubiVerificationNodeV1(
+                    release: rootRelease,
+                    releaseDigest: digest(4),
+                    archiveID: digest(5),
+                    sourceDigest: digest(6),
+                    interfaceDigest: digest(7),
+                    abi: abi,
+                    dependencies: exactDependencies
+                )
+            },
+            {
+                _ = try MusubiVerificationLockV1(
+                    root: rootRelease,
+                    rootDependencies: exactDependencies,
+                    nodes: [firstNode, secondNode]
+                )
+            },
+        ]
+        for construct in constructors {
+            XCTAssertThrowsError(try construct()) { error in
+                XCTAssertTrue(
+                    error.localizedDescription.contains("unique parent-local aliases"),
+                    "unexpected validation error: \(error)"
+                )
+            }
+        }
+    }
+
+    func testFinalizedCursorAcceptsMaximumVersionAndMaintainerKeys() throws {
+        let maximumIdentifier = try MusubiPrereleaseIdentifierV1.parse(
+            String(repeating: "z", count: 64)
+        )
+        let maximumVersion = try MusubiVersionV1(
+            major: UInt64.max,
+            minor: UInt64.max,
+            patch: UInt64.max,
+            prerelease: Array(repeating: maximumIdentifier, count: 16)
+        )
+        XCTAssertEqual(maximumVersion.canonicalText.utf8.count, 1_102)
+
+        let snapshot = try MusubiRegistrySnapshotV1(
+            finalizedHeight: 1,
+            finalizedBlockHash: Array(repeating: 7, count: 32),
+            indexRevision: 1
+        )
+        let queryHash = try MusubiDigest32V1(bytes: Array(repeating: 8, count: 32))
+        XCTAssertNoThrow(
+            try MusubiFinalizedCursorV1(
+                snapshot: snapshot,
+                queryHash: queryHash,
+                lastKey: maximumVersion.canonicalText,
+                caller: nil
+            )
+        )
+
+        let maximumMaintainerKey = String(repeating: "ab", count: 8_192)
+            + "|pending-" + String(repeating: "cd", count: 32)
+        XCTAssertEqual(musubiMaxCursorKeyBytesV1, 16_457)
+        XCTAssertEqual(maximumMaintainerKey.utf8.count, musubiMaxCursorKeyBytesV1)
+        XCTAssertNoThrow(
+            try MusubiFinalizedCursorV1(
+                snapshot: snapshot,
+                queryHash: queryHash,
+                lastKey: maximumMaintainerKey,
+                caller: nil
+            )
+        )
+        XCTAssertThrowsError(
+            try MusubiFinalizedCursorV1(
+                snapshot: snapshot,
+                queryHash: queryHash,
+                lastKey: maximumMaintainerKey + "0",
+                caller: nil
+            )
+        )
+    }
+
+    func testOrderedPrefixUsesExactStructuralMaximumAndPortablePackagePrefix() throws {
+        let maximumPrefix = String(repeating: "n", count: 255)
+            + "/" + String(repeating: "p", count: 64)
+        XCTAssertEqual(musubiMaxOrderedPrefixBytesV1, 320)
+        XCTAssertEqual(maximumPrefix.utf8.count, musubiMaxOrderedPrefixBytesV1)
+        XCTAssertNoThrow(try MusubiOrderedPrefixQueryV1(prefix: maximumPrefix))
+        XCTAssertNoThrow(try MusubiOrderedPrefixQueryV1(prefix: "sora/"))
+        XCTAssertNoThrow(try MusubiOrderedPrefixQueryV1(prefix: "sora/pkg-"))
+
+        let overlong = String(repeating: "n", count: 255)
+            + "/" + String(repeating: "p", count: 65)
+        XCTAssertEqual(overlong.utf8.count, musubiMaxOrderedPrefixBytesV1 + 1)
+        XCTAssertThrowsError(try MusubiOrderedPrefixQueryV1(prefix: overlong))
+
+        for malformed in [
+            "sora",
+            "/pkg",
+            "a.b.c/pkg",
+            "sora/pkg/extra",
+            "sora/-pkg",
+            "sora/pkg--extra",
+            "sora/Pkg",
+            "sora/pkg_name",
+            "sora/päkg",
+        ] {
+            XCTAssertThrowsError(
+                try MusubiOrderedPrefixQueryV1(prefix: malformed),
+                "accepted malformed ordered prefix \(malformed)"
+            )
+        }
+    }
+
     func testDecodedComparatorRequirementsRejectNoncanonicalExactForms() throws {
         let first = MusubiVersionComparatorV1(
             op: .equal,
@@ -196,6 +381,66 @@ final class MusubiSdkV1Tests: XCTestCase {
             from: jsonData(mismatched)
         )
         XCTAssertThrowsError(try mismatchedPage.requireMatches(request))
+    }
+
+    func testArchiveCommitmentContentLengthUsesFullBundlePayloadLimit() throws {
+        let fixtureRoute = try route(MusubiToriiClientV1.archiveLocationsPath)
+        let response = try object(fixtureRoute["response"])
+        let archive = try object(response["archive"])
+        let fixtureWire = try object(archive["commitment"])
+        let fixtureCommitment = try JSONDecoder().decode(
+            MusubiArchiveCommitmentV1.self,
+            from: jsonData(fixtureWire)
+        )
+        let aboveSourcePayloadLimit = (UInt64(64) << 20) + 1
+        let bundlePayloadLimit = UInt64(96) << 20
+        let aboveBundlePayloadLimit = bundlePayloadLimit + 1
+        XCTAssertEqual(musubiMaxArchiveBundlePayloadBytesV1, bundlePayloadLimit)
+
+        func commitment(contentLength: UInt64) throws -> MusubiArchiveCommitmentV1 {
+            try MusubiArchiveCommitmentV1(
+                rootCid: fixtureCommitment.rootCid,
+                chunker: fixtureCommitment.chunker,
+                chunkPlanDigest: fixtureCommitment.chunkPlanDigest,
+                porRoot: fixtureCommitment.porRoot,
+                contentLength: contentLength,
+                carDigest: fixtureCommitment.carDigest,
+                carSize: bundlePayloadLimit,
+                bundleDigest: fixtureCommitment.bundleDigest,
+                sourceTreeDigest: fixtureCommitment.sourceTreeDigest,
+                descriptorDigest: fixtureCommitment.descriptorDigest,
+                fileCount: fixtureCommitment.fileCount,
+                chunkCount: fixtureCommitment.chunkCount
+            )
+        }
+
+        XCTAssertEqual(
+            try commitment(contentLength: aboveSourcePayloadLimit).contentLength,
+            aboveSourcePayloadLimit
+        )
+        XCTAssertThrowsError(
+            try commitment(contentLength: aboveBundlePayloadLimit)
+        )
+
+        var acceptedWire = try object(deepMutableCopy(fixtureWire))
+        acceptedWire["content_length"] = aboveSourcePayloadLimit
+        acceptedWire["car_size"] = bundlePayloadLimit
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                MusubiArchiveCommitmentV1.self,
+                from: jsonData(acceptedWire)
+            ).contentLength,
+            aboveSourcePayloadLimit
+        )
+
+        var rejectedWire = acceptedWire
+        rejectedWire["content_length"] = aboveBundlePayloadLimit
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiArchiveCommitmentV1.self,
+                from: jsonData(rejectedWire)
+            )
+        )
     }
 
     func testArchiveLocationPageDecodesCurrentSortedLocations() throws {
@@ -365,6 +610,283 @@ final class MusubiSdkV1Tests: XCTestCase {
             try JSONDecoder().decode(
                 MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
                 from: jsonData(malformed)
+            )
+        )
+    }
+
+    func testMaintainerCursorUsesOpaqueAccountEqualityAndCanonicalShape() throws {
+        let fixtureRoute = try route(MusubiToriiClientV1.maintainersPath)
+        let page = try JSONDecoder().decode(
+            MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+            from: jsonData(fixtureRoute["response"])
+        )
+
+        func response(firstItem index: Int, cursor lastKey: String) throws -> [String: Any] {
+            var response = try object(deepMutableCopy(fixtureRoute["response"]))
+            response["items"] = [try array(response["items"])[index]]
+            var query = try object(response["query"])
+            var controls = try object(query["page"])
+            controls["cursor"] = finalizedCursor(
+                snapshot: try object(response["snapshot"]),
+                lastKey: lastKey
+            )
+            query["page"] = controls
+            response["query"] = query
+            return response
+        }
+
+        let acceptedKey = try maintainerCursorKey(page.items[0])
+        let pendingKey = try maintainerCursorKey(page.items[1])
+        let accountToken = String(acceptedKey.prefix { $0 != "|" })
+        guard case .accepted(let accepted) = page.items[0] else {
+            return XCTFail("First maintainer-directory entry must be accepted.")
+        }
+        let singlePayload = try CanonicalNorito.encodeCompactAccountId(accepted.account)
+        XCTAssertTrue(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(singlePayload)
+        )
+        let multisigPayload = try CanonicalNorito.encodeCompactAccountId(
+            firstMultisigAccountFixture()
+        )
+        XCTAssertTrue(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(multisigPayload)
+        )
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(Data([0]))
+        )
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                Data(singlePayload.dropLast())
+            )
+        )
+        var trailingPayload = singlePayload
+        trailingPayload.append(0)
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(trailingPayload)
+        )
+
+        let opaqueAccepted = try response(
+            firstItem: 0,
+            cursor: lowerHex([UInt8](multisigPayload)) + "|accepted"
+        )
+        XCTAssertNoThrow(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(opaqueAccepted)
+            )
+        )
+        let opaquePending = try response(
+            firstItem: 1,
+            cursor: accountToken + "|accepted"
+        )
+        XCTAssertNoThrow(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(opaquePending)
+            )
+        )
+
+        for (index, item) in page.items.enumerated() {
+            let repeated = try response(
+                firstItem: index,
+                cursor: maintainerCursorKey(item)
+            )
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                    from: jsonData(repeated)
+                )
+            )
+        }
+
+        var repeatedLater = try object(deepMutableCopy(fixtureRoute["response"]))
+        var repeatedQuery = try object(repeatedLater["query"])
+        var repeatedControls = try object(repeatedQuery["page"])
+        repeatedControls["cursor"] = finalizedCursor(
+            snapshot: try object(repeatedLater["snapshot"]),
+            lastKey: pendingKey
+        )
+        repeatedQuery["page"] = repeatedControls
+        repeatedLater["query"] = repeatedQuery
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(repeatedLater)
+            )
+        )
+
+        let arbitraryAccount = try response(firstItem: 0, cursor: "00|accepted")
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(arbitraryAccount)
+            )
+        )
+        let truncatedAccount = try response(
+            firstItem: 0,
+            cursor: String(accountToken.dropLast(2)) + "|accepted"
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(truncatedAccount)
+            )
+        )
+
+        let oversizedAccount = try response(
+            firstItem: 0,
+            cursor: String(repeating: "ab", count: 8_193) + "|accepted"
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(oversizedAccount)
+            )
+        )
+        let zeroInvitation = try response(
+            firstItem: 1,
+            cursor: "ff|pending-" + String(repeating: "00", count: 32)
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(zeroInvitation)
+            )
+        )
+    }
+
+    func testCompactAccountControllerRejectsInvalidKeyAndMultisigSemantics() throws {
+        let fixtureRoute = try route(MusubiToriiClientV1.maintainersPath)
+        let page = try JSONDecoder().decode(
+            MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+            from: jsonData(fixtureRoute["response"])
+        )
+        guard case .accepted(let accepted) = page.items[0] else {
+            return XCTFail("First maintainer-directory entry must be accepted.")
+        }
+        let singleAddress = try AccountAddress.parseEncoded(accepted.account)
+        let single = try XCTUnwrap(singleAddress.singleControllerInfo())
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                compactSingleAccountControllerPayload(
+                    algorithm: single.algorithm,
+                    publicKey: Data(single.publicKey.dropLast())
+                )
+            )
+        )
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                compactSingleAccountControllerPayload(
+                    algorithm: .ed25519,
+                    publicKey: Data(repeating: 0, count: 32)
+                )
+            )
+        )
+
+        let multisigFixture = try firstMultisigAccountFixture()
+        let multisigAddress = try AccountAddress.parseEncoded(multisigFixture)
+        let policy = try XCTUnwrap(try multisigAddress.multisigPolicyInfo())
+        let members = try compactMultisigTestMembers(policy.members)
+        let canonical = compactMultisigAccountControllerPayload(
+            version: policy.version,
+            threshold: policy.threshold,
+            members: members
+        )
+        XCTAssertEqual(
+            canonical,
+            try CanonicalNorito.encodeCompactAccountId(multisigFixture)
+        )
+        XCTAssertTrue(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(canonical)
+        )
+
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                compactMultisigAccountControllerPayload(
+                    version: 2,
+                    threshold: policy.threshold,
+                    members: members
+                )
+            )
+        )
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                compactMultisigAccountControllerPayload(
+                    version: 1,
+                    threshold: policy.threshold,
+                    members: []
+                )
+            )
+        )
+
+        var zeroWeight = members
+        zeroWeight[0].weight = 0
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                compactMultisigAccountControllerPayload(
+                    version: 1,
+                    threshold: policy.threshold,
+                    members: zeroWeight
+                )
+            )
+        )
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                compactMultisigAccountControllerPayload(
+                    version: 1,
+                    threshold: UInt16.max,
+                    members: members
+                )
+            )
+        )
+
+        var duplicate = members
+        duplicate.append(members[0])
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                compactMultisigAccountControllerPayload(
+                    version: 1,
+                    threshold: policy.threshold,
+                    members: duplicate
+                )
+            )
+        )
+        XCTAssertGreaterThan(members.count, 1)
+        XCTAssertFalse(
+            AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(
+                compactMultisigAccountControllerPayload(
+                    version: 1,
+                    threshold: policy.threshold,
+                    members: Array(members.reversed())
+                )
+            )
+        )
+    }
+
+    func testMaintainerOrderingUsesStructuralMultisigAccountOrder() throws {
+        let fixtureRoute = try route(MusubiToriiClientV1.maintainersPath)
+        let multisigAccount = try firstMultisigAccountFixture()
+
+        var response = try object(deepMutableCopy(fixtureRoute["response"]))
+        var items = try array(response["items"])
+        var pending = try object(items[1])
+        var pendingValue = try object(pending["value"])
+        pendingValue["invited_account"] = multisigAccount
+        pending["value"] = pendingValue
+        items[1] = pending
+        response["items"] = items
+        XCTAssertNoThrow(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(response)
+            )
+        )
+
+        response["items"] = Array(items.reversed())
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                MusubiPageV1<MusubiMaintainerDirectoryEntryV1>.self,
+                from: jsonData(response)
             )
         )
     }
@@ -990,6 +1512,94 @@ final class MusubiSdkV1Tests: XCTestCase {
         )
     }
 
+    func testResolverIndexAcceptsShortByteBudgetPageAndBindsContinuationTail() throws {
+        let decoder = JSONDecoder()
+        let resolverRoute = try route(MusubiToriiClientV1.resolverIndexPath)
+        var response = try object(deepMutableCopy(resolverRoute["response"]))
+        let releaseResponse = try object(
+            try route(MusubiToriiClientV1.exactReleasePath)["response"]
+        )
+        response["items"] = [try XCTUnwrap(releaseResponse["universal_release"])]
+
+        let snapshot = try object(response["snapshot"])
+        var query = try object(response["query"])
+        var page = try object(query["page"])
+        page["limit"] = 2
+        page["cursor"] = finalizedCursor(
+            snapshot: snapshot,
+            lastKey: "1.2.2",
+            queryHashFill: 19
+        )
+        query["page"] = page
+        response["query"] = query
+        response["next_cursor"] = finalizedCursor(
+            snapshot: snapshot,
+            lastKey: "1.2.3",
+            queryHashFill: 19
+        )
+
+        XCTAssertNoThrow(
+            try decoder.decode(MusubiResolverIndexPageV1.self, from: jsonData(response))
+        )
+
+        var duplicateAliases = try object(deepMutableCopy(response))
+        var resolverRow = try object(
+            deepMutableCopy(try XCTUnwrap(try array(duplicateAliases["items"]).first))
+        )
+        let release = try object(resolverRow["release"])
+        let packageTemplate = try object(release["package"])
+        let canonical = try object(try fixture()["canonical"])
+        let requirementFixture = try object(
+            try XCTUnwrap(try array(canonical["requirements"]).first)
+        )
+        let requirementWire = try XCTUnwrap(requirementFixture["wire"])
+        func dependency(_ name: String) throws -> [String: Any] {
+            var package = try object(deepMutableCopy(packageTemplate))
+            package["name"] = [name]
+            return [
+                "alias": "shared",
+                "package": package,
+                "requirement": deepMutableCopy(requirementWire),
+            ]
+        }
+        resolverRow["dependencies"] = try [
+            dependency("alpha-dependency"),
+            dependency("beta-dependency"),
+        ]
+        duplicateAliases["items"] = [resolverRow]
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MusubiResolverIndexPageV1.self,
+                from: jsonData(duplicateAliases)
+            )
+        ) { error in
+            XCTAssertTrue(
+                error.localizedDescription.contains("unique parent-local aliases"),
+                "unexpected resolver-row validation error: \(error)"
+            )
+        }
+
+        var wrongTail = try object(deepMutableCopy(response))
+        var wrongTailCursor = try object(wrongTail["next_cursor"])
+        wrongTailCursor["last_key"] = "1.2.4"
+        wrongTail["next_cursor"] = wrongTailCursor
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiResolverIndexPageV1.self, from: jsonData(wrongTail))
+        )
+
+        var wrongPriorHash = try object(deepMutableCopy(response))
+        var wrongPriorQuery = try object(wrongPriorHash["query"])
+        var wrongPriorPage = try object(wrongPriorQuery["page"])
+        var wrongPriorCursor = try object(wrongPriorPage["cursor"])
+        wrongPriorCursor["query_hash"] = [Array(repeating: 20, count: 32)]
+        wrongPriorPage["cursor"] = wrongPriorCursor
+        wrongPriorQuery["page"] = wrongPriorPage
+        wrongPriorHash["query"] = wrongPriorQuery
+        XCTAssertThrowsError(
+            try decoder.decode(MusubiResolverIndexPageV1.self, from: jsonData(wrongPriorHash))
+        )
+    }
+
     func testGenericPageRequestRejectsAboveMaximumAndPreservesZeroDefault() throws {
         XCTAssertEqual(try MusubiPageRequestV1(limit: 0).limit, 0)
         XCTAssertThrowsError(try MusubiPageRequestV1(limit: 101))
@@ -1008,6 +1618,8 @@ final class MusubiSdkV1Tests: XCTestCase {
     }
 
     func testReadOnlyClientPostsEachTypedQueryToExactV1Route() async throws {
+        XCTAssertEqual(MusubiToriiClientV1.responseMaximumBytes, 32 * 1024 * 1024)
+
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MusubiV1StubURLProtocol.self]
         let client = MusubiToriiClientV1(
@@ -1039,6 +1651,157 @@ final class MusubiSdkV1Tests: XCTestCase {
                 try jsonObject(try requestBody(captured)),
                 try jsonObject(expectedRequest)
             )
+        }
+    }
+
+    func testReadOnlyClientResponseCollectorEnforcesStreamingAndDeclaredBounds() async throws {
+        func response(contentLength: String? = nil) throws -> HTTPURLResponse {
+            var headers = ["Content-Type": "application/json"]
+            if let contentLength {
+                headers["Content-Length"] = contentLength
+            }
+            return try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(URL(string: "https://example.test/v1/musubi")),
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: headers
+                )
+            )
+        }
+
+        func stream(_ body: [UInt8]) -> AsyncStream<UInt8> {
+            AsyncStream { continuation in
+                for byte in body {
+                    continuation.yield(byte)
+                }
+                continuation.finish()
+            }
+        }
+
+        var cancelled = false
+        do {
+            _ = try await MusubiToriiClientV1.collectBoundedResponseBody(
+                stream([0x7b]),
+                response: response(contentLength: "9"),
+                maximumBytes: 8,
+                cancel: { cancelled = true }
+            )
+            XCTFail("an oversized declared response must fail before collection")
+        } catch let ToriiClientError.invalidPayload(message) {
+            XCTAssertTrue(message.contains("declares more than"))
+        }
+        XCTAssertTrue(cancelled)
+
+        cancelled = false
+        do {
+            _ = try await MusubiToriiClientV1.collectBoundedResponseBody(
+                stream([UInt8](repeating: 0x20, count: 9)),
+                response: response(),
+                maximumBytes: 8,
+                cancel: { cancelled = true }
+            )
+            XCTFail("an undeclared streamed response above the limit must fail")
+        } catch let ToriiClientError.invalidPayload(message) {
+            XCTAssertTrue(message.contains("exceeds the 8-byte client limit"))
+        }
+        XCTAssertTrue(cancelled)
+
+        cancelled = false
+        let exact = try await MusubiToriiClientV1.collectBoundedResponseBody(
+            stream([UInt8](repeating: 0x20, count: 8)),
+            response: response(contentLength: "8"),
+            maximumBytes: 8,
+            cancel: { cancelled = true }
+        )
+        XCTAssertEqual(exact, Data(repeating: 0x20, count: 8))
+        XCTAssertFalse(cancelled)
+
+        do {
+            _ = try await MusubiToriiClientV1.collectBoundedResponseBody(
+                stream([UInt8](repeating: 0x20, count: 7)),
+                response: response(contentLength: "8"),
+                maximumBytes: 8,
+                cancel: { cancelled = true }
+            )
+            XCTFail("an identity response shorter than Content-Length must fail")
+        } catch let ToriiClientError.invalidPayload(message) {
+            XCTAssertTrue(message.contains("does not match its Content-Length"))
+        }
+        XCTAssertTrue(cancelled)
+    }
+
+    func testReadOnlyClientRejectsOversizedDeclaredResponseBeforeDecoding() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MusubiV1StubURLProtocol.self]
+        let client = MusubiToriiClientV1(
+            baseURL: try XCTUnwrap(URL(string: "https://example.test/")),
+            session: URLSession(configuration: configuration)
+        )
+        let fixtureRoute = try route(MusubiToriiClientV1.versionsPath)
+        MusubiV1StubURLProtocol.handler = { request in
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Content-Type": "application/json",
+                        "Content-Length": String(
+                            MusubiToriiClientV1.responseMaximumBytes + 1
+                        ),
+                    ]
+                )
+            )
+            return (response, Data("{}".utf8))
+        }
+
+        do {
+            try await invoke(
+                client,
+                path: MusubiToriiClientV1.versionsPath,
+                request: try jsonData(fixtureRoute["request"])
+            )
+            XCTFail("an oversized declared Musubi response must fail before decoding")
+        } catch let ToriiClientError.invalidPayload(message) {
+            XCTAssertTrue(message.contains("declares more than"))
+        }
+    }
+
+    func testReadOnlyClientKeepsBoundedHttpErrorMapping() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MusubiV1StubURLProtocol.self]
+        let client = MusubiToriiClientV1(
+            baseURL: try XCTUnwrap(URL(string: "https://example.test/")),
+            session: URLSession(configuration: configuration)
+        )
+        let fixtureRoute = try route(MusubiToriiClientV1.versionsPath)
+        MusubiV1StubURLProtocol.handler = { request in
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 503,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Content-Type": "text/plain",
+                        "x-iroha-reject-code": "MUSUBI_UNAVAILABLE",
+                    ]
+                )
+            )
+            return (response, Data(repeating: 0x61, count: 4 * 1024 + 1))
+        }
+
+        do {
+            try await invoke(
+                client,
+                path: MusubiToriiClientV1.versionsPath,
+                request: try jsonData(fixtureRoute["request"])
+            )
+            XCTFail("a non-success response must retain HTTP status classification")
+        } catch let ToriiClientError.httpStatus(code, message, rejectCode) {
+            XCTAssertEqual(code, 503)
+            XCTAssertEqual(message?.utf8.count, 4 * 1024)
+            XCTAssertEqual(rejectCode, "MUSUBI_UNAVAILABLE")
         }
     }
 
@@ -1712,6 +2475,135 @@ final class MusubiSdkV1Tests: XCTestCase {
             "last_key": lastKey,
             "caller": NSNull(),
         ]
+    }
+
+    private func maintainerCursorKey(
+        _ entry: MusubiMaintainerDirectoryEntryV1
+    ) throws -> String {
+        let account: String
+        let suffix: String
+        switch entry {
+        case .accepted(let member):
+            account = member.account
+            suffix = "accepted"
+        case .pendingInvitation(let invitation):
+            account = invitation.invitedAccount
+            suffix = "pending-" + lowerHex(invitation.inviteId.bytes)
+        }
+        let payload = try CanonicalNorito.encodeCompactAccountId(account)
+        return lowerHex([UInt8](payload)) + "|" + suffix
+    }
+
+    private func lowerHex(_ bytes: [UInt8]) -> String {
+        bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func firstMultisigAccountFixture() throws -> String {
+        let fixturesRoot = try fixtureURL().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let accountFixtureURL = fixturesRoot.appendingPathComponent(
+            "account/address_vectors.json"
+        )
+        let accountFixture = try object(
+            JSONSerialization.jsonObject(with: Data(contentsOf: accountFixtureURL))
+        )
+        let cases = try object(accountFixture["cases"])
+        let multisig = try XCTUnwrap(
+            try array(cases["positive"]).map(object).first {
+                ($0["category"] as? String) == "multisig"
+            }
+        )
+        let encodings = try object(multisig["encodings"])
+        let i105 = try object(encodings["i105"])
+        return try XCTUnwrap(i105["string"] as? String)
+    }
+
+    private struct CompactMultisigTestMember {
+        let algorithm: SigningAlgorithm
+        var weight: UInt16
+        let publicKey: Data
+    }
+
+    private func compactMultisigTestMembers(
+        _ members: [AccountAddress.MultisigPolicyInfo.Member]
+    ) throws -> [CompactMultisigTestMember] {
+        try members.map { member in
+            let algorithm = try XCTUnwrap(
+                SigningAlgorithm.allCases.first {
+                    $0.wireName == member.algorithm
+                        || ($0 == .mlDsa && member.algorithm == "mldsa")
+                }
+            )
+            guard member.publicKeyHex.hasPrefix("0x"),
+                  let publicKey = Data(hexString: String(member.publicKeyHex.dropFirst(2))) else {
+                throw NSError(
+                    domain: "MusubiSdkV1Tests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Invalid multisig fixture public key"]
+                )
+            }
+            return CompactMultisigTestMember(
+                algorithm: algorithm,
+                weight: member.weight,
+                publicKey: publicKey
+            )
+        }
+    }
+
+    private func compactSingleAccountControllerPayload(
+        algorithm: SigningAlgorithm,
+        publicKey: Data
+    ) -> Data {
+        var controller = CompactNoritoWriter()
+        controller.writeUInt32LE(0)
+        controller.writeField(
+            compactAccountPublicKeyPayload(algorithm: algorithm, publicKey: publicKey)
+        )
+        return controller.data
+    }
+
+    private func compactMultisigAccountControllerPayload(
+        version: UInt8,
+        threshold: UInt16,
+        members: [CompactMultisigTestMember]
+    ) -> Data {
+        var encodedMembers = CompactNoritoWriter()
+        encodedMembers.writeUInt64LE(UInt64(members.count))
+        for member in members {
+            var encodedMember = CompactNoritoWriter()
+            encodedMember.writeField(
+                compactAccountPublicKeyPayload(
+                    algorithm: member.algorithm,
+                    publicKey: member.publicKey
+                )
+            )
+            encodedMember.writeField(CompactNorito.encodeUInt16(member.weight))
+            encodedMembers.writeField(encodedMember.data)
+        }
+
+        var policy = CompactNoritoWriter()
+        policy.writeField(CompactNorito.encodeUInt8(version))
+        policy.writeField(CompactNorito.encodeUInt16(threshold))
+        policy.writeField(encodedMembers.data)
+
+        var controller = CompactNoritoWriter()
+        controller.writeUInt32LE(1)
+        controller.writeField(policy.data)
+        return controller.data
+    }
+
+    private func compactAccountPublicKeyPayload(
+        algorithm: SigningAlgorithm,
+        publicKey: Data
+    ) -> Data {
+        var bytes = Data([algorithm.noritoDiscriminant])
+        bytes.append(publicKey)
+        var encoded = CompactNoritoWriter()
+        encoded.writeUInt64LE(UInt64(bytes.count))
+        for byte in bytes {
+            encoded.writeField(Data([byte]))
+        }
+        return encoded.data
     }
 
     private var expectedPaths: Set<String> {

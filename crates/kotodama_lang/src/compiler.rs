@@ -1535,32 +1535,6 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
     Ok(raw.as_bytes().to_vec())
 }
 
-fn decode_fixed32_chunks(
-    raw: &str,
-    label: &str,
-    allow_empty: bool,
-) -> Result<Vec<[u8; 32]>, String> {
-    let bytes = decode_hex_or_raw_bytes(raw).map_err(|err| format!("{label} literal {err}"))?;
-    if bytes.is_empty() {
-        return if allow_empty {
-            Ok(Vec::new())
-        } else {
-            Err(format!("{label} must contain one or more 32-byte chunks"))
-        };
-    }
-    if bytes.len() % 32 != 0 {
-        return Err(format!("{label} must be a multiple of 32 bytes"));
-    }
-    Ok(bytes
-        .chunks_exact(32)
-        .map(|chunk| {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(chunk);
-            out
-        })
-        .collect())
-}
-
 fn state_path_literal_data_key(
     func_idx: usize,
     path: ir::Temp,
@@ -1765,11 +1739,11 @@ fn parse_u64_literal(raw: &str) -> Option<u64> {
 
 // Kotodama ZK capabilities are supported by semantic/IR lowering:
 //   - namespaced verification operations lower to their typed ABI-v1 syscalls;
-//   - namespaced governance and unshield operations build their exact
-//     instruction payloads inside the compiler before host submission.
+//   - namespaced governance operations build their exact instruction payloads
+//     inside the compiler before host submission.
 // Raw instruction submission and direct syscall spellings are not source APIs.
 // See `kotodama::semantic`, `kotodama::ir`, and the sample
-// `crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko`.
+// `crates/kotodama_lang/src/samples/zk_vote_ballot.ko`.
 
 /// Compiler entry point for translating KOTODAMA programs into IVM bytecode.
 #[derive(Clone)]
@@ -2052,8 +2026,6 @@ seiyaku AxtLiteralValidation {
             IrAccessClass::Ledger(BuiltinAccess::LedgerRead)
         );
         for number in [
-            syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-            syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
             syscalls::SYSCALL_ZK_VERIFY_BATCH,
             syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
             syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
@@ -2132,7 +2104,7 @@ seiyaku AxtLiteralValidation {
         assert!(skips.is_empty());
 
         let (access, skips) = unresolved_world_access(&ir::Instr::ZkVerify {
-            number: syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+            number: syscalls::SYSCALL_ZK_VERIFY_BATCH,
             payload: temp,
         });
         assert_eq!(
@@ -5405,16 +5377,12 @@ kotoage fn main() authorize("CompilerFixture") {
   let trigger_id = Name::parse("wake");
   ledger::peer::register(Json::parse("{}"));
   ledger::peer::unregister(Json::parse("{}"));
-  ledger::trigger::create(Json::parse("{}"));
   ledger::trigger::register(Json::parse("{}"));
-  ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
   ledger::trigger::set_enabled(trigger_id, 1);
   ledger::peer::register(Json::parse("{}"));
   ledger::peer::unregister(Json::parse("{}"));
-  ledger::trigger::create(Json::parse("{}"));
   ledger::trigger::register(Json::parse("{}"));
-  ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
   ledger::trigger::set_enabled(trigger_id, 0);
 }
@@ -5460,10 +5428,8 @@ seiyaku CompilerFixture {
 
 kotoage fn main() authorize("CompilerFixture") {
   let trigger_id = Name::parse("wake");
-  ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
   ledger::trigger::set_enabled(trigger_id, 1);
-  ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
   ledger::trigger::set_enabled(trigger_id, 0);
 }
@@ -5583,12 +5549,12 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::trigger::create(Name::parse("bad"));
+  ledger::trigger::register(Name::parse("bad"));
 }
 
 }
 "#,
-                "ledger::trigger::create expects (Json)",
+                "ledger::trigger::register expects (Json)",
             ),
             (
                 r#"
@@ -6815,16 +6781,12 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn verify(bytes payload) {
-  crypto::zk::verify_transfer(payload);
-  crypto::zk::verify_unshield(payload);
   crypto::zk::verify_batch(payload);
   ledger::governance::verify_ballot(payload);
   ledger::governance::verify_tally(payload);
 }
 
 fn verify_namespaced(bytes payload) {
-  crypto::zk::verify_transfer(payload);
-  crypto::zk::verify_unshield(payload);
   crypto::zk::verify_batch(payload);
   ledger::governance::verify_ballot(payload);
   ledger::governance::verify_tally(payload);
@@ -6849,14 +6811,6 @@ kotoage fn main() authorize("CompilerFixture") {
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
                 "INPUT_PUBLISH_TLV",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-                "ZK_VERIFY_TRANSFER",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
-                "ZK_VERIFY_UNSHIELD",
             ),
             (
                 ivm_abi::syscalls::SYSCALL_ZK_VERIFY_BATCH,
@@ -6891,12 +6845,12 @@ kotoage fn main() authorize("CompilerFixture") {
 seiyaku CompilerFixture {
 
 fn main() {
-  crypto::zk::verify_transfer(1);
+  crypto::zk::verify_batch(1);
 }
 
 }
 "#,
-                "crypto::zk::verify_transfer expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
+                "crypto::zk::verify_batch expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
             ),
             (
                 r#"
@@ -6922,9 +6876,7 @@ fn main() {
     }
 
     #[test]
-    fn inline_zk_builder_builtins_lower_to_ir() {
-        let account = sample_account_literal();
-        let input = "\\x00".repeat(32);
+    fn inline_submit_ballot_builtin_lowers_to_ir() {
         let nullifier = "\\x00".repeat(32);
         let src = format!(
             r#"
@@ -6939,15 +6891,6 @@ fn main() {{
     proof: b"proof",
     verification_key: b"vk",
   );
-  let _unshield = crypto::zk::build_unshield(
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    destination: AccountId::parse("{account}"),
-    amount: 5,
-    inputs: b"{input}",
-    backend: "halo2",
-    proof: b"proof",
-    verification_key: b"vk",
-  );
 }}
 
 }}
@@ -6957,215 +6900,130 @@ fn main() {{
         let typed = analyze(&parsed).expect("analyze inline builder source");
         let ir = ir::lower(&typed).expect("lower inline builder source");
 
-        let mut saw_submit = false;
-        let mut saw_unshield = false;
-        for instr in ir
-            .functions
-            .iter()
-            .flat_map(|function| function.blocks.iter())
-            .flat_map(|block| block.instrs.iter())
-        {
-            match instr {
-                ir::Instr::BuildSubmitBallotInline { .. } => saw_submit = true,
-                ir::Instr::BuildUnshieldInline { .. } => saw_unshield = true,
-                _ => {}
-            }
-        }
-
-        assert!(saw_submit, "expected BuildSubmitBallotInline IR");
-        assert!(saw_unshield, "expected output-free BuildUnshieldInline IR");
+        assert!(
+            ir.functions
+                .iter()
+                .flat_map(|function| function.blocks.iter())
+                .flat_map(|block| block.instrs.iter())
+                .any(|instr| matches!(instr, ir::Instr::BuildSubmitBallotInline { .. })),
+            "expected BuildSubmitBallotInline IR"
+        );
     }
 
     #[test]
-    fn unshield_inline_literal_encodes_exact_output_free_instruction() {
-        let asset = ir::Temp(0);
-        let to = ir::Temp(1);
-        let amount = ir::Temp(2);
-        let inputs = ir::Temp(3);
-        let backend = ir::Temp(4);
-        let proof = ir::Temp(5);
-        let vk = ir::Temp(6);
+    fn inline_submit_ballot_requires_a_canonical_governance_selector() {
+        let nullifier = "\\x00".repeat(32);
+        let source = |selector: &str| {
+            format!(
+                r#"
+seiyaku CompilerFixture {{
+
+fn main() {{
+  let _ballot = ledger::governance::build_submit_ballot(
+    election_id: "{selector}",
+    ciphertext: b"00",
+    nullifier: b"{nullifier}",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
+  );
+}}
+
+}}
+"#
+            )
+        };
+
+        Compiler::new()
+            .compile_source(&source(&"a".repeat(128)))
+            .expect("a 128-byte canonical governance selector must compile");
+
+        let overlong = "a".repeat(129);
+        for (case, selector) in [
+            ("empty", ""),
+            ("dot", "."),
+            ("leading dot", ".hidden"),
+            ("slash", "a/b"),
+            ("percent", "a%2Fb"),
+            ("whitespace", "a b"),
+            ("Unicode", "投票"),
+            ("overlong", overlong.as_str()),
+        ] {
+            let error = Compiler::new()
+                .compile_source(&source(selector))
+                .expect_err("a noncanonical governance selector must fail compilation");
+            assert!(
+                error.contains(
+                    "election_id must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
+                ),
+                "case={case}: unexpected diagnostic: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn noncanonical_inline_submit_ballot_cannot_seed_access_hints() {
+        let election_id = ir::Temp(0);
+        let ciphertext = ir::Temp(1);
+        let nullifier = ir::Temp(2);
+        let backend = ir::Temp(3);
+        let proof = ir::Temp(4);
+        let vk = ir::Temp(5);
         let func_idx = 0;
-        let mut string_map = HashMap::new();
-        string_map.insert(
-            (func_idx, asset),
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string(),
-        );
-        string_map.insert((func_idx, to), sample_account_literal());
-        string_map.insert(
-            (func_idx, inputs),
-            format!("0x{}{}", "11".repeat(32), "12".repeat(32)),
-        );
-        string_map.insert((func_idx, backend), "halo2/ipa".to_string());
-        string_map.insert((func_idx, proof), "0xab".to_string());
-        string_map.insert((func_idx, vk), "vk_unshield".to_string());
-        let public_amount = u128::try_from(i64::MAX).expect("i64::MAX is non-negative") + 1;
-        string_map.insert((func_idx, amount), public_amount.to_string());
-
-        let raw = super::unshield_inline_instruction_literal(
-            &string_map,
-            func_idx,
-            asset,
-            to,
-            amount,
-            inputs,
-            backend,
-            proof,
-            vk,
-        )
-        .expect("fold unshield inline literal");
-        let payload = super::decode_norito_literal_payload(&raw).expect("literal payload");
-        let boxed: iroha_data_model::isi::InstructionBox =
-            norito::decode_from_bytes(&payload).expect("decode InstructionBox");
-        let unshield = boxed
-            .as_any()
-            .downcast_ref::<iroha_data_model::isi::zk::Unshield>()
-            .expect("Unshield instruction");
-        assert_eq!(
-            unshield.public_amount().to_string(),
-            public_amount.to_string()
-        );
-        assert_eq!(unshield.inputs().as_slice(), &[[0x11u8; 32], [0x12u8; 32]]);
-        assert_eq!(unshield.proof().backend, "halo2/ipa");
-        assert!(unshield.root_hint().is_none());
-    }
-
-    #[test]
-    fn unshield_literal_parser_preserves_quantity_and_checks_v1_scalar_boundary() {
-        let maximum = u128::MAX.to_string();
-        let quantity = super::parse_unshield_public_amount(&maximum)
-            .expect("u128::MAX is a valid whole quantity proof scalar");
-        assert_eq!(quantity.to_string(), maximum);
-        assert_eq!(quantity.scale(), 0);
-
-        for (raw, expected) in [
-            ("1.5", "whole quantity with canonical scale 0"),
-            (
-                "340282366920938463463374607431768211456",
-                "exceeds the u128 V1 proof-scalar range",
-            ),
-            ("-1", "canonical non-negative quantity literal"),
-        ] {
-            let error = super::parse_unshield_public_amount(raw)
-                .expect_err("invalid V1 unshield proof scalar must fail");
-            assert!(
-                error.contains(expected),
-                "raw={raw}: expected `{expected}` in `{error}`"
-            );
-        }
-    }
-
-    #[test]
-    fn unshield_inline_amount_uses_the_explicit_u128_protocol_domain() {
-        let account = sample_account_literal();
-        let inputs = "\\x00".repeat(32);
-        let source = |amount: &str| {
-            format!(
-                r#"
-seiyaku UnshieldAmount {{
-  view fn build() -> bytes {{
-    return crypto::zk::build_unshield(
-      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      destination: AccountId::parse("{account}"),
-      amount: {amount},
-      inputs: b"{inputs}",
-      backend: "halo2",
-      proof: b"proof",
-      verification_key: b"vk",
-    );
-  }}
-}}
-"#
+        let base_map = |selector: &str| {
+            let mut string_map = HashMap::new();
+            string_map.insert((func_idx, election_id), selector.to_owned());
+            string_map.insert((func_idx, ciphertext), "0x00".to_owned());
+            string_map.insert((func_idx, nullifier), format!("0x{}", "00".repeat(32)));
+            string_map.insert((func_idx, backend), "halo2/ipa".to_owned());
+            string_map.insert((func_idx, proof), "0x01".to_owned());
+            string_map.insert((func_idx, vk), "vk_ballot".to_owned());
+            string_map
+        };
+        let fold = |selector: &str| {
+            super::submit_ballot_inline_instruction_literal(
+                &base_map(selector),
+                func_idx,
+                election_id,
+                ciphertext,
+                nullifier,
+                backend,
+                proof,
+                vk,
             )
         };
 
-        Compiler::new()
-            .compile_source(&source("9223372036854775808"))
-            .expect("a contextual whole quantity above i64 but inside u128 must compile");
+        let maximum = "a".repeat(128);
+        for selector in ["a", maximum.as_str()] {
+            let raw = fold(selector).expect("canonical selector must produce a literal");
+            assert!(
+                super::access_for_instruction_literal(&raw).is_some(),
+                "canonical selector must remain eligible for static access hints"
+            );
+        }
 
-        let quantity_const = source("AMOUNT").replacen(
-            "seiyaku UnshieldAmount {",
-            "seiyaku UnshieldAmount { const quantity AMOUNT = 7;",
-            1,
-        );
-        Compiler::new()
-            .compile_source(&quantity_const)
-            .expect("an explicit quantity constant must compile");
-
-        for (amount, expected) in [
-            ("1.5", "requires a whole quantity with scale 0"),
-            (
-                "340282366920938463463374607431768211456",
-                "quantity exceeds the u128 V1 proof-scalar range",
-            ),
+        let overlong = "a".repeat(129);
+        for selector in [
+            "",
+            ".",
+            ".hidden",
+            "a/b",
+            "a%2Fb",
+            "a b",
+            "a\0b",
+            "投票",
+            overlong.as_str(),
         ] {
-            let error = Compiler::new()
-                .compile_source(&source(amount))
-                .expect_err("amount outside the protocol u128 domain must fail");
             assert!(
-                error.contains(expected),
-                "amount={amount}: expected `{expected}` in {error}"
+                fold(selector).is_none(),
+                "noncanonical selector {selector:?} must not produce an instruction literal or access hints"
             );
         }
-
-        let error = Compiler::new()
-            .compile_source(&source("-1"))
-            .expect_err("negative contextual quantity must fail");
-        assert!(
-            error.contains("E_NEGATIVE_QUANTITY")
-                && error.contains("contextual quantity literal cannot be negative"),
-            "negative amount must use the stable quantity diagnostic: {error}"
-        );
     }
 
     #[test]
-    fn unshield_inline_rejects_runtime_non_quantity_and_non_literal_amounts() {
-        let account = sample_account_literal();
-        let inputs = "\\x00".repeat(32);
-        let source = |amount_type: &str| {
-            format!(
-                r#"
-seiyaku RuntimeUnshieldAmount {{
-  view fn build({amount_type} amount) {{
-    let _bytes = crypto::zk::build_unshield(
-      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      destination: AccountId::parse("{account}"),
-      amount: amount,
-      inputs: b"{inputs}",
-      backend: "halo2",
-      proof: b"proof",
-      verification_key: b"vk",
-    );
-  }}
-}}
-"#
-            )
-        };
-
-        for amount_type in ["int", "decimal"] {
-            let error = Compiler::new()
-                .compile_source(&source(amount_type))
-                .expect_err("runtime non-quantity amount must fail semantic validation");
-            assert!(
-                error.contains("AssetDefinitionId, AccountId, quantity amount"),
-                "type={amount_type}: unexpected diagnostic: {error}"
-            );
-        }
-
-        let error = Compiler::new()
-            .compile_source(&source("quantity"))
-            .expect_err("the V1 inline builder still requires a literal quantity");
-        assert!(
-            error.contains("build_unshield_inline requires literal amount"),
-            "runtime quantity must retain the literal-builder diagnostic: {error}"
-        );
-    }
-
-    #[test]
-    fn inline_zk_builder_builtins_reject_invalid_arguments() {
-        for (src, expected) in [
-            (
-                r#"
+    fn inline_submit_ballot_builtin_rejects_invalid_arguments() {
+        let src = r#"
 seiyaku CompilerFixture {
 
 fn main() {
@@ -7180,80 +7038,16 @@ fn main() {
 }
 
 }
-"#,
-                "ledger::governance::build_submit_ballot expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bytes = crypto::zk::build_unshield(
-    asset_definition: Name::parse("asset"),
-    destination: context::authority(),
-    amount: 1,
-    inputs: b"00",
-    backend: "halo2",
-    proof: b"proof",
-    verification_key: b"vk",
-  );
-}
-
-}
-"#,
-                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, string backend, bytes proof, bytes vk)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bytes = crypto::zk::build_unshield(
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    destination: context::authority(),
-    amount: 1,
-    inputs: b"00",
-    backend: "halo2",
-    proof: 1,
-    verification_key: b"vk",
-  );
-}
-
-}
-"#,
-                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, string backend, bytes proof, bytes vk)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bytes = crypto::zk::build_unshield(
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    destination: context::authority(),
-    amount: 1,
-    inputs: b"00",
-    outputs: b"00",
-    backend: "halo2",
-    proof: b"proof",
-    verification_key: b"vk",
-  );
-}
-
-}
-"#,
-                "has no parameter named `outputs`",
-            ),
-        ] {
-            let parsed = parse(src).expect("parse invalid inline builder source");
-            let err =
-                analyze(&parsed).expect_err("semantic analysis should reject inline builder args");
-            assert!(
-                err.message.contains(expected),
-                "expected error containing {expected:?}, got {}",
-                err.message
-            );
-        }
+"#;
+        let expected = "ledger::governance::build_submit_ballot expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)";
+        let parsed = parse(src).expect("parse invalid inline builder source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject inline builder args");
+        assert!(
+            err.message.contains(expected),
+            "expected error containing {expected:?}, got {}",
+            err.message
+        );
     }
 
     #[test]
@@ -7264,7 +7058,6 @@ seiyaku CompilerFixture {
 kotoage fn run(bytes payload) authorize("Admin") {
   ledger::sccp::record(payload);
   ledger::governance::submit_ballot(payload);
-  crypto::zk::submit_unshield(payload);
   ledger::subscription::bill();
   ledger::subscription::record_usage();
 }
@@ -7293,17 +7086,13 @@ kotoage fn run(bytes payload) authorize("Admin") {
             .filter(|window| *window == execute_instruction)
             .count();
         assert_eq!(
-            execute_instruction_count, 3,
-            "typed SCCP/governance/ZK operations should lower to SMARTCONTRACT_EXECUTE_INSTRUCTION"
+            execute_instruction_count, 2,
+            "typed SCCP and governance operations should lower to SMARTCONTRACT_EXECUTE_INSTRUCTION"
         );
         for (tag, label) in [
             (
                 ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
                 "SubmitBallot",
-            ),
-            (
-                ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
-                "Unshield",
             ),
             (
                 ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
@@ -9422,11 +9211,11 @@ seiyaku NativeJson {
     }
 
     #[test]
-    fn manifest_access_set_hints_include_create_trigger_from_json() {
+    fn manifest_access_set_hints_include_register_trigger_from_json() {
         let src = r#"
 seiyaku Test {
   kotoage fn make() authorize("Admin") {
-    ledger::trigger::create(Json::parse("{\"id\":\"t1\"}"));
+    ledger::trigger::register(Json::parse("{\"id\":\"t1\"}"));
   }
 }
 "#;
@@ -9735,27 +9524,14 @@ kotoage fn main() authorize("AssetAdmin") {{
     }
 
     #[test]
-    fn manifest_access_set_hints_include_inline_zk_vendor_payloads() {
-        use iroha_data_model::{
-            account::{AccountId, ParsedAccountId},
-            asset::id::{AssetDefinitionId, AssetId},
-        };
-
+    fn manifest_access_set_hints_include_inline_ballot_vendor_payload() {
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(include_str!("samples/zk_vote_and_unshield.ko"))
+            .compile_source_with_manifest(include_str!("samples/zk_vote_ballot.ko"))
             .expect("compile sample manifest");
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        let asset_def = AssetDefinitionId::parse_address_literal("6pEP9RjNoZ7beWkT3pLfKoM1dyfi")
-            .expect("sample asset definition");
-        let account =
-            AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-                .map(ParsedAccountId::into_account_id)
-                .expect("sample account");
-        let asset = AssetId::of(asset_def.clone(), account.clone());
-
         assert!(
             hints
                 .write_keys
@@ -9765,13 +9541,6 @@ kotoage fn main() authorize("AssetAdmin") {{
             hints
                 .write_keys
                 .contains(&"zk:election:election-1:nullifiers".to_string())
-        );
-        assert!(hints.write_keys.contains(&format!("zk_asset:{asset_def}")));
-        assert!(hints.write_keys.contains(&format!("asset:{asset}")));
-        assert!(
-            hints
-                .write_keys
-                .contains(&format!("asset_def.detail:{asset_def}:zk.unshield.last"))
         );
         assert_conservative_ledger_read(&hints.read_keys, &hints.write_keys);
 
@@ -9784,7 +9553,7 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert_eq!(
             demo.access_hints_skipped,
             vec![HINT_SKIP_OPAQUE_ISI.to_owned()],
-            "opaque proof envelopes require a conservative read wildcard even when the built instruction payloads are exact"
+            "opaque proof envelopes require a conservative read wildcard even when the ballot instruction payload is exact"
         );
     }
 
@@ -11321,7 +11090,7 @@ seiyaku Test {
         let src = r#"
 seiyaku Test {
   kotoage fn register() authorize("Admin") {
-    ledger::trigger::create(Json::parse("{\"name\":\"t1\"}"));
+    ledger::trigger::register(Json::parse("{\"name\":\"t1\"}"));
   }
 }
 "#;
@@ -11380,7 +11149,7 @@ seiyaku Test {
         let src = r#"
 seiyaku Test {
   kotoage fn register() authorize("Admin") {
-    ledger::trigger::create(Json::parse("{\"name\":\"t1\"}"));
+    ledger::trigger::register(Json::parse("{\"name\":\"t1\"}"));
   }
 }
 "#;
@@ -11862,7 +11631,7 @@ seiyaku Test {
         let raw_json = norito::json::to_string(&json_value).expect("trigger json");
         let escaped = raw_json.replace('\\', "\\\\").replace('"', "\\\"");
         let src = format!(
-            r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::create(Json::parse("{escaped}")); }} }}"#
+            r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::register(Json::parse("{escaped}")); }} }}"#
         );
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
@@ -14185,34 +13954,6 @@ impl Compiler {
                         string_map.insert((func_idx, *dest), raw);
                         dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
                     }
-                    if let ir::Instr::BuildUnshieldInline {
-                        dest,
-                        asset,
-                        to,
-                        amount,
-                        inputs,
-                        backend,
-                        proof,
-                        vk,
-                    } = instr
-                        && let Some(raw) = unshield_inline_instruction_literal(
-                            &string_map,
-                            func_idx,
-                            *asset,
-                            *to,
-                            *amount,
-                            *inputs,
-                            *backend,
-                            *proof,
-                            *vk,
-                        )
-                    {
-                        if let Some(access) = access_for_instruction_literal(&raw) {
-                            instruction_literal_access_map.insert((func_idx, *dest), access);
-                        }
-                        string_map.insert((func_idx, *dest), raw);
-                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
-                    }
                     if let ir::Instr::ActorAccount { dest, .. } = instr {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Account);
                     }
@@ -16087,9 +15828,6 @@ impl Compiler {
                                 ir::VendorInstructionKind::SubmitBallot => {
                                     syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT
                                 }
-                                ir::VendorInstructionKind::Unshield => {
-                                    syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD
-                                }
                                 ir::VendorInstructionKind::RecordSccpMessage => {
                                     syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE
                                 }
@@ -16400,6 +16138,15 @@ impl Compiler {
                                     Err(i18n::translate(self.lang, Message::SemanticError(&err)))
                                 };
                             let eid = require_literal("election_id", election_id)?;
+                            if !iroha_data_model::governance::is_valid_governance_selector_v1(&eid)
+                            {
+                                let err = "build_submit_ballot_inline election_id must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
+                                    .to_owned();
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
+                            }
                             let backend_str = require_literal("backend", backend)?;
                             let ct_literal = require_literal("ciphertext", ciphertext)?;
                             let ct_bytes = decode_hex_or_raw_bytes(&ct_literal).map_err(|e| {
@@ -16451,93 +16198,6 @@ impl Compiler {
                                         i18n::translate(self.lang, Message::SemanticError(&err))
                                     })?;
                             // Store as NoritoBytes in data and emit load into dest
-                            let hex_payload = hex::encode(bytes);
-                            let key = DataKey(DataKind::NoritoBytes, hex_payload);
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            emit_literal_load(&mut code, &fixups, rd, key);
-                            spill_back(dest, rd, spilled, imm, &mut code)?;
-                        }
-                        Instr::BuildUnshieldInline {
-                            dest,
-                            asset,
-                            to,
-                            amount,
-                            inputs,
-                            backend,
-                            proof,
-                            vk,
-                        } => {
-                            use iroha_data_model::{
-                                isi::zk as DMZk,
-                                prelude::*,
-                                proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-                            };
-                            let require_literal =
-                                |label: &str, temp: &ir::Temp| -> Result<String, String> {
-                                    if let Some(value) = string_map.get(&(func_idx, *temp)) {
-                                        return Ok(value.clone());
-                                    }
-                                    let err =
-                                        format!("build_unshield_inline requires literal {label}");
-                                    Err(i18n::translate(self.lang, Message::SemanticError(&err)))
-                                };
-                            let asset_id_str = require_literal("asset", asset)?;
-                            let to_str = require_literal("to", to)?;
-                            let amount_literal = require_literal("amount", amount)?;
-                            let amt =
-                                parse_unshield_public_amount(&amount_literal).map_err(|err| {
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
-                            let ad = AssetDefinitionId::parse_address_literal(&asset_id_str)
-                                .map_err(|e| {
-                                let err = format!(
-                                    "build_unshield_inline invalid AssetDefinitionId literal `{asset_id_str}`: {e}"
-                                );
-                                i18n::translate(self.lang, Message::SemanticError(&err))
-                            })?;
-                            let acct = AccountId::parse_encoded(&to_str)
-                                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                                .map_err(|e| {
-                                    let err = format!(
-                                        "build_unshield_inline invalid AccountId literal `{to_str}`: {e}"
-                                    );
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
-                            let inputs_literal = require_literal("inputs", inputs)?;
-                            let ins = decode_fixed32_chunks(&inputs_literal, "inputs", false)
-                                .map_err(|e| {
-                                    let err = format!("build_unshield_inline {e}");
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
-                            let backend_str = require_literal("backend", backend)?;
-                            let proof_literal = require_literal("proof", proof)?;
-                            let proof_bytes =
-                                decode_hex_or_raw_bytes(&proof_literal).map_err(|e| {
-                                    let err = format!("build_unshield_inline proof literal {e}");
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
-                            let vk_ref = require_literal("vk_ref", vk)?;
-                            let pa = ProofAttachment::new_ref(
-                                backend_str.clone(),
-                                ProofBox::new(backend_str.clone(), proof_bytes),
-                                VerifyingKeyId::new(backend_str, vk_ref),
-                            );
-                            let uz = DMZk::Unshield {
-                                asset: ad,
-                                to: acct,
-                                public_amount: amt,
-                                inputs: ins,
-                                proof: pa,
-                                root_hint: None,
-                            };
-                            let bytes =
-                                ivm_abi::codec::encode_canonical_norito(&InstructionBox::from(uz))
-                                    .map_err(|e| {
-                                        let err = format!(
-                                            "build_unshield_inline encode InstructionBox: {e}"
-                                        );
-                                        i18n::translate(self.lang, Message::SemanticError(&err))
-                                    })?;
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -22593,7 +22253,7 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
-        ir::Instr::BuildSubmitBallotInline { .. } | ir::Instr::BuildUnshieldInline { .. } => {}
+        ir::Instr::BuildSubmitBallotInline { .. } => {}
         ir::Instr::TransferDomain { domain, to } => {
             let (Some(domain), Some(to)) = (
                 parse_domain_temp(string_map, func_idx, *domain),
@@ -23064,6 +22724,9 @@ fn submit_ballot_inline_instruction_literal(
 
     let literal = |temp| string_map.get(&(func_idx, temp)).cloned();
     let eid = literal(election_id)?;
+    if !iroha_data_model::governance::is_valid_governance_selector_v1(&eid) {
+        return None;
+    }
     let backend_str = literal(backend)?;
     let ct_bytes = decode_hex_or_raw_bytes(&literal(ciphertext)?).ok()?;
     let nf_bytes = decode_hex_or_raw_bytes(&literal(nullifier)?).ok()?;
@@ -23082,71 +22745,6 @@ fn submit_ballot_inline_instruction_literal(
         nullifier: null32,
     };
     let boxed = InstructionBox::from(submit);
-    let bytes = ivm_abi::codec::encode_canonical_norito(&boxed).ok()?;
-    Some(format!("0x{}", hex::encode(bytes)))
-}
-
-fn parse_unshield_public_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity, String> {
-    let quantity = raw
-        .parse::<iroha_primitives::numeric::Quantity>()
-        .map_err(|_| {
-            "build_unshield_inline requires a canonical non-negative quantity literal amount"
-                .to_owned()
-        })?;
-    if quantity.scale() != 0 {
-        return Err(
-            "build_unshield_inline requires a whole quantity with canonical scale 0".to_owned(),
-        );
-    }
-    if quantity.as_numeric().try_mantissa_u128().is_none() {
-        return Err(
-            "build_unshield_inline quantity exceeds the u128 V1 proof-scalar range".to_owned(),
-        );
-    }
-    Ok(quantity)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn unshield_inline_instruction_literal(
-    string_map: &HashMap<(usize, ir::Temp), String>,
-    func_idx: usize,
-    asset: ir::Temp,
-    to: ir::Temp,
-    amount: ir::Temp,
-    inputs: ir::Temp,
-    backend: ir::Temp,
-    proof: ir::Temp,
-    vk: ir::Temp,
-) -> Option<String> {
-    use iroha_data_model::{
-        isi::zk as DMZk,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-    };
-
-    let literal = |temp| string_map.get(&(func_idx, temp)).cloned();
-    let asset_id = AssetDefinitionId::parse_address_literal(&literal(asset)?).ok()?;
-    let account = AccountId::parse_encoded(&literal(to)?)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .ok()?;
-    let public_amount = parse_unshield_public_amount(&literal(amount)?).ok()?;
-    let inputs = decode_fixed32_chunks(&literal(inputs)?, "inputs", false).ok()?;
-    let backend_str = literal(backend)?;
-    let proof_bytes = decode_hex_or_raw_bytes(&literal(proof)?).ok()?;
-    let vk_ref = literal(vk)?;
-    let proof = ProofAttachment::new_ref(
-        backend_str.clone(),
-        ProofBox::new(backend_str.clone(), proof_bytes),
-        VerifyingKeyId::new(backend_str, vk_ref),
-    );
-    let unshield = DMZk::Unshield {
-        asset: asset_id,
-        to: account,
-        public_amount,
-        inputs,
-        proof,
-        root_hint: None,
-    };
-    let boxed = InstructionBox::from(unshield);
     let bytes = ivm_abi::codec::encode_canonical_norito(&boxed).ok()?;
     Some(format!("0x{}", hex::encode(bytes)))
 }
@@ -23171,16 +22769,6 @@ fn record_instruction_box_access(
     }
     if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::FinalizeElection>() {
         add_zk_election_tally_w(access_set, instr.election_id());
-        return Some(());
-    }
-    if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::Unshield>() {
-        let asset = AssetId::of(instr.asset().clone(), instr.to().clone());
-        add_asset_rw(access_set, &asset);
-        add_zk_asset_rw(access_set, instr.asset());
-        let Ok(key) = "zk.unshield.last".parse::<Name>() else {
-            return None;
-        };
-        add_asset_def_detail_rw(access_set, instr.asset(), &key);
         return Some(());
     }
     if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::transfer::TransferAssetBatch>() {
@@ -24634,8 +24222,8 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::UnregisterAccount { .. } => access_class_for_builtin(Builtin::UnregisterAccount),
         ir::Instr::RegisterPeer { .. } => access_class_for_builtin(Builtin::RegisterPeer),
         ir::Instr::UnregisterPeer { .. } => access_class_for_builtin(Builtin::UnregisterPeer),
-        ir::Instr::CreateTrigger { .. } => access_class_for_builtin(Builtin::CreateTrigger),
-        ir::Instr::RemoveTrigger { .. } => access_class_for_builtin(Builtin::RemoveTrigger),
+        ir::Instr::CreateTrigger { .. } => access_class_for_builtin(Builtin::RegisterTrigger),
+        ir::Instr::RemoveTrigger { .. } => access_class_for_builtin(Builtin::UnregisterTrigger),
         ir::Instr::SetTriggerEnabled { .. } => access_class_for_builtin(Builtin::SetTriggerEnabled),
         ir::Instr::GrantPermission { .. } => access_class_for_builtin(Builtin::GrantPermission),
         ir::Instr::RevokePermission { .. } => access_class_for_builtin(Builtin::RevokePermission),
@@ -24676,12 +24264,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::ActorPublicKey { .. } => access_class_for_builtin(Builtin::TestActorPublicKey),
         ir::Instr::ActorSign { .. } => access_class_for_builtin(Builtin::TestActorSign),
         ir::Instr::ZkVerify { number, .. } => match *number {
-            ivm_abi::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
-                access_class_for_builtin(Builtin::ZkVerifyTransfer)
-            }
-            ivm_abi::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => {
-                access_class_for_builtin(Builtin::ZkVerifyUnshield)
-            }
             ivm_abi::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
                 access_class_for_builtin(Builtin::ZkVerifyBatch)
             }
@@ -24703,7 +24285,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::VerifyProof { .. } => access_class_for_builtin(Builtin::VerifyProof),
         ir::Instr::VendorExecuteInstruction { kind, .. } => access_class_for_builtin(match kind {
             ir::VendorInstructionKind::SubmitBallot => Builtin::ScExecuteSubmitBallot,
-            ir::VendorInstructionKind::Unshield => Builtin::ScExecuteUnshield,
             ir::VendorInstructionKind::RecordSccpMessage => Builtin::RecordSccpMessage,
         }),
         ir::Instr::VendorExecuteQuery { .. } => access_class_for_builtin(Builtin::ExecuteQuery),
@@ -24751,9 +24332,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::StateCount { .. } => access_class_for_builtin(Builtin::StateCount),
         ir::Instr::BuildSubmitBallotInline { .. } => {
             access_class_for_builtin(Builtin::BuildSubmitBallotInline)
-        }
-        ir::Instr::BuildUnshieldInline { .. } => {
-            access_class_for_builtin(Builtin::BuildUnshieldInline)
         }
         ir::Instr::VrfVerify { .. } => access_class_for_builtin(Builtin::VrfVerify),
         ir::Instr::VrfVerifyBatch { .. } => access_class_for_builtin(Builtin::VrfVerifyBatch),

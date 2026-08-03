@@ -6,6 +6,122 @@
 # DecisionAgreement, not from the write-once chain projection.
 EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+    ): (
+        "\\A node \\in ValidatorIds: /\\ AsyncControlServiceStateTypeInvariant "
+        "/\\ AsyncNext /\\ ~AsyncRetransmitLifecycleOwned(node) "
+        "/\\ AsyncRetransmitLifecycleCanAcquireThisStep(node) "
+        "/\\ ~AsyncRetransmitLifecycleResetThisStep(node) "
+        "/\\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node) "
+        "=> /\\ AsyncRetransmitLifecycleOwned(node)' "
+        "/\\ AsyncRetransmitLifecyclePhysicalCut(node)' "
+        "= AsyncNextIngressPhysicalOrdinal(node)' "
+        "/\\ AsyncNextCandidateLifecycleOrdinal(node) "
+        "<= AsyncRetransmitLifecycleOrdinal(node)' "
+        "/\\ AsyncNextCandidateLifecycleOrdinal(node)' "
+        "> AsyncRetransmitLifecycleOrdinal(node)'"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+    ): (
+        "\\A node \\in ValidatorIds: /\\ AsyncNext "
+        "/\\ AsyncRetransmitLifecycleOwned(node) "
+        "/\\ ~AsyncRetransmitLifecycleResetThisStep(node) "
+        "/\\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node) "
+        "=> /\\ AsyncRetransmitLifecycleOrdinal(node)' "
+        "= AsyncRetransmitLifecycleOrdinal(node) "
+        "/\\ AsyncRetransmitLifecyclePhysicalCut(node)' "
+        "= AsyncRetransmitLifecyclePhysicalCut(node)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
+    ): (
+        "\\A node \\in ValidatorIds: /\\ AsyncNext "
+        "/\\ AsyncRetransmitLifecycleOwned(node) "
+        "/\\ AsyncRetransmitLifecycleOrdinal(node)' = 0 "
+        "=> /\\ AsyncRetransmitLifecyclePhysicalCut(node)' = 0 "
+        "/\\ \\/ AsyncRetransmitLifecycleResetThisStep(node) "
+        "\\/ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn",
+    ): (
+        "\\A node \\in ValidatorIds, record \\in "
+        "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
+        "/\\ AsyncRetransmitLifecycleOwned(node) "
+        "/\\ AsyncRetransmitLifecyclePhysicalCut(node) "
+        "<= record.sourcePhysicalOrdinal "
+        "=> record \\notin "
+        "AsyncCandidateProducerContinuationRunnableResolutionRecordsForNode( "
+        "node)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode",
+    ): (
+        "\\A target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank, owner: /\\ AsyncStrongTypeInvariant "
+        "/\\ AdequateLeaderFrozenTargetCorridor( target, leaderContext, "
+        "leader, leaderView) /\\ AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank) /\\ AdequateLeaderTargetOccurrenceOwnerSelected( "
+        "target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank, owner) "
+        "/\\ AdequateLeaderProtectedPeriodicSnapshot( target, leaderContext, "
+        "leader, leaderView, subject) = {} "
+        "=> \\/ AdequateLeaderTargetStrictOccurrenceDescentGoal( target, "
+        "leaderContext, leader, leaderView, subject, sourceOccurrenceRank) "
+        "\\/ \\E known \\in SUBSET AdequateLeaderFrozenOwnerUniverse( target, "
+        "leaderContext, leader, leaderView, subject), budget \\in Nat: "
+        "/\\ known = AdequateLeaderTargetLiveOwnerIdentitySet( target, "
+        "leaderContext, leader, leaderView, subject) "
+        "/\\ AdequateLeaderTargetNonDescentEpisodeBudgetFrontier( target, "
+        "leaderContext, leader, leaderView, subject, sourceOccurrenceRank, "
+        "owner, known, budget)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicSnapshotCannotReplenish",
+    ): (
+        "\\A target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank, owner: /\\ AsyncStrongTypeInvariant "
+        "/\\ AsyncProgressOwnershipInvariant "
+        "/\\ AdequateLeaderFrozenTargetCorridor( target, leaderContext, "
+        "leader, leaderView) /\\ AdequateLeaderTargetOccurrenceOwnerSelected( "
+        "target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank, owner) /\\ [AsyncNext]_AsyncAllVars "
+        "/\\ AdequateLeaderFrozenTargetCorridor( target, leaderContext, "
+        "leader, leaderView)' "
+        "/\\ AdequateLeaderTargetOccurrenceOwnerSelected( target, "
+        "leaderContext, leader, leaderView, subject, sourceOccurrenceRank, "
+        "owner)' => AdequateLeaderProtectedPeriodicSnapshot( target, "
+        "leaderContext, leader, leaderView, subject)' \\subseteq "
+        "AdequateLeaderProtectedPeriodicSnapshot( target, leaderContext, "
+        "leader, leaderView, subject)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicIdentityServiceClosesSnapshot",
+    ): (
+        "\\A specification: "
+        "AdequateLeaderProtectedPeriodicIdentityServiceProperty(specification) "
+        "=> AdequateLeaderProtectedPeriodicEpisodeClosureProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderProtectedPeriodicEpisodeClosureProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "LeaderWirePhysicalFrozenCertificateRetainsPastCut",
     ): (
@@ -165,6 +281,39 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "\\A initialContext: "
         "AdequateLeaderExactClosureResidualProperty("
         "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestRuntimePrefixSnapshotIsFinite",
+    ): (
+        "\\A node \\in ValidatorIds, schedulerCeiling \\in Nat \\ {0}, "
+        "physicalCut \\in Nat \\ {0}: "
+        "/\\ AsyncStrongTypeInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ schedulerCeiling "
+        "<= AsyncNextCandidateLifecycleOrdinal(node) "
+        "/\\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node) "
+        "=> LET snapshot == ExactDecisionRequestRuntimePrefixSnapshot( "
+        "node, schedulerCeiling, physicalCut) "
+        "IN /\\ ExactDecisionRequestRuntimePrefixSnapshotActive( "
+        "snapshot, node) "
+        "/\\ ExactDecisionRequestRuntimeFrozenPrefixRank(snapshot) "
+        "\\in ExactDecisionRequestRuntimeFrozenPrefixCarrier"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestOwnedEpisodeHasRigidPrefixSnapshot",
+    ): (
+        "\\A node, qc, ownerOrdinal: /\\ AsyncStrongTypeInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ ExactDecisionRequestOwnedRetransmitEpisode( "
+        "node, qc, ownerOrdinal) => \\E snapshot: "
+        "/\\ snapshot = ExactDecisionRequestRuntimePrefixSnapshot( "
+        "node, ownerOrdinal, AsyncRetransmitLifecyclePhysicalCut(node)) "
+        "/\\ ExactDecisionRequestRuntimePrefixSnapshotActive( "
+        "snapshot, node) "
+        "/\\ ExactDecisionRequestClockPrefixSnapshotBinding( "
+        "\"Owned\", snapshot, node, ownerOrdinal)"
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",

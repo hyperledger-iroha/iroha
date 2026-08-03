@@ -1969,7 +1969,7 @@ mod tests {
                 ),
                 Err(BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest)
             );
-            assert_eq!(
+            assert!(matches!(
                 backend.issue_validated(
                     &context,
                     genesis,
@@ -1979,7 +1979,7 @@ mod tests {
                     10,
                 ),
                 Err(BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest)
-            );
+            ));
         }
         assert_eq!(
             backend.validate_request(&context, genesis, backend.policy(), &authorization, &[], 10,),

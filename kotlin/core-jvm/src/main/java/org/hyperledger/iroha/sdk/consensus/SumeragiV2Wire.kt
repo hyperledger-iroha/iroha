@@ -12,7 +12,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 /** Canonical bare-Norito models for the Sumeragi v2 consensus wire protocol. */
 object SumeragiV2Wire {
     /** The only protocol revision accepted by live consensus. */
-    const val PROTOCOL_VERSION: Int = 3
+    const val PROTOCOL_VERSION: Int = 4
     /** Maximum number of real Kagemusha top-up leaves committed by one block. */
     const val MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: Long = 16
     private val KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
@@ -640,8 +640,7 @@ object SumeragiV2Wire {
 
     /** Deterministic payload encoding. */
     enum class PayloadEncoding(@JvmField val discriminant: Long) {
-        PLAIN(0),
-        REED_SOLOMON_16(1),
+        REED_SOLOMON_16(0),
         ;
 
         internal fun encode(): ByteArray = u32(discriminant)
@@ -664,6 +663,12 @@ object SumeragiV2Wire {
         @JvmField val maxPayloadSizeBytes: Long,
         @JvmField val maxChunkCount: Long,
     ) : WireValue() {
+        init {
+            require(dataShards > 0 && parityShards > 0) {
+                "ReedSolomon16 data availability requires positive shard counts"
+            }
+        }
+
         override fun encode(): ByteArray = struct(
             encoding.encode(),
             u32(chunkSizeBytes),
@@ -1586,7 +1591,8 @@ object SumeragiV2Wire {
     enum class LivenessBlocker(@JvmField val discriminant: Long) {
         MISSING_PROPOSAL(0), BODY_UNAVAILABLE(1), PREPARE_QUORUM_MISSING(2),
         COMMIT_QUORUM_MISSING(3), TIMEOUT_CERTIFICATE_MISSING(4),
-        SCHEDULER_STARVATION(5), APPLICATION_PENDING(6), LOCAL_CONTROL_PENDING(7),
+        SCHEDULER_STARVATION(5), APPLICATION_PENDING(6),
+        SUCCESSOR_ACTIVATION_PENDING(7), LOCAL_CONTROL_PENDING(8),
         ;
 
         internal fun encode(): ByteArray = u32(discriminant)

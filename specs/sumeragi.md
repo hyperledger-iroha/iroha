@@ -1,3 +1,73 @@
+# Sumeragi consensus
+
+## Authoritative Sumeragi v2 revision 4
+
+Revision 4 is the first-release production consensus contract. Wire and pure
+core protocol versions are exactly `4`; nodes do not negotiate or reinterpret
+older consensus messages.
+
+### Committee and roles
+
+- Every height uses an equal-vote committee with exact `n = 3f + 1` geometry,
+  where `1 <= f <= 10`. Valid committee sizes are 4, 7, 10, …, 31 and quorum is
+  exactly `q = 2f + 1`. NPoS stake affects candidate election, not consensus
+  vote weight.
+- The finalized height seed and height determine a stable roster permutation.
+  Views rotate that permutation cyclically without changing validator indices.
+- Set A is the first `q` members: the leader is first and the proxy tail is
+  last. Set B is the remaining `f` members.
+
+### Proposal, availability, and voting
+
+1. The leader broadcasts the signed proposal manifest to the full committee
+   and initially sends its canonical body chunks to Set A.
+2. Reed-Solomon-16 is mandatory. A validator may Prepare-vote only after it has
+   reconstructed the complete canonical body, verified its manifest and hashes,
+   stored it durably, and completed deterministic validation.
+3. Every validator that votes sends its Prepare and Commit vote to the full
+   committee. Any validator may aggregate `q` equal votes and broadcast the
+   corresponding QC. Duplicate votes and QCs are idempotent.
+4. When the fast path does not complete, recovery expands body/chunk delivery
+   to Set B. Voting is already committee-wide; the quorum remains `q`, and Set
+   B never weakens the certificate.
+5. Timeout votes are committee-wide and do not depend on the proxy tail. A
+   TimeoutCertificate rotates the leader, proxy tail, Set A, and Set B. A
+   locked body is re-proposed unchanged; Proposal, Vote, and QC evidence always
+   has same-round semantics.
+
+### Finality and progress
+
+- A CommitQC is unique under the standard authenticated `3f + 1`, at-most-`f`
+  Byzantine assumption and durable honest sign-once/lock rules.
+- A node applies only the exact certified, locally available body. Durable
+  application and its typed finality artifact authorize successor construction.
+- NPoS epochs advance after exactly 3,600 finalized non-empty blocks. Empty
+  blocks are rejected before voting/finality, so the height boundary is also
+  the non-empty-block boundary; the old committee authenticates the full
+  next-epoch transition evidence.
+- Retryable finalized-height output, merge/lane sidecars, historical service,
+  and cleanup run under detached supervised repair. They remain observable
+  debt but cannot revoke finality or block successor activation.
+- Liveness is conditional on partial synchrony after GST, at least `2f + 1`
+  responsive committee members, terminating deterministic validation and
+  durable storage, and an eventually honest leader. It is not claimed during
+  an unbounded partition or permanent storage failure.
+
+### Fresh-genesis migration
+
+Revision 4 is a fresh-genesis cutover. There is no rolling or in-place
+compatibility path from revision 3: old consensus wire values, frozen height
+contexts, safety WAL state, and partially completed rounds must be rejected.
+Operators must generate and sign a revision-4 genesis and start new revision-4
+storage. State transfer, if separately authorized, terminates at an audited
+snapshot boundary and does not import revision-3 consensus state.
+
+## Historical Sumeragi V1 material (non-authoritative)
+
+Everything below this heading describes the retired V1 implementation and
+operator surfaces. It is retained only as historical context and must not be
+used to implement, configure, validate, or operate revision 4.
+
 ## Sumeragi Consensus V1
 
 Sumeragi V1 is Iroha's first-release deterministic BFT consensus protocol.
@@ -198,7 +268,7 @@ accepts traffic:
 - View-change pruning: once a higher view is installed for a height, stale pending blocks/RBC sessions/missing-block requests for lower views of that height are dropped to prevent rebroadcast storms; missing payloads are re-requested only for the active view.
 - Validation gate rejects: `/v1/sumeragi/status.validation_rejects` surfaces totals by reason plus the last rejected block hash/height/view/reason/timestamp. Prometheus mirrors the rejects via `sumeragi_validation_reject_total{reason}` with gauges `sumeragi_validation_reject_last_reason`, `_last_height`, `_last_view`, and `_last_timestamp_ms` (all zero when unset) so alerts can distinguish stateless vs execution vs prev-hash/height/topology failures before voting.
 - Evidence helpers:
-  - `GET /v1/sumeragi/evidence`, `GET /v1/sumeragi/evidence/count`, and `POST /v1/sumeragi/evidence` carry the same DTOs surfaced in the JS/Python SDKs, so the CLI and automation can inspect or upload observer/fault evidence without recomputing payload formats.
+  - `GET /v1/sumeragi/evidence` and `GET /v1/sumeragi/evidence/count` carry the same read-only DTOs surfaced in the JS/Python SDKs. Evidence admission remains on the authenticated consensus peer path; Torii, the CLI, and SDKs expose no mutation API.
   - View‑change telemetry is mirrored via `view_change_proof_{accepted,stale,rejected}_total`; `/v1/sumeragi/status` exposes the same counters for ad‑hoc audits.
 
 **Quick reference**
@@ -207,11 +277,11 @@ accepts traffic:
 |---------|--------|-------------|-----------------|
 | CLI `iroha --output-format text ops sumeragi params` | `consensus_mode`, `block_time_ms`, `commit_time_ms`, `min_finality_ms`, `pacing_factor_bps`, `k_aggregators`, `redundant_send_r`, VRF windows | Match governance manifest; only change via tracked config updates | Re-deploy config or regenerate genesis when values drift |
 | CLI `iroha --output-format text ops sumeragi telemetry` / HTTP `/v1/sumeragi/telemetry` | Aggregate `availability.collectors`, `rbc_backlog`, and `rbc_pending` observations | Collector activity and RBC pressure remain stable; this surface does not publish a deterministic collector plan or per-session records | If activity disappears or backlog grows, verify the staking snapshot and `epoch_length_blocks`, inspect status/log evidence, and restart affected collectors after confirming randomness evidence |
-| CLI `iroha --output-format text ops sumeragi vrf-epoch`, `iroha --output-format text ops sumeragi vrf-penalties` | `finalized=true`, participant count equals roster size, penalty lists reflect drills only | Every epoch emits a seed and penalty set that matches the staking roster/governance intent | When counts drift or unexpected penalties appear, follow {doc}`sumeragi_randomness_evidence_runbook` to resubmit commits/reveals and capture artefacts for governance |
+| CLI `iroha --output-format text ops sumeragi vrf-epoch`, `iroha --output-format text ops sumeragi vrf-penalties` | `finalized=true`, participant count equals roster size, penalty lists reflect drills only | Every epoch emits a seed and penalty set that matches the staking roster/governance intent | When counts drift or unexpected penalties appear, follow {doc}`sumeragi_randomness_evidence_runbook` to repair the validator's authenticated peer participation and capture artefacts for governance |
 | Prometheus | `sumeragi_phase_latency_ms{phase="commit"}` and phase-specific histograms | P95 < `0.8 * sumeragi.advanced.npos.timeouts.<phase>_ms` | Trigger chaos harness + perf runbook if exceeded; investigate collector fan-out |
 | Prometheus | `sumeragi_da_gate_block_total{reason="missing_local_data"}`, `sumeragi_rbc_store_evictions_total`, `sumeragi_rbc_persist_drops_total` | Flat line in steady state; spikes indicate missing local payloads or RBC churn | Verify `BlockCreated` delivery/RBC backlog, then capture artefacts |
 | Prometheus | `sumeragi_vrf_no_participation_total`, `sumeragi_vrf_reveals_late_total` | 0 outside planned drills | Follow {doc}`sumeragi_randomness_evidence_runbook`; page affected validators |
-| HTTP `/v1/sumeragi/evidence/count` and CLI `iroha ops sumeragi evidence count` | Monotonic growth when faults occur; zero drift between peers | If counts diverge, re-run evidence submit/list checks and inspect Alertmanager snapshots |
+| HTTP `/v1/sumeragi/evidence/count` and CLI `iroha ops sumeragi evidence count` | Monotonic growth when faults occur; zero drift between peers | If counts diverge, compare paginated evidence lists and authenticated peer-ingress logs, then inspect Alertmanager snapshots |
 
 ### Troubleshooting checklist
 
@@ -231,10 +301,10 @@ accepts traffic:
   2. Inspect `/v1/sumeragi/status.mode_activation_lag_blocks` to ensure the window has elapsed.
   3. Confirm `slashing_delay_blocks` in `iroha --output-format text ops sumeragi params` and whether governance cancelled the penalty before the delay expires.
   4. Only re-run admission once both checks succeed; otherwise escalate governance/persistence issues.
-- **Evidence ingestion stalls:** Diverging `iroha ops sumeragi evidence count` outputs or a flat `sumeragi_evidence_records_total` time series indicates the HTTP ingest path is failing.
+- **Evidence observation stalls:** Diverging `iroha ops sumeragi evidence count` outputs or a flat `sumeragi_evidence_records_total` time series indicates peer admission, persistence, or audit projection is failing.
   1. Compare `evidence count` across at least two validators.
-  2. Tail the Torii logs for `/v1/sumeragi/evidence` errors and re-submit a known fixture.
-  3. If the retry also fails, capture the `count` output and Alertmanager silence IDs, then roll back to the last known-good build.
+  2. Compare the corresponding paginated evidence records and authenticated consensus-ingress logs; do not inject evidence through Torii.
+  3. If the divergence persists, capture the `count` and list outputs plus Alertmanager silence IDs, then roll back to the last known-good build.
 
 Node Roles (config)
 - `validator` (default): participates in consensus according to its current topology role.
@@ -312,8 +382,8 @@ Genesis manifests now seed `Sumeragi::NextMode` and the `sumeragi_npos_parameter
 - Bare-metal (Iroha2 staged cutover): `kagami localnet --build-line iroha2 --peers 4 --out-dir ./npos-local --consensus-mode permissioned --next-consensus-mode npos --mode-activation-height 5 --seed demo` stages a permissioned→NPoS cutover at height 5 and keeps the advertised fingerprint on the permissioned mode until activation.
 - Localnet defaults to a fast 1s pipeline (block/commit split), shortens transaction gossip cadence (`transaction_gossip_period_ms = 100`, `transaction_gossip_resend_ticks = 1`, target reshuffle cadence = 100ms), raises `sumeragi.advanced.rbc.chunk_max_bytes` to 256 KiB, lifts queue capacity to 262,144, sets `nexus.fusion.exit_teu = 1,000,000` and `sumeragi.block.proposal_queue_scan_multiplier = 4` to bound proposal assembly, relaxes Torii tx rate limiting (`torii.tx_rate_per_authority_per_sec = 1,000,000`, `torii.tx_burst_per_authority = 2,000,000`, `torii.api_high_load_tx_threshold = 262,144`), keeps Kura on its crash-safe batched fsync policy (`kura.fsync_mode = "batched"`), clamps the pacing governor to 1.0x so effective block/commit timing stays aligned with the pipeline, and bumps redundant-send fanout when DA is enabled; for NPoS localnets it seeds XOR stake, activates validators in genesis, and rewrites `SumeragiParameters` timing fields (`block_time_ms`, `commit_time_ms`) to match the selected pipeline. Override with `--block-time-ms`, `--commit-time-ms`, or `--redundant-send-r` if you need slower timings. When only one of the block/commit values is set, Kagami mirrors it to the other to keep the pipeline balanced; set both to decouple them.
 - Localnet soak (permissioned, thousands of blocks/tx): `cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_soak_thousands -- --ignored --exact --nocapture` (long-running).
-- Docker Compose: point `--config-dir` at the same localnet output and run `kagami docker --peers 4 --config-dir ./npos-local --image hyperledger/iroha:dev --out-file docker-compose.npos.yml --consensus-mode npos --no-banner --print` to emit a Compose file that re-signs genesis in-container with `GENESIS_CONSENSUS_MODE` overrides (add the `GENESIS_NEXT_CONSENSUS_MODE`/`GENESIS_MODE_ACTIVATION_HEIGHT` pair only on Iroha2 staged networks).
-- Rosters/PoPs: re-sign custom topologies with `kagami genesis sign --topology '<peers_json>' --peer-pop <public_key=pop_hex>...` (the swarm’s one-shot signer accepts the same flags and publishes the body plus exact expected hash before validators start). Reuse the same `--seed` when regenerating localnet output so BLS/Ed25519 keys and PoPs stay deterministic for VRF sampling.
+- Docker Compose: point `--config-dir` at the same localnet output and run `kagami docker --peers 4 --config-dir ./npos-local --image hyperledger/iroha:dev --out-file docker-compose.npos.yml --no-banner --print`. Kagami validates and reuses the prepared validator identities, PoPs, signed genesis body, verifier key, and exact hash; the validator-only Compose file does not sign or override consensus at runtime.
+- Rosters/PoPs: re-sign custom topologies before deployment with `kagami genesis sign --topology '<peers_json>' --peer-pop <public_key=pop_hex>...`, then distribute the matching prepared peer configs and trust artifacts. Reuse the same `--seed` only when regenerating deterministic development output so BLS/Ed25519 keys and PoPs stay stable for VRF sampling.
 - Genesis signing (NPoS): when no public-lane validators are present in the manifest, `kagami genesis sign` injects a bootstrap transaction that registers the default `nexus`/`ivm` domains, mints `xor#nexus`, and stakes/activates each topology peer in the public lane.
 - Guardrails: `--mode-activation-height` requires `--next-consensus-mode` (height > 0) and `--consensus-mode` continues to advertise the pre‑activation mode for fingerprints; omit both flags to stay in the configured mode, or pair them to stage a permissioned→NPoS cutover on Iroha2 only.
 
@@ -830,16 +900,11 @@ windows:
 
 The commit/reveal ingestion path is synchronous and deterministic:
 
-- Validators automatically post `VrfCommit` and `VrfReveal` frames to the commit
+- Validators automatically broadcast authenticated `VrfCommit` and `VrfReveal` frames to the commit
   topology when the commit/reveal windows open and the node is part of the
   active validator set.
-  Manual submissions remain available via Torii for recovery/override flows:
-  - `POST /v1/sumeragi/vrf/commit` with `{ "epoch": <u64>, "signer": <u32>,
-    "commitment_hex": "<0x…>" }`.
-  - `POST /v1/sumeragi/vrf/reveal` with `{ "epoch": <u64>, "signer": <u32>,
-    "reveal_hex": "<0x…>" }`.
-- Torii rate-limits the requests, validates the 32-byte hex payload, and forwards
-  the message to the `SumeragiHandle`.
+- Peer ingress authenticates the sender and preserves consensus provenance;
+  Torii has no commit or reveal mutation endpoint.
 - The main-loop adapter (`handle_vrf_commit`/`handle_vrf_reveal`) checks the local
   epoch, window, and commitment binding, then snapshots the in-progress epoch
   state into WSV (`world.vrf_epochs`) for durability and observability.
@@ -880,18 +945,8 @@ record is missing at restart.
 - `iroha_cli --output-format text ops sumeragi params` prints the active consensus parameters pulled from WSV,
   including `evidence_horizon_blocks`, `activation_lag_blocks`, and `slashing_delay_blocks`, so operators can verify staged
   values before and after governance decisions.
-- Use the Torii POST endpoints directly when you need to submit commits or reveals
-  manually (automation should drive them during normal operations). Example:
-
-  ```bash
-  curl -X POST "$TORII/v1/sumeragi/vrf/commit" \
-    -H "Content-Type: application/json" \
-    -d '{"epoch":42,"signer":1,"commitment_hex":"0x..."}'
-
-  curl -X POST "$TORII/v1/sumeragi/vrf/reveal" \
-    -H "Content-Type: application/json" \
-    -d '{"epoch":42,"signer":1,"reveal_hex":"0x..."}'
-  ```
+- Repair a validator's peer connectivity or process health when it misses a
+  commit or reveal. Operators cannot forge consensus provenance through Torii.
 - Automation can poll `/v1/sumeragi/telemetry` for aggregate observed collector
   activity and `/v1/sumeragi/status` for `prf_epoch_seed`, `prf_height`,
   `vrf_late_reveals_total`, and penalty totals. Confirm deterministic selection
@@ -900,7 +955,7 @@ record is missing at restart.
 **Randomness runbook (operator checklist)**
 - Monitor `iroha_cli --output-format text ops sumeragi status` after each block; if `vrf_penalty_epoch` jumps or `committed_no_reveal` grows, open the per-epoch snapshot with `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>` to identify missing validators.
 - During the commit window validate that each validator submitted a commitment: `iroha_cli --output-format text ops sumeragi telemetry` exposes `commitments_total`, while `/v1/sumeragi/telemetry` lists the per-signer map under `vrf.commitments`.
-- Before the reveal deadline, watch `vrf.reveals_total` and `vrf_late_reveals_total`. If a reveal is missing, page the validator and be ready to post it manually via `POST /v1/sumeragi/vrf/reveal` (see curl example above) with a hex-encoded payload captured from the validator.
+- Before the reveal deadline, watch `vrf.reveals_total` and `vrf_late_reveals_total`. If a reveal is missing, page the validator and restore its authenticated peer broadcast path before the deadline.
 - Cross-check the epoch’s recorded `commit_deadline_offset` / `reveal_deadline_offset` against your expected schedule; mismatches indicate a configuration drift or stale genesis snapshot and should trigger incident response before the pacemaker advances to the next epoch.
 - When a reveal lands late, follow the recovery flow below: capture the current seed, confirm the late reveal is recorded under `vrf.late_reveals`, and verify that `prf.epoch_seed` remains unchanged.
 - At epoch rollover confirm penalties cleared: `vrf_committed_no_reveal_total` should drop to zero for the signer that supplied the late reveal, and `/v1/sumeragi/vrf/epoch/{n}` should show `finalized: true`.
@@ -914,12 +969,14 @@ record is missing at restart.
 
 - Integration tests `npos_rbc_store_backpressure_records_metrics` and `npos_rbc_chunk_loss_fault_reports_backlog` capture RBC store pressure and chunk-loss telemetry end-to-end (`integration_tests/tests/sumeragi_npos_performance.rs:633` and `:760`).
 - Nodes emit a rate-limited log when RBC store pressure transitions (warn on elevated pressure, info when back to normal). Repeated elevated logs are throttled to one per minute.
+
 #### Metrics and alerts
 
 Telemetry surfaces the VRF lifecycle so operators can wire alerts:
 
-- `sumeragi_vrf_commit_emitted_total` /
-  `sumeragi_vrf_reveal_emitted_total` — accepted submissions.
+- `sumeragi_vrf_commits_emitted_total` /
+  `sumeragi_vrf_reveals_emitted_total` — authenticated consensus frames
+  broadcast by this validator.
 - `sumeragi_vrf_non_reveal_total` / `sumeragi_vrf_no_participation_total` —
   epoch penalties (incremented once per epoch).
 - `sumeragi_prf_epoch_seed` (status endpoint) — the current seed; can be
@@ -962,8 +1019,8 @@ and `/v1/sumeragi/telemetry`’s `vrf` section for dashboards.
 #### VRF alert response (runbook)
 - Capture the current epoch context from `/v1/sumeragi/status` (`prf_height`, `prf_view`, `vrf_penalty_epoch`, `vrf_committed_no_reveal_total`, `vrf_no_participation_total`) to confirm the alerting epoch and whether penalties were already applied.
 - Inspect the detailed participation table with `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>`. When multiple validators are missing, rerun without `--output-format text` to list per-signer commitments, reveals, and penalty flags.
-- For `no_participation` increments, contact the affected validator and verify that the corresponding Torii ingress logs show VRF submissions. If the validator was offline, stage a joint reconfiguration or jailing proposal before the next epoch to keep quorum guarantees intact.
-- For `non_reveal` increments, collect the stored commitment from the epoch snapshot (`commitments[*].commitment_hex`) and have the validator resend the reveal via `POST /v1/sumeragi/vrf/reveal` (see the curl example above). Confirm `sumeragi_vrf_reveals_late_total` increments and `vrf_committed_no_reveal_total` drops back to zero after the late submission.
+- For `no_participation` increments, contact the affected validator and verify that its authenticated peer-transport logs show VRF broadcasts. If the validator was offline, stage a joint reconfiguration or jailing proposal before the next epoch to keep quorum guarantees intact.
+- For `non_reveal` increments, collect the stored commitment from the epoch snapshot (`commitments[*].commitment_hex`), repair the validator, and have it rebroadcast the reveal through the authenticated peer protocol. Confirm `sumeragi_vrf_reveals_late_total` increments and `vrf_committed_no_reveal_total` drops back to zero after the late broadcast.
 - When `sumeragi_vrf_rejects_total_by_reason` fires, inspect the `reason` label to determine root cause. `invalid_signature` and `bad_epoch` require the validator to refresh its configuration; `stale` implies the payload was replayed and should be discarded. Record the offending payload hash in the incident notes.
 - After remediation, wait for the next block and re-check `/v1/sumeragi/status` plus `/v1/sumeragi/telemetry.vrf` to ensure counters stabilise and the PRF seed (`seed_hex`) matches the value captured before the intervention. If penalties remain non-zero across an epoch boundary, escalate to governance to slash or rotate the validator.
 
@@ -1019,7 +1076,7 @@ DA availability transitions also emit structured debug logs when the reason chan
 | DA availability missing with payloads pending | `sumeragi_rbc_backlog_sessions_pending` or `sumeragi_rbc_backlog_chunks_total` plateau, aggregate `rbc_backlog`/`rbc_pending` stay elevated, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) increase. | Verify the manifest hash and chunk availability, inspect `/v1/sumeragi/status.rbc_store.recent_evictions` and logs, restart collectors that stopped ingesting votes, temporarily increase `sumeragi.collectors.redundant_send_r`, and document the stalled block hash. |
 | Collector stops ingesting votes | `iroha --output-format text ops sumeragi telemetry` reports flat `availability.collectors[*].votes_ingested` for a single index and `sumeragi_bg_post_queue_depth_by_peer` spikes for that collector. | Compare aggregate activity with the configured parameters and VRF evidence, bump `sumeragi.collectors.redundant_send_r` to fan out to another collector, and debug the peer’s networking (firewall, queue saturation) before restoring the baseline redundancy. |
 | Membership mismatch alert | `sumeragi_membership_mismatch_active` gauges flip to `1` and `/v1/sumeragi/status.membership.view_hash` differs between peers. | Compare `/v1/configuration.sumeragi` snapshots, ensure `trusted_peers`/stake snapshots are identical, restart any validator that failed to apply the latest config, and keep the lane quiesced until every peer reports the same roster hash. |
-| VRF penalties creeping up | Prometheus alerts on `increase(sumeragi_vrf_no_participation_total)` / `increase(sumeragi_vrf_non_reveal_penalties_total)` or CLI telemetry shows growing penalties. | Follow {doc}`sumeragi_randomness_evidence_runbook` to pull the per-epoch participation table, contact the validator, collect the late reveal via `POST /v1/sumeragi/vrf/reveal`, and confirm the `prf.epoch_seed` remained stable. |
+| VRF penalties creeping up | Prometheus alerts on `increase(sumeragi_vrf_no_participation_total)` / `increase(sumeragi_vrf_non_reveal_penalties_total)` or CLI telemetry shows growing penalties. | Follow {doc}`sumeragi_randomness_evidence_runbook` to pull the per-epoch participation table, repair the validator's authenticated peer broadcast, and confirm the `prf.epoch_seed` remained stable. |
 | RBC store evicts sessions faster than expected | `sumeragi_rbc_store_pressure=2`, `sumeragi_rbc_store_evictions_total` increases, and `iroha --output-format text ops sumeragi status` lists recent evictions for nearby heights. | Expand disk allowance, confirm `sumeragi.advanced.rbc.store_max_bytes` and `sumeragi.collectors.redundant_send_r` match the production template, and re-ingest the affected payload once collectors are healthy. |
 
 ### Governance Checklist: Reconfiguration & Slashing
@@ -1039,28 +1096,25 @@ DA availability transitions also emit structured debug logs when the reason chan
 
 **Evidence API & CLI quick reference**
 - **List** — `iroha_cli --output-format text ops sumeragi evidence list` (JSON via `/v1/sumeragi/evidence`) surfaces the total count and the most recent records; drop `--output-format text` for the full Norito payload.
-- **Filter** — refine the snapshot with `--kind DoublePrepare` / `DoubleCommit` / `InvalidQc` / `InvalidProposal` / `Censorship` and paginate via `--limit` / `--offset` when auditing large incident windows.
+- **Filter** — refine the snapshot with `--kind DoublePrepare` / `DoubleCommit` / `InvalidQc` / `InvalidProposal` / `Censorship` / `SumeragiV2Equivocation` and paginate via `--limit` / `--offset` when auditing large incident windows.
 - **Count** — `iroha_cli ops sumeragi evidence count` (or `GET /v1/sumeragi/evidence/count`) reports the deduplicated total so operators can confirm that rejected payloads did not persist.
-- **Submit** — `iroha_cli ops sumeragi evidence submit --evidence-hex <0x…>` (or `--evidence-hex-file forged_evidence.hex`) wraps `POST /v1/sumeragi/evidence` with a hex-encoded Norito payload. Torii validates structure and signatures (vote signatures against the commit topology and chain ID), emits `invalid consensus evidence` on mismatch, and never stores the entry.
 - **Horizon audit** — `iroha_cli --output-format text ops sumeragi params` shows the active `evidence_horizon_blocks`; governance updates flow through `SetParameter::Custom(SumeragiNposParameters)` and tests guard short horizons to prevent stale replays from succeeding.
 
 **Evidence runbook (operator checklist)**
-- Record the current count via `iroha_cli ops sumeragi evidence count` before submitting slashing material; the value should increase only after valid payloads are accepted.
-- When ingesting evidence manually, inspect the payload locally (for example with the Norito tooling or a staging node) to avoid propagating malformed votes before calling `iroha_cli ops sumeragi evidence submit`.
-- After submission, poll `iroha_cli --output-format text ops sumeragi evidence list` and confirm the new record’s `recorded_at_height` equals the subject height (or the fallback height if horizon pruning applied).
+- Record the current count via `iroha_cli ops sumeragi evidence count` before an authenticated consensus fault drill; the value should increase only after valid evidence is admitted.
+- After admission, poll `iroha_cli --output-format text ops sumeragi evidence list` and confirm the new record's subject and consensus-admission heights match the committed proof.
 - Use `iroha_cli ops sumeragi evidence list --kind <Kind>` to isolate double votes versus invalid QC/proposal reports; reconcile the paginated output (`--limit`, `--offset`) across peers to ensure the in-memory snapshot matches before/after governance actions.
-- If a payload is rejected with `invalid consensus evidence`, inspect the CLI’s structured error and cross-check the underlying votes or proposal. No state change should occur; the count remains unchanged by design.
+- If peer ingress rejects evidence, inspect the structured consensus log and cross-check the underlying votes or proposal. No state change should occur; the count remains unchanged by design.
 - Periodically compare `/v1/sumeragi/evidence/count` across peers. Divergence indicates a horizon mismatch or a node that failed to persist the record and should trigger incident response.
-- Submit payloads with `iroha_cli ops sumeragi evidence submit --evidence-hex <0x…>` or
-  `--evidence-hex-file forged_evidence.hex`. Use `--output-format text` to surface the
-  `{kind, status}` line; omit it to return the full JSON payload.
 - For pacemaker queue issues, run `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>`
   (or pipe `journalctl -f … | python3 scripts/sumeragi_backpressure_log_scraper.py -`) to correlate
   `pacemaker_backpressure_deferrals_total` spikes with "DA availability gate still active" logs and RBC backlog logs. Add `--status` when you
   have a `/v1/sumeragi/status` snapshot to include counter baselines; see `scripts/sumeragi_backpressure_log_scraper.py --help`
   and the telemetry runbook for details.
 
-CI coverage keeps the evidence pipeline honest:
-- `integration_tests/tests/sumeragi_negative_paths.rs` posts forged double-vote payloads with mismatched signer/height/view/epoch/signature metadata, invalid kind/payload pairings, and stale heights; each permutation must yield `invalid consensus evidence` and leave the persisted count untouched.
-- `crates/iroha_core/src/sumeragi/evidence.rs` round-trips every negative mutation through the Norito codec before feeding it to the validator so encode/decode cannot “heal” malformed payloads. The fuzz-style loop jitters signatures and block hashes to guard the deduplication keys.
-- The helper `set_evidence_horizon` in the integration suite stages short horizons and proves that stale evidence sourced from old heights is ignored even when the network replays it later.
+CI coverage keeps the evidence pipeline honest: `crates/iroha_core/src/sumeragi/evidence.rs`
+round-trips every negative mutation through the Norito codec before feeding it
+to the validator so encode/decode cannot "heal" malformed payloads. The
+fuzz-style loop jitters signatures and block hashes to guard the deduplication
+keys, and exact v2 tests cover authenticated admission, horizon enforcement,
+ordering, proof validation, and committed-height binding.

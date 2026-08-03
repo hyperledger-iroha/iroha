@@ -6,7 +6,6 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config_base::WithOrigin;
-use iroha_crypto::KeyPair;
 use iroha_data_model::{ChainId, prelude::Peer};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{NetworkHandle, network::message::*};
@@ -88,14 +87,14 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr, rate: Option<u32>, burst: Optio
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn low_priority_posts_are_throttled() {
     let chain = ChainId::from("test_chain");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let a1 = socket_addr!(127.0.0.1:12_036);
     let a2 = socket_addr!(127.0.0.1:12_037);
 
     // Enable per-peer low-priority token bucket with 1 msg/sec, burst 1
     let started1 = NetworkHandle::<LoMsg>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(a1.clone(), Some(1), Some(1)),
         chain.clone(),
         None,
@@ -108,7 +107,7 @@ async fn low_priority_posts_are_throttled() {
         Err(_e) => return,
     };
     let started2 = NetworkHandle::<LoMsg>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(a2.clone(), None, None),
         chain.clone(),
         None,

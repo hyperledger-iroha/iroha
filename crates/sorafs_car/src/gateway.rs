@@ -554,8 +554,7 @@ impl GatewayFetcherInner {
 
         let max_response_bytes = usize::try_from(request.spec.length)
             .unwrap_or(usize::MAX)
-            .checked_add(MAX_GATEWAY_ERROR_BODY_BYTES)
-            .unwrap_or(usize::MAX)
+            .saturating_add(MAX_GATEWAY_ERROR_BODY_BYTES)
             .min(MAX_GATEWAY_RESPONSE_BYTES);
         let response = self
             .engine

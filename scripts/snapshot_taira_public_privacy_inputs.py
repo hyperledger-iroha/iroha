@@ -51,10 +51,10 @@ POLICY_ID = hashlib.sha256(
 ).hexdigest()
 PROVIDER_HANDLE = "runtime://privacy/bootle-lantern/taira-primary"
 CONFIG_PUBLIC_BASE_SHA256 = (
-    "1281e4eceef19149ea91da5587578f08f3cac71ce38a85c5803d6f3c6a7f02ac"
+    "a300e33200dae1927fe8394b7b523840317edd2ce3fb4e0272276b1ef8e70525"
 )
 GENESIS_PUBLIC_BASE_SHA256 = (
-    "d441eac907d74530874fa6f400558d530de28e984b154d9d19e0f6bde1ae7ad5"
+    "4739c1703e3b259f540e194302ae1d7c79f4c7fa1331088fa6755f8e39f1b352"
 )
 PROTOCOLS = (
     (0, "zk-ace-pq-authorization-v0", "ZkAcePqAuthorizationV0"),
@@ -657,6 +657,10 @@ def _validate_public_config(payload: bytes, plan: dict[str, Any]) -> None:
     credentials = onboarding.get("credentials") if isinstance(onboarding, dict) else None
     if (
         config.get("private_key") != "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"
+        or config.get("soranet_transport_public_key")
+        != "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY"
+        or config.get("soranet_transport_private_key")
+        != "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY"
         or not isinstance(kagemusha, dict)
         or kagemusha.get("private_key")
         != "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
@@ -674,7 +678,10 @@ def _validate_public_config(payload: bytes, plan: dict[str, Any]) -> None:
         or streaming.get("identity_private_key")
         != "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
     ):
-        _fail("public Taira config materializes a private key, token, or key-file value")
+        _fail(
+            "public Taira config materializes or replaces a required runtime-identity, "
+            "private-key, token, or key-file placeholder"
+        )
     base = {
         "root_without_torii": {
             key: value for key, value in config.items() if key != "torii"

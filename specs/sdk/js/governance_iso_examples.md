@@ -274,8 +274,8 @@ await torii.governancePersistCouncil({
 }, { signal: writeController.signal });
 
 const finalizeDraft = await torii.governanceFinalizeReferendumTyped({
-  referendumId: "ref-mainnet-001",
-  proposalId: "0123abcd...beef",
+  referendumId: "01".repeat(32),
+  proposalId: "01".repeat(32),
 }, { signal: writeController.signal });
 console.log("finalize tx count", finalizeDraft.tx_instructions.length);
 

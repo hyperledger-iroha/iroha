@@ -272,6 +272,14 @@ def test_embedded_projection_fingerprints_match_canonical_templates() -> None:
     (
         ("REPLACE_WITH_VALIDATOR_PRIVATE_KEY", "ed0120materialized-validator-key"),
         (
+            "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY",
+            "ed0120materialized-soranet-transport-public-key",
+        ),
+        (
+            "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY",
+            "802620materialized-soranet-transport-private-key",
+        ),
+        (
             "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY",
             "ed0120materialized-kagemusha-key",
         ),

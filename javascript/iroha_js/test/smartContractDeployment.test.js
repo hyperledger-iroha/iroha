@@ -31,14 +31,16 @@ import {
   finalizeBrowserInstructionTransaction,
   validateBrowserInstructionTransactionSignable,
 } from "../src/transactionCodec.js";
+import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 
-const CURRENT_ARTIFACT_FIXTURE = JSON.parse(
+const CURRENT_ARTIFACT_FIXTURE = parseStrictLosslessIntegerJson(
   readFileSync(
     new URL("./fixtures/current_rust_contract_artifact.json", import.meta.url),
     "utf8",
   ),
+  "current Rust contract artifact fixture",
 );
-const ABI_HASH = CURRENT_ARTIFACT_FIXTURE.rust_verifier.abi_hash_hex;
+const ABI_HASH = CURRENT_ARTIFACT_FIXTURE.artifact_semantics.abi_hash_hex;
 const PRIVATE_KEY = Buffer.from(
   "CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
   "hex",
@@ -54,17 +56,17 @@ const AUTHORITY_FEE_PAYMENT = Object.freeze({
 });
 const ARTIFACT_ADMISSION_VERIFIER = await createStaticArtifactAdmissionVerifier({
   ok: true,
-  code_hash_hex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_hash_hex,
-  abi_hash_hex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.abi_hash_hex,
-  header_len: CURRENT_ARTIFACT_FIXTURE.rust_verifier.header_len,
-  code_offset: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset,
-  entrypoint_count: CURRENT_ARTIFACT_FIXTURE.rust_verifier.entrypoint_count,
+  code_hash_hex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_hash_hex,
+  abi_hash_hex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.abi_hash_hex,
+  header_len: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
+  code_offset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
+  entrypoint_count: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
   manifest: CURRENT_ARTIFACT_FIXTURE.manifest,
 });
 function deploymentFixture() {
   return {
     artifactBytes: Buffer.from(CURRENT_ARTIFACT_FIXTURE.artifact_base64, "base64"),
-    codeHashHex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_hash_hex,
+    codeHashHex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_hash_hex,
     manifest: structuredClone(CURRENT_ARTIFACT_FIXTURE.manifest),
   };
 }
@@ -346,9 +348,9 @@ test("browser deployment retains the existing key locally and commits every step
   assert.equal(result.ledgerTimeMs, "123456");
   assert.deepEqual(result.artifactAdmission, {
     verifierSha256Hex: ARTIFACT_ADMISSION_VERIFIER.verifierSha256Hex,
-    headerLength: CURRENT_ARTIFACT_FIXTURE.rust_verifier.header_len,
-    codeOffset: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset,
-    entrypointCount: CURRENT_ARTIFACT_FIXTURE.rust_verifier.entrypoint_count,
+    headerLength: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
+    codeOffset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
+    entrypointCount: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
   });
   assert.equal(result.transactions.length, 4);
 });
@@ -408,7 +410,7 @@ test("browser deployment fails closed without authentic shared artifact admissio
   const forbiddenArtifact = Buffer.from(fixture.artifactBytes);
   forbiddenArtifact.set(
     [0x00, 0x00, 0xfe, 0x62],
-    CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset,
+    CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
   );
   const forbiddenCodeHash =
     computeIvmArtifactHashes(forbiddenArtifact).codeHashHex;

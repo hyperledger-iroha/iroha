@@ -676,6 +676,21 @@ def default_gate_metadata(
         add_hex_list("valid_checkpoint_digests", "checkpoint_digest_hex")
         add_policy()
         add_hex_list("valid_public_head_cids", "public_head_cid_hex")
+        add_hex_list(
+            "valid_receiver_policy_digests", "receiver_policy_digest_hex"
+        )
+        add_hex_list(
+            "valid_replay_namespace_digests", "replay_namespace_digest_hex"
+        )
+        add_hex_list("valid_replica_set_digests", "replica_set_digest_hex")
+        add_hex_list(
+            "valid_kubo_ingress_binding_digests",
+            "kubo_ingress_binding_digest_hex",
+        )
+        add_hex_list(
+            "valid_signed_head_ingress_binding_digests",
+            "signed_head_ingress_binding_digest_hex",
+        )
     elif gate_name == "hedging_billing":
         metadata["metric_count_values"] = [len(MODULE.HEDGING_BILLING_REQUIRED_METRICS)]
         metadata["metrics"] = sorted(MODULE.HEDGING_BILLING_REQUIRED_METRICS)
@@ -9933,6 +9948,54 @@ def test_governance_dag_policy_bound_artifacts_must_match_policy_digest(
     assert (
         "governance_dag policy-bound artifact fingerprints must match "
         "valid_policy_digests"
+    ) in errors
+
+
+@pytest.mark.parametrize(
+    ("metadata_field", "fingerprint_field"),
+    (
+        ("valid_receiver_policy_digests", "receiver_policy_digest_hex"),
+        ("valid_replay_namespace_digests", "replay_namespace_digest_hex"),
+        ("valid_replica_set_digests", "replica_set_digest_hex"),
+        (
+            "valid_kubo_ingress_binding_digests",
+            "kubo_ingress_binding_digest_hex",
+        ),
+        (
+            "valid_signed_head_ingress_binding_digests",
+            "signed_head_ingress_binding_digest_hex",
+        ),
+    ),
+)
+def test_governance_dag_ingress_bound_artifacts_match_publisher_anchors(
+    metadata_field: str,
+    fingerprint_field: str,
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("governance_dag")
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        **{fingerprint_field: "cd" * 32},
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "governance_dag.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "governance_dag",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "governance_dag ingress-bound artifact fingerprints must match "
+        f"{metadata_field}"
     ) in errors
 
 

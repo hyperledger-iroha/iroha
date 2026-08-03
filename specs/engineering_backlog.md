@@ -6696,13 +6696,12 @@ redistributable schemas, and official trust/revocation bundles.
   CRT-NTT helper path now rejects invalid operand lengths, unsupported NTT
   lengths, and CRT reconstruction overflow before using that same fallback
   instead of relying on panic-only degree or NTT arithmetic;
-  confidential encrypted shield payloads now require supported versions,
-  non-empty ciphertext, and low-order-free X25519 ephemeral keys before
-  `Shield` execution burns public balance or records note commitments, and the
-  CLI plus Connect/Norito bridge shield payload builders now run that same
-  preflight before instruction construction, raw payload emission, or signing,
-  with Swift fallback serialization enforcing matching empty-ciphertext and
-  X25519 low-order admission;
+  confidential encrypted memo payloads require supported versions, non-empty
+  ciphertext, and low-order-free X25519 ephemeral keys before envelope use;
+  this structural validation is not value authorization. The proofless generic
+  `zk::Shield` instruction and CLI/native/SDK transaction encoders are removed,
+  public-to-confidential ingress requires the proof-bound Kagemusha V4 top-up,
+  and the standalone envelope utility retains the same payload preflight;
   standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
   secret keys, all-zero embedded secret-key public keys, all-zero secret-key
@@ -10272,16 +10271,16 @@ redistributable schemas, and official trust/revocation bundles.
     generation before verifier-key registration, election finalization, and
     tally syscall regressions consume account material;
     core ZK roots cap fixtures now use checked random Ed25519 key generation
-    before root-history mint/shield setup and roots-get syscall regressions
-    consume account material;
+    before authenticated confidential-state setup and roots-get syscall
+    regressions consume account material;
     core ZK root-hint fixtures now use checked random Ed25519 key generation
     before stale/recent root-window regressions consume account material;
-    core ZK shield-transfer audit fixtures now use checked random Ed25519 key
-    generation before shield/transfer audit regressions consume account
-    material;
+    core Kagemusha and native anonymous-escrow audit fixtures now use checked
+    random Ed25519 key generation before protocol-bound confidential-state
+    regressions consume account material;
     core ZK asset verifier-key enforcement fixtures now use checked random
-    Ed25519 key generation before transfer/unshield VK binding regressions
-    consume account material;
+    Ed25519 key generation before Kagemusha and native anonymous-escrow VK-role
+    binding regressions consume account material;
     core fraud monitoring authority and attester fixtures now use checked
     random Ed25519 key generation before admission and attestation regressions
     consume signing material;

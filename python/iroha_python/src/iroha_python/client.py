@@ -362,6 +362,16 @@ def _require_exact_token_string(value: Any, context: str) -> str:
     return exact
 
 
+def _require_governance_selector_string(value: Any, context: str) -> str:
+    exact = _require_exact_token_string(value, context)
+    if re.fullmatch(r"[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}", exact) is None:
+        raise ValueError(
+            f"{context} must be 1-128 RFC 3986 unreserved ASCII characters "
+            "and must not start with a dot"
+        )
+    return exact
+
+
 def _require_governance_proposal_id(value: Any, context: str) -> str:
     proposal_id = _require_exact_token_string(value, context)
     if re.fullmatch(r"[0-9a-f]{64}", proposal_id) is None:
@@ -3146,6 +3156,10 @@ def _normalize_governance_plain_ballot_payload(
         _GOVERNANCE_PLAIN_BALLOT_FIELDS,
         context=context,
     )
+    record["referendum_id"] = _require_governance_selector_string(
+        record.get("referendum_id"),
+        f"{context}.referendum_id",
+    )
     record["amount"] = _canonical_quantity_text(
         record.get("amount"),
         f"{context} amount",
@@ -3231,11 +3245,15 @@ def _normalize_governance_zk_ballot_v1_payload(
         _GOVERNANCE_ZK_BALLOT_V1_FIELDS,
         context=context,
     )
-    for field in ("authority", "chain_id", "election_id"):
+    for field in ("authority", "chain_id"):
         record[field] = _require_exact_token_string(
             record.get(field),
             f"{context}.{field}",
         )
+    record["election_id"] = _require_governance_selector_string(
+        record.get("election_id"),
+        f"{context}.election_id",
+    )
     record["backend"] = _require_exact_token_string(
         record.get("backend"),
         f"{context}.backend",
@@ -3297,11 +3315,15 @@ def _normalize_governance_zk_ballot_proof_payload(
         _GOVERNANCE_ZK_BALLOT_PROOF_V1_FIELDS,
         context=context,
     )
-    for field in ("authority", "chain_id", "election_id"):
+    for field in ("authority", "chain_id"):
         record[field] = _require_exact_token_string(
             record.get(field),
             f"{context}.{field}",
         )
+    record["election_id"] = _require_governance_selector_string(
+        record.get("election_id"),
+        f"{context}.election_id",
+    )
     ballot = record.get("ballot")
     if ballot is None:
         raise ValueError(f"{context}.ballot must be provided")
@@ -3407,13 +3429,16 @@ def _normalize_governance_finalize_payload(
         _GOVERNANCE_FINALIZE_FIELDS,
         context=context,
     )
-    record["referendum_id"] = _require_exact_token_string(
+    record["referendum_id"] = _require_governance_proposal_id(
         record.get("referendum_id"),
         f"{context}.referendum_id",
     )
-    if record.get("proposal_id") is None:
-        raise ValueError(f"{context} is missing required field `proposal_id`")
-    _normalize_governance_public_hex_hint(record, "proposal_id", context=context)
+    record["proposal_id"] = _require_governance_proposal_id(
+        record.get("proposal_id"),
+        f"{context}.proposal_id",
+    )
+    if record["referendum_id"] != record["proposal_id"]:
+        raise ValueError(f"{context}.referendum_id must equal proposal_id")
     return record
 
 
@@ -19030,144 +19055,6 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def shield_asset_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        from_account_id: str,
-        amount: QuantityLike,
-        note_commitment: Union[str, bytes, bytearray, memoryview],
-        ephemeral_public_key: Union[str, bytes, bytearray, memoryview],
-        nonce: Union[str, bytes, bytearray, memoryview],
-        ciphertext: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        ciphertext_b64: Optional[str] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Shield public funds into an asset's ZK ledger."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.shield_asset(
-            asset_definition_id,
-            self._native_transaction_account_id(from_account_id, "from_account_id"),
-            amount,
-            note_commitment=note_commitment,
-            ephemeral_public_key=ephemeral_public_key,
-            nonce=nonce,
-            ciphertext=ciphertext,
-            ciphertext_b64=ciphertext_b64,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
-    def zk_transfer_prepared_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        outputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        proof: Mapping[str, Any],
-        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Submit a prepared private-to-private ZK transfer."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.zk_transfer_prepared(
-            asset_definition_id,
-            inputs=inputs,
-            outputs=outputs,
-            proof=proof,
-            root_hint=root_hint,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
-    def unshield_prepared_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        to_account_id: str,
-        public_amount: QuantityLike,
-        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        proof: Mapping[str, Any],
-        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Submit an output-free first-release ZK unshield transaction.
-
-        Private outputs are derived from the verified statement; the retired
-        caller-supplied ``outputs`` keyword is intentionally unsupported.
-        """
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.unshield_prepared(
-            asset_definition_id,
-            self._native_transaction_account_id(to_account_id, "to_account_id"),
-            public_amount,
-            inputs=inputs,
-            proof=proof,
-            root_hint=root_hint,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
     def _account_record_from_listing(
         self,
         account_id: str,
@@ -21487,17 +21374,6 @@ class ToriiClient(_BaseToriiClient):
             raise RuntimeError("sumeragi evidence endpoint returned non-object payload")
         return SumeragiEvidenceListPage.from_payload(payload)
 
-    def submit_sumeragi_evidence(self, evidence_hex: str) -> Optional[Any]:
-        """Submit a Norito-encoded evidence payload (`POST /v1/sumeragi/evidence`)."""
-
-        return self.request_json(
-            "POST",
-            "/v1/sumeragi/evidence",
-            json_body={"evidence_hex": str(evidence_hex)},
-            expected_status=(200, 202),
-            allow_retry=False,
-        )
-
     def get_sumeragi_phases(self) -> Optional[Any]:
         """Fetch consensus phase durations (`GET /v1/sumeragi/phases`)."""
 
@@ -21706,7 +21582,7 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_referendum(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/referenda/{referendum_id}`."""
 
-        exact_referendum_id = _require_exact_token_string(
+        exact_referendum_id = _require_governance_selector_string(
             referendum_id,
             "referendum_id",
         )
@@ -21731,7 +21607,7 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_tally(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/tally/{referendum_id}`."""
 
-        exact_referendum_id = _require_exact_token_string(
+        exact_referendum_id = _require_governance_selector_string(
             referendum_id,
             "referendum_id",
         )
@@ -21758,7 +21634,7 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_locks(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/locks/{referendum_id}`."""
 
-        exact_referendum_id = _require_exact_token_string(
+        exact_referendum_id = _require_governance_selector_string(
             referendum_id,
             "referendum_id",
         )

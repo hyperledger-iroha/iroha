@@ -373,7 +373,7 @@ fn validate_kagemusha_v4_topup_snapshot(
                 "Offline top-up asset has no confidential tree state.",
             )
         })?;
-    zk_state.validate_tree_integrity().map_err(|error| {
+    zk_state.validate_tree_metadata().map_err(|error| {
         validation_owned(
             "offline_confidential_state_invalid",
             format!(

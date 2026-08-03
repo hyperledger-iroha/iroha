@@ -125,9 +125,6 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::zk::RegisterZkAsset);
         $macro!(iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition);
         $macro!(iroha_data_model::isi::zk::CancelConfidentialPolicyTransition);
-        $macro!(iroha_data_model::isi::zk::Shield);
-        $macro!(iroha_data_model::isi::zk::ZkTransfer);
-        $macro!(iroha_data_model::isi::zk::Unshield);
         $macro!(iroha_data_model::isi::zk::CreateElection);
         $macro!(iroha_data_model::isi::zk::SubmitBallot);
         $macro!(iroha_data_model::isi::zk::FinalizeElection);
@@ -938,6 +935,48 @@ mod tests {
             }),
             "retired Numeric asset instruction leaked into the exported manifest"
         );
+    }
+
+    #[test]
+    fn generic_privacy_types_are_absent_but_specialized_flows_remain_registered() {
+        let registry = instruction_registry::default();
+        let specs = gather_instruction_specs(&registry, None);
+        assert_eq!(
+            specs.len(),
+            110,
+            "first-release generated instruction count"
+        );
+
+        let retired = [
+            ["Sh", "ield"].concat(),
+            ["Zk", "Transfer"].concat(),
+            ["Un", "shield"].concat(),
+        ];
+        for type_name in retired {
+            assert!(
+                specs
+                    .iter()
+                    .all(|spec| { spec.type_name.rsplit("::").next() != Some(type_name.as_str()) }),
+                "retired generic privacy type must not be generated: {type_name}"
+            );
+            let source_entry = format!("$macro!(iroha_data_model::isi::zk::{type_name})");
+            assert!(
+                !include_str!("main.rs").contains(&source_entry),
+                "retired generic privacy type must not remain in exporter inventory: {type_name}"
+            );
+        }
+
+        for specialized_type in [
+            std::any::type_name::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(),
+            std::any::type_name::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(),
+            std::any::type_name::<iroha_data_model::isi::escrow::OpenAnonymousAssetEscrow>(),
+            std::any::type_name::<iroha_data_model::isi::escrow::ReleaseAnonymousAssetEscrow>(),
+        ] {
+            assert!(
+                registry.contains(specialized_type),
+                "specialized privacy instruction must remain registered: {specialized_type}"
+            );
+        }
     }
 
     #[test]

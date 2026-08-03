@@ -122,6 +122,56 @@ fn run_parameterized_int_entrypoint(program: &[u8], index: i64) -> (IVM, u64) {
     (vm, gas)
 }
 
+fn run_multiword_mutation_failure_case(
+    program: &[u8],
+    operation: i64,
+    index: &str,
+) -> (Vec<u64>, u64) {
+    let metadata = ProgramMetadata::parse(program).expect("parse multiword List metadata");
+    let entrypoint = metadata
+        .contract_interface
+        .as_ref()
+        .expect("multiword List contract interface")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == "main")
+        .expect("main entrypoint");
+    let schema = entrypoint
+        .argument_schema
+        .as_ref()
+        .expect("multiword List argument schema");
+    let entrypoint_pc =
+        u64::try_from(metadata.prefix_len()).expect("prefix fits u64") + entrypoint.entry_pc;
+    let payload = Json::from_str_norito(&format!(
+        r#"{{"operation":"{operation}","index":"{index}"}}"#
+    ))
+    .expect("valid multiword List arguments");
+    let record =
+        ivm::encode_argument_record_from_json(schema, &payload).expect("encode List arguments");
+    let key: Name = "trigger_event_json".parse().expect("public input key");
+    let host = DefaultHost::new().with_public_inputs(BTreeMap::from([(
+        key,
+        argument_tlv(PointerType::NoritoBytes, &record),
+    )]));
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(host);
+    vm.load_program(program)
+        .expect("load multiword List program");
+    vm.set_program_counter(entrypoint_pc)
+        .expect("select multiword List entrypoint");
+    vm.run().expect("execute multiword List program");
+
+    let layout = ListLayoutV1::try_new(2, 2).expect("List<Pair, 2> layout");
+    let base = vm.register(10);
+    let allocation = (0..layout.allocation_bytes().expect("bounded allocation") / 8)
+        .map(|word| vm.load_u64(base + word * 8).expect("returned List word"))
+        .collect();
+    let heap_cursor = vm
+        .alloc_heap(0)
+        .expect("observe heap cursor without allocating");
+    (allocation, heap_cursor)
+}
+
 #[test]
 fn safe_mutations_execute_with_transactional_failures() {
     let vm = run(r#"
@@ -391,6 +441,91 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
     assert!(
         failure_delta < success_delta,
         "full try_push must skip element and length writes: success={success_delta}, failure={failure_delta}"
+    );
+}
+
+#[test]
+fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_preflight() {
+    let program = KotodamaCompiler::new()
+        .compile_source(
+            r#"
+            seiyaku MultiwordMutationFailures {
+                struct Pair { int first, int second }
+
+                view fn main(int operation, int index) -> List<Pair, 2> {
+                    if operation < 2 {
+                        var List<Pair, 2> values = [
+                            Pair { first: 10, second: 20 },
+                        ];
+                        let Pair replacement = Pair { first: 90, second: 91 };
+                        let Pair control_poison = Pair { first: -1, second: -1 };
+                        let Pair failure_poison = Pair { first: -2, second: -2 };
+                        if operation == 0 {
+                            // Match the exact bounds-proof allocation performed by
+                            // try_set before comparing its failure branch to control.
+                            let int length = values.len();
+                            let bool non_negative = index >= 0;
+                            let bool below_length = index < length;
+                            let bool present = non_negative && below_length;
+                            if present {
+                                values.try_set(
+                                    index: 0,
+                                    value: control_poison,
+                                );
+                            }
+                        } else if values.try_set(
+                            index: index,
+                            value: replacement,
+                        ) {
+                            values.try_set(
+                                index: 0,
+                                value: failure_poison,
+                            );
+                        }
+                        return values;
+                    }
+
+                    var List<Pair, 2> values = [
+                        Pair { first: 10, second: 20 },
+                        Pair { first: 30, second: 40 },
+                    ];
+                    let Pair replacement = Pair { first: 90, second: 91 };
+                    let Pair failure_poison = Pair { first: -3, second: -3 };
+                    if operation == 3 && values.try_push(replacement) {
+                        values.try_set(
+                            index: 0,
+                            value: failure_poison,
+                        );
+                    }
+                    return values;
+                }
+            }
+            "#,
+        )
+        .expect("compile multiword mutation failure fixture");
+
+    for index in ["-1", "1", "8", "18446744073709551616"] {
+        let control = run_multiword_mutation_failure_case(&program, 0, index);
+        let failure = run_multiword_mutation_failure_case(&program, 1, index);
+        assert_eq!(
+            failure.0, control.0,
+            "failed try_set({index}) mutated a reserved Pair word"
+        );
+        assert_eq!(
+            failure.1, control.1,
+            "failed try_set({index}) allocated after its matched bounds proof"
+        );
+    }
+
+    let full_control = run_multiword_mutation_failure_case(&program, 2, "0");
+    let full_failure = run_multiword_mutation_failure_case(&program, 3, "0");
+    assert_eq!(
+        full_failure.0, full_control.0,
+        "full-capacity try_push mutated a reserved Pair word"
+    );
+    assert_eq!(
+        full_failure.1, full_control.1,
+        "full-capacity try_push allocated before returning false"
     );
 }
 

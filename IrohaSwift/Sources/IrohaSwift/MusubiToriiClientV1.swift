@@ -33,7 +33,10 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
     public static let searchPath = "/v1/musubi/queries/search"
 
     private static let requestMaximumBytes = 64 * 1024
-    private static let responseMaximumBytes = 8 * 1024 * 1024
+    private static let errorResponseMaximumBytes = 4 * 1024
+    private static let responseInitialCapacity = 64 * 1024
+    // Exact-release JSON repeats the bounded dependency vector in both registry projections.
+    static let responseMaximumBytes = 32 * 1024 * 1024
 
     public let baseURL: URL
     public let defaultHeaders: [String: String]
@@ -219,10 +222,10 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
             throw ToriiClientError.invalidPayload(violation)
         }
 
-        let data: Data
+        let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (data, response) = try await session.data(
+            (bytes, response) = try await session.bytes(
                 for: request,
                 delegate: MusubiV1RejectRedirectDelegate.shared
             )
@@ -231,9 +234,22 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
             throw ToriiClientError.transport(error)
         }
         guard let http = response as? HTTPURLResponse else {
+            bytes.task.cancel()
             throw ToriiClientError.invalidResponse
         }
         guard (200..<300).contains(http.statusCode) else {
+            let data: Data
+            do {
+                data = try await Self.collectResponsePrefix(
+                    bytes,
+                    maximumBytes: Self.errorResponseMaximumBytes,
+                    cancel: { bytes.task.cancel() }
+                )
+            } catch {
+                bytes.task.cancel()
+                if error is CancellationError { throw CancellationError() }
+                throw ToriiClientError.transport(error)
+            }
             let message = String(data: data.prefix(4 * 1024), encoding: .utf8)
             throw ToriiClientError.httpStatus(
                 code: http.statusCode,
@@ -241,10 +257,20 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
                 rejectCode: http.value(forHTTPHeaderField: "x-iroha-reject-code")
             )
         }
-        guard data.count <= Self.responseMaximumBytes else {
-            throw ToriiClientError.invalidPayload(
-                "Musubi response exceeds the \(Self.responseMaximumBytes)-byte client limit."
+        let data: Data
+        do {
+            data = try await Self.collectBoundedResponseBody(
+                bytes,
+                response: http,
+                maximumBytes: Self.responseMaximumBytes,
+                cancel: { bytes.task.cancel() }
             )
+        } catch let error as ToriiClientError {
+            throw error
+        } catch {
+            bytes.task.cancel()
+            if error is CancellationError { throw CancellationError() }
+            throw ToriiClientError.transport(error)
         }
         guard let contentType = http.value(forHTTPHeaderField: "Content-Type")?
             .split(separator: ";", maxSplits: 1).first?
@@ -257,5 +283,102 @@ public final class MusubiToriiClientV1: @unchecked Sendable {
         } catch {
             throw ToriiClientError.decoding(error)
         }
+    }
+
+    static func collectBoundedResponseBody<Bytes: AsyncSequence>(
+        _ bytes: Bytes,
+        response: HTTPURLResponse,
+        maximumBytes: Int,
+        cancel: () -> Void
+    ) async throws -> Data where Bytes.Element == UInt8 {
+        precondition(maximumBytes > 0)
+        let declaredLength: Int?
+        do {
+            declaredLength = try validatedContentLength(
+                response,
+                maximumBytes: maximumBytes
+            )
+        } catch {
+            cancel()
+            throw error
+        }
+
+        var data = Data()
+        data.reserveCapacity(
+            min(
+                declaredLength ?? Self.responseInitialCapacity,
+                Self.responseInitialCapacity,
+                maximumBytes
+            )
+        )
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    cancel()
+                    throw ToriiClientError.invalidPayload(
+                        "Musubi response exceeds the \(maximumBytes)-byte client limit."
+                    )
+                }
+                data.append(byte)
+            }
+        } catch {
+            cancel()
+            throw error
+        }
+
+        let contentEncoding = response.value(forHTTPHeaderField: "Content-Encoding")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let hasIdentityRepresentation = contentEncoding == nil
+            || contentEncoding?.isEmpty == true
+            || contentEncoding == "identity"
+        if hasIdentityRepresentation, let declaredLength, data.count != declaredLength {
+            cancel()
+            throw ToriiClientError.invalidPayload(
+                "Musubi response length does not match its Content-Length header."
+            )
+        }
+        return data
+    }
+
+    private static func collectResponsePrefix<Bytes: AsyncSequence>(
+        _ bytes: Bytes,
+        maximumBytes: Int,
+        cancel: () -> Void
+    ) async throws -> Data where Bytes.Element == UInt8 {
+        precondition(maximumBytes > 0)
+        var data = Data()
+        data.reserveCapacity(maximumBytes)
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count == maximumBytes {
+                cancel()
+                break
+            }
+        }
+        return data
+    }
+
+    private static func validatedContentLength(
+        _ response: HTTPURLResponse,
+        maximumBytes: Int
+    ) throws -> Int? {
+        guard let raw = response.value(forHTTPHeaderField: "Content-Length") else {
+            return nil
+        }
+        let isCanonical = !raw.isEmpty
+            && raw.utf8.allSatisfy { (48...57).contains($0) }
+            && (raw == "0" || !raw.hasPrefix("0"))
+        guard isCanonical, let value = UInt64(raw), value <= UInt64(Int.max) else {
+            throw ToriiClientError.invalidPayload(
+                "Musubi response has a malformed or noncanonical Content-Length header."
+            )
+        }
+        guard value <= UInt64(maximumBytes) else {
+            throw ToriiClientError.invalidPayload(
+                "Musubi response declares more than the \(maximumBytes)-byte client limit."
+            )
+        }
+        return Int(value)
     }
 }

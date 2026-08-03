@@ -9,18 +9,16 @@
 // TODO: Supply a deployment-qualified runner only after the production boundaries below exist.
 // The stock tree deliberately cannot assemble one from the current SoraFS/Torii primitives:
 //
-// 1. seed ingress needs authenticated bounded canonical plan metadata (the current stage request
-//    carries only the raw CAR and its digest/length), plus durable opaque staging whose readback
-//    proves the complete `MusubiArchiveCommitmentV1`;
-// 2. providers need a reusable full-bundle verifier and a runtime-only completion-authority
-//    signer that produces `MusubiProviderBundleVerificationAttestationV1`; an ordinary SoraFS
-//    storage completion is not that attestation;
-// 3. storage coordination needs its own crash-safe idempotency journal and an authoritative
+// 1. provider adapters must invoke `sorafs_car::musubi::MusubiBundleVerifierV1` before a
+//    runtime-only completion-authority signer produces
+//    `MusubiProviderBundleVerificationAttestationV1`; the signer and those adapters remain to be
+//    implemented, and an ordinary SoraFS storage completion is not that attestation;
+// 2. storage coordination needs its own crash-safe idempotency journal and an authoritative
 //    finalized-chain reader which verifies the exact committed registration transaction and
 //    immutable archive projection before submitting/reconciling pin and replication mutations;
-// 4. readback needs admitted-provider authentication, redirect and DNS-rebinding defenses, and
+// 3. readback needs admitted-provider authentication, redirect and DNS-rebinding defenses, and
 //    full plan/CAR/bundle verification; and
-// 5. daemon assembly needs non-secret public configuration, runtime credential/signer resolution,
+// 4. daemon assembly needs non-secret public configuration, runtime credential/signer resolution,
 //    and a private TLS listener constructed around daemon-owned finalized-state/SoraFS handles.
 //
 // The protocol core, durable clock and service replay journal, and typed supervisor dependency are

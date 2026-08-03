@@ -1641,8 +1641,6 @@ pub mod sorafs {
 
             /// The public publisher is opt-in until endpoints and secret paths are configured.
             pub const ENABLED: bool = false;
-            /// Head publication mode (`signed_http` or `ipns`).
-            pub const HEAD_MODE: &str = "signed_http";
             /// Poll interval for filesystem feed reconciliation.
             pub const POLL_INTERVAL_SECS: u64 = 5;
             /// Endpoint TCP/TLS connection timeout.
@@ -1660,12 +1658,6 @@ pub mod sorafs {
             /// 128 MiB of canonical signing payload plus a checked 64 KiB
             /// block-signature/envelope allowance.
             pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((128 * 1024 * 1024) + (64 * 1024));
-            /// Maximum entries retained in the deterministic local IPLD mirror.
-            pub const MIRROR_MAX_ENTRIES: usize = 65_536;
-            /// Maximum canonical block bytes retained by the mirror.
-            pub const MIRROR_MAX_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
-            /// Maximum age accepted for a newly published signed head.
-            pub const MAX_HEAD_AGE_SECS: u64 = 15 * 60;
             /// Maximum future clock skew accepted for blocks and heads.
             pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
             /// Maximum lifetime accepted for one signed outbound request envelope.
@@ -3887,7 +3879,7 @@ pub mod sumeragi {
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 3;
+    pub const PROTOCOL_VERSION: u32 = 4;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// The view-zero round deadline is ten signed block-cadence intervals.
@@ -4125,8 +4117,8 @@ pub mod sumeragi {
         pub const VRF_COMMIT_WINDOW_BLOCKS: u64 = 100;
         /// VRF reveal window size after the commitment window.
         pub const VRF_REVEAL_WINDOW_BLOCKS: u64 = 40;
-        /// Maximum validators elected for an epoch (`0` means no configured cap).
-        pub const MAX_VALIDATORS: u32 = 128;
+        /// Exact bounded `3f + 1` ceiling for an epoch committee.
+        pub const MAX_VALIDATORS: u32 = 31;
         /// Minimum validator self-bond.
         pub const MIN_SELF_BOND: u64 = 1_000;
         /// Minimum nomination bond.

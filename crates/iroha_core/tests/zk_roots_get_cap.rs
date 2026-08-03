@@ -15,14 +15,6 @@ use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
-fn encrypted_payload(seed: u8) -> iroha_data_model::confidential::ConfidentialEncryptedPayload {
-    let mut nonce = [0_u8; 24];
-    nonce.fill(seed);
-    let mut ciphertext = b"zk-roots-get-cap-payload-v1".to_vec();
-    ciphertext.extend_from_slice(&[seed; 32]);
-    iroha_data_model::confidential::ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
-}
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -173,22 +165,22 @@ fn zk_roots_get_respects_cap_and_max() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-    // Multiple shields to exceed cap
+    // Seed authenticated-tree transitions directly; the syscall test only exercises root caps.
+    let mut zk_state = stx
+        .world
+        .zk_assets()
+        .get(&asset_def_id)
+        .cloned()
+        .expect("registered confidential asset state");
     for i in 0_u8..16 {
-        let ib: InstructionBox = iroha_data_model::isi::zk::Shield::new(
-            asset_def_id.clone(),
-            owner.clone(),
-            100u128,
-            [7u8; 32],
-            encrypted_payload(i),
-        )
-        .into();
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, ib)
-            .unwrap();
+        let mut commitment = [7_u8; 32];
+        commitment[0] = i.saturating_add(1);
+        zk_state
+            .push_commitment(commitment, nonzero!(4_usize))
+            .expect("seed bounded confidential root history");
     }
+    stx.world.zk_assets.remove(asset_def_id.clone());
+    stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
     let zk_snapshot = stx
         .world
         .zk_assets()

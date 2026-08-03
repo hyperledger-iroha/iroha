@@ -1297,6 +1297,52 @@ pub mod isi {
         }
     }
 
+    /// Resolve the canonical public balance identifier used by native ledger effects.
+    ///
+    /// Dataspace-restricted definitions prefer the active non-universal execution route, then
+    /// their declared home dataspace, and finally an unambiguous account binding. This keeps
+    /// privacy and other native balance effects on the same scope-resolution boundary as normal
+    /// asset instructions without coupling the asset layer to a particular protocol.
+    pub(crate) fn public_asset_id_for_current_scope(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition_id: &AssetDefinitionId,
+        account_id: &AccountId,
+    ) -> Result<AssetId, Error> {
+        let definition = state_transaction
+            .world
+            .asset_definition(definition_id)
+            .map_err(Error::from)?;
+        let scope = match definition.balance_scope_policy() {
+            AssetBalancePolicy::Global => AssetBalanceScope::Global,
+            AssetBalancePolicy::DataspaceRestricted => {
+                let route_dataspace = state_transaction
+                    .current_dataspace_id
+                    .or(state_transaction.world.current_dataspace_id)
+                    .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL);
+                let home_dataspace = || {
+                    asset_definition_home_dataspace_id(state_transaction, &definition)
+                        .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
+                };
+                let dataspace = if let Some(dataspace) = route_dataspace.or_else(home_dataspace) {
+                    Some(dataspace)
+                } else {
+                    unique_account_dataspace_hint(state_transaction, account_id)?
+                }
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "dataspace-restricted public asset access requires a non-universal execution dataspace, a declared home dataspace, or a single account dataspace binding"
+                            .into(),
+                    )
+                })?;
+                AssetBalanceScope::Dataspace(dataspace)
+            }
+        };
+        let asset_id = AssetId::with_scope(definition_id.clone(), account_id.clone(), scope);
+        state_transaction
+            .world
+            .resolve_asset_id_for_current_scope(&asset_id)
+    }
+
     fn bare_restricted_asset_home_dataspace_hint(
         state_transaction: &StateTransaction<'_, '_>,
         asset_id: &AssetId,
@@ -9455,6 +9501,150 @@ pub mod query {
                     .get(&AssetId::new(asset_def_id, ALICE_ID.clone()))
                     .is_none(),
                 "global bucket must stay empty for restricted assets"
+            );
+        }
+
+        #[test]
+        fn public_asset_scope_resolver_respects_policy_and_private_route() {
+            let domain_id =
+                DomainId::try_new("public_asset_scope", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let global_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "global_coin".parse().expect("global asset name"),
+            );
+            let restricted_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "private_coin".parse().expect("restricted asset name"),
+            );
+            let global_definition = AssetDefinition::numeric(
+                global_definition_id.clone(),
+                "global coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&ALICE_ID);
+            let restricted_definition = AssetDefinition::numeric(
+                restricted_definition_id.clone(),
+                "private coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&ALICE_ID);
+            let state = State::new(
+                World::with(
+                    [domain],
+                    [account],
+                    [global_definition, restricted_definition],
+                ),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let private_dataspace = DataSpaceId::new(7);
+            stx.current_dataspace_id = Some(private_dataspace);
+            stx.world.current_dataspace_id = Some(private_dataspace);
+
+            let global = public_asset_id_for_current_scope(&stx, &global_definition_id, &ALICE_ID)
+                .expect("global definition resolves to the global balance");
+            assert!(matches!(
+                global.scope(),
+                iroha_data_model::asset::AssetBalanceScope::Global
+            ));
+
+            let restricted =
+                public_asset_id_for_current_scope(&stx, &restricted_definition_id, &ALICE_ID)
+                    .expect("restricted definition resolves to the active private route");
+            assert_eq!(
+                restricted.scope(),
+                &iroha_data_model::asset::AssetBalanceScope::Dataspace(private_dataspace)
+            );
+        }
+
+        #[test]
+        fn public_asset_scope_resolver_rejects_unanchored_universal_route() {
+            let domain_id =
+                DomainId::try_new("unanchored_public_asset", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "private_coin".parse().expect("asset name"),
+            );
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "private coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&ALICE_ID);
+            let state = State::new(
+                World::with([domain], [account], [definition]),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let error = public_asset_id_for_current_scope(&stx, &definition_id, &ALICE_ID)
+                .expect_err("universal routing must not invent a private balance partition");
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires a non-universal execution dataspace"),
+                "unexpected scope error: {error}"
+            );
+        }
+
+        #[test]
+        fn public_asset_scope_resolver_rejects_ambiguous_account_bindings() {
+            let domain_id =
+                DomainId::try_new("ambiguous_public_asset", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+                b"public-asset-scope-ambiguous-account",
+            ));
+            let account = NewAccount::new(ALICE_ID.clone())
+                .with_uaid(Some(uaid))
+                .build(&ALICE_ID);
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "private_coin".parse().expect("asset name"),
+            );
+            let definition = AssetDefinition::numeric(
+                definition_id.clone(),
+                "private coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&ALICE_ID);
+            let mut world = World::with([domain], [account], [definition]);
+            let mut bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+            bindings.bind_account(DataSpaceId::new(7), ALICE_ID.clone());
+            bindings.bind_account(DataSpaceId::new(8), ALICE_ID.clone());
+            world.uaid_dataspaces.insert(uaid, bindings);
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+            let error = public_asset_id_for_current_scope(&stx, &definition_id, &ALICE_ID)
+                .expect_err("ambiguous account bindings must fail closed");
+            assert!(
+                error.to_string().contains("bound to multiple dataspaces"),
+                "unexpected ambiguity error: {error}"
             );
         }
 

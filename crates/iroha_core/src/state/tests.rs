@@ -131,6 +131,123 @@ fn musubi_v1_world_defaults_and_domain_generation_are_deterministic() {
 }
 
 #[test]
+fn musubi_resolver_checkpoints_are_sparse_block_final_and_reorg_safe() {
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+
+    let genesis = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(1).expect("genesis height"));
+        header.creation_time_ms = 1;
+    });
+    {
+        let mut block = state.block(genesis.as_ref().header());
+        let _ = block.apply_without_execution(&genesis, Vec::new());
+        block.commit().expect("commit genesis checkpoint");
+    }
+    {
+        let world = state.world.view();
+        let checkpoints = world.musubi_resolver_index_checkpoints();
+        assert_eq!(checkpoints.iter().count(), 1);
+        let genesis_checkpoint = checkpoints
+            .get(&MusubiResolverIndexRevisionV1::new(1).expect("revision one"))
+            .expect("genesis checkpoint");
+        assert_eq!(genesis_checkpoint.finalized_height, 1);
+        assert_eq!(
+            genesis_checkpoint.finalized_block_hash,
+            *genesis.as_ref().hash().as_ref()
+        );
+    }
+
+    let unchanged = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(2).expect("second height"));
+        header.creation_time_ms = 2;
+    });
+    {
+        let mut block = state.block(unchanged.as_ref().header());
+        let _ = block.apply_without_execution(&unchanged, Vec::new());
+        block.commit().expect("commit unchanged resolver block");
+    }
+    assert_eq!(
+        state
+            .world
+            .view()
+            .musubi_resolver_index_checkpoints()
+            .iter()
+            .count(),
+        1,
+        "unchanged blocks must not duplicate resolver checkpoints"
+    );
+
+    let jumped = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(3).expect("third height"));
+        header.creation_time_ms = 3;
+    });
+    {
+        let mut block = state.block(jumped.as_ref().header());
+        let mut transaction = block.transaction();
+        *transaction.world.musubi_resolver_index_revision.get_mut() =
+            MusubiResolverIndexRevisionV1::new(3).expect("revision three");
+        transaction.apply();
+        let _ = block.apply_without_execution(&jumped, Vec::new());
+        block.commit().expect("commit final same-block revision");
+    }
+    {
+        let world = state.world.view();
+        let checkpoints = world.musubi_resolver_index_checkpoints();
+        assert_eq!(checkpoints.iter().count(), 2);
+        assert!(
+            checkpoints
+                .get(&MusubiResolverIndexRevisionV1::new(2).expect("revision two"))
+                .is_none(),
+            "an intra-block revision must not receive a checkpoint"
+        );
+        let final_checkpoint = checkpoints
+            .get(&MusubiResolverIndexRevisionV1::new(3).expect("revision three"))
+            .expect("block-final revision checkpoint");
+        assert_eq!(final_checkpoint.finalized_height, 3);
+        assert_eq!(
+            final_checkpoint.finalized_block_hash,
+            *jumped.as_ref().hash().as_ref()
+        );
+    }
+
+    let replacement = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(3).expect("replacement height"));
+        header.creation_time_ms = 30;
+    });
+    assert_ne!(jumped.as_ref().hash(), replacement.as_ref().hash());
+    {
+        let mut block = state.block_and_revert(replacement.as_ref().header());
+        let mut transaction = block.transaction();
+        *transaction.world.musubi_resolver_index_revision.get_mut() =
+            MusubiResolverIndexRevisionV1::new(2).expect("replacement revision");
+        transaction.apply();
+        let _ = block.apply_without_execution(&replacement, Vec::new());
+        block.commit().expect("commit replacement checkpoint");
+    }
+    let world = state.world.view();
+    let checkpoints = world.musubi_resolver_index_checkpoints();
+    assert_eq!(checkpoints.iter().count(), 2);
+    assert!(
+        checkpoints
+            .get(&MusubiResolverIndexRevisionV1::new(3).expect("revision three"))
+            .is_none(),
+        "reverting a block must remove its resolver checkpoint"
+    );
+    let replacement_checkpoint = checkpoints
+        .get(&MusubiResolverIndexRevisionV1::new(2).expect("replacement revision"))
+        .expect("replacement checkpoint");
+    assert_eq!(replacement_checkpoint.finalized_height, 3);
+    assert_eq!(
+        replacement_checkpoint.finalized_block_hash,
+        *replacement.as_ref().hash().as_ref()
+    );
+}
+
+#[test]
 fn test_state_constructor_installs_default_lane_manifest() {
     let state = State::new(
         World::default(),
@@ -51561,11 +51678,13 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
     assert!(
-        !state.time_trigger_clock_progress_required_fast(),
+        !state.time_trigger_clock_progress_required_fast(Duration::ZERO),
         "a state without time triggers must not require idle block production"
     );
     assert!(
-        !state.view().time_trigger_clock_progress_required(),
+        !state
+            .view()
+            .time_trigger_clock_progress_required(Duration::ZERO),
         "the snapshot helper must agree for a state without time triggers"
     );
 
@@ -51599,11 +51718,11 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let view = state.view();
     assert!(
-        state.time_trigger_clock_progress_required_fast(),
+        state.time_trigger_clock_progress_required_fast(Duration::ZERO),
         "an enabled time trigger must retain ledger-clock progress"
     );
     assert!(
-        view.time_trigger_clock_progress_required(),
+        view.time_trigger_clock_progress_required(Duration::ZERO),
         "the snapshot helper must retain ledger-clock progress"
     );
     assert_eq!(
@@ -51632,13 +51751,114 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
     }
     state_block2.commit()?;
     assert!(
-        !state.time_trigger_clock_progress_required_fast(),
+        !state.time_trigger_clock_progress_required_fast(Duration::ZERO),
         "a disabled time trigger must not keep producing idle blocks"
     );
     assert!(
-        !state.view().time_trigger_clock_progress_required(),
+        !state
+            .view()
+            .time_trigger_clock_progress_required(Duration::ZERO),
         "the snapshot helper must ignore disabled time triggers"
     );
+
+    Ok(())
+}
+
+#[test]
+fn time_trigger_clock_progress_requires_a_reachable_schedule() -> Result<()> {
+    const PARENT_TIME_MS: u64 = 10_000;
+
+    fn state_with_time_trigger(execution_time: ExecutionTime) -> Result<State> {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            PARENT_TIME_MS,
+            0,
+        );
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
+            Register::domain(Domain::new(domain_id))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            let trigger = Trigger::new(
+                "clock_progress_probe".parse()?,
+                Action::new(
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        "probe".to_owned(),
+                    ))],
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter::new(execution_time),
+                )?,
+            );
+            Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
+            stx.apply();
+        }
+        state_block.commit()?;
+        Ok(state)
+    }
+
+    let cases = [
+        (
+            "stale one-shot",
+            ExecutionTime::Schedule(Schedule {
+                start_ms: 0,
+                period_ms: None,
+            }),
+            false,
+        ),
+        (
+            "due one-shot",
+            ExecutionTime::Schedule(Schedule {
+                start_ms: PARENT_TIME_MS,
+                period_ms: None,
+            }),
+            true,
+        ),
+        (
+            "future one-shot",
+            ExecutionTime::Schedule(Schedule {
+                start_ms: 20_000,
+                period_ms: None,
+            }),
+            true,
+        ),
+        (
+            "repeating",
+            ExecutionTime::Schedule(Schedule {
+                start_ms: 0,
+                period_ms: Some(60_000),
+            }),
+            true,
+        ),
+    ];
+    let parent_creation_time = Duration::from_millis(PARENT_TIME_MS);
+    for (label, execution_time, expected) in cases {
+        let state = state_with_time_trigger(execution_time)?;
+        assert_eq!(
+            state.time_trigger_clock_progress_required_fast(parent_creation_time),
+            expected,
+            "fast helper returned the wrong clock-progress decision for {label}"
+        );
+        assert_eq!(
+            state
+                .view()
+                .time_trigger_clock_progress_required(parent_creation_time),
+            expected,
+            "snapshot helper returned the wrong clock-progress decision for {label}"
+        );
+    }
 
     Ok(())
 }

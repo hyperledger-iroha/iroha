@@ -134,7 +134,7 @@ use iroha_data_model::{
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         zk::{
             CancelConfidentialPolicyTransition, CreateElection, FinalizeElection, RegisterZkAsset,
-            ScheduleConfidentialPolicyTransition, Shield, SubmitBallot, Unshield, ZkTransfer,
+            ScheduleConfidentialPolicyTransition, SubmitBallot,
         },
     },
     kaigi::{
@@ -8433,8 +8433,65 @@ fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<Instructio
     Ok(InstructionBox::from(TransferAssetBatch::new(entries)))
 }
 
+fn validate_governance_selector_payload(
+    payload: Option<&json::Value>,
+    field: &str,
+    context: &str,
+) -> napi::Result<()> {
+    let Some(json::Value::Object(fields)) = payload else {
+        return Ok(());
+    };
+    let Some(selector) = fields.get(field) else {
+        return Ok(());
+    };
+    let json::Value::String(selector) = selector else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "{context}.{field} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
+            ),
+        ));
+    };
+    if !iroha_data_model::governance::is_valid_governance_selector_v1(selector) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "{context}.{field} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_governance_instruction_selectors(value: &json::Value) -> napi::Result<()> {
+    let json::Value::Object(instruction) = value else {
+        return Ok(());
+    };
+    for (variant, field) in [
+        ("CastZkBallot", "election_id"),
+        ("CastPlainBallot", "referendum_id"),
+        ("FinalizeReferendum", "referendum_id"),
+    ] {
+        validate_governance_selector_payload(instruction.get(variant), field, variant)?;
+    }
+    for zk_key in ["zk", "Zk", "ZK"] {
+        let Some(json::Value::Object(zk)) = instruction.get(zk_key) else {
+            continue;
+        };
+        for variant in ["CreateElection", "SubmitBallot", "FinalizeElection"] {
+            validate_governance_selector_payload(
+                zk.get(variant),
+                "election_id",
+                &format!("{zk_key}.{variant}"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
 fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
+    validate_governance_instruction_selectors(&value)?;
     // These instructions carry release-critical JSON contracts. The generic
     // `InstructionBox` decoder may accept data-model defaults and unknown
     // fields, so route these envelopes through explicit strict parsers.
@@ -10204,20 +10261,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                         json::from_value(payload).map_err(norito_to_napi)?;
                     return Ok(Box::new(instruction).into_instruction_box());
                 }
-                if let Some(payload) = zk_map.remove("Shield") {
-                    let instruction: Shield = json::from_value(payload).map_err(norito_to_napi)?;
-                    return Ok(Box::new(instruction).into_instruction_box());
-                }
-                if let Some(payload) = zk_map.remove("ZkTransfer") {
-                    let instruction: ZkTransfer =
-                        json::from_value(payload).map_err(norito_to_napi)?;
-                    return Ok(Box::new(instruction).into_instruction_box());
-                }
-                if let Some(payload) = zk_map.remove("Unshield") {
-                    let instruction: Unshield =
-                        json::from_value(payload).map_err(norito_to_napi)?;
-                    return Ok(Box::new(instruction).into_instruction_box());
-                }
                 if let Some(payload) = zk_map.remove("CreateElection") {
                     let instruction: CreateElection =
                         json::from_value(payload).map_err(norito_to_napi)?;
@@ -11219,27 +11262,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         return Ok(zk_json_value(
             "CancelConfidentialPolicyTransition",
             json::to_value(cancel).map_err(norito_to_napi)?,
-        ));
-    }
-
-    if let Some(shield) = instruction_ref.as_any().downcast_ref::<Shield>() {
-        return Ok(zk_json_value(
-            "Shield",
-            json::to_value(shield).map_err(norito_to_napi)?,
-        ));
-    }
-
-    if let Some(transfer) = instruction_ref.as_any().downcast_ref::<ZkTransfer>() {
-        return Ok(zk_json_value(
-            "ZkTransfer",
-            json::to_value(transfer).map_err(norito_to_napi)?,
-        ));
-    }
-
-    if let Some(unshield) = instruction_ref.as_any().downcast_ref::<Unshield>() {
-        return Ok(zk_json_value(
-            "Unshield",
-            json::to_value(unshield).map_err(norito_to_napi)?,
         ));
     }
 
@@ -14428,6 +14450,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retired_generic_zk_instruction_variants_are_not_parseable() {
+        for variant in [
+            ["Sh", "ield"].concat(),
+            ["Zk", "Transfer"].concat(),
+            ["Un", "shield"].concat(),
+        ] {
+            let payload = format!(r#"{{"Zk":{{"{variant}":{{}}}}}}"#);
+            let error = instruction_from_json(&payload)
+                .expect_err("retired generic privacy instruction must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert_eq!(error.reason, "unsupported zk instruction variant");
+        }
+
+        let source = include_str!("lib.rs");
+        for retired_type_use in [
+            ["let instruction: ", "Sh", "ield"].concat(),
+            ["downcast_ref::<", "Sh", "ield", ">"].concat(),
+            ["let instruction: ", "Zk", "Transfer"].concat(),
+            ["downcast_ref::<", "Zk", "Transfer", ">"].concat(),
+            ["let instruction: ", "Un", "shield"].concat(),
+            ["downcast_ref::<", "Un", "shield", ">"].concat(),
+        ] {
+            assert!(
+                !source.contains(&retired_type_use),
+                "JS host must not compile against retired type use {retired_type_use}"
+            );
+        }
+        assert!(source.contains("RegisterZkAsset"));
+        assert!(source.contains("build_confidential_unshield_proof_v3_with_paths"));
+    }
+
+    #[test]
     fn subscription_draft_instruction_json_roundtrips() {
         let authority = AccountId::new(
             KeyPair::random_with_algorithm(Algorithm::Ed25519)
@@ -15421,6 +15475,36 @@ seiyaku Privacy {
             "CastPlainBallot".to_owned(),
             json::Value::Object(fields),
         )]))
+    }
+
+    fn governance_selector_instruction_json(variant: &str, selector: &str) -> json::Value {
+        match variant {
+            "CastZkBallot" => norito_json!({
+                "CastZkBallot": norito_json!({ "election_id": selector })
+            }),
+            "CastPlainBallot" => norito_json!({
+                "CastPlainBallot": norito_json!({ "referendum_id": selector })
+            }),
+            "FinalizeReferendum" => norito_json!({
+                "FinalizeReferendum": norito_json!({ "referendum_id": selector })
+            }),
+            "CreateElection" => norito_json!({
+                "zk": norito_json!({
+                    "CreateElection": norito_json!({ "election_id": selector })
+                })
+            }),
+            "SubmitBallot" => norito_json!({
+                "zk": norito_json!({
+                    "SubmitBallot": norito_json!({ "election_id": selector })
+                })
+            }),
+            "FinalizeElection" => norito_json!({
+                "zk": norito_json!({
+                    "FinalizeElection": norito_json!({ "election_id": selector })
+                })
+            }),
+            _ => panic!("unsupported governance selector instruction {variant}"),
+        }
     }
 
     fn account_json_literal(account: &AccountId) -> String {
@@ -18085,6 +18169,60 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn governance_selectors_are_canonical_at_instruction_construction() {
+        const VARIANTS: [&str; 6] = [
+            "CastZkBallot",
+            "CastPlainBallot",
+            "FinalizeReferendum",
+            "CreateElection",
+            "SubmitBallot",
+            "FinalizeElection",
+        ];
+        let maximum = "a".repeat(128);
+        for selector in ["a", maximum.as_str()] {
+            for variant in VARIANTS {
+                let value = governance_selector_instruction_json(variant, selector);
+                validate_governance_instruction_selectors(&value).unwrap_or_else(|error| {
+                    panic!(
+                        "valid {variant} selector of length {} was rejected: {}",
+                        selector.len(),
+                        error.reason
+                    )
+                });
+            }
+        }
+
+        let overlong = "a".repeat(129);
+        for (case, selector) in [
+            ("empty", ""),
+            ("dot", "."),
+            ("leading dot", ".hidden"),
+            ("slash", "a/b"),
+            ("percent", "a%2Fb"),
+            ("whitespace", "a b"),
+            ("control", "a\0b"),
+            ("Unicode", "投票"),
+            ("129 bytes", overlong.as_str()),
+        ] {
+            for variant in VARIANTS {
+                let error =
+                    value_to_instruction(governance_selector_instruction_json(variant, selector))
+                        .expect_err(
+                            "noncanonical selector must fail before instruction construction",
+                        );
+                assert_eq!(error.status, napi::Status::InvalidArg);
+                assert!(
+                    error
+                        .reason
+                        .contains("must be 1-128 RFC 3986 unreserved ASCII characters"),
+                    "unexpected {variant} {case} rejection: {}",
+                    error.reason
+                );
+            }
+        }
+    }
+
+    #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_deprecated_keys() {
         let mut inner = json::Map::new();
         let owner = canonical_owner_literal("wonderland");
@@ -19744,78 +19882,6 @@ seiyaku Privacy {
             parse_account_id(&tampered, "authority account id").is_err(),
             "payload/checksum tampering must be rejected"
         );
-    }
-
-    #[test]
-    fn build_transaction_accepts_taira_i105_shield_fields() {
-        disable_packed_struct_once();
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let authority = AccountId::new(keypair.public_key().clone());
-        let authority_i105 = AccountAddress::from_account_id(&authority)
-            .expect("account address")
-            .to_i105_for_discriminant(369)
-            .expect("taira i105");
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("domain"),
-            "rose".parse().expect("name"),
-        );
-        let instruction = Shield::new(
-            asset_definition,
-            authority.clone(),
-            7_u128,
-            [0x11; 32],
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
-                [0x22; 32],
-                [0x33; 24],
-                b"ciphertext".to_vec(),
-            ),
-        );
-        let instruction_box: InstructionBox = instruction.into();
-        let mut instruction_json =
-            instruction_to_json_value(&instruction_box).expect("instruction json");
-        instruction_json
-            .get_mut("zk")
-            .and_then(json::Value::as_object_mut)
-            .and_then(|zk| zk.get_mut("Shield"))
-            .and_then(json::Value::as_object_mut)
-            .expect("shield payload")
-            .insert(
-                "from".to_owned(),
-                json::Value::String(authority_i105.clone()),
-            );
-        let instruction_json =
-            json::to_json(&instruction_json).expect("serialized instruction json");
-        let (_, secret_bytes) = keypair.private_key().to_bytes();
-
-        let result = build_transaction(
-            chain_id.to_string(),
-            authority_i105,
-            vec![instruction_json],
-            authority_fee_payment_json(),
-            None,
-            None,
-            None,
-            None,
-            Uint8Array::from(secret_bytes.to_vec()),
-            None,
-        )
-        .expect("transaction built");
-
-        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
-        assert_eq!(tx.authority(), &authority);
-        match tx.instructions() {
-            Executable::Instructions(batch) => {
-                assert_eq!(batch.len(), 1);
-                let first = batch.iter().next().expect("shield instruction");
-                let shield = first
-                    .as_any()
-                    .downcast_ref::<Shield>()
-                    .expect("shield instruction");
-                assert_eq!(shield.from, authority);
-            }
-            other => panic!("expected instruction batch, got {other:?}"),
-        }
     }
 
     #[test]

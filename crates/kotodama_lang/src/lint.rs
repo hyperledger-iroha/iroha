@@ -219,7 +219,6 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     Builtin::RegisterPeer.source_name(),
     Builtin::UnregisterPeer.source_name(),
     Builtin::ScExecuteSubmitBallot.source_name(),
-    Builtin::ScExecuteUnshield.source_name(),
     Builtin::ResolveAccountAlias.source_name(),
     Builtin::AxtBegin.source_name(),
     Builtin::AxtTouch.source_name(),
@@ -1807,7 +1806,7 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             unreachable!("kind() strips provenance wrappers")
         }
         Expr::Call { name, args, .. } => {
-            if name == Builtin::CreateTrigger.source_name()
+            if name == Builtin::RegisterTrigger.source_name()
                 || name == Builtin::RegisterTrigger.source_name()
             {
                 let literal = args.first().is_some_and(is_literal_trigger_spec);
@@ -2399,7 +2398,7 @@ mod tests {
     #[test]
     fn lint_nonliteral_trigger_spec_warns() {
         let program =
-            parse("fn main() { let spec = Json::parse(\"{}\"); ledger::trigger::create(spec); }")
+            parse("fn main() { let spec = Json::parse(\"{}\"); ledger::trigger::register(spec); }")
                 .expect("parse trigger");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
@@ -2407,7 +2406,7 @@ mod tests {
 
     #[test]
     fn lint_literal_trigger_spec_is_silent() {
-        let program = parse("fn main() { ledger::trigger::create(Json::parse(\"{}\")); }")
+        let program = parse("fn main() { ledger::trigger::register(Json::parse(\"{}\")); }")
             .expect("parse trigger");
         let warnings = lint_program(&program);
         assert!(!warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
@@ -2527,7 +2526,7 @@ fn main() {
     }
 
     #[test]
-    fn lint_inline_zk_builders_are_precise_access() {
+    fn lint_inline_submit_ballot_builder_is_precise_access() {
         let program = parse(
             r#"
 fn main() {
@@ -2539,23 +2538,14 @@ fn main() {
     blob("proof"),
     blob("vk")
   );
-  let _unshield = build_unshield_inline(
-    AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    authority(),
-    1,
-    blob("0000000000000000000000000000000000000000000000000000000000000000"),
-    "halo2",
-    blob("proof"),
-    blob("vk")
-  );
 }
 "#,
         )
-        .expect("parse inline ZK builders");
+        .expect("parse inline submit-ballot builder");
         let warnings = lint_program(&program);
         assert!(
             !warnings.iter().any(|w| w.code == "opaque-access-hints"),
-            "inline ZK builders only construct payloads and should not warn about access hints"
+            "the inline submit-ballot builder only constructs a payload and should not warn about access hints"
         );
     }
 

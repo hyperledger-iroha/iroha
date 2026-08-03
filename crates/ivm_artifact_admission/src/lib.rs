@@ -570,6 +570,10 @@ fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDe
         .collect()
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the iterative formatter keeps every EmbeddedStateType spelling in one exhaustive match"
+)]
 fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
     enum Fragment<'a> {
         Type {

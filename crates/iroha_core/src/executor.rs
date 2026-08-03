@@ -2196,6 +2196,9 @@ fn fee_sponsor_instruction_operation(
             MultisigInstructionBox::Cancel(cancel) => {
                 (FeeSponsorMultisigOperation::Cancel, cancel.account)
             }
+            MultisigInstructionBox::InvalidateOutstanding(invalidate) => {
+                (FeeSponsorMultisigOperation::Cancel, invalidate.account)
+            }
             MultisigInstructionBox::Register(register) => {
                 (FeeSponsorMultisigOperation::Register, register.account)
             }
@@ -8694,6 +8697,41 @@ fn invalid_initial_permission_payload(
     ))
 }
 
+fn validate_initial_permission_payload_constraints(
+    permission: &Permission,
+) -> Result<(), ValidationFail> {
+    macro_rules! validate_governance_selector {
+        ($permission_ty:path) => {{
+            let token = <$permission_ty>::try_from(permission)
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if !iroha_data_model::governance::is_valid_governance_selector_v1(&token.referendum_id)
+            {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    format!(
+                        "referendum_id must match canonical governance selector V1 `{}`",
+                        iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
+                    ),
+                ));
+            }
+        }};
+    }
+
+    match permission.name().as_ref() {
+        "CanSubmitGovernanceBallot" => validate_governance_selector!(
+            executor_permission::governance::CanSubmitGovernanceBallot
+        ),
+        "CanSlashGovernanceLock" => {
+            validate_governance_selector!(executor_permission::governance::CanSlashGovernanceLock)
+        }
+        "CanRestituteGovernanceLock" => validate_governance_selector!(
+            executor_permission::governance::CanRestituteGovernanceLock
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
 fn initial_alias_scope_owned_by(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8888,6 +8926,8 @@ fn initial_permission_capability_root_authority(
     permission: &Permission,
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
 ) -> Result<Option<bool>, ValidationFail> {
+    validate_initial_permission_payload_constraints(permission)?;
+
     macro_rules! decode {
         ($permission_ty:path) => {
             <$permission_ty>::try_from(permission)
@@ -9312,6 +9352,7 @@ fn validate_initial_permission_or_role_mutation(
             destination,
             is_revoke,
         } => {
+            validate_initial_permission_payload_constraints(permission)?;
             validate_initial_account_permission_destination(
                 state_transaction,
                 permission,
@@ -9346,10 +9387,7 @@ fn validate_initial_permission_or_role_mutation(
             role: role_id,
             is_revoke,
         } => {
-            if is_genesis {
-                return Ok(());
-            }
-            if !authority_has_role(&state_transaction.world, authority, role_id) {
+            if !is_genesis && !authority_has_role(&state_transaction.world, authority, role_id) {
                 return Err(ValidationFail::NotPermitted(
                     "authority cannot grant or revoke a role it does not hold".to_owned(),
                 ));
@@ -9364,26 +9402,28 @@ fn validate_initial_permission_or_role_mutation(
             for permission in role.permissions() {
                 let normalized =
                     normalize_role_permission_for_initial_executor(state_transaction, permission)?;
-                let allowed = if is_revoke {
-                    initial_permission_revocation_allowed(
-                        state_transaction,
-                        authority,
-                        &normalized,
-                        contract_runtime_context,
-                    )?
-                } else {
-                    initial_permission_delegation_allowed(
-                        state_transaction,
-                        authority,
-                        &normalized,
-                        contract_runtime_context,
-                    )?
-                };
-                if !allowed {
-                    return Err(ValidationFail::NotPermitted(format!(
-                        "authority cannot grant or revoke role `{role_id}` because it cannot delegate contained permission `{}`",
-                        normalized.name()
-                    )));
+                if !is_genesis {
+                    let allowed = if is_revoke {
+                        initial_permission_revocation_allowed(
+                            state_transaction,
+                            authority,
+                            &normalized,
+                            contract_runtime_context,
+                        )?
+                    } else {
+                        initial_permission_delegation_allowed(
+                            state_transaction,
+                            authority,
+                            &normalized,
+                            contract_runtime_context,
+                        )?
+                    };
+                    if !allowed {
+                        return Err(ValidationFail::NotPermitted(format!(
+                            "authority cannot grant or revoke role `{role_id}` because it cannot delegate contained permission `{}`",
+                            normalized.name()
+                        )));
+                    }
                 }
             }
             Ok(())
@@ -10855,6 +10895,8 @@ fn normalize_role_permission_for_initial_executor(
             "{permission:?}: Unknown permission"
         )));
     }
+
+    validate_initial_permission_payload_constraints(permission)?;
 
     if permission.name() == "CanTransferAsset" {
         let normalized = executor_permission::asset::CanTransferAsset::try_from(permission)
@@ -13947,6 +13989,95 @@ mod tests {
                     Revoke::account_permission(permission.clone(), adjacent_owner.clone()).into(),
                 )
                 .unwrap_or_else(|error| panic!("legitimate root could not revoke {name}: {error}"));
+        }
+    }
+
+    #[test]
+    fn initial_executor_rejects_noncanonical_governance_permission_selectors_before_storage() {
+        use iroha_executor_data_model::permission::governance::{
+            CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+        };
+
+        let authority = checked_account_id();
+        let destination = checked_account_id();
+        let invalid_permissions = vec![
+            Permission::from(CanSubmitGovernanceBallot {
+                referendum_id: ".hidden-ballot".to_owned(),
+            }),
+            Permission::from(CanSlashGovernanceLock {
+                referendum_id: "slash/alias".to_owned(),
+            }),
+            Permission::from(CanRestituteGovernanceLock {
+                referendum_id: "restitution\nalias".to_owned(),
+            }),
+        ];
+        let mut world = World::with(
+            [],
+            [
+                Account::new(authority.clone()).build(&authority),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [],
+        );
+        // Seed the malformed tokens as exact holdings so this regression proves that canonical
+        // payload validation happens before the ordinary exact-holder delegation rule.
+        world.account_permissions.insert(
+            authority.clone(),
+            invalid_permissions.iter().cloned().collect(),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let role_id: RoleId = "governance_selector_sink".parse().expect("role id");
+        Register::role(Role::new(role_id.clone(), authority.clone()))
+            .execute(&authority, &mut state_transaction)
+            .expect("seed empty role fixture");
+
+        for permission in invalid_permissions {
+            let permission_name: &str = permission.name().as_ref();
+            for (path, instruction) in [
+                (
+                    "account",
+                    Grant::account_permission(permission.clone(), destination.clone()).into(),
+                ),
+                (
+                    "role",
+                    Grant::role_permission(permission.clone(), role_id.clone()).into(),
+                ),
+            ] {
+                let error = super::Executor::Initial
+                    .execute_instruction(&mut state_transaction, &authority, instruction)
+                    .unwrap_err();
+                assert!(
+                    matches!(&error, ValidationFail::NotPermitted(message)
+                        if message.contains(permission_name)
+                            && message.contains("canonical governance selector V1")),
+                    "unexpected {path} grant rejection: {error:?}"
+                );
+            }
+
+            assert!(
+                !state_transaction
+                    .world
+                    .account_permissions_iter(&destination)
+                    .expect("destination permissions")
+                    .any(|stored| stored == &permission),
+                "noncanonical permission reached account storage"
+            );
+            assert!(
+                !state_transaction
+                    .world
+                    .roles()
+                    .get(&role_id)
+                    .expect("role fixture")
+                    .permissions()
+                    .any(|stored| stored == &permission),
+                "noncanonical permission reached role storage"
+            );
         }
     }
 

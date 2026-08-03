@@ -1182,9 +1182,9 @@ fn gov_finalize_against_mock() {
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
 
-    let referendum_id = "ref-plain";
     let proposal_id =
         "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
+    let referendum_id = proposal_id.as_str();
 
     let summary = command()
         .arg("--config")
@@ -2651,6 +2651,26 @@ fn gov_vote_rejects_retired_zk_flag_aliases() {
         assert!(
             stderr.contains("unexpected argument") && stderr.contains(flag),
             "unexpected diagnostic for {flag}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn gov_queries_reject_retired_id_alias() {
+    for (label, query) in [
+        ("referendum get", ["app", "gov", "referendum", "get"]),
+        ("tally get", ["app", "gov", "tally", "get"]),
+    ] {
+        let output = command()
+            .args(query)
+            .args(["--id", "ref-plain"])
+            .output()
+            .expect("run governance query with retired --id alias");
+        assert!(!output.status.success(), "{label} must reject --id");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument") && stderr.contains("--id"),
+            "unexpected {label} diagnostic: {stderr}"
         );
     }
 }
@@ -4238,7 +4258,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
         mock.base_url(),
         &norito::json!({
             "status": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "node_fingerprint": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
                 "build_fingerprint": "hash:1212121212121212121212121212121212121212121212121212121212121213#E183",
                 "config_fingerprint": "hash:1313131313131313131313131313131313131313131313131313131313131313#9CE1",

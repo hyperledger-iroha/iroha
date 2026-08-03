@@ -7,11 +7,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_data_model::{
+    block::consensus_v2::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
+};
 
-const MIN_PEER_COUNT: usize = 1;
+const MIN_PEER_COUNT: usize = 4;
 const MAX_PEER_COUNT: usize = 7;
-const SINGLE_PEER_BLOCK_CADENCE_MS: NonZeroU64 = NonZeroU64::new(100).unwrap();
 const MULTI_PEER_BLOCK_CADENCE_MS: NonZeroU64 = NonZeroU64::new(1_000).unwrap();
 /// Relative directory used for Mochi-generated workspace artifacts.
 pub const WORKSPACE_MOCHI_DIR: &str = ".mochi";
@@ -21,7 +22,11 @@ pub const WORKSPACE_SANDBOX_DIR: &str = ".mochi/sandbox";
 /// High-level presets exposed directly to the user interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfilePreset {
-    /// Single peer for rapid prototyping.
+    /// Historical preset name retained for saved-config compatibility.
+    ///
+    /// Revision 4 launches the same four-validator committee as
+    /// [`ProfilePreset::FourPeerBft`]; it never creates a single-validator
+    /// network.
     SinglePeer,
     /// Four peers to exercise Sumeragi BFT locally.
     FourPeerBft,
@@ -31,7 +36,7 @@ impl ProfilePreset {
     /// Default peer count for the preset.
     pub const fn peer_count(self) -> usize {
         match self {
-            ProfilePreset::SinglePeer => 1,
+            ProfilePreset::SinglePeer => 4,
             ProfilePreset::FourPeerBft => 4,
         }
     }
@@ -47,7 +52,7 @@ impl ProfilePreset {
     /// Human-friendly label used in UI surfaces.
     pub const fn label(self) -> &'static str {
         match self {
-            ProfilePreset::SinglePeer => "Single Peer",
+            ProfilePreset::SinglePeer => "Legacy single-peer name (4 validators)",
             ProfilePreset::FourPeerBft => "Four Peer BFT",
         }
     }
@@ -133,11 +138,6 @@ pub struct NetworkTopology {
 }
 
 impl NetworkTopology {
-    /// One peer topology.
-    pub const fn single_peer() -> Self {
-        Self { peer_count: 1 }
-    }
-
     /// Four peer topology for BFT testing.
     pub const fn four_peer_bft() -> Self {
         Self { peer_count: 4 }
@@ -146,7 +146,7 @@ impl NetworkTopology {
 
 impl Default for NetworkTopology {
     fn default() -> Self {
-        NetworkTopology::single_peer()
+        NetworkTopology::four_peer_bft()
     }
 }
 
@@ -190,9 +190,12 @@ impl NetworkProfile {
 
     /// Validate the profile against topology bounds and preset defaults.
     pub fn validate(&self) -> Result<(), String> {
-        if !(MIN_PEER_COUNT..=MAX_PEER_COUNT).contains(&self.topology.peer_count) {
+        if !(MIN_PEER_COUNT..=MAX_PEER_COUNT).contains(&self.topology.peer_count)
+            || !is_valid_committee_size(self.topology.peer_count)
+        {
             return Err(format!(
-                "peer_count {} must be between {MIN_PEER_COUNT} and {MAX_PEER_COUNT}",
+                "peer_count {} must form an exact Sumeragi v2 3f+1 committee \
+                 between {MIN_PEER_COUNT} and {MAX_PEER_COUNT}",
                 self.topology.peer_count
             ));
         }
@@ -234,22 +237,17 @@ impl NetworkProfile {
 
     /// Signed block cadence suitable for this local topology.
     ///
-    /// A single peer keeps Mochi's rapid-prototyping cadence. Multi-peer
-    /// profiles use Kagami localnet's one-second cadence so crash-safe
+    /// Profiles use Kagami localnet's one-second cadence so crash-safe
     /// consensus persistence has enough headroom when every validator runs on
     /// the same developer machine.
     pub const fn signed_block_cadence_ms(&self) -> NonZeroU64 {
-        if self.topology.peer_count == 1 {
-            SINGLE_PEER_BLOCK_CADENCE_MS
-        } else {
-            MULTI_PEER_BLOCK_CADENCE_MS
-        }
+        MULTI_PEER_BLOCK_CADENCE_MS
     }
 }
 
 impl Default for NetworkProfile {
     fn default() -> Self {
-        Self::from_preset(ProfilePreset::SinglePeer)
+        Self::from_preset(ProfilePreset::FourPeerBft)
     }
 }
 
@@ -436,10 +434,10 @@ mod tests {
 
     #[test]
     fn profile_topology_matches_preset() {
-        let single = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
-        assert_eq!(single.topology.peer_count, 1);
-        assert_eq!(single.preset, Some(ProfilePreset::SinglePeer));
-        assert_eq!(single.consensus_mode, SumeragiConsensusMode::Permissioned);
+        let legacy = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
+        assert_eq!(legacy.topology.peer_count, 4);
+        assert_eq!(legacy.preset, Some(ProfilePreset::SinglePeer));
+        assert_eq!(legacy.consensus_mode, SumeragiConsensusMode::Permissioned);
 
         let four = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
         assert_eq!(four.topology.peer_count, 4);
@@ -448,14 +446,14 @@ mod tests {
     }
 
     #[test]
-    fn profile_cadence_keeps_single_peer_fast_and_gives_bft_persistence_headroom() {
-        let single = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
-        assert_eq!(single.signed_block_cadence_ms().get(), 100);
+    fn profile_cadence_gives_every_committee_persistence_headroom() {
+        let legacy = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
+        assert_eq!(legacy.signed_block_cadence_ms().get(), 1_000);
 
         let four = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
         assert_eq!(four.signed_block_cadence_ms().get(), 1_000);
 
-        let custom_multi = NetworkProfile::custom(3, SumeragiConsensusMode::Permissioned).unwrap();
+        let custom_multi = NetworkProfile::custom(7, SumeragiConsensusMode::Permissioned).unwrap();
         assert_eq!(custom_multi.signed_block_cadence_ms().get(), 1_000);
     }
 
@@ -464,6 +462,12 @@ mod tests {
         let err = NetworkProfile::custom(0, SumeragiConsensusMode::Permissioned)
             .expect_err("zero peers should be rejected");
         assert!(err.contains("peer_count"), "unexpected error: {err}");
+
+        for count in [1_usize, 2, 3, 5] {
+            let err = NetworkProfile::custom(count, SumeragiConsensusMode::Permissioned)
+                .expect_err("non-committee size should be rejected");
+            assert!(err.contains("3f+1"), "unexpected error: {err}");
+        }
 
         let err = NetworkProfile::custom(8, SumeragiConsensusMode::Permissioned)
             .expect_err("too many peers should be rejected");
@@ -478,10 +482,10 @@ mod tests {
     #[test]
     fn custom_profile_slug_and_label_include_consensus_mode() {
         let profile =
-            NetworkProfile::custom(3, SumeragiConsensusMode::Npos).expect("valid custom profile");
-        assert_eq!(profile.slug(), "custom-3-npos");
+            NetworkProfile::custom(7, SumeragiConsensusMode::Npos).expect("valid custom profile");
+        assert_eq!(profile.slug(), "custom-7-npos");
         let label = profile.label().to_ascii_lowercase();
-        assert!(label.contains("3"), "label should include peer count");
+        assert!(label.contains("7"), "label should include peer count");
         assert!(
             label.contains("npos"),
             "label should include consensus mode"

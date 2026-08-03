@@ -26,8 +26,6 @@ fn reject_non_norito_bytes_pointer_type() {
     let mut host = DefaultHost::new();
 
     for &num in &[
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-        syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
         syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
         syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
     ] {

@@ -40,7 +40,7 @@ cargo run --bin kagami -- schema --genesis-out ./specs/references/genesis_schema
 cargo run --bin iroha -- tools markdown-help > /dev/null
 cargo run --bin kagami -- advanced markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
 # update docker compose files
-cargo run --bin kagami -- docker -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
+cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
 cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F
 cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev -o ./defaults/docker-compose.yml -F
 # stage updates

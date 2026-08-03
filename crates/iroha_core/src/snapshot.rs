@@ -4127,12 +4127,12 @@ mod tests {
                 nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: DataAvailabilityLayout {
-                    encoding: PayloadEncoding::Plain,
+                    encoding: PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1024,
-                    data_shards: 0,
-                    parity_shards: 0,
-                    max_payload_size_bytes: 4 * 1024 * 1024,
-                    max_chunk_count: 4096,
+                    data_shards: 1,
+                    parity_shards: 1,
+                    max_payload_size_bytes: 512 * 1024,
+                    max_chunk_count: 1024,
                 },
                 leader_seed: [0x42; 32],
             };

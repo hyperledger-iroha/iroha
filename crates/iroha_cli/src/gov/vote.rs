@@ -15,7 +15,10 @@ use iroha::data_model::isi::{
 use iroha_crypto::Hash as CryptoHash;
 use norito::{decode_from_bytes, json};
 
-use super::shared::{canonicalize_hex32, print_with_summary};
+use super::shared::{
+    canonicalize_hex32, parse_governance_proposal_id_v1, parse_governance_selector_v1,
+    print_with_summary,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 /// Voting mode selector for `iroha_cli gov vote`.
@@ -168,7 +171,11 @@ fn reject_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Resul
 
 #[derive(clap::Args, Debug)]
 pub struct VoteArgs {
-    #[arg(long, value_name = "REFERENDUM_ID")]
+    #[arg(
+        long,
+        value_name = "REFERENDUM_ID",
+        value_parser = parse_governance_selector_v1
+    )]
     pub referendum_id: String,
     /// Voting mode override. Defaults to auto-detect via GET /v1/gov/referenda/{id}.
     #[arg(long, value_enum, default_value_t = VoteMode::Auto)]
@@ -285,7 +292,7 @@ impl Run for VoteArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VoteZkArgs {
-    #[arg(long)]
+    #[arg(long, value_parser = parse_governance_selector_v1)]
     pub election_id: String,
     #[arg(long)]
     pub backend: String,
@@ -385,7 +392,7 @@ impl Run for VoteZkArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VotePlainArgs {
-    #[arg(long)]
+    #[arg(long, value_parser = parse_governance_selector_v1)]
     pub referendum_id: String,
     #[arg(long)]
     pub owner: String,
@@ -439,7 +446,11 @@ impl Run for VotePlainArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ProposalGetArgs {
-    #[arg(long, value_name = "ID_HEX")]
+    #[arg(
+        long,
+        value_name = "ID_HEX",
+        value_parser = parse_governance_proposal_id_v1
+    )]
     pub id: String,
 }
 
@@ -737,7 +748,7 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct LocksGetArgs {
-    #[arg(long)]
+    #[arg(long, value_parser = parse_governance_selector_v1)]
     pub referendum_id: String,
 }
 
@@ -794,7 +805,10 @@ impl Run for UnlockStatsArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ReferendumGetArgs {
-    #[arg(long = "referendum-id", alias = "id")]
+    #[arg(
+        long = "referendum-id",
+        value_parser = parse_governance_selector_v1
+    )]
     pub referendum_id: String,
 }
 
@@ -816,7 +830,10 @@ impl Run for ReferendumGetArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct TallyGetArgs {
-    #[arg(long = "referendum-id", alias = "id")]
+    #[arg(
+        long = "referendum-id",
+        value_parser = parse_governance_selector_v1
+    )]
     pub referendum_id: String,
 }
 

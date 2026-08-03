@@ -4858,7 +4858,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     match balance.direction {
                         PrivacyValueBalanceDirectionV1::IntoPool => {
                             let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
+                                super::asset::isi::public_asset_id_for_current_scope(
                                     state_transaction,
                                     effect.asset_definition_id(),
                                     authority,
@@ -4872,7 +4872,7 @@ impl Execute for SubmitPrivacyProofV1 {
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
                             let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
+                                super::asset::isi::public_asset_id_for_current_scope(
                                     state_transaction,
                                     effect.asset_definition_id(),
                                     effect.reserve_account(),
@@ -5287,7 +5287,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     match balance.direction {
                         PrivacyValueBalanceDirectionV1::IntoPool => {
                             let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
+                                super::asset::isi::public_asset_id_for_current_scope(
                                     state_transaction,
                                     effect.asset_definition_id(),
                                     authority,
@@ -5301,7 +5301,7 @@ impl Execute for SubmitPrivacyProofV1 {
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
                             let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
+                                super::asset::isi::public_asset_id_for_current_scope(
                                     state_transaction,
                                     effect.asset_definition_id(),
                                     reserve_account,
@@ -5415,7 +5415,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     expected_action_index,
                 )
                 .map_err(invalid_privacy_parameter)?;
-                let source_asset_id = crate::smartcontracts::world::isi::privacy_public_asset_id(
+                let source_asset_id = super::asset::isi::public_asset_id_for_current_scope(
                     state_transaction,
                     &effect.asset_definition_id,
                     &effect.source,

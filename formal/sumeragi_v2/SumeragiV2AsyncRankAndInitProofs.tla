@@ -627,7 +627,9 @@ PROOF
          DEF CommandSuccessors, PersistDecisionRecoverySuccessor,
              PersistDecisionRecoveryKind, PersistDecisionBody,
              PersistDecisionValidationHeld, PersistDecisionRequest,
-             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateSuccessorProposalRound,
+             AsyncCandidateWithIdentityAndOrigin,
              NoItemCandidate, SequenceSet
     <2>22. CASE command.kind = "BeginTimeout"
       BY <1>1, <2>22, Isa
@@ -644,7 +646,9 @@ PROOF
     <2>25. CASE command.kind = "SignTimeout"
       BY <1>1, <2>25, Isa
          DEF CommandSuccessors, SignTimeoutFormsTC,
-             CausalCandidateWithEvidence, AsyncCandidateWithIdentity,
+             CausalCandidateWithEvidence,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin,
              NoItemCandidate, SequenceSet
     <2>26. CASE command.kind = "DeliverTC"
       BY <1>1, <2>26, Isa
@@ -661,7 +665,9 @@ PROOF
              InstallCommitSignSuccessors,
              InstallLockedFetchSuccessor,
              InstallCommitSignSuccessor, InstallProposalSuccessor,
-             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateSuccessorProposalRound,
+             AsyncCandidateWithIdentityAndOrigin,
              NoItemCandidate, SequenceSet
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
          <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13, <2>14,

@@ -60,8 +60,6 @@ mod wsv_host_unregister_tlv;
 mod wsv_host_zk_perm_and_events;
 #[path = "../wsv_state_overlay.rs"]
 mod wsv_state_overlay;
-#[path = "../wsv_verify_latch_unshield.rs"]
-mod wsv_verify_latch_unshield;
 #[path = "../zk_gating.rs"]
 mod zk_gating;
 #[path = "../zk_halo2_backend_toggle.rs"]

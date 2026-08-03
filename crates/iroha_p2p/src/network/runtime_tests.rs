@@ -63,6 +63,27 @@ fn runtime_from_handshake_rejects_invalid_pow_bounds() {
 }
 
 #[test]
+fn runtime_from_handshake_rejects_puzzle_ticket_ttl_without_solution_window() {
+    let mut handshake = ActualSoranetHandshake::default();
+    handshake.pow.required = true;
+    handshake.pow.max_future_skew = Duration::from_secs(300);
+    handshake.pow.min_ticket_ttl = Duration::from_secs(60);
+    handshake.pow.ticket_ttl = Duration::from_secs(60);
+
+    let err = runtime_from_handshake(handshake)
+        .expect_err("puzzle target ttl equal to the required remainder must fail startup");
+    match err {
+        Error::HandshakeSoranet(message) => assert!(
+            message.contains("ticket_ttl")
+                && message.contains("must exceed")
+                && message.contains("min_ticket_ttl"),
+            "expected puzzle solution-window validation failure, got {message}"
+        ),
+        other => panic!("unexpected error type: {other:?}"),
+    }
+}
+
+#[test]
 fn runtime_from_handshake_rejects_invalid_revocation_limits() {
     let mut handshake = ActualSoranetHandshake::default();
     handshake.pow.required = true;

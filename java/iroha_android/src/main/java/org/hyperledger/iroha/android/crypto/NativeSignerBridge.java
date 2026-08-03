@@ -1,19 +1,16 @@
 package org.hyperledger.iroha.android.crypto;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
-import org.hyperledger.iroha.android.model.instructions.ShieldInstruction;
-import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
 
 /** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 21;
-  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 2;
+  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 3;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -81,142 +78,6 @@ public final class NativeSignerBridge {
     }
     requireNative();
     return nativeVerifyDetached(algorithm.bridgeCode(), publicKey, message, signature);
-  }
-
-  public static NativeSignedTransaction encodeShieldSignedTransaction(
-      final SigningAlgorithm algorithm,
-      final String chainId,
-      final int chainDiscriminant,
-      final String authority,
-      final long creationTimeMs,
-      final ShieldInstruction instruction,
-      final byte[] privateKey,
-      final FeePaymentIntent feePayment) {
-    return encodeShieldSignedTransaction(
-        algorithm,
-        chainId,
-        chainDiscriminant,
-        authority,
-        creationTimeMs,
-        null,
-        instruction,
-        privateKey,
-        feePayment);
-  }
-
-  public static NativeSignedTransaction encodeShieldSignedTransaction(
-      final SigningAlgorithm algorithm,
-      final String chainId,
-      final int chainDiscriminant,
-      final String authority,
-      final long creationTimeMs,
-      final Long ttlMs,
-      final ShieldInstruction instruction,
-      final byte[] privateKey,
-      final FeePaymentIntent feePayment) {
-    requireCreationTime(creationTimeMs);
-    final int validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant);
-    if (instruction == null) {
-      throw new IllegalArgumentException("instruction must be provided");
-    }
-    final byte[] key = requirePrivateKey(privateKey);
-    final byte[] chainBytes = textBytes(chainId, "chainId");
-    final byte[] authorityBytes = textBytes(authority, "authority");
-    final byte[] assetBytes = textBytes(instruction.asset(), "asset");
-    final byte[] fromBytes = textBytes(instruction.from(), "from");
-    final byte[] amountBytes = textBytes(instruction.amount(), "amount");
-    final byte[] feePaymentJson = feePaymentJson(feePayment);
-    final long ttl = ttlValue(ttlMs);
-    final boolean hasTtl = ttlMs != null;
-    requireNative();
-    return requireNativeSignedOutput(
-        nativeEncodeShieldSignedTransaction(
-            algorithm.bridgeCode(),
-            chainBytes,
-            validatedChainDiscriminant,
-            authorityBytes,
-            creationTimeMs,
-            ttl,
-            hasTtl,
-            assetBytes,
-            fromBytes,
-            amountBytes,
-            instruction.noteCommitment(),
-            instruction.encryptedPayload().ephemeralPublicKey(),
-            instruction.encryptedPayload().nonce(),
-            instruction.encryptedPayload().ciphertext(),
-            key,
-            feePaymentJson),
-        "encodeShieldSignedTransaction");
-  }
-
-  public static NativeSignedTransaction encodeUnshieldSignedTransaction(
-      final SigningAlgorithm algorithm,
-      final String chainId,
-      final int chainDiscriminant,
-      final String authority,
-      final long creationTimeMs,
-      final UnshieldInstruction instruction,
-      final byte[] privateKey,
-      final FeePaymentIntent feePayment) {
-    return encodeUnshieldSignedTransaction(
-        algorithm,
-        chainId,
-        chainDiscriminant,
-        authority,
-        creationTimeMs,
-        null,
-        instruction,
-        privateKey,
-        feePayment);
-  }
-
-  public static NativeSignedTransaction encodeUnshieldSignedTransaction(
-      final SigningAlgorithm algorithm,
-      final String chainId,
-      final int chainDiscriminant,
-      final String authority,
-      final long creationTimeMs,
-      final Long ttlMs,
-      final UnshieldInstruction instruction,
-      final byte[] privateKey,
-      final FeePaymentIntent feePayment) {
-    requireCreationTime(creationTimeMs);
-    final int validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant);
-    if (instruction == null) {
-      throw new IllegalArgumentException("instruction must be provided");
-    }
-    final byte[] key = requirePrivateKey(privateKey);
-    final byte[] chainBytes = textBytes(chainId, "chainId");
-    final byte[] authorityBytes = textBytes(authority, "authority");
-    final byte[] assetBytes = textBytes(instruction.asset(), "asset");
-    final byte[] toBytes = textBytes(instruction.to(), "to");
-    final byte[] amountBytes = textBytes(instruction.publicAmount(), "publicAmount");
-    final byte[] inputsBytes = flattenFixed32(instruction.inputs());
-    final byte[] proofJsonBytes = instruction.proof().toNativeJson().getBytes(StandardCharsets.UTF_8);
-    final byte[] rootHintBytes = optionalBytes(instruction.rootHint());
-    final byte[] feePaymentJson = feePaymentJson(feePayment);
-    final long ttl = ttlValue(ttlMs);
-    final boolean hasTtl = ttlMs != null;
-    requireNative();
-    return requireNativeSignedOutput(
-        nativeEncodeUnshieldSignedTransaction(
-            algorithm.bridgeCode(),
-            chainBytes,
-            validatedChainDiscriminant,
-            authorityBytes,
-            creationTimeMs,
-            ttl,
-            hasTtl,
-            assetBytes,
-            toBytes,
-            amountBytes,
-            inputsBytes,
-            proofJsonBytes,
-            rootHintBytes,
-            key,
-            feePaymentJson),
-        "encodeUnshieldSignedTransaction");
   }
 
   public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
@@ -375,22 +236,6 @@ public final class NativeSignerBridge {
     return privateKey.clone();
   }
 
-  private static byte[] flattenFixed32(final List<byte[]> values) {
-    final byte[] out = new byte[values.size() * 32];
-    for (int i = 0; i < values.size(); i++) {
-      final byte[] value = values.get(i);
-      if (value.length != 32) {
-        throw new IllegalArgumentException("value[" + i + "] must be exactly 32 bytes");
-      }
-      System.arraycopy(value, 0, out, i * 32, 32);
-    }
-    return out;
-  }
-
-  private static byte[] optionalBytes(final byte[] value) {
-    return value == null ? new byte[0] : value.clone();
-  }
-
   private static native int nativeBridgeAbiVersion();
 
   private static native int nativeSignerContractRevision();
@@ -403,41 +248,6 @@ public final class NativeSignerBridge {
 
   private static native boolean nativeVerifyDetached(
       int algorithmCode, byte[] publicKey, byte[] message, byte[] signature);
-
-  private static native byte[][] nativeEncodeShieldSignedTransaction(
-      int algorithmCode,
-      byte[] chainId,
-      int chainDiscriminant,
-      byte[] authority,
-      long creationTimeMs,
-      long ttlMs,
-      boolean ttlPresent,
-      byte[] asset,
-      byte[] from,
-      byte[] amount,
-      byte[] noteCommitment,
-      byte[] payloadEphemeralPublicKey,
-      byte[] payloadNonce,
-      byte[] payloadCiphertext,
-      byte[] privateKey,
-      byte[] feePaymentJson);
-
-  private static native byte[][] nativeEncodeUnshieldSignedTransaction(
-      int algorithmCode,
-      byte[] chainId,
-      int chainDiscriminant,
-      byte[] authority,
-      long creationTimeMs,
-      long ttlMs,
-      boolean ttlPresent,
-      byte[] asset,
-      byte[] to,
-      byte[] publicAmount,
-      byte[] inputs,
-      byte[] proofJson,
-      byte[] rootHint,
-      byte[] privateKey,
-      byte[] feePaymentJson);
 
   private static native byte[][] nativeEncodeRegisterZkAssetSignedTransaction(
       int algorithmCode,

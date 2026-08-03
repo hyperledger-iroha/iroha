@@ -1,5 +1,13 @@
 import Foundation
 
+// Conservative finalized-cursor ceiling with headroom for the 8 KiB canonical account cap,
+// lowercase hex, the maintainer-state suffix, and one 32-byte invitation identity.
+let musubiMaxCursorKeyBytesV1 = 2 * 8_192 + 1 + 8 + 2 * 32
+// A namespace is at most 255 bytes and the portable package prefix is at most 64 bytes.
+let musubiMaxOrderedPrefixBytesV1 = 255 + 1 + 64
+// Archive content length covers the complete canonical bundle payload, not only sources.
+let musubiMaxArchiveBundlePayloadBytesV1: UInt64 = 96 << 20
+
 /// Validation and decoding failures for the first-release Musubi wire surface.
 public enum MusubiV1Error: Error, Equatable, Sendable {
     case invalidValue(String)
@@ -1131,7 +1139,7 @@ public struct MusubiFinalizedCursorV1: Codable, Hashable, Sendable {
         caller: String?
     ) throws {
         try musubiRequireExactText(lastKey, field: "Musubi cursor last key")
-        guard lastKey.utf8.count <= 512,
+        guard lastKey.utf8.count <= musubiMaxCursorKeyBytesV1,
               queryHash.bytes.contains(where: { $0 != 0 }) else {
             throw MusubiV1Error.invalidValue("Musubi cursor key or query hash is invalid.")
         }
@@ -1638,20 +1646,22 @@ public struct MusubiOrderedPrefixQueryV1: Codable, Hashable, Sendable {
     public let page: MusubiPageRequestV1
     public init(prefix: String, page: MusubiPageRequestV1 = .init()) throws {
         try musubiRequireExactText(prefix, field: "Musubi ordered prefix")
+        guard prefix.utf8.count <= musubiMaxOrderedPrefixBytesV1 else {
+            throw MusubiV1Error.invalidValue("Musubi ordered prefix exceeds its bound.")
+        }
         let components = prefix.split(
             separator: "/",
             maxSplits: 1,
             omittingEmptySubsequences: false
         )
-        guard components.count == 2,
-              (try? MusubiNamespaceV1(String(components[0]))) != nil else {
+        guard components.count == 2 else {
             throw MusubiV1Error.invalidValue(
                 "Musubi ordered prefix must use namespace/package-prefix."
             )
         }
+        _ = try MusubiNamespaceV1(String(components[0]))
         let packagePrefix = components[1]
-        guard prefix.utf8.count <= 512,
-              packagePrefix.utf8.count <= 255,
+        guard packagePrefix.utf8.count <= 64,
               !packagePrefix.contains("/"),
               !packagePrefix.hasPrefix("-"),
               !packagePrefix.contains("--"),
@@ -2390,6 +2400,37 @@ public struct MusubiResolverReleaseRowV1: Codable, Hashable, Sendable {
             throw MusubiV1Error.unsupportedVersion("Musubi resolver row is not IVM ABI V1.")
         }
         try musubiValidateRawFixedBytes(abi["abi_hash"], field: "abi_hash")
+        let dependencies = try musubiRawArray(
+            raw["dependencies"], field: "resolver row.dependencies"
+        ).enumerated().map { index, dependencyValue in
+            let field = "resolver row.dependencies[\(index)]"
+            let dependency = try musubiRawObject(
+                dependencyValue,
+                field: field,
+                exactKeys: ["alias", "package", "requirement"]
+            )
+            guard let package = dependency["package"],
+                  let requirement = dependency["requirement"] else {
+                throw MusubiV1Error.invalidValue("\(field) is incomplete.")
+            }
+            return try MusubiDependencyReqV1(
+                alias: musubiRawString(dependency["alias"], field: "\(field).alias"),
+                package: musubiDecodeRaw(package, as: MusubiPackageIdV1.self),
+                requirement: musubiDecodeRaw(requirement, as: MusubiVersionReqV1.self)
+            )
+        }
+        guard dependencies.count <= 256,
+              zip(dependencies, dependencies.dropFirst()).allSatisfy({
+                  musubiDependencyReqLessV1($0.0, $0.1)
+              }) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi resolver row dependencies must be bounded, sorted, and distinct."
+            )
+        }
+        try musubiRequireUniqueParentLocalAliasesV1(
+            dependencies.map(\.alias),
+            field: "Musubi resolver row dependencies"
+        )
         guard let selectionValue = raw["selection"] else {
             throw MusubiV1Error.invalidValue("resolver selection is missing.")
         }
@@ -2640,7 +2681,8 @@ public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
                   firstKey: firstKey,
                   lastKey: lastKey,
                   snapshot: snapshot,
-                  nextCursor: nextCursor
+                  nextCursor: nextCursor,
+                  nextCursorRequiresFullPage: false
               ),
               nextCursor == nil || nextCursor?.snapshot == snapshot else {
             throw MusubiV1Error.invalidValue(
@@ -2678,7 +2720,8 @@ public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
                   firstKey: items.first?.release.version.canonicalText,
                   lastKey: items.last?.release.version.canonicalText,
                   snapshot: snapshot,
-                  nextCursor: nextCursor
+                  nextCursor: nextCursor,
+                  nextCursorRequiresFullPage: false
               ) else {
             throw MusubiV1Error.invalidValue(
                 "Musubi resolver response does not match the exact request."
@@ -2929,6 +2972,7 @@ public struct MusubiChunkerProfileHandleV1: Codable, Hashable, Sendable {
 }
 
 /// Complete immutable source-archive commitment returned by the registry.
+/// `contentLength` counts the canonical bundle payload, including mandatory metadata.
 public struct MusubiArchiveCommitmentV1: Codable, Hashable, Sendable {
     public let rootCid: [UInt8]
     public let chunker: MusubiChunkerProfileHandleV1
@@ -2961,7 +3005,8 @@ public struct MusubiArchiveCommitmentV1: Codable, Hashable, Sendable {
         guard rootCid.count == 36,
               Array(rootCid.prefix(4)) == [1, 113, 31, 32],
               rootCid.dropFirst(4).contains(where: { $0 != 0 }),
-              contentLength > 0, contentLength <= 64 << 20,
+              contentLength > 0,
+              contentLength <= musubiMaxArchiveBundlePayloadBytesV1,
               carSize > 0, carSize <= 96 << 20,
               (1...4_096).contains(fileCount), (1...16_384).contains(chunkCount),
               [
@@ -3037,7 +3082,8 @@ public struct MusubiArchiveCommitmentV1: Codable, Hashable, Sendable {
         descriptorDigest = try digest("descriptor_digest")
         let files = try musubiRawUnsigned(rawValue["file_count"], field: "file_count")
         let chunks = try musubiRawUnsigned(rawValue["chunk_count"], field: "chunk_count")
-        guard contentLength > 0, contentLength <= 64 << 20,
+        guard contentLength > 0,
+              contentLength <= musubiMaxArchiveBundlePayloadBytesV1,
               carSize > 0, carSize <= 96 << 20,
               (1...4_096).contains(files), (1...16_384).contains(chunks),
               [
@@ -4002,11 +4048,6 @@ private func musubiIsLowerHex(_ value: Substring) -> Bool {
     }
 }
 
-private struct MusubiMaintainerCursorBoundaryV1 {
-    let account: [UInt8]
-    let invitation: [UInt8]?
-}
-
 private func musubiDecodeLowerHex(_ value: Substring) -> [UInt8]? {
     guard value.count.isMultiple(of: 2), musubiIsLowerHex(value) else { return nil }
     let bytes = Array(value.utf8)
@@ -4023,43 +4064,34 @@ private func musubiDecodeLowerHex(_ value: Substring) -> [UInt8]? {
 
 private func musubiMaintainerCursorBoundary(
     _ value: String
-) -> MusubiMaintainerCursorBoundaryV1? {
+) -> Bool {
     let components = value.split(separator: "|", omittingEmptySubsequences: false)
     guard components.count == 2,
-          let account = musubiDecodeLowerHex(components[0]) else {
-        return nil
+          components[0].utf8.count <= 16_384,
+          let account = musubiDecodeLowerHex(components[0]),
+          AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(Data(account)) else {
+        return false
     }
     if components[1] == "accepted" {
-        return MusubiMaintainerCursorBoundaryV1(account: account, invitation: nil)
+        return true
     }
-    guard components[1].hasPrefix("pending-") else { return nil }
+    guard components[1].hasPrefix("pending-") else { return false }
     let invitation = components[1].dropFirst("pending-".count)
     guard invitation.count == 64,
-          let invitationBytes = musubiDecodeLowerHex(invitation) else {
-        return nil
+          let invitationBytes = musubiDecodeLowerHex(invitation),
+          invitationBytes.contains(where: { $0 != 0 }) else {
+        return false
     }
-    return MusubiMaintainerCursorBoundaryV1(
-        account: account,
-        invitation: invitationBytes
-    )
+    return true
 }
 
 private func musubiMaintainerPageAdvances(
     _ request: MusubiPageRequestV1,
-    first: MusubiMaintainerDirectoryEntryV1?
+    entries: [MusubiMaintainerDirectoryEntryV1]
 ) throws -> Bool {
     guard let cursor = request.cursor else { return true }
-    guard let previous = musubiMaintainerCursorBoundary(cursor.lastKey) else { return false }
-    guard let first else { return true }
-    let firstAccount = [UInt8](try CanonicalNorito.encodeCompactAccountId(first.account))
-    let accountOrder = musubiCompareUnsignedBytes(previous.account, firstAccount)
-    if accountOrder != 0 { return accountOrder < 0 }
-    switch (previous.invitation, first.invitation?.bytes) {
-    case (nil, .some): return true
-    case (.some, nil), (nil, nil): return false
-    case let (.some(previousInvite), .some(firstInvite)):
-        return musubiCompareUnsignedBytes(previousInvite, firstInvite) < 0
-    }
+    guard musubiMaintainerCursorBoundary(cursor.lastKey) else { return false }
+    return try entries.allSatisfy { try $0.cursorKey() != cursor.lastKey }
 }
 
 private func musubiSemVerPageAdvances(
@@ -4147,17 +4179,143 @@ private func musubiMaintainerEntryLessThan(
     if left.package != right.package {
         return musubiPackageIdLessThan(left.package, right.package)
     }
-    if left.account != right.account {
-        let leftAccount = [UInt8](try CanonicalNorito.encodeCompactAccountId(left.account))
-        let rightAccount = [UInt8](try CanonicalNorito.encodeCompactAccountId(right.account))
-        return musubiCompareUnsignedBytes(leftAccount, rightAccount) < 0
-    }
+    let accountOrder = try musubiCompareMaintainerAccountIds(left.account, right.account)
+    if accountOrder != 0 { return accountOrder < 0 }
     switch (left.invitation, right.invitation) {
     case (nil, .some): return true
     case (.some, nil), (nil, nil): return false
     case let (.some(leftInvite), .some(rightInvite)):
         return musubiCompareUnsignedBytes(leftInvite.bytes, rightInvite.bytes) < 0
     }
+}
+
+private struct MusubiMaintainerPublicKeyOrderV1 {
+    let algorithm: UInt8
+    let payload: [UInt8]
+}
+
+private struct MusubiMaintainerMultisigMemberOrderV1 {
+    let publicKey: MusubiMaintainerPublicKeyOrderV1
+    let weight: UInt16
+}
+
+private enum MusubiMaintainerAccountOrderV1 {
+    case single(MusubiMaintainerPublicKeyOrderV1)
+    case multisig(
+        version: UInt8,
+        threshold: UInt16,
+        members: [MusubiMaintainerMultisigMemberOrderV1]
+    )
+}
+
+private func musubiMaintainerAccountOrderKey(
+    _ canonicalAccount: String
+) throws -> MusubiMaintainerAccountOrderV1 {
+    let prefix = try AccountAddress.inspectI105NetworkPrefix(canonicalAccount).chainDiscriminant
+    let address = try AccountAddress.fromI105(canonicalAccount, expectedPrefix: prefix)
+    if let single = address.singleControllerInfo() {
+        return .single(MusubiMaintainerPublicKeyOrderV1(
+            algorithm: single.algorithm.noritoDiscriminant,
+            payload: [UInt8](single.publicKey)
+        ))
+    }
+    guard let policy = try address.multisigPolicyInfo() else {
+        throw MusubiV1Error.invalidValue(
+            "Musubi maintainer account has no canonical account controller."
+        )
+    }
+    let members = try policy.members.map { member -> MusubiMaintainerMultisigMemberOrderV1 in
+        let body = member.publicKeyHex.hasPrefix("0x")
+            ? String(member.publicKeyHex.dropFirst(2))
+            : member.publicKeyHex
+        guard let publicKey = Data(hexString: body) else {
+            throw MusubiV1Error.invalidValue(
+                "Musubi maintainer account contains an invalid multisig public key."
+            )
+        }
+        return MusubiMaintainerMultisigMemberOrderV1(
+            publicKey: MusubiMaintainerPublicKeyOrderV1(
+                algorithm: try musubiMaintainerAlgorithmOrderV1(member.algorithm),
+                payload: [UInt8](publicKey)
+            ),
+            weight: member.weight
+        )
+    }
+    return .multisig(
+        version: policy.version,
+        threshold: policy.threshold,
+        members: members
+    )
+}
+
+private func musubiMaintainerAlgorithmOrderV1(_ algorithm: String) throws -> UInt8 {
+    switch algorithm {
+    case "ed25519": return 0
+    case "secp256k1": return 1
+    case "bls_normal": return 2
+    case "bls_small": return 3
+    case "mldsa", "ml-dsa": return 4
+    case "gost3410-2012-256-paramset-a": return 5
+    case "gost3410-2012-256-paramset-b": return 6
+    case "gost3410-2012-256-paramset-c": return 7
+    case "gost3410-2012-512-paramset-a": return 8
+    case "gost3410-2012-512-paramset-b": return 9
+    case "sm2": return 10
+    default:
+        throw MusubiV1Error.invalidValue(
+            "Musubi maintainer account uses an unsupported signing algorithm."
+        )
+    }
+}
+
+private func musubiCompareMaintainerAccountIds(
+    _ left: String,
+    _ right: String
+) throws -> Int {
+    try musubiCompareMaintainerAccountOrderKeys(
+        musubiMaintainerAccountOrderKey(left),
+        musubiMaintainerAccountOrderKey(right)
+    )
+}
+
+private func musubiCompareMaintainerAccountOrderKeys(
+    _ left: MusubiMaintainerAccountOrderV1,
+    _ right: MusubiMaintainerAccountOrderV1
+) -> Int {
+    switch (left, right) {
+    case (.single(let leftKey), .single(let rightKey)):
+        return musubiCompareMaintainerPublicKeys(leftKey, rightKey)
+    case (.single, .multisig):
+        return -1
+    case (.multisig, .single):
+        return 1
+    case let (
+        .multisig(leftVersion, leftThreshold, leftMembers),
+        .multisig(rightVersion, rightThreshold, rightMembers)
+    ):
+        if leftVersion != rightVersion { return leftVersion < rightVersion ? -1 : 1 }
+        if leftThreshold != rightThreshold { return leftThreshold < rightThreshold ? -1 : 1 }
+        for index in 0..<min(leftMembers.count, rightMembers.count) {
+            let keyOrder = musubiCompareMaintainerPublicKeys(
+                leftMembers[index].publicKey,
+                rightMembers[index].publicKey
+            )
+            if keyOrder != 0 { return keyOrder }
+            if leftMembers[index].weight != rightMembers[index].weight {
+                return leftMembers[index].weight < rightMembers[index].weight ? -1 : 1
+            }
+        }
+        if leftMembers.count == rightMembers.count { return 0 }
+        return leftMembers.count < rightMembers.count ? -1 : 1
+    }
+}
+
+private func musubiCompareMaintainerPublicKeys(
+    _ left: MusubiMaintainerPublicKeyOrderV1,
+    _ right: MusubiMaintainerPublicKeyOrderV1
+) -> Int {
+    if left.algorithm != right.algorithm { return left.algorithm < right.algorithm ? -1 : 1 }
+    return musubiCompareUnsignedBytes(left.payload, right.payload)
 }
 
 private func musubiGenericPageItemsAreStrictlyOrdered<Item: Hashable>(
@@ -4215,7 +4373,8 @@ private func musubiFinalizedPageMatches(
     firstKey: String?,
     lastKey: String?,
     snapshot: MusubiRegistrySnapshotV1,
-    nextCursor: MusubiFinalizedCursorV1?
+    nextCursor: MusubiFinalizedCursorV1?,
+    nextCursorRequiresFullPage: Bool = true
 ) -> Bool {
     guard let effectiveLimit = musubiEffectivePageLimit(request.limit),
           itemCount <= effectiveLimit,
@@ -4229,7 +4388,7 @@ private func musubiFinalizedPageMatches(
     if let cursor = nextCursor {
         guard cursor.snapshot == snapshot,
               cursor.caller == nil,
-              itemCount == effectiveLimit,
+              (!nextCursorRequiresFullPage || itemCount == effectiveLimit),
               cursor.lastKey == lastKey,
               request.cursor == nil || request.cursor?.queryHash == cursor.queryHash else {
             return false
@@ -4476,7 +4635,7 @@ public struct MusubiPageV1<Item: Codable & Hashable & Sendable>: Codable, Hashab
                 queryMatchesItems = try maintainers.allSatisfy({ $0.package == request.package })
                     && musubiMaintainerPageAdvances(
                         request.page,
-                        first: maintainers.first
+                        entries: maintainers
                     )
                     && musubiFinalizedPageMatches(
                         request.page,
@@ -4572,7 +4731,7 @@ public extension MusubiPageV1 where Item == MusubiMaintainerDirectoryEntryV1 {
     func requireMatches(_ request: MusubiPackagePageQueryV1) throws {
         guard query == .package(request),
               items.allSatisfy({ $0.package == request.package }),
-              try musubiMaintainerPageAdvances(request.page, first: items.first),
+              try musubiMaintainerPageAdvances(request.page, entries: items),
               musubiFinalizedPageMatches(
                   request.page,
                   itemCount: items.count,
@@ -5315,6 +5474,10 @@ public struct MusubiVerificationNodeV1: Hashable, Sendable {
                   .allSatisfy({ $0.bytes.contains(where: { $0 != 0 }) }) else {
             throw MusubiV1Error.invalidValue("Musubi verification node is invalid.")
         }
+        try musubiRequireUniqueParentLocalAliasesV1(
+            dependencies.map(\.alias),
+            field: "Musubi verification-node dependencies"
+        )
         self.release = release
         self.releaseDigest = releaseDigest
         self.archiveID = archiveID
@@ -5351,6 +5514,10 @@ public struct MusubiVerificationLockV1: Hashable, Sendable {
               }) else {
             throw MusubiV1Error.invalidValue("Musubi verification lock is invalid.")
         }
+        try musubiRequireUniqueParentLocalAliasesV1(
+            rootDependencies.map(\.alias),
+            field: "Musubi root dependencies"
+        )
         let byRelease = Dictionary(grouping: nodes, by: \.release)
         guard byRelease.count == nodes.count,
               rootDependencies.allSatisfy({ byRelease[$0.selected]?.count == 1 }) else {
@@ -5486,6 +5653,10 @@ public struct MusubiReleaseManifestV1: Hashable, Sendable {
               verificationLockDigest.bytes.contains(where: { $0 != 0 }) else {
             throw MusubiV1Error.invalidValue("Musubi release manifest is invalid.")
         }
+        try musubiRequireUniqueParentLocalAliasesV1(
+            dependencies.map(\.alias),
+            field: "Musubi manifest dependencies"
+        )
         for dependency in dependencies {
             guard dependency.package != release.package else {
                 throw MusubiV1Error.invalidValue(
@@ -5728,6 +5899,17 @@ private func musubiCompareStringV1(_ left: String, _ right: String) -> Int {
     }
     if leftBytes.count == rightBytes.count { return 0 }
     return leftBytes.count < rightBytes.count ? -1 : 1
+}
+
+private func musubiRequireUniqueParentLocalAliasesV1(
+    _ aliases: [String],
+    field: String
+) throws {
+    guard Set(aliases).count == aliases.count else {
+        throw MusubiV1Error.invalidValue(
+            "\(field) must use unique parent-local aliases."
+        )
+    }
 }
 
 private func musubiComparePackageV1(

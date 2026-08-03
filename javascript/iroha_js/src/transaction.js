@@ -62,9 +62,6 @@ import {
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
-  buildShieldInstruction,
-  buildZkTransferInstruction,
-  buildUnshieldInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,
@@ -5004,87 +5001,6 @@ export function buildCancelConfidentialPolicyTransitionTransaction({
 }) {
   const instruction =
     buildCancelConfidentialPolicyTransitionInstruction(cancellation);
-  return buildTransaction({
-    chainId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-export function buildShieldTransaction({
-  chainId,
-  authority,
-  feePayment,
-  shield,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildShieldInstruction(shield);
-  return buildTransaction({
-    chainId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-export function buildZkTransferTransaction({
-  chainId,
-  authority,
-  feePayment,
-  transfer,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildZkTransferInstruction(transfer);
-  return buildTransaction({
-    chainId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-export function buildUnshieldTransaction({
-  chainId,
-  authority,
-  feePayment,
-  unshield,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-  privateKeyAlgorithm = null,
-}) {
-  const instruction = buildUnshieldInstruction(unshield);
   return buildTransaction({
     chainId,
     authority,

@@ -10,6 +10,64 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(SumeragiV2IgnoreReason(rawValue: 11), .unsafeProposal)
     }
 
+    func testLivenessBlockerDecoderPinsEveryWireDiscriminant() throws {
+        let expected: [SumeragiV2LivenessBlocker] = [
+            .missingProposal,
+            .bodyUnavailable,
+            .prepareQuorumMissing,
+            .commitQuorumMissing,
+            .timeoutCertificateMissing,
+            .schedulerStarvation,
+            .applicationPending,
+            .successorActivationPending,
+            .localControlPending,
+        ]
+        for (tag, blocker) in expected.enumerated() {
+            XCTAssertEqual(
+                try SumeragiV2LivenessBlocker.decode(Data([UInt8(tag), 0, 0, 0])),
+                blocker
+            )
+        }
+    }
+
+    func testLivenessBlockerDecoderRejectsUnknownTruncatedAndTrailingInputs() {
+        let cases: [(Data, SumeragiV2WireError)] = [
+            (Data([9, 0, 0, 0]), .invalid("unknown liveness blocker 9")),
+            (Data([8, 0, 0]), .invalid("u32 is truncated")),
+            (Data([8, 0, 0, 0, 0]), .invalid("u32 contains trailing bytes")),
+        ]
+        for (encoded, expectedError) in cases {
+            XCTAssertThrowsError(try SumeragiV2LivenessBlocker.decode(encoded)) { error in
+                XCTAssertEqual(error as? SumeragiV2WireError, expectedError)
+            }
+        }
+    }
+
+    func testDataAvailabilityRejectsRetiredEncodingTagAndZeroShards() throws {
+        XCTAssertEqual(SumeragiV2PayloadEncoding(rawValue: 0), .reedSolomon16)
+        XCTAssertNil(SumeragiV2PayloadEncoding(rawValue: 1))
+
+        for shards in [(data: UInt16(0), parity: UInt16(1)), (data: 1, parity: 0)] {
+            XCTAssertThrowsError(
+                try SumeragiV2DataAvailabilityLayout(
+                    encoding: .reedSolomon16,
+                    chunkSizeBytes: 4,
+                    dataShards: shards.data,
+                    parityShards: shards.parity,
+                    maxPayloadSizeBytes: 4,
+                    maxChunkCount: 2
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? SumeragiV2WireError,
+                    .invalid(
+                        "ReedSolomon16 data availability requires positive shard counts"
+                    )
+                )
+            }
+        }
+    }
+
     func testRustCanonicalMessageFixturesRoundtrip() throws {
         let messages = try fixtureRows().filter { $0.kind == "message" }
         XCTAssertEqual(Set(messages.map(\.name)), expectedMessageNames)

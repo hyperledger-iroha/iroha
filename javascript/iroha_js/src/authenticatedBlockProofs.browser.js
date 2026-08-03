@@ -18,4 +18,3 @@ export async function verifyAuthenticatedBlockProofsV1() {
   });
   throw error;
 }
-

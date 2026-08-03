@@ -133,9 +133,9 @@ def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
     assert config["torii"]["address"] == "addr:0.0.0.0:18080#2F16"
     assert config["torii"]["deploy_rate_per_origin_per_sec"] == 4
     assert config["torii"]["deploy_burst_per_origin"] == 8
-    assert config["sumeragi"]["block"]["max_payload_bytes"] == 21 * MODULE.MIB
-    assert config["sumeragi"]["queues"]["body_source_bytes"] == 43 * MODULE.MIB
-    assert config["sumeragi"]["queues"]["body_bytes"] == 7 * 43 * MODULE.MIB
+    assert config["sumeragi"]["block"]["max_payload_bytes"] == 16 * MODULE.MIB
+    assert config["sumeragi"]["queues"]["body_source_bytes"] == 33 * MODULE.MIB
+    assert config["sumeragi"]["queues"]["body_bytes"] == 7 * 33 * MODULE.MIB
     assert (
         config["network"]["max_frame_bytes_block_sync"]
         == MODULE.TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES
@@ -388,6 +388,8 @@ def test_checked_in_taira_genesis_gas_parameters_are_structured_parameters() -> 
 BASE_CONFIG = """# baseline
 public_key = "peer-1-public"
 private_key = "peer-1-private"
+soranet_transport_public_key = "peer-1-soranet-public"
+soranet_transport_private_key = "peer-1-soranet-private"
 
 trusted_peers = [
   "peer-1-public@taira-validator-1.sora.org:1337",
@@ -408,12 +410,12 @@ max_frame_bytes_block_sync = 23068672
 max_frame_bytes_tx_gossip = 11534336
 
 [sumeragi.block]
-max_payload_bytes = 22020096
+max_payload_bytes = 16777216
 
 [sumeragi.queues]
 authenticated_non_validator_sources = 2
-body_bytes = 315621376
-body_source_bytes = 45088768
+body_bytes = 242221056
+body_source_bytes = 34603008
 
 [torii]
 address = "0.0.0.0:18080"
@@ -493,7 +495,13 @@ def _write_roster(
             f'public_key = "peer-{index}-public"',
         ]
         if inline_private_keys:
-            entry.append(f'private_key = "peer-{index}-private"')
+            entry.extend(
+                [
+                    f'private_key = "peer-{index}-private"',
+                    f'soranet_transport_public_key = "peer-{index}-soranet-public"',
+                    f'soranet_transport_private_key = "peer-{index}-soranet-private"',
+                ]
+            )
         entry.extend(
             [
                 f'pop_hex = "peer-{index}-pop"',
@@ -541,6 +549,8 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
                 "[[validators]]",
                 f'slug = "taira-validator-{index}"',
                 f'private_key = "peer-{index}-private"',
+                f'soranet_transport_public_key = "peer-{index}-soranet-public"',
+                f'soranet_transport_private_key = "peer-{index}-soranet-private"',
                 "",
             ]
         )
@@ -566,6 +576,8 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     )
     assert 'public_key = "peer-3-public"' in config
     assert 'private_key = "peer-3-private"' in config
+    assert 'soranet_transport_public_key = "peer-3-soranet-public"' in config
+    assert 'soranet_transport_private_key = "peer-3-soranet-private"' in config
     assert 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' in config
     assert 'public_address = "addr:taira-validator-3.sora.org:1337#99FF"' in config
     assert 'address = "addr:0.0.0.0:1337#BF18"' in config
@@ -1224,6 +1236,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-1"',
                 'public_key = "peer-1-public"',
                 'private_key = "peer-1-private"',
+                'soranet_transport_public_key = "peer-1-soranet-public"',
+                'soranet_transport_private_key = "peer-1-soranet-private"',
                 'pop_hex = "peer-1-pop"',
                 'public_address = "taira-validator-1.sora.org:1337"',
                 "",
@@ -1232,6 +1246,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-2"',
                 'public_key = "peer-2-public"',
                 'private_key = "peer-2-private"',
+                'soranet_transport_public_key = "peer-2-soranet-public"',
+                'soranet_transport_private_key = "peer-2-soranet-private"',
                 'pop_hex = "peer-2-pop"',
                 'public_address = "taira-validator-2.sora.org:1337"',
                 "",
@@ -1240,6 +1256,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-3"',
                 'public_key = "peer-3-public"',
                 'private_key = "peer-3-private"',
+                'soranet_transport_public_key = "peer-3-soranet-public"',
+                'soranet_transport_private_key = "peer-3-soranet-private"',
                 'pop_hex = "peer-3-pop"',
                 'public_address = "taira-validator-3.sora.org:1337"',
                 "",
@@ -1248,6 +1266,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-4"',
                 'public_key = "peer-4-public"',
                 'private_key = "peer-4-private"',
+                'soranet_transport_public_key = "peer-4-soranet-public"',
+                'soranet_transport_private_key = "peer-4-soranet-private"',
                 'pop_hex = "peer-4-pop"',
                 'public_address = "taira-validator-4.sora.org:1337"',
                 "",
@@ -1283,18 +1303,30 @@ def test_load_roster_rejects_more_than_protocol_maximum(tmp_path: Path) -> None:
     try:
         MODULE.load_roster(roster_path)
     except ValueError as error:
-        assert "at most 128 validators" in str(error)
+        assert "at most 31 validators" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("load_roster accepted a roster above the protocol maximum")
 
 
-def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) -> None:
+def test_load_roster_rejects_non_three_f_plus_one_geometry(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path, validator_count=5)
+
+    try:
+        MODULE.load_roster(roster_path)
+    except ValueError as error:
+        assert "exact 3f + 1 validator committee" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("load_roster accepted non-3f+1 committee geometry")
+
+
+def test_render_bundle_scales_body_budget_for_seven_validators(tmp_path: Path) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     secrets_path = tmp_path / "validator_secrets.toml"
     base_config_path = tmp_path / "config.toml"
     output_dir = tmp_path / "out"
-    _write_roster(roster_path, validator_count=5, inline_private_keys=False)
-    _write_secrets(secrets_path, validator_count=5)
+    _write_roster(roster_path, validator_count=7, inline_private_keys=False)
+    _write_secrets(secrets_path, validator_count=7)
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
 
     MODULE.render_bundle(
@@ -1304,11 +1336,13 @@ def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) ->
         secrets_path=secrets_path,
     )
 
-    rendered = MODULE._load_toml(output_dir / "taira-validator-5" / "config.toml")
+    rendered = MODULE._load_toml(
+        output_dir / "taira-validator-7" / "config.toml"
+    )
     queues = rendered["sumeragi"]["queues"]
     assert queues["authenticated_non_validator_sources"] == 2
-    assert queues["body_source_bytes"] == 45_088_768
-    assert queues["body_bytes"] == 8 * queues["body_source_bytes"]
+    assert queues["body_source_bytes"] == 34_603_008
+    assert queues["body_bytes"] == 10 * queues["body_source_bytes"]
 
 
 def test_render_bundle_rejects_non_positive_queue_template_values(
@@ -1319,13 +1353,13 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
 
     malformed = {
         "authenticated_non_validator_sources": ["0", "-1", '"2"', "true"],
-        "body_bytes": ["0", "-1", '"315621376"', "true"],
-        "body_source_bytes": ["0", "-1", '"45088768"', "true"],
+        "body_bytes": ["0", "-1", '"242221056"', "true"],
+        "body_source_bytes": ["0", "-1", '"34603008"', "true"],
     }
     defaults = {
         "authenticated_non_validator_sources": 2,
-        "body_bytes": 315621376,
-        "body_source_bytes": 45088768,
+        "body_bytes": 242221056,
+        "body_source_bytes": 34603008,
     }
     for key, values in malformed.items():
         for index, value in enumerate(values):
@@ -1352,15 +1386,21 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
     [
         (
             "max_payload_bytes",
-            "22020096",
+            "16777216",
             str(MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES - 1),
-            "must be at least 22020096 bytes",
+            "must equal the revision-4 protocol ceiling of 16777216 bytes",
+        ),
+        (
+            "max_payload_bytes",
+            "16777216",
+            str(MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES + 1),
+            "must equal the revision-4 protocol ceiling of 16777216 bytes",
         ),
         (
             "body_source_bytes",
-            "45088768",
+            "34603008",
             str(MODULE.TAIRA_BODY_SOURCE_MIN_BYTES - 1),
-            "must be at least 44270600 bytes",
+            "must be at least 33784840 bytes",
         ),
         (
             "max_frame_bytes_block_sync",
@@ -1382,7 +1422,7 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
         ),
     ],
 )
-def test_render_bundle_rejects_privacy_transport_corridor_below_boundary(
+def test_render_bundle_rejects_invalid_privacy_transport_corridor(
     tmp_path: Path,
     field: str,
     current: str,
@@ -1404,20 +1444,25 @@ def test_render_bundle_rejects_privacy_transport_corridor_below_boundary(
         MODULE.render_bundle(base_config_path, roster_path, tmp_path / "out")
 
 
-def test_genesis_renderer_rejects_da_payload_one_byte_below_privacy_corridor(
+@pytest.mark.parametrize("delta", [-1, 1])
+def test_genesis_renderer_rejects_da_payload_outside_protocol_ceiling(
     tmp_path: Path,
+    delta: int,
 ) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     _write_roster(roster_path)
     validators = MODULE.load_roster(roster_path)
     genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
     genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"] = (
-        MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES - 1
+        MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES + delta
     )
     base_genesis_path = tmp_path / "genesis.json"
     base_genesis_path.write_text(json.dumps(genesis), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="must be at least 22020096"):
+    with pytest.raises(
+        ValueError,
+        match="must equal the revision-4 protocol ceiling of 16777216",
+    ):
         MODULE.render_genesis_template(
             base_genesis_path,
             validators,
@@ -1472,6 +1517,58 @@ def test_load_roster_merges_private_keys_from_secrets(tmp_path: Path) -> None:
 
     assert validators[0].private_key == "peer-1-private"
     assert validators[-1].private_key == "peer-4-private"
+    assert validators[0].soranet_transport_public_key == "peer-1-soranet-public"
+    assert validators[-1].soranet_transport_private_key == "peer-4-soranet-private"
+
+
+def test_secret_material_requires_each_validator_transport_pair(tmp_path: Path) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            'soranet_transport_private_key = "peer-2-soranet-private"\n',
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="soranet_transport_private_key"):
+        MODULE.load_secret_material(secrets_path)
+
+
+def test_load_roster_rejects_duplicate_transport_public_keys(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    roster_path.write_text(
+        roster_path.read_text(encoding="utf-8").replace(
+            'soranet_transport_public_key = "peer-2-soranet-public"',
+            'soranet_transport_public_key = "peer-1-soranet-public"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="soranet_transport_public_key.*duplicated"):
+        MODULE.load_roster(roster_path)
+
+
+def test_load_roster_rejects_streaming_identity_reuse(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            'streaming_identity_public_key = "streaming-public-key"',
+            'streaming_identity_public_key = "peer-1-soranet-public"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must not reuse the shared streaming identity"):
+        MODULE.load_roster(roster_path, secrets_path=secrets_path)
 
 
 def test_render_bundle_rejects_unpopulated_template_placeholders(
