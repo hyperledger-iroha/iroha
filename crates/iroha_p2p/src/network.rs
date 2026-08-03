@@ -20023,7 +20023,19 @@ fn reconnect_backoff_jitter_ms(
         base.as_millis(),
         next_base.as_millis()
     );
-    bounded_hash_jitter_ms(&material, upper_ms)
+    // Keep jitter inside the current exponential-backoff window.  Hashing
+    // into `0..=next_base` lets one peer pair deterministically select the
+    // same near-zero delay forever once `base == next_base`, turning an
+    // unavailable validator into a reconnect storm.  The lower bound still
+    // spreads peers throughout `[base, next_base]` while preserving the
+    // configured maximum retry cadence.
+    let lower_ms = u64::try_from(base.as_millis())
+        .unwrap_or(u64::MAX)
+        .min(upper_ms);
+    lower_ms.saturating_add(bounded_hash_jitter_ms(
+        &material,
+        upper_ms.saturating_sub(lower_ms),
+    ))
 }
 
 fn bounded_hash_jitter_ms(material: &str, upper_ms: u64) -> u64 {
@@ -20302,6 +20314,7 @@ mod tests {
                 upper_ms,
             )
         );
+        assert!(jitter >= 100);
         assert!(jitter <= upper_ms);
         assert_eq!(
             reconnect_backoff_jitter_ms(
@@ -20313,6 +20326,20 @@ mod tests {
                 0,
             ),
             0
+        );
+    }
+
+    #[test]
+    fn reconnect_backoff_at_cap_cannot_repeat_a_near_zero_delay() {
+        let self_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let addr = socket_addr!(127.0.0.1:45679);
+        let capped = Duration::from_secs(5);
+
+        assert_eq!(
+            reconnect_backoff_jitter_ms(&self_id, &peer_id, &addr, capped, capped, 5_000),
+            5_000,
+            "a capped deterministic backoff must retain its configured floor"
         );
     }
 
