@@ -154,6 +154,49 @@ fn admit_prune_intent_fixture(kura: &Kura, mut intent: KuraPruneIntentV2) -> Kur
         .expect("seal prune-intent fixture admission")
 }
 
+fn archival_roster_row_fixture(
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    roster: Vec<PeerId>,
+) -> (Qc, iroha_data_model::consensus::ValidatorSetCheckpoint) {
+    let state_root = Hash::prehashed([0_u8; Hash::LENGTH]);
+    let signers_bitmap = vec![0b0000_0001];
+    let aggregate_signature = vec![0xAB; 96];
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: state_root,
+        post_state_root: state_root,
+        height,
+        view: 0,
+        epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag: PERMISSIONED_TAG.to_owned(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap: signers_bitmap.clone(),
+            bls_aggregate_signature: aggregate_signature.clone(),
+        },
+    };
+    let checkpoint = iroha_data_model::consensus::ValidatorSetCheckpoint::new(
+        height,
+        qc.view,
+        block_hash,
+        state_root,
+        state_root,
+        roster,
+        signers_bitmap,
+        aggregate_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    (qc, checkpoint)
+}
+
 fn provisional_snapshot_metadata(tag: u8) -> ProvisionalSnapshotBootstrap {
     ProvisionalSnapshotBootstrap {
         hash_only_prefix_height: usize::from(tag),

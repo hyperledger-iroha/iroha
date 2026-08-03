@@ -193,10 +193,9 @@ fn kagemusha_circuit_params_sha256_v4(
     })
 }
 
-// The compact profile admits one reviewed k17 shape for artifact decoding and
-// candidate generation. Keeping the generation boundary explicit prevents a
-// stale or column-heavy profile from reaching `ParamsIPA::new` or Halo2
-// configure/keygen even if it was decoded from a historical carrier.
+// The compact profile admits one reviewed k17 shape for artifact decoding and candidate generation.
+// Keeping the generation boundary explicit prevents a stale or column-heavy profile from reaching
+// `ParamsIPA::new` or Halo2 configure/keygen even if it was decoded from a historical carrier.
 const KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4: &[u32] =
     &iroha_data_model::offline::KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4;
 const KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4: &[u32] =

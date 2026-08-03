@@ -1653,6 +1653,12 @@ impl AutonomousLifecycleAttemptBindingV1 {
         self.origin_proposal_hash
     }
 
+    /// Return the canonical executable-payload hash bound into the signed cursor.
+    #[must_use]
+    pub(crate) const fn executable_payload_hash(&self) -> Hash {
+        self.executable_payload_hash
+    }
+
     /// Return the ordered reservation-group hash.
     #[must_use]
     pub(crate) const fn reservation_group_hash(&self) -> Hash {

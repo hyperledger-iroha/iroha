@@ -23281,14 +23281,10 @@ def test_production_evidence_viewer_service_surface_is_exposed_once() -> None:
         "/v1/sorafs/appeals/finance/reports",
         "/v1/sorafs/appeals/finance/weekly-rollups",
     )
+    openapi_artifacts = REPO_ROOT / "artifacts" / "openapi"
     for spec_path in (
-        REPO_ROOT / "artifacts" / "openapi" / "torii.json",
-        REPO_ROOT
-        / "artifacts"
-        / "openapi"
-        / "versions"
-        / "current"
-        / "torii.json",
+        openapi_artifacts / "torii.json",
+        openapi_artifacts / "versions" / "current" / "torii.json",
     ):
         paths = json.loads(read(spec_path))["paths"]
         for route in retired_viewer_routes:
@@ -23296,9 +23292,8 @@ def test_production_evidence_viewer_service_surface_is_exposed_once() -> None:
         for route in authenticated_appeal_finance_publication_routes:
             operations = paths[route]
             assert set(operations) == {"get", "post"}
-            assert operations["post"]["security"]
-            assert "202" in operations["post"]["responses"]
-            assert "200" not in operations["post"]["responses"]
+            post = operations["post"]
+            assert post["security"] and "202" in post["responses"] and "200" not in post["responses"]
 
 
 def test_evidence_viewer_canary_builder_is_checked_in() -> None:

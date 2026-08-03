@@ -226,33 +226,18 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     let (mut kura, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("prune boundary Kura");
     let blocks = store_dummy_block_arcs(&kura, 2);
-    let used = kura
-        .refresh_disk_usage_bytes()
-        .expect("measure prune-boundary physical bytes");
-    let (persisted_count, unindexed_bytes) = kura
-        .persisted_count_and_unindexed_bytes()
-        .expect("measure prune-boundary durable frontier");
-    let pending = kura
-        .pending_block_bytes(persisted_count, unindexed_bytes)
-        .expect("measure prune-boundary pending blocks");
-    let terminal = kura
-        .autonomous_global_terminal_outcome_reserved_bytes()
-        .expect("measure prune-boundary terminal reservations");
-    let post_wsv = kura
-        .post_wsv_lane_artifact_budget_reserved_bytes()
-        .expect("measure prune-boundary post-WSV reservations");
-    let certified = kura
-        .certified_bundle_capacity_reserved_bytes()
-        .expect("measure prune-boundary certified-bundle reservations");
-    let exact_boundary = used
-        .checked_add(pending)
-        .and_then(|bytes| bytes.checked_add(terminal))
-        .and_then(|bytes| bytes.checked_add(post_wsv))
-        .and_then(|bytes| bytes.checked_add(certified))
-        .and_then(|bytes| {
-            bytes.checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
-        })
-        .expect("prune reserved boundary fits u64");
+    let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
+        version: 2,
+        source_height: 2,
+        source_tip_hash: Some(blocks[1].hash()),
+        target_height: 1,
+        target_tip_hash: Some(blocks[0].hash()),
+        retained_merge_entries: 0,
+        retained_merge_tip_hash: None,
+        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+        capacity: unsealed_prune_capacity_fixture(),
+    });
+    let exact_boundary = preview.capacity.admitted_peak_bytes;
 
     Arc::get_mut(&mut kura)
         .expect("prune boundary Kura remains exclusive")
@@ -274,6 +259,72 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     assert_eq!(kura.get_block(nonzero!(1_usize)).as_deref(), Some(blocks[0].as_ref()));
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
     assert!(!Kura::prune_intent_temp_path_for(temp_dir.path()).exists());
+}
+
+#[test]
+fn canonical_prune_capacity_includes_large_commit_roster_generation() {
+    let temp_dir = TempDir::new().expect("large-roster prune temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (mut kura, _) =
+        Kura::new(&config, &RuntimeLaneConfig::default()).expect("large-roster Kura");
+    let blocks = store_dummy_block_arcs(&kura, 48);
+    let peer = PeerId::new(
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate large-roster BLS key")
+            .public_key()
+            .clone(),
+    );
+    {
+        let mut journal = kura.roster_log.write();
+        for (index, block) in blocks.iter().enumerate() {
+            let height = u64::try_from(index + 1).expect("large-roster height fits u64");
+            let (qc, checkpoint) =
+                archival_roster_row_fixture(height, block.hash(), vec![peer.clone()]);
+            assert!(journal.upsert(qc, checkpoint, None));
+        }
+        journal.persist().expect("persist large source roster");
+    }
+    let roster_projection = kura
+        .roster_log
+        .read()
+        .project_truncate_to_height(24)
+        .expect("project large retained roster");
+    assert!(roster_projection.required);
+    assert!(roster_projection.retained_payload_bytes > 4 * 1024);
+    let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
+        version: 2,
+        source_height: 48,
+        source_tip_hash: Some(blocks[47].hash()),
+        target_height: 24,
+        target_tip_hash: Some(blocks[23].hash()),
+        retained_merge_entries: 0,
+        retained_merge_tip_hash: None,
+        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+        capacity: unsealed_prune_capacity_fixture(),
+    });
+    assert_eq!(preview.capacity.roster, roster_projection);
+    let exact = preview.capacity.admitted_peak_bytes;
+
+    Arc::get_mut(&mut kura)
+        .expect("large-roster Kura remains exclusive")
+        .max_disk_usage_bytes = exact - 1;
+    assert!(matches!(
+        kura.prune_to_height(24),
+        Err(Error::StorageBudgetExceeded { limit, required, .. })
+            if limit == exact - 1 && required == exact
+    ));
+    assert_eq!(kura.blocks_count(), 48);
+    assert!(kura.roster_log.read().has_entries_above(24));
+    assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
+
+    Arc::get_mut(&mut kura)
+        .expect("large-roster Kura remains exclusive after rejection")
+        .max_disk_usage_bytes = exact;
+    kura.prune_to_height(24)
+        .expect("exact large-roster prune peak is admitted");
+    assert_eq!(kura.blocks_count(), 24);
+    assert!(!kura.roster_log.read().has_entries_above(24));
+    assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
 }
 
 #[test]
@@ -620,34 +671,18 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
             ),
         "sequential rewrites reserve the larger exact pair, not their sum",
     );
-    let used = kura
-        .refresh_disk_usage_bytes()
-        .expect("measure current-tip physical bytes");
-    let pending = {
-        let _prune_guard = kura.prune_lock.lock();
-        let _canonical_guard = kura.canonical_chain_lock.lock();
-        kura.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
-            .expect("measure current-tip pending canonical bytes")
-    };
-    let terminal = kura
-        .autonomous_global_terminal_outcome_reserved_bytes()
-        .expect("measure current-tip terminal reservations");
-    let post_wsv = kura
-        .post_wsv_lane_artifact_budget_reserved_bytes()
-        .expect("measure current-tip post-WSV reservations");
-    let certified = kura
-        .certified_bundle_capacity_reserved_bytes()
-        .expect("measure current-tip certified reservations");
-    let exact = used
-        .checked_add(pending)
-        .and_then(|bytes| bytes.checked_add(terminal))
-        .and_then(|bytes| bytes.checked_add(post_wsv))
-        .and_then(|bytes| bytes.checked_add(certified))
-        .and_then(|bytes| {
-            bytes.checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
-        })
-        .and_then(|bytes| bytes.checked_add(projection.sequential_peak_bytes))
-        .expect("current-tip exact projection fits u64");
+    let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
+        version: 2,
+        source_height: 1,
+        source_tip_hash: Some(blocks[0].hash()),
+        target_height: 1,
+        target_tip_hash: Some(blocks[0].hash()),
+        retained_merge_entries: 0,
+        retained_merge_tip_hash: None,
+        sidecar_rewrite: projection,
+        capacity: unsealed_prune_capacity_fixture(),
+    });
+    let exact = preview.capacity.admitted_peak_bytes;
     let before = canonical_prune_sidecar_files(&kura);
 
     Arc::get_mut(&mut kura)
@@ -677,6 +712,7 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
     assert_eq!(intent.source_height, intent.target_height);
     assert_eq!(intent.source_tip_hash, intent.target_tip_hash);
     assert_eq!(intent.sidecar_rewrite, projection);
+    assert_eq!(intent.capacity, preview.capacity);
     assert_eq!(canonical_prune_sidecar_files(&kura), before);
     drop(kura);
 
@@ -720,9 +756,11 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
     let physical = kura
         .kura_disk_usage_bytes()
         .expect("measure startup physical bytes with intent");
-    let exact = physical
-        .checked_add(sidecar_rewrite.sequential_peak_bytes)
-        .expect("startup exact rewrite capacity fits u64");
+    let exact = intent.capacity.admitted_peak_bytes;
+    assert!(
+        exact >= physical,
+        "admitted startup peak includes the now-durable intent and every remaining stage",
+    );
     let before = canonical_prune_sidecar_files(&kura);
     drop(kura);
 
